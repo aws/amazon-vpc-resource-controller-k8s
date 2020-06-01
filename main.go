@@ -55,7 +55,7 @@ func main() {
 		MetricsBindAddress: metricsAddr,
 		Port:               9443,
 		LeaderElection:     enableLeaderElection,
-		LeaderElectionID:   "bb6ce178.k8s.aws",
+		LeaderElectionID:   "bb6ce178.k8s.amazonaws.com",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
