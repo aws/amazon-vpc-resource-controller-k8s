@@ -1,3 +1,4 @@
 domain: k8s.amazonaws.com
+multigroup: true
 repo: amazon-vpc-resource-controller-k8s
 version: "2"
