@@ -1,0 +1,20 @@
+# permissions for end users to view securitygrouppolicies.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: securitygrouppolicy-viewer-role
+rules:
+- apiGroups:
+  - vpcresources.k8s.aws
+  resources:
+  - securitygrouppolicies
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - vpcresources.k8s.aws
+  resources:
+  - securitygrouppolicies/status
+  verbs:
+  - get

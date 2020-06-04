@@ -1,0 +1,7 @@
+apiVersion: vpcresources.k8s.aws/v1beta1
+kind: SecurityGroupPolicy
+metadata:
+  name: securitygrouppolicy-sample
+spec:
+  # Add fields here
+  foo: bar

@@ -27,7 +27,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	vpcresourcesv1beta1 "amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	corecontroller "amazon-vpc-resource-controller-k8s/controllers/core"
+	vpcresourcescontroller "amazon-vpc-resource-controller-k8s/controllers/vpcresources"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -40,6 +42,7 @@ func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
 
 	_ = corev1.AddToScheme(scheme)
+	_ = vpcresourcesv1beta1.AddToScheme(scheme)
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -59,7 +62,7 @@ func main() {
 		MetricsBindAddress: metricsAddr,
 		Port:               9443,
 		LeaderElection:     enableLeaderElection,
-		LeaderElectionID:   "bb6ce178.k8s.amazonaws.com",
+		LeaderElectionID:   "bb6ce178.k8s.aws",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -80,6 +83,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
+		os.Exit(1)
+	}
+	if err = (&vpcresourcescontroller.SecurityGroupPolicyReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("SecurityGroupPolicy"),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SecurityGroupPolicy")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
