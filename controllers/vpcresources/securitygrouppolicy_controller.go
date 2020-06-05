@@ -38,10 +38,22 @@ type SecurityGroupPolicyReconciler struct {
 // +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies/status,verbs=get;update;patch
 
 func (r *SecurityGroupPolicyReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	_ = context.Background()
-	_ = r.Log.WithValues("securitygrouppolicy", req.NamespacedName)
+	ctx := context.Background()
+	sgp := &vpcresourcesv1beta1.SecurityGroupPolicy{}
 
-	// your logic here
+	if err := r.Client.Get(ctx, req.NamespacedName, sgp); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	logger := r.Log.WithValues("securitygrouppolicy", req.NamespacedName)
+
+	logger.Info("security group policy event received",
+		"label selector", sgp.Spec.PodSelector,
+		"service account selector", sgp.Spec.ServiceAccountSelector,
+		"security groups", sgp.Spec.SecurityGroups,
+	)
+
+	// Cache Implementation logic
 
 	return ctrl.Result{}, nil
 }
