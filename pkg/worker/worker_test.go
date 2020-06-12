@@ -18,16 +18,17 @@ package worker
 
 import (
 	"context"
-	"github.com/stretchr/testify/assert"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 var (
-	resourceName = "vpc.amazonaws.com/pod-eni"
-	bufferSize = 2
-	workerCount = 1
+	resourceName          = "vpc.amazonaws.com/pod-eni"
+	bufferSize            = 2
+	workerCount           = 1
 	workerMockProcessTime = time.Millisecond * 100
 )
 
@@ -53,20 +54,20 @@ func TestWorker_SubmitJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w := GetMockWorkerPool(ctx)
-	w.StartWorkers()
+	w.StartWorkerPool()
 
 	// Count to verify
-	var	jobCompletedCounter = 0
+	var jobCompletedCounter = 0
 
 	// Submit two jobs
 	var jobCount = 2
-	for i:=0 ; i < jobCount; i++ {
+	for i := 0; i < jobCount; i++ {
 		err := w.SubmitJob(&jobCompletedCounter)
 		assert.NoError(t, err)
 	}
 
 	// Wait till the job complete. If the test is flaky, increase the buffer sleep time.
-	time.Sleep(workerMockProcessTime * time.Duration(jobCount + 1))
+	time.Sleep(workerMockProcessTime * time.Duration(jobCount+1))
 
 	// Verify job completed.
 	assert.Equal(t, jobCount, jobCompletedCounter)
@@ -78,14 +79,14 @@ func TestWorker_SubmitJob_BufferOverflow(t *testing.T) {
 	defer cancel()
 
 	w := GetMockWorkerPool(ctx)
-	w.StartWorkers()
+	w.StartWorkerPool()
 
 	// Count to verify
-	var	jobCompletedCounter = 0
+	var jobCompletedCounter = 0
 
 	// Submit 2 jobs
 	var jobCount = 2
-	for i:=0 ; i < jobCount; i++ {
+	for i := 0; i < jobCount; i++ {
 		err := w.SubmitJob(&jobCompletedCounter)
 		assert.NoError(t, err)
 	}
@@ -95,7 +96,7 @@ func TestWorker_SubmitJob_BufferOverflow(t *testing.T) {
 	assert.Error(t, err)
 
 	// Wait till the job complete. If the test is flaky, increase the buffer sleep time.
-	time.Sleep(workerMockProcessTime * time.Duration(jobCount + 1))
+	time.Sleep(workerMockProcessTime * time.Duration(jobCount+1))
 
 	// Verify job completed.
 	assert.Equal(t, jobCount, jobCompletedCounter)
