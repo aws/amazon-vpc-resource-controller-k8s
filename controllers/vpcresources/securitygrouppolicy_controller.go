@@ -24,7 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	vpcresourcesv1beta1 "amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
+	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 )
 
 // SecurityGroupPolicyReconciler reconciles a SecurityGroupPolicy object

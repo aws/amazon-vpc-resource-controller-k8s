@@ -30,7 +30,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	vpcresourcesv1beta1 "amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
+	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	// +kubebuilder:scaffold:imports
 )
 

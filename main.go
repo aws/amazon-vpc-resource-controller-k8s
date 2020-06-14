@@ -27,9 +27,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	vpcresourcesv1beta1 "amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
-	corecontroller "amazon-vpc-resource-controller-k8s/controllers/core"
-	vpcresourcescontroller "amazon-vpc-resource-controller-k8s/controllers/vpcresources"
+	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
+	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
+	vpcresourcescontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/vpcresources"
 	// +kubebuilder:scaffold:imports
 )
 
