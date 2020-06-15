@@ -22,6 +22,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/client-go/util/workqueue"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 // Prometheus metrics
@@ -44,12 +46,11 @@ var (
 		[]string{"resource"},
 	)
 
-	jobsRejectedCount = prometheus.NewCounterVec(
+	jobsFailedCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "jobs_rejected_count",
-			Help: "The number of jobs rejected due to buffer overflow",
-		},
-		[]string{"resource"},
+			Name: "jobs_failed_count",
+			Help: "The number of jobs that failed to complete after retries",
+		}, []string{"resource"},
 	)
 )
 
@@ -65,31 +66,33 @@ type Worker struct {
 	// workersStarted is the flag to prevent starting duplicate set of workers
 	workersStarted bool
 	// workerFunc is the function that will be invoked with the job by the worker routine
-	workerFunc func(interface{})
-	// buffer is the channel holding the jobs that will be processed by workers
-	buffer chan interface{}
+	workerFunc func(interface{}) (ctrl.Result, error)
+	// maxRetries is the number of times to retry item in case of failure
+	maxRetriesOnErr int
 	// maxWorkerCount represents the maximum number of workers that will be started
 	maxWorkerCount int
 	// ctx is the background context to close the chanel on termination signal
 	ctx context.Context
 	// Log is the structured logger set to log with resource name
 	Log logr.Logger
+	// queue is the k8s rate limiting queue to store the submitted jobs
+	queue workqueue.RateLimitingInterface
 }
 
-// NewWorkerPool returns a new worker pool for a give resource type with the given configuration
-func NewWorkerPool(bufferSize int, resourceName string,
-	workerCount int, workerFunc func(interface{}),
+// NewDefaultWorkerPool returns a new worker pool for a give resource type with the given configuration
+func NewDefaultWorkerPool(resourceName string, workerCount int, workerFunc func(interface{}) (ctrl.Result, error),
 	logger logr.Logger, ctx context.Context) *Worker {
 
 	prometheusRegister()
 
 	return &Worker{
-		resourceName:   resourceName,
-		Log:            logger,
-		workerFunc:     workerFunc,
-		maxWorkerCount: workerCount,
-		ctx:            ctx,
-		buffer:         make(chan interface{}, bufferSize),
+		resourceName:    resourceName,
+		maxRetriesOnErr: 5,
+		workerFunc:      workerFunc,
+		maxWorkerCount:  workerCount,
+		Log:             logger,
+		queue:           workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		ctx:             ctx,
 	}
 }
 
@@ -98,34 +101,60 @@ func prometheusRegister() {
 	if !prometheusRegistered {
 		prometheus.MustRegister(jobsSubmittedCount)
 		prometheus.MustRegister(jobsCompletedCount)
-		prometheus.MustRegister(jobsRejectedCount)
+		prometheus.MustRegister(jobsFailedCount)
 
 		prometheusRegistered = true
 	}
 }
 
-// SubmitJob takes a job to be added to the buffer, if the buffer is already full it will return
-// error and it's upto the caller to handle the overflow item
+// SubmitJob adds the job to the rate limited queue
 func (w *Worker) SubmitJob(job interface{}) error {
+	w.queue.Add(job)
 	jobsSubmittedCount.WithLabelValues(w.resourceName).Inc()
-	if len(w.buffer) == cap(w.buffer) {
-		jobsRejectedCount.WithLabelValues(w.resourceName).Inc()
-		w.Log.Error(BufferOverflowError, "cannot accept any more jobs",
-			"buffer size", len(w.buffer))
-		return BufferOverflowError
-	}
-
-	w.buffer <- job
 	return nil
 }
 
-// startWorker starts a worker routine that listens on the buffer to process new jobs
-func (w *Worker) startWorker(id int, jobs <-chan interface{}) {
-	for job := range jobs {
-		w.Log.Info("starting job", "worker id", id, "job", job)
-		w.workerFunc(job)
-		jobsCompletedCount.WithLabelValues(w.resourceName).Inc()
+// runWorker runs a worker that listens on new item on the worker queue
+func (w *Worker) runWorker() {
+	for w.processNextItem() {
 	}
+}
+
+// processNextItem returns false if the queue is shut down, otherwise processes the job and returns true
+func (w *Worker) processNextItem() (cont bool) {
+	job, quit := w.queue.Get()
+	if quit {
+		return
+	}
+	defer w.queue.Done(job)
+	log := w.Log.WithValues("job", job)
+
+	log.Info("processing job")
+
+	cont = true
+
+	if result, err := w.workerFunc(job); err != nil {
+		if w.queue.NumRequeues(job) >= w.maxRetriesOnErr {
+			log.Error(err, "exceeded maximum retries",  "max retries", w.maxRetriesOnErr)
+			w.queue.Forget(job)
+			jobsFailedCount.WithLabelValues(w.resourceName).Inc()
+			return
+		}
+		log.Error(err, "requeuing job", "retry count", w.queue.NumRequeues(job))
+		w.queue.AddRateLimited(job)
+		return
+	} else if result.Requeue {
+		log.Info("timed retry",  "retry after", result.RequeueAfter)
+		w.queue.AddAfter(job, result.RequeueAfter)
+		return
+	}
+
+	log.Info("completed job successfully")
+
+	w.queue.Forget(job)
+	jobsCompletedCount.WithLabelValues(w.resourceName).Inc()
+
+	return
 }
 
 // StartWorkerPool starts the worker pool that starts the worker routines that concurrently listen on the channel
@@ -139,16 +168,15 @@ func (w *Worker) StartWorkerPool() error {
 	go func() {
 		w.Log.Info("starting routine to listen on chanel for termination signal")
 		<-w.ctx.Done()
-		close(w.buffer)
-		w.Log.Info("closed the buffer after receiving termination signal")
+		w.queue.ShutDown()
+		w.Log.Info("shut down the queue after receiving termination signal")
 	}()
 
-	w.Log.Info("starting worker routines", "buffer size", cap(w.buffer),
-		"worker count", w.maxWorkerCount)
+	w.Log.Info("starting worker routines", "worker count", w.maxWorkerCount)
 
 	// Start a new go routine to listen on the chanel and allocate jobs to go routines
 	for workerCount := 1; workerCount <= w.maxWorkerCount; workerCount++ {
-		go w.startWorker(workerCount, w.buffer)
+		go w.runWorker()
 	}
 
 	return nil

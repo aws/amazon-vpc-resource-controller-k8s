@@ -18,29 +18,33 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 var (
 	resourceName          = "vpc.amazonaws.com/pod-eni"
-	bufferSize            = 2
 	workerCount           = 1
-	workerMockProcessTime = time.Millisecond * 100
+	mockTimeToProcessWorkerFunc = time.Duration(5)
+	bufferTimeBwWorkerFuncExecution = time.Duration(1)
 )
 
 func GetMockWorkerPool(ctx context.Context) *Worker {
 	log := zap.New(zap.UseDevMode(true)).WithValues("worker resource Id", resourceName)
-	return NewWorkerPool(bufferSize, resourceName, workerCount, MockWorkerFunc, log, ctx)
+	return NewDefaultWorkerPool(resourceName, workerCount, MockWorkerFunc, log, ctx)
 }
 
-func MockWorkerFunc(job interface{}) {
+func MockWorkerFunc(job interface{}) (result ctrl.Result, err error) {
 	v := job.(*int)
 	*v++
-	time.Sleep(workerMockProcessTime)
+	time.Sleep(time.Millisecond * mockTimeToProcessWorkerFunc)
+
+	return  ctrl.Result{}, nil
 }
 
 func TestNewWorkerPool(t *testing.T) {
@@ -49,32 +53,32 @@ func TestNewWorkerPool(t *testing.T) {
 	assert.NotNil(t, w)
 }
 
-// TestWorker_SubmitJob verifies that jobs are accepted and completed if the buffer is not full.
+// TestWorker_SubmitJob verifies that two different jobs are executed successfully.
 func TestWorker_SubmitJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w := GetMockWorkerPool(ctx)
 	w.StartWorkerPool()
 
-	// Count to verify
-	var jobCompletedCounter = 0
+	// Count to verify job executed
+	var jobCount = 2
+	var job1 = 0
+	var job2 = 0
 
 	// Submit two jobs
-	var jobCount = 2
-	for i := 0; i < jobCount; i++ {
-		err := w.SubmitJob(&jobCompletedCounter)
-		assert.NoError(t, err)
-	}
+	w.SubmitJob(&job1)
+	w.SubmitJob(&job2)
 
 	// Wait till the job complete. If the test is flaky, increase the buffer sleep time.
-	time.Sleep(workerMockProcessTime * time.Duration(jobCount+1))
+	time.Sleep(time.Millisecond * (mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Duration(jobCount))
 
 	// Verify job completed.
-	assert.Equal(t, jobCount, jobCompletedCounter)
+	assert.Equal(t, job1, 1)
+	assert.Equal(t, job2, 1)
 }
 
-// TestWorker_SubmitJob_BufferOverflow verifies that if the buffer is full the new job is rejected with an error.
-func TestWorker_SubmitJob_BufferOverflow(t *testing.T) {
+// TestWorker_SubmitJob_Duplicate ensures that duplicate jobs are only processed once.
+func TestWorker_SubmitJob_Duplicate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -91,13 +95,32 @@ func TestWorker_SubmitJob_BufferOverflow(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	// Submit one more job and verify buffer overflows
-	err := w.SubmitJob(&jobCompletedCounter)
-	assert.Error(t, err)
-
 	// Wait till the job complete. If the test is flaky, increase the buffer sleep time.
-	time.Sleep(workerMockProcessTime * time.Duration(jobCount+1))
+	time.Sleep(time.Millisecond * (mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Duration(jobCount))
 
-	// Verify job completed.
-	assert.Equal(t, jobCount, jobCompletedCounter)
+	// Verify only one job got completed.
+	assert.Equal(t, 1, jobCompletedCounter)
+}
+
+func TestWorker_SubmitJob_RequeueOnError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := GetMockWorkerPool(ctx)
+	w.StartWorkerPool()
+
+	w.maxRetriesOnErr = 3
+	w.workerFunc = func(job interface{}) (result ctrl.Result, err error) {
+		invoked := job.(*int)
+		*invoked++
+
+		return ctrl.Result{}, fmt.Errorf("error")
+	}
+
+	var invoked = 0
+	w.SubmitJob(&invoked)
+
+	time.Sleep((mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Millisecond * time.Duration(w.maxRetriesOnErr))
+
+	assert.Equal(t, w.maxRetriesOnErr, invoked)
 }
