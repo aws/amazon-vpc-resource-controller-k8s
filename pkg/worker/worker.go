@@ -129,8 +129,6 @@ func (w *Worker) processNextItem() (cont bool) {
 	defer w.queue.Done(job)
 	log := w.Log.WithValues("job", job)
 
-	log.Info("processing job")
-
 	cont = true
 
 	if result, err := w.workerFunc(job); err != nil {
