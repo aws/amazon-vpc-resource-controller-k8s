@@ -19,6 +19,8 @@ package controllers
 import (
 	"context"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
+
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,18 +31,38 @@ import (
 // NodeReconciler reconciles a Node object
 type NodeReconciler struct {
 	client.Client
-	Log    logr.Logger
-	Scheme *runtime.Scheme
+	Log     logr.Logger
+	Scheme  *runtime.Scheme
+	Manager node.Manager
 }
 
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=nodes/status,verbs=get;update;patch
 
 func (r *NodeReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	_ = context.Background()
-	_ = r.Log.WithValues("node", req.NamespacedName)
+	ctx := context.Background()
+	node := &corev1.Node{}
 
-	// your logic here
+	logger := r.Log.WithValues("node", req.NamespacedName)
+
+	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Process Delete Event
+	if !node.DeletionTimestamp.IsZero() {
+		err := r.Manager.DeleteNode(node)
+		if err != nil {
+			logger.Error(err, "failed to delete node")
+			return ctrl.Result{}, err
+		}
+	} else { // Process Add Event
+		err := r.Manager.AddOrUpdateNode(node)
+		if err != nil {
+			logger.Error(err, "failed to add node")
+			return ctrl.Result{}, err
+		}
+	}
 
 	return ctrl.Result{}, nil
 }
