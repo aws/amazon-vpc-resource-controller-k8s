@@ -32,7 +32,7 @@ import (
 var (
 	instanceID = "i-01234567890abcdef"
 	providerId = "aws:///us-west-2c/" + instanceID
-	v1Node = &v1.Node{
+	v1Node     = &v1.Node{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   "ip-192-168-55-73.us-west-2.compute.internal",
@@ -107,7 +107,7 @@ func Test_addOrUpdateNode_notSelected(t *testing.T) {
 
 // Test_addOrUpdateNode_statusChanged tests if the status of a managed node changes it is removed from the list
 // of managed node and requested to delete the resources
-func Test_addOrUpdateNode_statusChanged(t *testing.T)  {
+func Test_addOrUpdateNode_statusChanged(t *testing.T) {
 	manager := getMockManager()
 
 	// Add node to list of managed node
@@ -187,7 +187,7 @@ func Test_isManagedLabelSet_neg(t *testing.T) {
 // Test_getNodeInstanceID test if the correct node id is retrieved from the provider id
 func Test_getNodeInstanceID(t *testing.T) {
 	id := getNodeInstanceID(v1Node)
-	assert.Equal(t, instanceID, id,)
+	assert.Equal(t, instanceID, id)
 }
 
 // Test_getNodeOS tests that is OS label is set then the correct os is returned
@@ -208,7 +208,7 @@ func Test_isSelectedForManagement(t *testing.T) {
 func Test_performPostUnlockOperation(t *testing.T) {
 	manager := getMockManager()
 
-	postUnlockFunc := func() error  {
+	postUnlockFunc := func() error {
 		return nil
 	}
 
@@ -225,7 +225,7 @@ func Test_performPostUnlockOperation_intiFails(t *testing.T) {
 	_, managed := manager.GetNode(v1Node.Name)
 	assert.True(t, managed)
 
-	postUnlockFunc := func() error  {
+	postUnlockFunc := func() error {
 		return ErrInitResources
 	}
 

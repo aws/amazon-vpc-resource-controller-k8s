@@ -60,7 +60,12 @@ var (
 	WorkersAlreadyStartedError = errors.New("failed to start the workers as they are already running")
 )
 
-type Worker struct {
+type Worker interface {
+	StartWorkerPool() error
+	SubmitJob(job interface{}) error
+}
+
+type worker struct {
 	// resourceName that the worker belongs to
 	resourceName string
 	// workersStarted is the flag to prevent starting duplicate set of workers
@@ -81,13 +86,13 @@ type Worker struct {
 
 // NewDefaultWorkerPool returns a new worker pool for a give resource type with the given configuration
 func NewDefaultWorkerPool(resourceName string, workerCount int, workerFunc func(interface{}) (ctrl.Result, error),
-	logger logr.Logger, ctx context.Context) *Worker {
+	maxRequeue int, logger logr.Logger, ctx context.Context) Worker {
 
 	prometheusRegister()
 
-	return &Worker{
+	return &worker{
 		resourceName:    resourceName,
-		maxRetriesOnErr: 5,
+		maxRetriesOnErr: maxRequeue,
 		workerFunc:      workerFunc,
 		maxWorkerCount:  workerCount,
 		Log:             logger,
@@ -108,20 +113,20 @@ func prometheusRegister() {
 }
 
 // SubmitJob adds the job to the rate limited queue
-func (w *Worker) SubmitJob(job interface{}) error {
+func (w *worker) SubmitJob(job interface{}) error {
 	w.queue.Add(job)
 	jobsSubmittedCount.WithLabelValues(w.resourceName).Inc()
 	return nil
 }
 
 // runWorker runs a worker that listens on new item on the worker queue
-func (w *Worker) runWorker() {
+func (w *worker) runWorker() {
 	for w.processNextItem() {
 	}
 }
 
 // processNextItem returns false if the queue is shut down, otherwise processes the job and returns true
-func (w *Worker) processNextItem() (cont bool) {
+func (w *worker) processNextItem() (cont bool) {
 	job, quit := w.queue.Get()
 	if quit {
 		return
@@ -133,7 +138,7 @@ func (w *Worker) processNextItem() (cont bool) {
 
 	if result, err := w.workerFunc(job); err != nil {
 		if w.queue.NumRequeues(job) >= w.maxRetriesOnErr {
-			log.Error(err, "exceeded maximum retries",  "max retries", w.maxRetriesOnErr)
+			log.Error(err, "exceeded maximum retries", "max retries", w.maxRetriesOnErr)
 			w.queue.Forget(job)
 			jobsFailedCount.WithLabelValues(w.resourceName).Inc()
 			return
@@ -142,7 +147,7 @@ func (w *Worker) processNextItem() (cont bool) {
 		w.queue.AddRateLimited(job)
 		return
 	} else if result.Requeue {
-		log.Info("timed retry",  "retry after", result.RequeueAfter)
+		log.Info("timed retry", "retry after", result.RequeueAfter)
 		w.queue.AddAfter(job, result.RequeueAfter)
 		return
 	}
@@ -156,7 +161,7 @@ func (w *Worker) processNextItem() (cont bool) {
 }
 
 // StartWorkerPool starts the worker pool that starts the worker routines that concurrently listen on the channel
-func (w *Worker) StartWorkerPool() error {
+func (w *worker) StartWorkerPool() error {
 	if w.workersStarted {
 		return WorkersAlreadyStartedError
 	}

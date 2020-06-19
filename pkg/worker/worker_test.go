@@ -28,15 +28,16 @@ import (
 )
 
 var (
-	resourceName          = "vpc.amazonaws.com/pod-eni"
-	workerCount           = 1
-	mockTimeToProcessWorkerFunc = time.Duration(5)
+	resourceName                    = "vpc.amazonaws.com/pod-eni"
+	workerCount                     = 1
+	mockTimeToProcessWorkerFunc     = time.Duration(5)
 	bufferTimeBwWorkerFuncExecution = time.Duration(1)
+	maxRequeue                      = 3
 )
 
-func GetMockWorkerPool(ctx context.Context) *Worker {
+func GetMockWorkerPool(ctx context.Context, workerFunc func(interface{}) (ctrl.Result, error)) Worker {
 	log := zap.New(zap.UseDevMode(true)).WithValues("worker resource Id", resourceName)
-	return NewDefaultWorkerPool(resourceName, workerCount, MockWorkerFunc, log, ctx)
+	return NewDefaultWorkerPool(resourceName, workerCount, workerFunc, maxRequeue, log, ctx)
 }
 
 func MockWorkerFunc(job interface{}) (result ctrl.Result, err error) {
@@ -44,12 +45,13 @@ func MockWorkerFunc(job interface{}) (result ctrl.Result, err error) {
 	*v++
 	time.Sleep(time.Millisecond * mockTimeToProcessWorkerFunc)
 
-	return  ctrl.Result{}, nil
+	return ctrl.Result{}, nil
 }
 
 func TestNewWorkerPool(t *testing.T) {
-	ctx, _ := context.WithCancel(context.Background())
-	w := GetMockWorkerPool(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := GetMockWorkerPool(ctx, MockWorkerFunc)
 	assert.NotNil(t, w)
 }
 
@@ -57,7 +59,7 @@ func TestNewWorkerPool(t *testing.T) {
 func TestWorker_SubmitJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	w := GetMockWorkerPool(ctx)
+	w := GetMockWorkerPool(ctx, MockWorkerFunc)
 	w.StartWorkerPool()
 
 	// Count to verify job executed
@@ -82,7 +84,7 @@ func TestWorker_SubmitJob_Duplicate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w := GetMockWorkerPool(ctx)
+	w := GetMockWorkerPool(ctx, MockWorkerFunc)
 	w.StartWorkerPool()
 
 	// Count to verify
@@ -106,21 +108,20 @@ func TestWorker_SubmitJob_RequeueOnError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w := GetMockWorkerPool(ctx)
-	w.StartWorkerPool()
-
-	w.maxRetriesOnErr = 3
-	w.workerFunc = func(job interface{}) (result ctrl.Result, err error) {
+	workerFunc := func(job interface{}) (result ctrl.Result, err error) {
 		invoked := job.(*int)
 		*invoked++
 
 		return ctrl.Result{}, fmt.Errorf("error")
 	}
 
+	w := GetMockWorkerPool(ctx, workerFunc)
+	w.StartWorkerPool()
+
 	var invoked = 0
 	w.SubmitJob(&invoked)
 
-	time.Sleep((mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Millisecond * time.Duration(w.maxRetriesOnErr))
+	time.Sleep((mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Millisecond * time.Duration(maxRequeue))
 
-	assert.Equal(t, w.maxRetriesOnErr, invoked)
+	assert.Equal(t, maxRequeue, invoked)
 }

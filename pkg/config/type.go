@@ -35,9 +35,9 @@ const (
 	// VPCManagedBy if set enables the controller to manage the VPC Resources
 	VPCManagedBy = "controller"
 	// NodeLabelOS is the Kubernetes Operating System label
-	NodeLabelOS        = "kubernetes.io/os"
+	NodeLabelOS = "kubernetes.io/os"
 	// NodeLabelOS is the Kubernetes Operating System label used before k8s version 1.16
-	NodeLabelOSBeta    = "beta.kubernetes.io/os"
+	NodeLabelOSBeta = "beta.kubernetes.io/os"
 	// OSWindows is the the windows Operating System
 	OSWindows = "windows"
 	// OSLinux is the the linux Operating System
