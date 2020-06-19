@@ -27,10 +27,13 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
 	vpcresourcescontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/vpcresources"
+	webhookutils "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhook/core"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -72,6 +75,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// creating a cache helper to handle security groups.
+	cacheHelper := webhookutils.NewK8sCacheHelper(
+		mgr.GetClient(),
+		ctrl.Log.WithName("cache helper"))
+
 	if err = (&corecontroller.PodReconciler{
 		Client: mgr.GetClient(),
 		Log:    ctrl.Log.WithName("controllers").WithName("Pod"),
@@ -96,7 +104,20 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SecurityGroupPolicy")
 		os.Exit(1)
 	}
+
 	// +kubebuilder:scaffold:builder
+	setupLog.Info("setting up webhook server")
+	webhookServer := mgr.GetWebhookServer()
+
+	//TODO: if we need validating webhook for pod.
+	//webhookServer.Register("/validate-v1-pod", &webhook.Admission{Handler: &podValidator{}})
+
+	setupLog.Info("registering webhooks to the webhook server")
+	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{Handler: &webhookcore.PodResourceInjector{
+		Client:      mgr.GetClient(),
+		CacheHelper: cacheHelper,
+		Log:         ctrl.Log.WithName("webhook").WithName("Pod Mutating"),
+	}})
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
