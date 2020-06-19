@@ -100,7 +100,7 @@ func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func() e
 
 	if managed { // Cache hit
 		shouldManageNode := m.isSelectedForManagement(v1Node)
-		if !shouldManageNode {
+		if shouldManageNode {
 			log.Info("no updates on the managed status of the node")
 			postUnlockOperation = node.UpdateResources
 			return
