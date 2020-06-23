@@ -18,9 +18,11 @@ package k8s
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,31 +31,53 @@ import (
 var (
 	prometheusRegistered = false
 
-	annotateRequestReceivedCount = prometheus.NewCounterVec(
+	annotatePodRequestCallCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "annotate_request_count",
-			Help: "The number of request made to annotate the pod",
+			Name: "annotate_pod_request_call_count",
+			Help: "The number of request to annotate pod object",
 		},
 		[]string{"annotate_key"},
 	)
-	annotateRequestSuccessfulCount = prometheus.NewCounterVec(
+
+	annotatePodRequestErrCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "annotate_request_completed_successfully_count",
-			Help: "The number of request that successfully annotated the pod",
+			Name: "annotate_pod_request_err_count",
+			Help: "The number of request that failed to annotate the pod",
 		},
 		[]string{"annotate_key"},
+	)
+
+	advertiseResourceRequestCallCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "advertise_resource_request_call_count",
+			Help: "The number of request to advertise extended resource",
+		},
+		[]string{"resource_name"},
+	)
+
+	advertiseResourceRequestErrCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "advertise_resource_request_err_count",
+			Help: "The number of request that failed to advertise extended resource",
+		},
+		[]string{"resource_name"},
 	)
 )
 
 func prometheusRegister() {
-	prometheus.MustRegister(annotateRequestReceivedCount)
-	prometheus.MustRegister(annotateRequestSuccessfulCount)
+	prometheus.MustRegister(annotatePodRequestErrCount)
+	prometheus.MustRegister(annotatePodRequestCallCount)
+	prometheus.MustRegister(advertiseResourceRequestErrCount)
+	prometheus.MustRegister(advertiseResourceRequestCallCount)
+
+	prometheusRegistered = true
 }
 
 // K8sWrapper represents an interface with all the common operations on K8s objects
 type K8sWrapper interface {
 	AnnotatePod(pod *v1.Pod, mapKey string, mapVal string) error
 	GetPod(namespace string, name string) (*v1.Pod, error)
+	AdvertiseCapacity(nodeName string, resourceName string, capacity int) error
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -63,28 +87,29 @@ type k8sWrapper struct {
 
 // NewK8sWrapper returns a new K8sWrapper
 func NewK8sWrapper(client client.Client) K8sWrapper {
-	prometheusRegister()
+	if !prometheusRegistered {
+		prometheusRegister()
+	}
 	return &k8sWrapper{client: client}
 }
 
 // AnnotatePod annotates the pod with the provided key and value
 func (k *k8sWrapper) AnnotatePod(pod *v1.Pod, key string, val string) error {
-	annotateRequestReceivedCount.WithLabelValues(key).Inc()
+	annotatePodRequestCallCount.WithLabelValues(key).Inc()
 	ctx := context.Background()
 
-	oldPod := pod.DeepCopy()
-
-	pod.Annotations[key] = val
+	newPod := pod.DeepCopy()
+	newPod.Annotations[key] = val
 
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		return k.client.Patch(ctx, pod, client.MergeFrom(oldPod))
+		return k.client.Patch(ctx, newPod, client.MergeFrom(pod))
 	})
 
 	if err != nil {
+		annotatePodRequestErrCount.WithLabelValues(key).Inc()
 		return err
 	}
 
-	annotateRequestSuccessfulCount.WithLabelValues(key).Inc()
 	return nil
 }
 
@@ -97,4 +122,29 @@ func (k *k8sWrapper) GetPod(namespace string, name string) (*v1.Pod, error) {
 		return nil, err
 	}
 	return pod, nil
+}
+
+// AdvertiseCapacity advertises the resource capacity for the given resource
+func (k *k8sWrapper) AdvertiseCapacity(nodeName string, resourceName string, capacity int) error {
+	advertiseResourceRequestCallCount.WithLabelValues(resourceName).Inc()
+	ctx := context.Background()
+
+	node := &v1.Node{}
+	if err := k.client.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
+		return err
+	}
+
+	newNode := node.DeepCopy()
+	newNode.Status.Capacity[v1.ResourceName(resourceName)] = resource.MustParse(strconv.Itoa(capacity))
+
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		return k.client.Patch(ctx, newNode, client.MergeFrom(node))
+	})
+
+	if err != nil {
+		advertiseResourceRequestErrCount.WithLabelValues(resourceName).Inc()
+		return err
+	}
+
+	return nil
 }
