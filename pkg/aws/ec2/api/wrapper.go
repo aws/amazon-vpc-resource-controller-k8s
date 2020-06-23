@@ -14,9 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package ec2
+package api
 
 import (
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -28,11 +30,15 @@ type EC2Wrapper interface {
 	CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error)
 	AttachNetworkInterface(input *ec2.AttachNetworkInterfaceInput) (*ec2.AttachNetworkInterfaceOutput, error)
 	DetachNetworkInterface(input *ec2.DetachNetworkInterfaceInput) (*ec2.DetachNetworkInterfaceOutput, error)
-	AssignPrivateIpAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
-	UnassignPrivateIpAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
+	DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error)
+	AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
+	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error)
 	CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
 	DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error)
+	AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error)
+	DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error)
+	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 }
 
 var (
@@ -204,6 +210,56 @@ var (
 		},
 	)
 
+	ec2AssociateTrunkInterfaceAPICallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_associate_trunk_interface_api_req_count",
+			Help: "The number of calls made to EC2 for associating Trunk with Branch ENI",
+		},
+	)
+
+	ec2AssociateTrunkInterfaceAPIErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_associate_trunk_interface_api_err_count",
+			Help: "The number of errors encountered while disassociating Trunk with Branch ENI",
+		},
+	)
+
+	ec2describeTrunkInterfaceAssociationAPICallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_describe_trunk_network_interface_association_api_call_count",
+			Help: "The number of calls made to describe trunk network interface",
+		},
+	)
+
+	ec2describeTrunkInterfaceAssociationAPIErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_describe_trunk_network_interface_association_api_err_count",
+			Help: "The number of errors encountered to describe trunk network interface",
+		},
+	)
+
+	ec2modifyNetworkInterfaceAttributeAPICallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_modify_network_interface_attribute_api_call_count",
+			Help: "The number of calls made to modify the network interface attribute",
+		},
+	)
+
+	ec2modifyNetworkInterfaceAttributeAPIErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_modify_network_interface_attribute_api_err_count",
+			Help: "The number of errors encountered when modifying the network interface attribute",
+		},
+	)
+
+	ec2APICallLatencies = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name: "aws_nw_call_latency",
+			Help: "AWS ENI API Calls  Operation latency in ms",
+		},
+		[]string{"api"},
+	)
+
 	prometheusRegistered = false
 )
 
@@ -231,6 +287,13 @@ func prometheusRegister() {
 		prometheus.MustRegister(ec2DeleteNetworkInterfaceAPIErrCnt)
 		prometheus.MustRegister(ec2DescribeSubnetsAPICallCnt)
 		prometheus.MustRegister(ec2DescribeSubnetsAPIErrCnt)
+		prometheus.MustRegister(ec2AssociateTrunkInterfaceAPICallCnt)
+		prometheus.MustRegister(ec2AssociateTrunkInterfaceAPIErrCnt)
+		prometheus.MustRegister(ec2describeTrunkInterfaceAssociationAPICallCnt)
+		prometheus.MustRegister(ec2describeTrunkInterfaceAssociationAPIErrCnt)
+		prometheus.MustRegister(ec2modifyNetworkInterfaceAttributeAPICallCnt)
+		prometheus.MustRegister(ec2modifyNetworkInterfaceAttributeAPIErrCnt)
+		prometheus.MustRegister(ec2APICallLatencies)
 
 		prometheusRegistered = true
 	}
@@ -264,8 +327,14 @@ func NewEC2Wrapper() (EC2Wrapper, error) {
 	return EC2Client, nil
 }
 
+func timeSinceMs(start time.Time) float64 {
+	return float64(time.Since(start).Milliseconds())
+}
+
 func (e *ec2Wrapper) DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
+	start := time.Now()
 	describeInstancesOutput, err := e.ec2ServiceClient.DescribeInstances(input)
+	ec2APICallLatencies.WithLabelValues("describe_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -280,7 +349,9 @@ func (e *ec2Wrapper) DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.
 }
 
 func (e *ec2Wrapper) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error) {
+	start := time.Now()
 	createNetworkInterfaceOutput, err := e.ec2ServiceClient.CreateNetworkInterface(input)
+	ec2APICallLatencies.WithLabelValues("create_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -296,7 +367,9 @@ func (e *ec2Wrapper) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInp
 }
 
 func (e *ec2Wrapper) AttachNetworkInterface(input *ec2.AttachNetworkInterfaceInput) (*ec2.AttachNetworkInterfaceOutput, error) {
+	start := time.Now()
 	attachNetworkInterfaceOutput, err := e.ec2ServiceClient.AttachNetworkInterface(input)
+	ec2APICallLatencies.WithLabelValues("attach_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -311,7 +384,9 @@ func (e *ec2Wrapper) AttachNetworkInterface(input *ec2.AttachNetworkInterfaceInp
 }
 
 func (e *ec2Wrapper) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
+	start := time.Now()
 	deleteNetworkInterfaceOutput, err := e.ec2ServiceClient.DeleteNetworkInterface(input)
+	ec2APICallLatencies.WithLabelValues("delete_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -326,7 +401,9 @@ func (e *ec2Wrapper) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInp
 }
 
 func (e *ec2Wrapper) DetachNetworkInterface(input *ec2.DetachNetworkInterfaceInput) (*ec2.DetachNetworkInterfaceOutput, error) {
+	start := time.Now()
 	detachNetworkInterfaceOutput, err := e.ec2ServiceClient.DetachNetworkInterface(input)
+	ec2APICallLatencies.WithLabelValues("detach_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -341,7 +418,9 @@ func (e *ec2Wrapper) DetachNetworkInterface(input *ec2.DetachNetworkInterfaceInp
 }
 
 func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
+	start := time.Now()
 	describeNetworkInterfacesOutput, err := e.ec2ServiceClient.DescribeNetworkInterfaces(input)
+	ec2APICallLatencies.WithLabelValues("describe_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -355,8 +434,10 @@ func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfa
 	return describeNetworkInterfacesOutput, err
 }
 
-func (e *ec2Wrapper) AssignPrivateIpAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
-	assignPrivateIpAddressesOutput, err := e.ec2ServiceClient.AssignPrivateIpAddresses(input)
+func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
+	start := time.Now()
+	assignPrivateIPAddressesOutput, err := e.ec2ServiceClient.AssignPrivateIpAddresses(input)
+	ec2APICallLatencies.WithLabelValues("assign_private_ip").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -368,11 +449,13 @@ func (e *ec2Wrapper) AssignPrivateIpAddresses(input *ec2.AssignPrivateIpAddresse
 		ec2AssignPrivateIPAddressAPIErrCnt.Inc()
 	}
 
-	return assignPrivateIpAddressesOutput, err
+	return assignPrivateIPAddressesOutput, err
 }
 
-func (e *ec2Wrapper) UnassignPrivateIpAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error) {
-	unAssignPrivateIpAddressesOutput, err := e.ec2ServiceClient.UnassignPrivateIpAddresses(input)
+func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error) {
+	start := time.Now()
+	unAssignPrivateIPAddressesOutput, err := e.ec2ServiceClient.UnassignPrivateIpAddresses(input)
+	ec2APICallLatencies.WithLabelValues("unassign_private_ip").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -384,11 +467,13 @@ func (e *ec2Wrapper) UnassignPrivateIpAddresses(input *ec2.UnassignPrivateIpAddr
 		ec2UnassignPrivateIPAddressAPIErrCnt.Inc()
 	}
 
-	return unAssignPrivateIpAddressesOutput, err
+	return unAssignPrivateIPAddressesOutput, err
 }
 
 func (e *ec2Wrapper) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
+	start := time.Now()
 	createTagsOutput, err := e.ec2ServiceClient.CreateTags(input)
+	ec2APICallLatencies.WithLabelValues("create_tags").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -403,7 +488,9 @@ func (e *ec2Wrapper) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutp
 }
 
 func (e *ec2Wrapper) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
+	start := time.Now()
 	output, err := e.ec2ServiceClient.DescribeSubnets(input)
+	ec2APICallLatencies.WithLabelValues("describe_subnets").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -415,4 +502,55 @@ func (e *ec2Wrapper) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.Desc
 	}
 
 	return output, err
+}
+
+func (e *ec2Wrapper) DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error) {
+	start := time.Now()
+	describeTrunkInterfaceAssociationInput, err := e.ec2ServiceClient.DescribeTrunkInterfaceAssociations(input)
+	ec2APICallLatencies.WithLabelValues("describe_trunk_association").Observe(timeSinceMs(start))
+
+	// Metric Update
+	ec2APICallCnt.Inc()
+	ec2describeTrunkInterfaceAssociationAPICallCnt.Inc()
+
+	if err != nil {
+		ec2APIErrCnt.Inc()
+		ec2describeTrunkInterfaceAssociationAPIErrCnt.Inc()
+	}
+
+	return describeTrunkInterfaceAssociationInput, err
+}
+
+func (e *ec2Wrapper) AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error) {
+	start := time.Now()
+	associateTrunkInterfaceOutput, err := e.ec2ServiceClient.AssociateTrunkInterface(input)
+	ec2APICallLatencies.WithLabelValues("associate_trunk_to_branch").Observe(timeSinceMs(start))
+
+	// Metric Update
+	ec2APICallCnt.Inc()
+	ec2AssociateTrunkInterfaceAPICallCnt.Inc()
+
+	if err != nil {
+		ec2APIErrCnt.Inc()
+		ec2AssociateTrunkInterfaceAPIErrCnt.Inc()
+	}
+
+	return associateTrunkInterfaceOutput, err
+}
+
+func (e *ec2Wrapper) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error) {
+	start := time.Now()
+	modifyNetworkInterfaceAttributeOutput, err := e.ec2ServiceClient.ModifyNetworkInterfaceAttribute(input)
+	ec2APICallLatencies.WithLabelValues("modify_network_interface_attribute").Observe(timeSinceMs(start))
+
+	// Metric Update
+	ec2APICallCnt.Inc()
+	ec2modifyNetworkInterfaceAttributeAPICallCnt.Inc()
+
+	if err != nil {
+		ec2APIErrCnt.Inc()
+		ec2modifyNetworkInterfaceAttributeAPIErrCnt.Inc()
+	}
+
+	return modifyNetworkInterfaceAttributeOutput, err
 }

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package ec2
+package api
 
 import (
 	"github.com/aws/aws-sdk-go/aws"
@@ -29,7 +29,7 @@ const (
 // TODO: Move away from using mock
 
 // HttpClient is used to help with testing
-type HttpClient interface {
+type HTTPClient interface {
 	GetInstanceIdentityDocument() (ec2metadata.EC2InstanceIdentityDocument, error)
 	Region() (string, error)
 }
@@ -41,11 +41,11 @@ type EC2MetadataClient interface {
 }
 
 type ec2MetadataClientImpl struct {
-	client HttpClient
+	client HTTPClient
 }
 
 // New creates an ec2metadata client to retrieve metadata
-func NewMetaDataClient(client HttpClient) EC2MetadataClient {
+func NewMetaDataClient(client HTTPClient) EC2MetadataClient {
 	if client == nil {
 		return &ec2MetadataClientImpl{client: ec2metadata.New(session.New(), aws.NewConfig().WithMaxRetries(MetadataRetries))}
 	} else {
