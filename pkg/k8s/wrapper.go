@@ -75,9 +75,9 @@ func prometheusRegister() {
 
 // K8sWrapper represents an interface with all the common operations on K8s objects
 type K8sWrapper interface {
-	AnnotatePod(pod *v1.Pod, mapKey string, mapVal string) error
 	GetPod(namespace string, name string) (*v1.Pod, error)
-	AdvertiseCapacity(nodeName string, resourceName string, capacity int) error
+	AnnotatePod(podNamespace string, podName string,  key string, val string) error
+	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -94,14 +94,24 @@ func NewK8sWrapper(client client.Client) K8sWrapper {
 }
 
 // AnnotatePod annotates the pod with the provided key and value
-func (k *k8sWrapper) AnnotatePod(pod *v1.Pod, key string, val string) error {
+func (k *k8sWrapper) AnnotatePod(podNamespace string, podName string,  key string, val string) error {
 	annotatePodRequestCallCount.WithLabelValues(key).Inc()
 	ctx := context.Background()
 
-	newPod := pod.DeepCopy()
-	newPod.Annotations[key] = val
+	request := types.NamespacedName{
+		Namespace: podNamespace,
+		Name:      podName,
+	}
 
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		// Get the latest copy of the pod from cache
+		pod := &v1.Pod{}
+		if err := k.client.Get(ctx, request, pod); err != nil {
+			return err
+		}
+		newPod := pod.DeepCopy()
+		newPod.Annotations[key] = val
+
 		return k.client.Patch(ctx, newPod, client.MergeFrom(pod))
 	})
 
@@ -125,19 +135,31 @@ func (k *k8sWrapper) GetPod(namespace string, name string) (*v1.Pod, error) {
 }
 
 // AdvertiseCapacity advertises the resource capacity for the given resource
-func (k *k8sWrapper) AdvertiseCapacity(nodeName string, resourceName string, capacity int) error {
-	advertiseResourceRequestCallCount.WithLabelValues(resourceName).Inc()
+func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error {
 	ctx := context.Background()
 
-	node := &v1.Node{}
-	if err := k.client.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
-		return err
+	request := types.NamespacedName{
+		Name:      nodeName,
 	}
 
-	newNode := node.DeepCopy()
-	newNode.Status.Capacity[v1.ResourceName(resourceName)] = resource.MustParse(strconv.Itoa(capacity))
-
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		node := &v1.Node{}
+		if err := k.client.Get(ctx, request, node); err != nil {
+			return err
+		}
+
+		existingCapacity := node.Status.Capacity[v1.ResourceName(resourceName)]
+		if !existingCapacity.IsZero() && existingCapacity.Value() == int64(capacity) {
+			return nil
+		}
+
+		// Capacity doesn't match the expected capacity, need to advertise again
+		advertiseResourceRequestCallCount.WithLabelValues(resourceName).Inc()
+
+		newNode := node.DeepCopy()
+		newNode.Status.Capacity[v1.ResourceName(resourceName)] = resource.MustParse(strconv.Itoa(capacity))
+
+
 		return k.client.Patch(ctx, newNode, client.MergeFrom(node))
 	})
 
