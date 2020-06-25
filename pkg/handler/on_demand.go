@@ -17,8 +17,6 @@ limitations under the License.
 package handler
 
 import (
-	"fmt"
-
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
@@ -46,39 +44,35 @@ func (h *onDemandResourceHandler) CanHandle(resourceName string) bool {
 }
 
 // HandleCreate provides the resource to the on demand resource by passing the Create Job to the respective Worker
-func (h *onDemandResourceHandler) HandleCreate(resourceName string, requestCount int, pod *v1.Pod) error {
-	resourceProvider, isPresent := h.providers[resourceName]
+func (h *onDemandResourceHandler) HandleCreate(resourceName string, requestCount int64, pod *v1.Pod) error {
+	logger := h.Log.WithValues("resource", resourceName, "pod NS", pod.Namespace, "pod name", pod.Name)
 
-	if !isPresent {
-		return fmt.Errorf("cannot handle resource %s, check canHandle before submitting jobs", resourceName)
+	resourceProvider := h.providers[resourceName]
+
+	job := worker.NewOnDemandCreateJob(pod.Namespace, pod.Name, requestCount)
+	err := resourceProvider.SubmitAsyncJob(job)
+
+	if err != nil {
+		logger.Error(err, "failed to process create request")
+		return err
 	}
-
-	job := worker.NewOnDemandCreateJob(string(pod.UID), pod.Namespace, pod.Name, requestCount)
-	resourceProvider.SubmitAsyncJob(job)
-
-	return nil
-}
-
-func (h *onDemandResourceHandler) HandleDeleting(resourceName string, pod *v1.Pod) error {
-	resourceProvider, isPresent := h.providers[resourceName]
-
-	if !isPresent {
-		return fmt.Errorf("cannot handle resource %s, check canHandle before submitting jobs", resourceName)
-	}
-
-	job := worker.NewOnDemandDeletingJob(string(pod.UID), pod.Namespace, pod.Name, pod.Spec.NodeName)
-	resourceProvider.SubmitAsyncJob(job)
 
 	return nil
 }
 
 // HandleDelete reclaims the on demand resource by passing the Delete Job to the respective Worker
-func (h *onDemandResourceHandler) HandleDelete(podNamespace string, podName string) error {
-	deleteJob := worker.NewOnDemandDeletedJob(podNamespace, podName)
-	// Since we don't have the node name nor the resource used by the pod after it's deleted, submit the job to all
-	// the providers.
-	for _, resourceProvider := range h.providers {
-		resourceProvider.SubmitAsyncJob(deleteJob)
+func (h *onDemandResourceHandler) HandleDelete(resourceName string, pod *v1.Pod) error {
+	logger := h.Log.WithValues("resource", resourceName, "pod NS", pod.Namespace, "pod name", pod.Name)
+
+	resourceProvider := h.providers[resourceName]
+
+	job := worker.NewOnDemandDeleteJob(pod.Namespace, pod.Name)
+	err := resourceProvider.SubmitAsyncJob(job)
+
+	if err != nil {
+		logger.Error(err, "failed to process delete request")
+		return err
 	}
+
 	return nil
 }

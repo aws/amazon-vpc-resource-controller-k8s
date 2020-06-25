@@ -23,53 +23,26 @@ import (
 )
 
 var (
-	podName      = "pod-name"
+	podName = "pod-name"
 	podNamespace = "pod-namespace"
-	podUid       = "pod-uid"
-	reqCount     = 2
-	nodeName     = "node-name"
+	reqCount = int64(2)
 )
 
 // TestNewOnDemandCreateJob tests the fields of Create Job
 func TestNewOnDemandCreateJob(t *testing.T) {
-	onDemandJob := NewOnDemandCreateJob(podUid, podNamespace, podName, reqCount)
+	onDemandJob := NewOnDemandCreateJob(podNamespace, podName, reqCount)
 
 	assert.Equal(t, OperationCreate, onDemandJob.Operation)
-	assert.Equal(t, podUid, string(onDemandJob.UID))
 	assert.Equal(t, podName, onDemandJob.PodName)
 	assert.Equal(t, podNamespace, onDemandJob.PodNamespace)
 	assert.Equal(t, reqCount, onDemandJob.RequestCount)
 }
 
-// TestNewOnDemandDeleteJob tests the fields of Deleted Job
-func TestNewOnDemandDeletedJob(t *testing.T) {
-	onDemandJob := NewOnDemandDeletedJob(podNamespace, podName)
+// TestNewOnDemandDeleteJob tests the fields of Delete Job
+func TestNewOnDemandDeleteJob(t *testing.T) {
+	onDemandJob := NewOnDemandDeleteJob(podNamespace, podName)
 
-	assert.Equal(t, OperationDeleted, onDemandJob.Operation)
+	assert.Equal(t, OperationDelete, onDemandJob.Operation)
 	assert.Equal(t, podName, onDemandJob.PodName)
 	assert.Equal(t, podNamespace, onDemandJob.PodNamespace)
-}
-
-func TestNewOnDemandDeletingJob(t *testing.T) {
-	onDemandJob := NewOnDemandDeletingJob(podUid, podNamespace, podName, nodeName)
-
-	assert.Equal(t, OperationDeleting, onDemandJob.Operation)
-	assert.Equal(t, podUid, string(onDemandJob.UID))
-	assert.Equal(t, podNamespace, onDemandJob.PodNamespace)
-	assert.Equal(t, podName, onDemandJob.PodName)
-	assert.Equal(t, nodeName, onDemandJob.NodeName)
-}
-
-func TestNewOnDemandReconcileJob(t *testing.T) {
-	onDemandJob := NewOnDemandReconcileJob(nodeName)
-
-	assert.Equal(t, OperationReconcile, onDemandJob.Operation)
-	assert.Equal(t, nodeName, onDemandJob.NodeName)
-}
-
-func TestNewOnDemandProcessDeleteQueueJob(t *testing.T) {
-	onDemandJob := NewOnDemandProcessDeleteQueueJob(nodeName)
-
-	assert.Equal(t, OperationProcessDeleteQueue, onDemandJob.Operation)
-	assert.Equal(t, nodeName, onDemandJob.NodeName)
 }

@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
@@ -28,42 +27,11 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/go-logr/logr"
-	"github.com/prometheus/client_golang/prometheus"
-	"k8s.io/apimachinery/pkg/types"
+	v1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
-)
-
-var (
-	branchProviderOperationsErrCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "branch_provider_operations_err_count",
-			Help: "The number of errors encountered for branch provider operations",
-		},
-		[]string{"operation"},
-	)
-
-	branchProviderOperationLatency = prometheus.NewSummaryVec(
-		prometheus.SummaryOpts{
-			Name: "branch_provider_operation_latency",
-			Help: "Branch Provider operations latency in ms",
-		},
-		[]string{"operation", "resource_count"},
-	)
-
-	operationCreateBranchENI            = "create_branch_eni"
-	operationCreateBranchENIAndAnnotate = "create_and_annotate_branch_eni"
-	operationInitTrunk                  = "init_trunk"
-
-	reconcileRequeueRequest   = ctrl.Result{RequeueAfter: time.Minute * 30, Requeue: true}
-	deleteQueueRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
-
-	prometheusRegistered = false
 )
 
 var (
@@ -82,79 +50,42 @@ type branchENIProvider struct {
 	// lock to prevent concurrent writes to the trunk eni map
 	lock sync.RWMutex
 	// trunkENICache is the map of node name to the trunk ENI
-	trunkENICache map[string]trunk.TrunkENI
+	trunkENICache map[string]TrunkENI
 	// workerPool is the worker pool and queue for submitting async job
 	workerPool worker.Worker
-	// k8sHelper provides api for getting security group to be used by the pod
-	k8sHelper utils.K8sCacheHelper
 }
 
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
 func NewBranchENIProvider(logger logr.Logger, k8sWrapper k8s.K8sWrapper,
-	helper api.EC2APIHelper, worker worker.Worker, k8sHelper utils.K8sCacheHelper) provider.ResourceProvider {
-	prometheusRegister()
-	trunk.PrometheusRegister()
-
+	helper api.EC2APIHelper, worker worker.Worker) provider.ResourceProvider {
 	return &branchENIProvider{
-		k8sHelper:     k8sHelper,
 		log:           logger,
 		k8s:           k8sWrapper,
 		ec2APIHelper:  helper,
 		workerPool:    worker,
-		trunkENICache: make(map[string]trunk.TrunkENI),
+		trunkENICache: make(map[string]TrunkENI),
 	}
-}
-
-// prometheusRegister registers prometheus metrics
-func prometheusRegister() {
-	if !prometheusRegistered {
-		metrics.Registry.MustRegister(
-			branchProviderOperationsErrCount,
-			branchProviderOperationLatency)
-
-		prometheusRegistered = true
-	}
-}
-
-// timeSinceMs returns the time since MS from the start time
-func timeSinceMs(start time.Time) float64 {
-	return float64(time.Since(start).Milliseconds())
 }
 
 // InitResources initialized the resource for the given node name. The initialized trunk ENI is stored in
 // cache for use in future Create/Delete Requests
 func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
-	nodeName := instance.Name()
-	log := b.log.WithValues("node name", nodeName)
-	trunkENI := trunk.NewTrunkENI(log, instance.InstanceID(), instance.SubnetID(), instance.SubnetCidrBlock(), b.ec2APIHelper)
+	log := b.log.WithValues("node name", instance.Name())
+	trunkENI := NewTrunkENI(log, instance.InstanceID(), instance.SubnetID(), instance.SubnetCidrBlock(), b.ec2APIHelper)
 
 	// Initialize the Trunk ENI
-	start := time.Now()
-
-	podList, err := b.k8s.ListPods(nodeName)
-	if err != nil {
-		log.Error(err, "failed to get list of pod on node")
-	}
-
-	err = trunkENI.InitTrunk(instance, podList.Items)
+	err := trunkENI.InitTrunk(instance)
 	if err != nil {
 		log.Error(err, "failed to init resource")
-		branchProviderOperationsErrCount.WithLabelValues("init").Inc()
 		return err
 	}
-	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceMs(start))
+	log.Info("initialized trunk eni")
 
 	// Add the Trunk ENI to cache
-	err = b.addTrunkToCache(nodeName, trunkENI)
+	err = b.addTrunkToCache(instance.Name(), trunkENI)
 	if err != nil {
-		branchProviderOperationsErrCount.WithLabelValues("add_trunk_to_cache").Inc()
 		return err
 	}
-
-	// TODO: For efficiency submit the process delete queue job only when the delete queue has items.
-	// Submit periodic jobs for the given node name
-	b.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
-	b.SubmitAsyncJob(worker.NewOnDemandReconcileJob(nodeName))
 
 	b.log.Info("initialized the resource provider successfully")
 
@@ -162,19 +93,18 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 }
 
 // DeInitResources removes the trunk ENI from the cache. Network Interface are not deleted here.
+// TODO: Only delete trunk interface when the node is removed from etcd.
 func (b *branchENIProvider) DeInitResource(instance ec2.EC2Instance) error {
-	nodeName := instance.Name()
-	b.removeTrunkFromCache(nodeName)
-
-	b.log.Info("de-initialized resource provider successfully", "node name", nodeName)
+	b.removeTrunkFromCache(instance.Name())
+	b.log.Info("de-initialized resource provider successfully", "node name", instance.Name())
 
 	return nil
 }
 
 // SubmitAsyncJob submits the job to the k8s worker queue and returns immediately without waiting for the job to
 // complete. Using the k8s worker queue features we can ensure that the same job is not submitted more than once.
-func (b *branchENIProvider) SubmitAsyncJob(job interface{}) {
-	b.workerPool.SubmitJob(job)
+func (b *branchENIProvider) SubmitAsyncJob(job interface{}) error {
+	return b.workerPool.SubmitJob(job)
 }
 
 // ProcessAsyncJob is the job being executed in the worker pool routine. The job must be submitted using the
@@ -185,198 +115,136 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 		return ctrl.Result{}, fmt.Errorf("invalid job type")
 	}
 
-	switch onDemandJob.Operation {
-	case worker.OperationCreate:
-		return b.CreateAndAnnotateResources(onDemandJob.PodNamespace, onDemandJob.PodName, onDemandJob.RequestCount)
-	case worker.OperationDeleting:
-		return b.MarkPodBeingDeleted(onDemandJob.NodeName, onDemandJob.UID, onDemandJob.PodNamespace, onDemandJob.PodName)
-	case worker.OperationDeleted:
-		return b.DeleteBranchUsedByPods(onDemandJob.PodNamespace, onDemandJob.PodName)
-	case worker.OperationProcessDeleteQueue:
-		return b.ProcessDeleteQueue(onDemandJob.NodeName)
-	case worker.OperationReconcile:
-		return b.Reconcile(onDemandJob.NodeName)
+	// Get the pod from cache
+	pod, err := b.k8s.GetPod(onDemandJob.PodNamespace, onDemandJob.PodName)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// TODO: Fix use case where CREATE is ongoing and DELETE is requested.
+
+	if onDemandJob.Operation == worker.OperationDelete {
+		return b.DeleteResources(pod)
+	} else if onDemandJob.Operation == worker.OperationCreate {
+		if _, ok := pod.Annotations[config.ResourceNamePodENI]; !ok {
+			// Pod doesn't have an annotation yet. Create Branch ENI and annotate the pod
+			return b.CreateAndAnnotateResources(pod, int(onDemandJob.RequestCount))
+		}
+		return ctrl.Result{}, nil
 	}
 
 	return ctrl.Result{}, fmt.Errorf("unsupported operation type")
 }
 
 // GetResourceCapacity returns the resource capacity for the given instance.
-func (b *branchENIProvider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
-	instanceName := instance.Name()
-	instanceType := instance.Type()
-	capacity := vpc.InstanceBranchENIsAvailable[instanceType]
-	if capacity != 0 {
-		err := b.k8s.AdvertiseCapacityIfNotSet(instanceName, config.ResourceNamePodENI, capacity)
-		if err != nil {
-			branchProviderOperationsErrCount.WithLabelValues("advertise_capacity").Inc()
-			return err
-		}
-		b.log.V(1).Info("advertised capacity", "instance", instanceName,
-			"instance type", instanceType, "capacity", capacity)
-	}
-	return nil
-}
-
-func (b *branchENIProvider) Reconcile(nodeName string) (ctrl.Result, error) {
-	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
-	log := b.log.WithValues("node", nodeName)
-	if !isPresent {
-		log.Info("stopping the reconcile job")
-		return ctrl.Result{}, nil
-	}
-	podList, err := b.k8s.ListPods(nodeName)
-	if err != nil {
-		log.Error(err, "failed fo list pod")
-		return reconcileRequeueRequest, nil
-	}
-	err = trunkENI.Reconcile(podList.Items)
-	if err != nil {
-		b.log.Error(err, "failed to reconcile")
-		return reconcileRequeueRequest, nil
-	}
-
-	log.V(1).Info("completed reconcile job")
-
-	return reconcileRequeueRequest, nil
-}
-
-func (b *branchENIProvider) ProcessDeleteQueue(nodeName string) (ctrl.Result, error) {
-	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
-	log := b.log.WithValues("node", nodeName)
-	if !isPresent {
-		log.Info("stopping the process delete queue job")
-		return ctrl.Result{}, nil
-	}
-	trunkENI.DeleteCooledDownENIs()
-	return deleteQueueRequeueRequest, nil
+func (b *branchENIProvider) GetResourceCapacity(instanceType string) int {
+	return vpc.InstanceBranchENIsAvailable[instanceType]
 }
 
 // CreateAndAnnotateResources creates resource for the pod, the function can run concurrently for different pods without
 // any locking as long as caller guarantees this function is not called concurrently for same pods.
-func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podName string, resourceCount int) (ctrl.Result, error) {
-	// Get the pod from cache
-	pod, err := b.k8s.GetPod(podNamespace, podName)
-	if err != nil {
-		branchProviderOperationsErrCount.WithLabelValues("create_get_pod").Inc()
-		return ctrl.Result{}, err
-	}
-
-	if _, ok := pod.Annotations[config.ResourceNamePodENI]; ok {
-		// Pod from cache already has annotation, skip the job
-		return ctrl.Result{}, nil
-	}
-
-	// Get the pod object again directly from API Server as the cache can be stale
-	pod, err = b.k8s.GetPodFromAPIServer(podNamespace, podName)
-	if err != nil {
-		branchProviderOperationsErrCount.WithLabelValues("get_pod_api_server").Inc()
-		return ctrl.Result{}, err
-	}
-
-	if _, ok := pod.Annotations[config.ResourceNamePodENI]; ok {
-		// Pod doesn't have an annotation yet. Create Branch ENI and annotate the pod
-		b.log.Info("skipping pod event as the pod already has pod-eni allocated",
-			"namespace", pod.Namespace, "name", pod.Name)
-		return ctrl.Result{}, nil
-	}
-
-	securityGroups, err := b.k8sHelper.GetPodSecurityGroups(pod)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
+func (b *branchENIProvider) CreateAndAnnotateResources(pod *v1.Pod, resourceCount int) (ctrl.Result, error) {
 	log := b.log.WithValues("pod namespace", pod.Namespace, "pod name", pod.Name, "node name", pod.Spec.NodeName)
 
-	start := time.Now()
 	trunkENI, isPresent := b.getTrunkFromCache(pod.Spec.NodeName)
 	if !isPresent {
-		// This should never happen
-		branchProviderOperationsErrCount.WithLabelValues("get_trunk_create").Inc()
+		// Trunk may not have been initialized yet. Request will be retried
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
 	}
 
-	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENI, string(resourceCount)).
-		Observe(timeSinceMs(start))
-
-	jsonBytes, err := json.Marshal(branchENIs)
-	if err != nil {
-		trunkENI.PushENIsToFrontOfDeleteQueue(branchENIs)
-		b.log.Info("pushed the ENIs to the delete queue as failed to unmarshal ENI details", "ENI/s", branchENIs)
-		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
-		return ctrl.Result{}, err
-	}
-
-	err = b.k8s.AnnotatePod(pod.Namespace, pod.Name, config.ResourceNamePodENI, string(jsonBytes))
-	if err != nil {
-		trunkENI.PushENIsToFrontOfDeleteQueue(branchENIs)
-		b.log.Info("pushed the ENIs to the delete queue as failed to annotate the pod", "ENI/s", branchENIs)
-		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
-		return ctrl.Result{}, err
-	}
-
-	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENIAndAnnotate, string(resourceCount)).
-		Observe(timeSinceMs(start))
-
-	log.Info("created and annotated branch interface/s successfully", "branches", branchENIs)
-
-	return ctrl.Result{}, nil
-}
-
-// DeleteResources deletes the branch ENIs present in the annotation of the pod
-func (b *branchENIProvider) MarkPodBeingDeleted(nodeName string, uid types.UID, podNamespace string, podName string) (ctrl.Result, error) {
-
-	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
-	if !isPresent {
-		branchProviderOperationsErrCount.WithLabelValues("get_trunk_delete").Inc()
-		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", nodeName)
-	}
-
-	err := trunkENI.MarkPodBeingDeleted(uid, podNamespace, podName)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{}, nil
-}
-
-func (b *branchENIProvider) DeleteBranchUsedByPods(podNamespace string, podName string) (ctrl.Result, error) {
-	log := b.log.WithValues("pod namespace", podNamespace, "pod name", podName)
-
-	b.lock.RLock()
-	defer b.lock.RUnlock()
-
+	var branches []*BranchENI
+	var branch *BranchENI
 	var err error
-	for nodeName, trunkENI := range b.trunkENICache {
-		err = trunkENI.PushBranchENIsToCoolDownQueue(podNamespace, podName)
-		if err == nil {
-			log.V(1).Info("pushed the branch interface/s to cool down queue", "node name", nodeName)
+
+	for i := 0; i < resourceCount; i++ {
+		// TODO: Pass Security Groups Here
+		// TODO: Fallback to etho security gorup if no interface found
+		branch, err = trunkENI.CreateAndAssociateBranchToTrunk(nil)
+		if err != nil {
 			break
 		}
+		branches = append(branches, branch)
 	}
 
-	// None of the trunk ENI owned that pod.
+	// One or more Branch ENI failed to create, delete all created branch ENIs
 	if err != nil {
-		log.Error(err, "failed to delete the branch interfaces used by the pod")
+		return b.handleCreateFailed(err, pod.Spec.NodeName, trunkENI, branches)
 	}
 
+	jsonBytes, err := json.Marshal(branches)
+	if err != nil {
+		return b.handleCreateFailed(err, pod.Spec.NodeName, trunkENI, branches)
+	}
+
+	err = b.k8s.AnnotatePod(pod, config.ResourceNamePodENI, string(jsonBytes))
+	if err != nil {
+		return b.handleCreateFailed(err, pod.Spec.NodeName, trunkENI, branches)
+	}
+
+	log.Info("created and annotated branch interface/s successfully", "branches", branches)
+
+	return ctrl.Result{}, nil
+}
+
+// TODO: On next retry only delete failed ENIs
+// handleCreateFailed deletes the list of branch interfaces for the given trunk network interface
+func (b *branchENIProvider) handleCreateFailed(err error, nodeName string, trunkENI TrunkENI,
+	branches []*BranchENI) (ctrl.Result, error) {
+	deleteErrors := b.deleteBranchInterfaces(nodeName, trunkENI, branches)
+	if deleteErrors != nil && len(deleteErrors) > 0 {
+		return ctrl.Result{}, fmt.Errorf("failed to create %v and delete created branches %+v", err, deleteErrors)
+	}
 	return ctrl.Result{}, err
 }
 
+// DeleteResources deletes the branch ENIs present in the annotation of the pod
+func (b *branchENIProvider) DeleteResources(pod *v1.Pod) (ctrl.Result, error) {
+	log := b.log.WithValues("pod namespace", pod.Namespace, "pod name", pod.Name, "node name", pod.Spec.NodeName)
+	trunk, isPresent := b.getTrunkFromCache(pod.Spec.NodeName)
+	if !isPresent {
+		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
+	}
+
+	var branchENIs []*BranchENI
+	podENIAnnotation := pod.Annotations[config.ResourceNamePodENI]
+	if err := json.Unmarshal([]byte(podENIAnnotation), &branchENIs); err != nil {
+		log.Error(err, "failed to unmarshal resource annotation", "annotation", podENIAnnotation)
+		return ctrl.Result{}, err
+	}
+
+	err := b.deleteBranchInterfaces(pod.Spec.NodeName, trunk, branchENIs)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("faield to delete branch ENI/s %+v", err)
+	}
+
+	log.Info("deleted specified branch interface/s ", "interface id/s", branchENIs)
+
+	return ctrl.Result{}, nil
+}
+
+// deleteBranchInterfaces deletes the all the branch interfaces provided as the argument belonging to the trunk ENI
+func (b *branchENIProvider) deleteBranchInterfaces(nodeName string, trunk TrunkENI, branchENIs []*BranchENI) []error {
+	log := b.log.WithValues("node", nodeName)
+	var errors []error
+	for _, branchENI := range branchENIs {
+		err := trunk.DeleteBranchNetworkInterface(branchENI)
+		if err != nil {
+			errors = append(errors, err)
+			continue
+		}
+		log.Info("deleted branch network interface successfully", "id", branchENI.BranchENId)
+	}
+	return errors
+}
+
 // addTrunkToCache adds the trunk eni to cache, if the trunk already exists an error is thrown
-func (b *branchENIProvider) addTrunkToCache(nodeName string, trunkENI trunk.TrunkENI) error {
+func (b *branchENIProvider) addTrunkToCache(nodeName string, trunkENI TrunkENI) error {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 	log := b.log.WithValues("node", nodeName)
 
 	if _, ok := b.trunkENICache[nodeName]; ok {
-		branchProviderOperationsErrCount.WithLabelValues("add_to_cache").Inc()
 		log.Error(ErrTrunkExistInCache, "trunk already exist in cache")
 		return ErrTrunkExistInCache
 	}
@@ -394,7 +262,6 @@ func (b *branchENIProvider) removeTrunkFromCache(nodeName string) {
 	log := b.log.WithValues("node", nodeName)
 
 	if _, ok := b.trunkENICache[nodeName]; !ok {
-		branchProviderOperationsErrCount.WithLabelValues("remove_from_cache").Inc()
 		// No need to propagate the error
 		log.Error(ErrTrunkNotInCache, "trunk doesn't exist in cache")
 		return
@@ -406,7 +273,7 @@ func (b *branchENIProvider) removeTrunkFromCache(nodeName string) {
 }
 
 // getTrunkFromCache returns the trunkENI form the cache for the given node name
-func (b *branchENIProvider) getTrunkFromCache(nodeName string) (trunkENI trunk.TrunkENI, present bool) {
+func (b *branchENIProvider) getTrunkFromCache(nodeName string) (trunkENI TrunkENI, present bool) {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
 

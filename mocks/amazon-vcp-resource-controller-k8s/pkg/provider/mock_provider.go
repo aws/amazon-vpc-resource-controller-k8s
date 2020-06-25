@@ -48,6 +48,20 @@ func (mr *MockResourceProviderMockRecorder) DeInitResource(arg0 interface{}) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeInitResource", reflect.TypeOf((*MockResourceProvider)(nil).DeInitResource), arg0)
 }
 
+// GetResourceCapacity mocks base method
+func (m *MockResourceProvider) GetResourceCapacity(arg0 string) int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetResourceCapacity", arg0)
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// GetResourceCapacity indicates an expected call of GetResourceCapacity
+func (mr *MockResourceProviderMockRecorder) GetResourceCapacity(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetResourceCapacity", reflect.TypeOf((*MockResourceProvider)(nil).GetResourceCapacity), arg0)
+}
+
 // InitResource mocks base method
 func (m *MockResourceProvider) InitResource(arg0 ec2.EC2Instance) error {
 	m.ctrl.T.Helper()
@@ -78,27 +92,15 @@ func (mr *MockResourceProviderMockRecorder) ProcessAsyncJob(arg0 interface{}) *g
 }
 
 // SubmitAsyncJob mocks base method
-func (m *MockResourceProvider) SubmitAsyncJob(arg0 interface{}) {
+func (m *MockResourceProvider) SubmitAsyncJob(arg0 interface{}) error {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SubmitAsyncJob", arg0)
+	ret := m.ctrl.Call(m, "SubmitAsyncJob", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 // SubmitAsyncJob indicates an expected call of SubmitAsyncJob
 func (mr *MockResourceProviderMockRecorder) SubmitAsyncJob(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitAsyncJob", reflect.TypeOf((*MockResourceProvider)(nil).SubmitAsyncJob), arg0)
-}
-
-// UpdateResourceCapacity mocks base method
-func (m *MockResourceProvider) UpdateResourceCapacity(arg0 ec2.EC2Instance) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateResourceCapacity", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// UpdateResourceCapacity indicates an expected call of UpdateResourceCapacity
-func (mr *MockResourceProviderMockRecorder) UpdateResourceCapacity(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateResourceCapacity", reflect.TypeOf((*MockResourceProvider)(nil).UpdateResourceCapacity), arg0)
 }
