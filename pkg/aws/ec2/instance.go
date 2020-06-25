@@ -60,9 +60,9 @@ type EC2Instance interface {
 // NewEC2Instance returns a new EC2 Instance type
 func NewEC2Instance(nodeName string, instanceID string, os string) EC2Instance {
 	return &ec2Instance{
-		name:         nodeName,
-		os:           os,
-		instanceID:   instanceID,
+		name:       nodeName,
+		os:         os,
+		instanceID: instanceID,
 	}
 }
 

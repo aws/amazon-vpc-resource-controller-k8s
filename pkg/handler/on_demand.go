@@ -17,6 +17,7 @@ limitations under the License.
 package handler
 
 import (
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/go-logr/logr"
@@ -24,59 +25,32 @@ import (
 )
 
 type onDemandResourceHandler struct {
-	resourceWorkers map[string]worker.Worker
-	Log             logr.Logger
-}
-
-// Operations are the supported operations for on demand resource handler
-type Operations string
-
-const (
-	// Create represent create resource operation
-	Create Operations = "Create"
-	// Delete represents delete resource operation
-	Delete Operations = "Delete"
-)
-
-// OnDemandJob represents the job that will be executed by the respective worker
-type OnDemandJob struct {
-	// Operation is the type of operation to perform on the given pod
-	Operation Operations
-	// PodName is the name of the pod
-	PodName string
-	// PodNamespace is the pod's namespace
-	PodNamespace string
-	// RequestCount is the number of resources to create for operations of type Create. Optional for other operations
-	RequestCount int64
+	providers map[string]provider.ResourceProvider
+	Log       logr.Logger
 }
 
 // NewOnDemandHandler returns a new on demand handler with all the workers that can handle particular resource types
-func NewOnDemandHandler(log logr.Logger, onDemandResHandlers map[string]worker.Worker) Handler {
+func NewOnDemandHandler(log logr.Logger, ondDemandProviders map[string]provider.ResourceProvider) Handler {
 	return &onDemandResourceHandler{
-		resourceWorkers: onDemandResHandlers,
-		Log:             log,
+		providers: ondDemandProviders,
+		Log:       log,
 	}
 }
 
 // CanHandle returns true if the resource can be handled by the on demand handler
 func (h *onDemandResourceHandler) CanHandle(resourceName string) bool {
-	_, canHandle := h.resourceWorkers[resourceName]
+	_, canHandle := h.providers[resourceName]
 	return canHandle
 }
 
 // HandleCreate provides the resource to the on demand resource by passing the Create Job to the respective Worker
 func (h *onDemandResourceHandler) HandleCreate(resourceName string, requestCount int64, pod *v1.Pod) error {
 	logger := h.Log.WithValues("resource", resourceName, "pod NS", pod.Namespace, "pod name", pod.Name)
-	job := OnDemandJob{
-		Operation:    Create,
-		PodName:      pod.Name,
-		PodNamespace: pod.Namespace,
-		RequestCount: requestCount,
-	}
 
-	worker := h.resourceWorkers[resourceName]
+	resourceProvider := h.providers[resourceName]
 
-	err := worker.SubmitJob(job)
+	job := worker.NewOnDemandCreateJob(pod.Namespace, pod.Name, requestCount)
+	err := resourceProvider.SubmitAsyncJob(job)
 
 	if err != nil {
 		logger.Error(err, "failed to process create request")
@@ -89,15 +63,11 @@ func (h *onDemandResourceHandler) HandleCreate(resourceName string, requestCount
 // HandleDelete reclaims the on demand resource by passing the Delete Job to the respective Worker
 func (h *onDemandResourceHandler) HandleDelete(resourceName string, pod *v1.Pod) error {
 	logger := h.Log.WithValues("resource", resourceName, "pod NS", pod.Namespace, "pod name", pod.Name)
-	job := OnDemandJob{
-		Operation:    Delete,
-		PodName:      pod.Name,
-		PodNamespace: pod.Namespace,
-	}
 
-	worker := h.resourceWorkers[resourceName]
+	resourceProvider := h.providers[resourceName]
 
-	err := worker.SubmitJob(job)
+	job := worker.NewOnDemandDeleteJob(pod.Namespace, pod.Name)
+	err := resourceProvider.SubmitAsyncJob(job)
 
 	if err != nil {
 		logger.Error(err, "failed to process delete request")

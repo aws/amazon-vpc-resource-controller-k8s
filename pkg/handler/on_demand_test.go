@@ -19,7 +19,8 @@ package handler
 import (
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
+	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/golang/mock/gomock"
@@ -43,16 +44,29 @@ var (
 		Spec:   v1.PodSpec{},
 		Status: v1.PodStatus{},
 	}
+
+	createJob = worker.OnDemandJob{
+		Operation:    worker.OperationCreate,
+		PodName:      mockPodName,
+		PodNamespace: mockPodNamespace,
+		RequestCount: 1,
+	}
+
+	deleteJob = worker.OnDemandJob{
+		Operation:    worker.OperationDelete,
+		PodName:      mockPodName,
+		PodNamespace: mockPodNamespace,
+	}
 )
 
 // getHandlerWithMock returns the OnDemandHandler with mock Worker
-func getHandlerWithMock(ctrl *gomock.Controller) (Handler, *mock_worker.MockWorker) {
-	mockWorker := mock_worker.NewMockWorker(ctrl)
+func getHandlerWithMock(ctrl *gomock.Controller) (Handler, *mock_provider.MockResourceProvider) {
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
 	log := zap.New(zap.UseDevMode(true)).WithName("on demand handler")
 
-	handler := NewOnDemandHandler(log, map[string]worker.Worker{mockResourceName: mockWorker})
+	handler := NewOnDemandHandler(log, map[string]provider.ResourceProvider{mockResourceName: mockProvider})
 
-	return handler, mockWorker
+	return handler, mockProvider
 }
 
 // Test_NewOnDemandHandler tests new on demand handler in not nil
@@ -79,14 +93,9 @@ func Test_HandleCreate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, mockWorker := getHandlerWithMock(ctrl)
+	handler, mockProvider := getHandlerWithMock(ctrl)
 
-	mockWorker.EXPECT().SubmitJob(OnDemandJob{
-		Operation:    Create,
-		PodName:      mockPodName,
-		PodNamespace: mockPodNamespace,
-		RequestCount: 1,
-	}).Return(nil)
+	mockProvider.EXPECT().SubmitAsyncJob(createJob).Return(nil)
 
 	err := handler.HandleCreate(mockResourceName, 1, mockPod)
 	assert.NoError(t, err)
@@ -97,13 +106,9 @@ func Test_HandleDelete(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, mockWorker := getHandlerWithMock(ctrl)
+	handler, mockProvider := getHandlerWithMock(ctrl)
 
-	mockWorker.EXPECT().SubmitJob(OnDemandJob{
-		Operation:    Delete,
-		PodName:      mockPodName,
-		PodNamespace: mockPodNamespace,
-	}).Return(nil)
+	mockProvider.EXPECT().SubmitAsyncJob(deleteJob).Return(nil)
 
 	err := handler.HandleDelete(mockResourceName, mockPod)
 	assert.NoError(t, err)
@@ -114,14 +119,10 @@ func Test_HandleCreate_error(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, mockWorker := getHandlerWithMock(ctrl)
+	handler, mockProvider := getHandlerWithMock(ctrl)
 
-	mockWorker.EXPECT().SubmitJob(OnDemandJob{
-		Operation:    Create,
-		PodName:      mockPodName,
-		PodNamespace: mockPodNamespace,
-		RequestCount: 1,
-	}).Return(worker.BufferOverflowError)
+	mockProvider.EXPECT().SubmitAsyncJob(createJob).
+		Return(worker.BufferOverflowError)
 
 	err := handler.HandleCreate(mockResourceName, 1, mockPod)
 	assert.Error(t, err, worker.BufferOverflowError)
@@ -132,13 +133,10 @@ func Test_HandleDelete_error(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, mockWorker := getHandlerWithMock(ctrl)
+	handler, mockProvider := getHandlerWithMock(ctrl)
 
-	mockWorker.EXPECT().SubmitJob(OnDemandJob{
-		Operation:    Delete,
-		PodName:      mockPodName,
-		PodNamespace: mockPodNamespace,
-	}).Return(worker.BufferOverflowError)
+	mockProvider.EXPECT().SubmitAsyncJob(deleteJob).
+		Return(worker.BufferOverflowError)
 
 	err := handler.HandleDelete(mockResourceName, mockPod)
 	assert.Error(t, err, worker.BufferOverflowError)

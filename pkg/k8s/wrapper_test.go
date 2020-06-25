@@ -29,14 +29,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	fakeClient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 var (
 	podName      = "name"
 	podNamespace = "namespace"
 
-	oldAnnotation = "old-annotation-key"
+	oldAnnotation      = "old-annotation-key"
+	oldAnnotationValue = "old-annotation-val"
 
 	newAnnotation      = "new-annotation"
 	newAnnotationValue = "new-annotation-val"
@@ -74,47 +75,19 @@ var (
 // getMockK8sWrapper returns the mock wrapper interface
 func getMockK8sWrapperWithClient() (K8sWrapper, client.Client) {
 	scheme := runtime.NewScheme()
-	_ = v1.AddToScheme(scheme)
-	fakeClient := fake.NewFakeClientWithScheme(scheme, mockPod, mockNode)
+	v1.AddToScheme(scheme)
+	fakeClient := fakeClient.NewFakeClientWithScheme(scheme, mockPod, mockNode)
 	return NewK8sWrapper(fakeClient), fakeClient
 }
 
-// TestK8sWrapper_AnnotatePod tests that annotate pod doesn't throw error on adding a new annotation to pod
+// TestApi_AnnotatePod tests that annotate pod doesn't throw error on adding a new annotation to pod
 func TestK8sWrapper_AnnotatePod(t *testing.T) {
-	wrapper, k8sClient := getMockK8sWrapperWithClient()
-
-	err := wrapper.AnnotatePod(podNamespace, podName, newAnnotation, newAnnotationValue)
-	assert.NoError(t, err)
-
-	// Validate the pod got the annotation
-	updatedPod := &v1.Pod{}
-	err = k8sClient.Get(context.Background(), types.NamespacedName{
-		Namespace: podNamespace,
-		Name:      podName,
-	}, updatedPod)
-
-	assert.NoError(t, err)
-	assert.Equal(t, newAnnotationValue, updatedPod.Annotations[newAnnotation])
-}
-
-// TestNewK8sWrapper_Annotate_And_Get_Pod tests E2E  annotates a pod and gets it from wrapper to verify annotation exists
-func TestNewK8sWrapper_Annotate_And_Get_Pod(t *testing.T) {
 	wrapper, _ := getMockK8sWrapperWithClient()
 
-	err := wrapper.AnnotatePod(podNamespace, podName, newAnnotation, newAnnotationValue)
+	testPod := mockPod.DeepCopy()
+
+	err := wrapper.AnnotatePod(testPod, newAnnotation, newAnnotationValue)
 	assert.NoError(t, err)
-
-	pod, err := wrapper.GetPod(podNamespace, podName)
-	assert.NoError(t, err)
-	assert.Equal(t, newAnnotationValue, pod.Annotations[newAnnotation])
-}
-
-// TestK8sWrapper_AnnotatePod_PodNotExists tests that annotate pod fails if the pod doesn't exist
-func TestK8sWrapper_AnnotatePod_PodNotExists(t *testing.T) {
-	wrapper, _ := getMockK8sWrapperWithClient()
-
-	err := wrapper.AnnotatePod(podNamespace, "non-existent-pod", newAnnotation, newAnnotationValue)
-	assert.NotNil(t, err)
 }
 
 // TestK8sWrapper_GetPod gets the pod object form the wrapper api
@@ -136,9 +109,23 @@ func TestK8sWrapper_GetPod_NotExists(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
+// TestNewK8sWrapper_Annotate_And_Get_Pod annotates a pod and gets it from wrapper to verify annotation exists
+func TestNewK8sWrapper_Annotate_And_Get_Pod(t *testing.T) {
+	wrapper, _ := getMockK8sWrapperWithClient()
+
+	testPod := mockPod.DeepCopy()
+
+	err := wrapper.AnnotatePod(testPod, newAnnotation, newAnnotationValue)
+	assert.NoError(t, err)
+
+	pod, err := wrapper.GetPod(podNamespace, podName)
+	assert.NoError(t, err)
+	assert.Equal(t, newAnnotationValue, pod.Annotations[newAnnotation])
+}
+
 // TestK8sWrapper_AdvertiseCapacity tests that the capacity is advertised to the k8s node
 func TestK8sWrapper_AdvertiseCapacity(t *testing.T) {
-	wrapper, k8sClient := getMockK8sWrapperWithClient()
+	wrapper, client := getMockK8sWrapperWithClient()
 
 	// Make node copy and ensure that the advertised capacity is 0
 	testNode := mockNode.DeepCopy()
@@ -147,12 +134,12 @@ func TestK8sWrapper_AdvertiseCapacity(t *testing.T) {
 
 	// Advertise capacity
 	capacityToAdvertise := 10
-	err := wrapper.AdvertiseCapacityIfNotSet(nodeName, mockResourceName, capacityToAdvertise)
+	err := wrapper.AdvertiseCapacity(nodeName, mockResourceName, capacityToAdvertise)
 	assert.NoError(t, err)
 
 	// Get the node from the client and verify the capacity is set
 	node := &v1.Node{}
-	err = k8sClient.Get(context.Background(), types.NamespacedName{Name: nodeName}, node)
+	err = client.Get(context.Background(), types.NamespacedName{Name: nodeName}, node)
 
 	// Verify no error and the capacity is set to the desired capacity
 	assert.NoError(t, err)
@@ -165,16 +152,6 @@ func TestK8sWrapper_AdvertiseCapacity_Err(t *testing.T) {
 	wrapper, _ := getMockK8sWrapperWithClient()
 
 	deletedNodeName := "deleted-node"
-	err := wrapper.AdvertiseCapacityIfNotSet(deletedNodeName, mockResourceName, 10)
+	err := wrapper.AdvertiseCapacity(deletedNodeName, mockResourceName, 10)
 	assert.NotNil(t, err)
-}
-
-// TestK8sWrapper_AdvertiseCapacity_AlreadySet tests that if capacity of node is already set no error is thrown.
-func TestK8sWrapper_AdvertiseCapacity_AlreadySet(t *testing.T) {
-	wrapper, _ := getMockK8sWrapperWithClient()
-	err := wrapper.AdvertiseCapacityIfNotSet(nodeName, existingResource, 5)
-
-	capacity, _ := mockNode.Status.Capacity[v1.ResourceName(existingResource)]
-	assert.NoError(t, err)
-	assert.Equal(t, existingResourceQuantity, capacity.Value())
 }
