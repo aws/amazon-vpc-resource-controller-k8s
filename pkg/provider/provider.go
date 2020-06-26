@@ -27,8 +27,8 @@ type ResourceProvider interface {
 	InitResource(instance ec2.EC2Instance) error
 	// DeInitResources de initializes the resource provider
 	DeInitResource(instance ec2.EC2Instance) error
-	// GetResourceCapacity returns the capacity of the resource managed by the provider
-	GetResourceCapacity(instanceType string) int
+	// UpdateResourceCapacity updates the resource capacity
+	UpdateResourceCapacity(instance ec2.EC2Instance) error
 	// SubmitAsyncJob submits a job to the worker
 	SubmitAsyncJob(job interface{}) error
 	// ProcessAsyncJob processes a job form the worker queue

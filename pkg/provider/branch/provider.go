@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
@@ -30,8 +31,42 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+)
+
+var (
+	branchProviderOperationsErrCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_provider_operations_err_count",
+			Help: "The number of errors encountered for branch provider operations",
+		},
+		[]string{"operation"},
+	)
+
+	trunkENIOperationsErrCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "trunk_eni_operations_err_count",
+			Help: "The number of errors encountered for operations on Trunk ENI",
+		},
+		[]string{"operation"},
+	)
+
+	branchProviderOperationLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name: "branch_provider_operation_latency",
+			Help: "Branch Provider operations latency in ms",
+		},
+		[]string{"operation", "resource_count"},
+	)
+
+	operationCreateBranchENI            = "create_branch_eni"
+	operationCreateBranchENIAndAnnotate = "create_and_annotate_branch_eni"
+	operationDeleteBranchENI            = "delete_branch_eni"
+	operationInitTrunk                  = "init_trunk"
+
+	prometheusRegistered = false
 )
 
 var (
@@ -58,6 +93,10 @@ type branchENIProvider struct {
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
 func NewBranchENIProvider(logger logr.Logger, k8sWrapper k8s.K8sWrapper,
 	helper api.EC2APIHelper, worker worker.Worker) provider.ResourceProvider {
+	if !prometheusRegistered {
+		prometheusRegister()
+	}
+
 	return &branchENIProvider{
 		log:           logger,
 		k8s:           k8sWrapper,
@@ -67,6 +106,20 @@ func NewBranchENIProvider(logger logr.Logger, k8sWrapper k8s.K8sWrapper,
 	}
 }
 
+// prometheusRegister registers prometheus metrics
+func prometheusRegister() {
+	prometheus.MustRegister(branchProviderOperationsErrCount)
+	prometheus.MustRegister(trunkENIOperationsErrCount)
+	prometheus.MustRegister(branchProviderOperationLatency)
+
+	prometheusRegistered = true
+}
+
+// timeSinceMs returns the time since MS from the start time
+func timeSinceMs(start time.Time) float64 {
+	return float64(time.Since(start).Milliseconds())
+}
+
 // InitResources initialized the resource for the given node name. The initialized trunk ENI is stored in
 // cache for use in future Create/Delete Requests
 func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
@@ -74,16 +127,21 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	trunkENI := NewTrunkENI(log, instance.InstanceID(), instance.SubnetID(), instance.SubnetCidrBlock(), b.ec2APIHelper)
 
 	// Initialize the Trunk ENI
+	start := time.Now()
 	err := trunkENI.InitTrunk(instance)
 	if err != nil {
 		log.Error(err, "failed to init resource")
+		branchProviderOperationsErrCount.WithLabelValues("init").Inc()
 		return err
 	}
+	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceMs(start))
+
 	log.Info("initialized trunk eni")
 
 	// Add the Trunk ENI to cache
 	err = b.addTrunkToCache(instance.Name(), trunkENI)
 	if err != nil {
+		branchProviderOperationsErrCount.WithLabelValues("add_trunk_to_cache").Inc()
 		return err
 	}
 
@@ -118,6 +176,7 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 	// Get the pod from cache
 	pod, err := b.k8s.GetPod(onDemandJob.PodNamespace, onDemandJob.PodName)
 	if err != nil {
+		branchProviderOperationsErrCount.WithLabelValues("get_pod").Inc()
 		return ctrl.Result{}, err
 	}
 
@@ -137,18 +196,27 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 }
 
 // GetResourceCapacity returns the resource capacity for the given instance.
-func (b *branchENIProvider) GetResourceCapacity(instanceType string) int {
-	return vpc.InstanceBranchENIsAvailable[instanceType]
+func (b *branchENIProvider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
+	capacity := vpc.InstanceBranchENIsAvailable[instance.Type()]
+	if capacity != 0 {
+		err := b.k8s.AdvertiseCapacityIfNotSet(instance.Name(), config.ResourceNamePodENI, capacity)
+		if err != nil {
+			branchProviderOperationsErrCount.WithLabelValues("advertise_capacity").Inc()
+			return err
+		}
+	}
+	return nil
 }
 
 // CreateAndAnnotateResources creates resource for the pod, the function can run concurrently for different pods without
 // any locking as long as caller guarantees this function is not called concurrently for same pods.
 func (b *branchENIProvider) CreateAndAnnotateResources(pod *v1.Pod, resourceCount int) (ctrl.Result, error) {
 	log := b.log.WithValues("pod namespace", pod.Namespace, "pod name", pod.Name, "node name", pod.Spec.NodeName)
-
+	start := time.Now()
 	trunkENI, isPresent := b.getTrunkFromCache(pod.Spec.NodeName)
 	if !isPresent {
-		// Trunk may not have been initialized yet. Request will be retried
+		// This should never happen
+		branchProviderOperationsErrCount.WithLabelValues("get_trunk_create").Inc()
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
 	}
 
@@ -161,6 +229,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(pod *v1.Pod, resourceCoun
 		// TODO: Fallback to etho security gorup if no interface found
 		branch, err = trunkENI.CreateAndAssociateBranchToTrunk(nil)
 		if err != nil {
+			branchProviderOperationsErrCount.WithLabelValues("create_trunk").Inc()
 			break
 		}
 		branches = append(branches, branch)
@@ -171,15 +240,22 @@ func (b *branchENIProvider) CreateAndAnnotateResources(pod *v1.Pod, resourceCoun
 		return b.handleCreateFailed(err, pod.Spec.NodeName, trunkENI, branches)
 	}
 
+	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENI, string(resourceCount)).
+		Observe(timeSinceMs(start))
+
 	jsonBytes, err := json.Marshal(branches)
 	if err != nil {
 		return b.handleCreateFailed(err, pod.Spec.NodeName, trunkENI, branches)
 	}
 
-	err = b.k8s.AnnotatePod(pod, config.ResourceNamePodENI, string(jsonBytes))
+	err = b.k8s.AnnotatePod(pod.Namespace, pod.Name, config.ResourceNamePodENI, string(jsonBytes))
 	if err != nil {
+		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
 		return b.handleCreateFailed(err, pod.Spec.NodeName, trunkENI, branches)
 	}
+
+	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENIAndAnnotate, string(resourceCount)).
+		Observe(timeSinceMs(start))
 
 	log.Info("created and annotated branch interface/s successfully", "branches", branches)
 
@@ -200,8 +276,10 @@ func (b *branchENIProvider) handleCreateFailed(err error, nodeName string, trunk
 // DeleteResources deletes the branch ENIs present in the annotation of the pod
 func (b *branchENIProvider) DeleteResources(pod *v1.Pod) (ctrl.Result, error) {
 	log := b.log.WithValues("pod namespace", pod.Namespace, "pod name", pod.Name, "node name", pod.Spec.NodeName)
+	start := time.Now()
 	trunk, isPresent := b.getTrunkFromCache(pod.Spec.NodeName)
 	if !isPresent {
+		branchProviderOperationsErrCount.WithLabelValues("get_trunk_delete").Inc()
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
 	}
 
@@ -217,6 +295,9 @@ func (b *branchENIProvider) DeleteResources(pod *v1.Pod) (ctrl.Result, error) {
 		return ctrl.Result{}, fmt.Errorf("faield to delete branch ENI/s %+v", err)
 	}
 
+	branchProviderOperationLatency.WithLabelValues(operationDeleteBranchENI, string(len(branchENIs))).
+		Observe(timeSinceMs(start))
+
 	log.Info("deleted specified branch interface/s ", "interface id/s", branchENIs)
 
 	return ctrl.Result{}, nil
@@ -229,6 +310,7 @@ func (b *branchENIProvider) deleteBranchInterfaces(nodeName string, trunk TrunkE
 	for _, branchENI := range branchENIs {
 		err := trunk.DeleteBranchNetworkInterface(branchENI)
 		if err != nil {
+			branchProviderOperationsErrCount.WithLabelValues("delete_branch_eni").Inc()
 			errors = append(errors, err)
 			continue
 		}
@@ -245,6 +327,7 @@ func (b *branchENIProvider) addTrunkToCache(nodeName string, trunkENI TrunkENI) 
 	log := b.log.WithValues("node", nodeName)
 
 	if _, ok := b.trunkENICache[nodeName]; ok {
+		branchProviderOperationsErrCount.WithLabelValues("add_to_cache").Inc()
 		log.Error(ErrTrunkExistInCache, "trunk already exist in cache")
 		return ErrTrunkExistInCache
 	}
@@ -262,6 +345,7 @@ func (b *branchENIProvider) removeTrunkFromCache(nodeName string) {
 	log := b.log.WithValues("node", nodeName)
 
 	if _, ok := b.trunkENICache[nodeName]; !ok {
+		branchProviderOperationsErrCount.WithLabelValues("remove_from_cache").Inc()
 		// No need to propagate the error
 		log.Error(ErrTrunkNotInCache, "trunk doesn't exist in cache")
 		return
