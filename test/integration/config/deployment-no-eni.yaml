@@ -1,0 +1,23 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: no-eni
+spec:
+  selector:
+    matchLabels:
+      role: db
+      environment: dev
+  replicas: 30
+  template:
+    metadata:
+      labels:
+        role: db
+        environment: dev
+    spec:
+      containers:
+        - name: no-eni
+          image: gcr.io/google-samples/node-hello:1.0
+          ports:
+            - containerPort: 8080
+              protocol: TCP

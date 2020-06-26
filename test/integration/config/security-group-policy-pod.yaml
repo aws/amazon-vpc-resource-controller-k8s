@@ -1,0 +1,19 @@
+---
+# Example of SecurityGroupPolicy that uses Pod labels to determine if a new Pod get a ENI with the specified Security Groups.
+apiVersion: vpcresources.k8s.aws/v1beta1
+kind: SecurityGroupPolicy
+metadata:
+  name: securitygrouppolicy-sample-podselector
+spec:
+  podSelector:  # Select eligible Pod using the Pod's label. The result from each item will be ANDed to retrieve final result.
+    matchLabels:  # Select Pod with label that exactly match the key and value given below.
+      role: db
+    matchExpressions: # Select Pod with label that matches the pattern In/NotIn/Exists/DoesNotExist for given key-value pair.
+      - key: environment
+        operator: In
+        values:
+          - production
+          - qa
+  securityGroups:
+    groupIds: # List of security groups to be applied to the ENI and assigned to a Pod.
+      - sg-0000000
