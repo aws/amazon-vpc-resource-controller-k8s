@@ -21,7 +21,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
@@ -34,6 +36,10 @@ type manager struct {
 	lock sync.RWMutex
 	// dataStore is the in memory data store of all the managed nodes in the cluster
 	dataStore map[string]Node
+	// resourceProviders is the list of resource providers
+	resourceProviders []provider.ResourceProvider
+	// ec2APIHelper is the helper function to get instance details from EC2 API
+	ec2APIHelper api.EC2APIHelper
 }
 
 type Manager interface {
@@ -43,10 +49,12 @@ type Manager interface {
 }
 
 // NewNodeManager returns a new node manager
-func NewNodeManager(logger logr.Logger) Manager {
+func NewNodeManager(logger logr.Logger, provider []provider.ResourceProvider, ec2APIHelper api.EC2APIHelper) Manager {
 	return &manager{
-		Log:       logger,
-		dataStore: make(map[string]Node),
+		resourceProviders: provider,
+		Log:               logger,
+		dataStore:         make(map[string]Node),
+		ec2APIHelper:      ec2APIHelper,
 	}
 }
 
@@ -90,7 +98,7 @@ func (m *manager) DeleteNode(v1Node *v1.Node) error {
 
 // addOrUpdateNode adds eligible nodes to the cache. If the node was previously managed and
 // is not eligible for management currently, the node is removed
-func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func() error, err error) {
+func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func([]provider.ResourceProvider, api.EC2APIHelper) error, err error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -129,7 +137,7 @@ func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func() e
 		}
 
 		node := NewNode(m.Log.WithName("node initializer").WithValues("name",
-			v1Node.Name), instanceId, os)
+			v1Node.Name), v1Node.Name, instanceId, os)
 
 		m.dataStore[v1Node.Name] = node
 		postUnlockOperation = node.InitResources
@@ -140,7 +148,7 @@ func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func() e
 }
 
 // deleteNode deletes the nodes from the node manager cache
-func (m *manager) deleteNode(v1Node *v1.Node) (postUnlockOperation func() error, err error) {
+func (m *manager) deleteNode(v1Node *v1.Node) (postUnlockOperation func([]provider.ResourceProvider, api.EC2APIHelper) error, err error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -162,13 +170,13 @@ func (m *manager) deleteNode(v1Node *v1.Node) (postUnlockOperation func() error,
 }
 
 // performPostUnlockOperation performs the operation on a node without taking the node manager lock
-func (m *manager) performPostUnlockOperation(nodeName string, postUnlockOperation func() error) error {
+func (m *manager) performPostUnlockOperation(nodeName string, postUnlockOperation func([]provider.ResourceProvider, api.EC2APIHelper) error) error {
 	log := m.Log.WithValues("node", nodeName)
 	if postUnlockOperation == nil {
 		return nil
 	}
 
-	err := postUnlockOperation()
+	err := postUnlockOperation(m.resourceProviders, m.ec2APIHelper)
 	if err == nil {
 		log.Info("successfully performed node operation", "operation", postUnlockOperation)
 		return nil
@@ -189,10 +197,7 @@ func (m *manager) performPostUnlockOperation(nodeName string, postUnlockOperatio
 
 // isSelectedForManagement returns true if the node should be managed by the controller
 func (m *manager) isSelectedForManagement(v1node *v1.Node) bool {
-	labelSelector := isManagedLabelSet(v1node)
-	capacitySelector := isPodENICapacitySet(v1node)
-
-	return labelSelector || capacitySelector
+	return isManagedLabelSet(v1node) || canAttachTrunk(v1node)
 }
 
 // getNodeInstanceID returns the EC2 instance ID of a node
@@ -232,8 +237,8 @@ func isManagedLabelSet(node *v1.Node) bool {
 	return false
 }
 
-// isPodENICapacitySet returns true if the node has greater than 0 capacity for resource pod-eni
-func isPodENICapacitySet(node *v1.Node) bool {
-	cap := node.Status.Capacity[config.ResourceNamePodENI]
-	return !cap.IsZero()
+// canAttachTrunk returns true if the node has capability to attach a Trunk ENI
+func canAttachTrunk(node *v1.Node) bool {
+	_, ok := node.Labels[config.HasTrunkAttachedLabel]
+	return ok
 }

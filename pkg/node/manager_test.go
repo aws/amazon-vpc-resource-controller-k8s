@@ -20,7 +20,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/stretchr/testify/assert"
 
 	v1 "k8s.io/api/core/v1"
@@ -36,7 +38,7 @@ var (
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   "ip-192-168-55-73.us-west-2.compute.internal",
-			Labels: map[string]string{config.NodeLabelOS: config.OSLinux},
+			Labels: map[string]string{config.NodeLabelOS: config.OSLinux, config.HasTrunkAttachedLabel: "true"},
 		},
 		Spec: v1.NodeSpec{
 			ProviderID: providerId,
@@ -59,7 +61,7 @@ func getMockManager() manager {
 
 // Test_GetNewManager tests if new node manager is not nil
 func Test_GetNewManager(t *testing.T) {
-	manager := NewNodeManager(nil)
+	manager := NewNodeManager(nil, nil, nil)
 	assert.NotNil(t, manager)
 }
 
@@ -80,7 +82,9 @@ func Test_addOrUpdateNode_existing_node(t *testing.T) {
 	manager := getMockManager()
 
 	// Add node twice
-	manager.addOrUpdateNode(v1Node)
+	_, err := manager.addOrUpdateNode(v1Node)
+	assert.NoError(t, err)
+
 	postUnlockOperation, err := manager.addOrUpdateNode(v1Node)
 	node, _ := manager.GetNode(v1Node.Name)
 
@@ -94,7 +98,7 @@ func Test_addOrUpdateNode_notSelected(t *testing.T) {
 	manager := getMockManager()
 
 	v1NodeCopy := v1Node.DeepCopy()
-	v1NodeCopy.Status.Capacity[config.ResourceNamePodENI] = *resource.NewQuantity(0, resource.DecimalExponent)
+	delete(v1NodeCopy.Labels, config.HasTrunkAttachedLabel)
 
 	postUnlockOperation, err := manager.addOrUpdateNode(v1NodeCopy)
 	assert.NoError(t, err)
@@ -117,8 +121,9 @@ func Test_addOrUpdateNode_statusChanged(t *testing.T) {
 
 	// Set the capacity for the node to 0
 	v1NodeCopy := v1Node.DeepCopy()
-	v1NodeCopy.Status.Capacity[config.ResourceNamePodENI] = *resource.NewQuantity(0, resource.DecimalExponent)
-	manager.addOrUpdateNode(v1Node)
+	delete(v1NodeCopy.Labels, config.HasTrunkAttachedLabel)
+	_, err := manager.addOrUpdateNode(v1Node)
+	assert.NoError(t, err)
 
 	postUnlockOperation, err := manager.addOrUpdateNode(v1NodeCopy)
 
@@ -158,15 +163,16 @@ func Test_deleteNode_notExists(t *testing.T) {
 
 // Test_isPodENICapacitySet test if the pod-eni capacity then true is returned
 func Test_isPodENICapacitySet(t *testing.T) {
-	isSet := isPodENICapacitySet(v1Node)
+
+	isSet := canAttachTrunk(v1Node)
 	assert.True(t, isSet)
 }
 
 // Test_isPodENICapacitySet_Neg tests if the pod-eni capacity is not set then false is returned
 func Test_isPodENICapacitySet_Neg(t *testing.T) {
 	v1NodeCopy := v1Node.DeepCopy()
-	v1NodeCopy.Status.Capacity[config.ResourceNamePodENI] = *resource.NewQuantity(0, resource.DecimalExponent)
-	isSet := isPodENICapacitySet(v1NodeCopy)
+	delete(v1NodeCopy.Labels, config.HasTrunkAttachedLabel)
+	isSet := canAttachTrunk(v1NodeCopy)
 	assert.False(t, isSet)
 }
 
@@ -208,7 +214,7 @@ func Test_isSelectedForManagement(t *testing.T) {
 func Test_performPostUnlockOperation(t *testing.T) {
 	manager := getMockManager()
 
-	postUnlockFunc := func() error {
+	postUnlockFunc := func(provider []provider.ResourceProvider, helper api.EC2APIHelper) error {
 		return nil
 	}
 
@@ -220,16 +226,18 @@ func Test_performPostUnlockOperation(t *testing.T) {
 // operation fails
 func Test_performPostUnlockOperation_intiFails(t *testing.T) {
 	manager := getMockManager()
-	manager.addOrUpdateNode(v1Node)
+	_, err := manager.addOrUpdateNode(v1Node)
+	assert.NoError(t, err)
 
 	_, managed := manager.GetNode(v1Node.Name)
 	assert.True(t, managed)
 
-	postUnlockFunc := func() error {
+	postUnlockFunc := func(provider []provider.ResourceProvider, helper api.EC2APIHelper) error {
 		return ErrInitResources
 	}
 
-	manager.performPostUnlockOperation(v1Node.Name, postUnlockFunc)
+	err = manager.performPostUnlockOperation(v1Node.Name, postUnlockFunc)
+	assert.NotNil(t, err)
 
 	_, managed = manager.GetNode(v1Node.Name)
 	assert.False(t, managed)

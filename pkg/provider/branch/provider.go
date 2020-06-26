@@ -28,6 +28,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/go-logr/logr"
@@ -88,16 +89,19 @@ type branchENIProvider struct {
 	trunkENICache map[string]TrunkENI
 	// workerPool is the worker pool and queue for submitting async job
 	workerPool worker.Worker
+	// k8sHelper provides api for getting security group to be used by the pod
+	k8sHelper *utils.K8sCacheHelper
 }
 
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
 func NewBranchENIProvider(logger logr.Logger, k8sWrapper k8s.K8sWrapper,
-	helper api.EC2APIHelper, worker worker.Worker) provider.ResourceProvider {
+	helper api.EC2APIHelper, worker worker.Worker, k8sHelper *utils.K8sCacheHelper) provider.ResourceProvider {
 	if !prometheusRegistered {
 		prometheusRegister()
 	}
 
 	return &branchENIProvider{
+		k8sHelper:     k8sHelper,
 		log:           logger,
 		k8s:           k8sWrapper,
 		ec2APIHelper:  helper,
@@ -220,14 +224,24 @@ func (b *branchENIProvider) CreateAndAnnotateResources(pod *v1.Pod, resourceCoun
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
 	}
 
+	var err error
 	var branches []*BranchENI
 	var branch *BranchENI
-	var err error
+
+	securityGroups, err := b.k8sHelper.GetPodSecurityGroups(pod)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// TODO: Fallback to etho security gorup if no interface found
+	// TODO: Fix this workaround
+	var sgPointers []*string
+	for _, sgGroup := range securityGroups {
+		sgPointers = append(sgPointers, &sgGroup)
+	}
 
 	for i := 0; i < resourceCount; i++ {
-		// TODO: Pass Security Groups Here
-		// TODO: Fallback to etho security gorup if no interface found
-		branch, err = trunkENI.CreateAndAssociateBranchToTrunk(nil)
+		branch, err = trunkENI.CreateAndAssociateBranchToTrunk(sgPointers)
 		if err != nil {
 			branchProviderOperationsErrCount.WithLabelValues("create_trunk").Inc()
 			break

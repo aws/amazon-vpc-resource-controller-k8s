@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"time"
@@ -27,12 +28,21 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
 	vpcresourcescontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/vpcresources"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
 	webhookutils "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhook/core"
 	// +kubebuilder:scaffold:imports
 )
@@ -80,18 +90,24 @@ func main() {
 		mgr.GetClient(),
 		ctrl.Log.WithName("cache helper"))
 
+	// Get the resource providers and handlers
+	resourceHandlers, nodeManager := setUpResources(mgr, cacheHelper)
+
 	if err = (&corecontroller.PodReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("Pod"),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Log:      ctrl.Log.WithName("controllers").WithName("Pod"),
+		Scheme:   mgr.GetScheme(),
+		Manager:  nodeManager,
+		Handlers: resourceHandlers,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod")
 		os.Exit(1)
 	}
 	if err = (&corecontroller.NodeReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("Node"),
-		Scheme: mgr.GetScheme(),
+		Client:  mgr.GetClient(),
+		Log:     ctrl.Log.WithName("controllers").WithName("Node"),
+		Scheme:  mgr.GetScheme(),
+		Manager: nodeManager,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
 		os.Exit(1)
@@ -124,4 +140,59 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// setUpResources sets up all resource providers and the node manager
+func setUpResources(manager manager.Manager, cacheHelper *webhookutils.K8sCacheHelper) ([]handler.Handler, node.Manager) {
+
+	var resourceProviders []provider.ResourceProvider
+
+	ec2Wrapper, err := api.NewEC2Wrapper()
+	if err != nil {
+		setupLog.Error(err, "unable to create ec2 wrapper")
+	}
+
+	ec2APIHelper := api.NewEC2APIHelper(ec2Wrapper)
+	k8sWrapper := k8s.NewK8sWrapper(manager.GetClient())
+
+	// Set up the node manager
+	nodeManager := node.NewNodeManager(ctrl.Log.WithName("node manager"), resourceProviders, ec2APIHelper)
+
+	// Load the default resource config
+	resourceConfig := config.LoadResourceConfig()
+
+	// Set up on demand handlers
+	onDemandProviders := getOnDemandResourceProviders(resourceConfig, k8sWrapper, ec2APIHelper, &resourceProviders, cacheHelper)
+	onDemandHandler := handler.NewOnDemandHandler(ctrl.Log.WithName("on demand handler"), onDemandProviders)
+
+	// Set up warm resource handlers
+
+	return []handler.Handler{onDemandHandler}, nodeManager
+}
+
+// getOnDemandResourceProviders returns all the providers for resource type on demand
+func getOnDemandResourceProviders(resourceConfig map[string]config.ResourceConfig, k8sWrapper k8s.K8sWrapper,
+	ec2APIHelper api.EC2APIHelper, providers *[]provider.ResourceProvider,
+	cacheHelper *webhookutils.K8sCacheHelper) map[string]provider.ResourceProvider {
+
+	// Load Branch ENI Config
+	branchConfig := resourceConfig[config.ResourceNamePodENI]
+
+	// Create the branch provider and worker pool
+	branchWorker := worker.NewDefaultWorkerPool(branchConfig.Name, branchConfig.WorkerCount,
+		config.WorkQueueDefaultMaxRetries, ctrl.Log.WithName("branch eni worker"), context.Background())
+	branchProvider := branch.NewBranchENIProvider(ctrl.Log.WithName("branch eni provider"),
+		k8sWrapper, ec2APIHelper, branchWorker, cacheHelper)
+
+	// Start the branch worker to accept new jobs on the give function
+	err := branchWorker.StartWorkerPool(branchProvider.ProcessAsyncJob)
+	if err != nil {
+		setupLog.Error(err, "unable to start the branch ENI worker")
+		os.Exit(1)
+	}
+
+	// Add provider to the list of providers
+	*providers = append(*providers, branchProvider)
+
+	return map[string]provider.ResourceProvider{branchConfig.Name: branchProvider}
 }

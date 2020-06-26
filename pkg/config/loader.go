@@ -17,12 +17,12 @@ limitations under the License.
 package config
 
 const (
+	WorkQueueDefaultMaxRetries = 5
+
 	// Default Configuration for Pod ENI resource type
-	PodENIDefaultBuffer = 200
 	PodENIDefaultWorker = 2
 
 	// Default Configuration for IPv4 resource type
-	IPv4DefaultBuffer  = 200
 	IPv4DefaultWorker  = 2
 	IPv4DefaultWPSize  = 3
 	IPv4DefaultMaxDev  = 1
@@ -43,7 +43,6 @@ func getDefaultResourceConfig() map[string]ResourceConfig {
 	// Create default configuration for Pod ENI Resource
 	podENIConfig := ResourceConfig{
 		Name:           ResourceNamePodENI,
-		BufferSize:     PodENIDefaultBuffer,
 		WorkerCount:    PodENIDefaultWorker,
 		SupportedOS:    map[string]bool{OSWindows: false, OSLinux: true},
 		WarmPoolConfig: nil,
@@ -58,7 +57,6 @@ func getDefaultResourceConfig() map[string]ResourceConfig {
 	}
 	ipV4Config := ResourceConfig{
 		Name:           ResourceNameIPAddress,
-		BufferSize:     IPv4DefaultBuffer,
 		WorkerCount:    IPv4DefaultWorker,
 		SupportedOS:    map[string]bool{OSWindows: true, OSLinux: false},
 		WarmPoolConfig: &ipV4WarmPoolConfig,

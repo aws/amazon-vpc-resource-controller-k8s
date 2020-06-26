@@ -34,6 +34,8 @@ const (
 	VPCManagerLabel = "eks.amazonaws.com/vpc-resource-manager"
 	// VPCManagedBy if set enables the controller to manage the VPC Resources
 	VPCManagedBy = "controller"
+	// HasTrunkAttachedLabel is the label denoting that the trunk ENI is attached to node or not
+	HasTrunkAttachedLabel = "vpc.amazonaws.com/has-trunk-attached"
 	// NodeLabelOS is the Kubernetes Operating System label
 	NodeLabelOS = "kubernetes.io/os"
 	// NodeLabelOS is the Kubernetes Operating System label used before k8s version 1.16
@@ -48,8 +50,6 @@ const (
 type ResourceConfig struct {
 	// Name is the unique name of the resource
 	Name string
-	// BufferSize is the max number of requests that can be added in the buffer
-	BufferSize int
 	// WorkerCount is the number of routines that will process items for the buffer
 	WorkerCount int
 	// SupportedOS is the map of operating system that supports the resource

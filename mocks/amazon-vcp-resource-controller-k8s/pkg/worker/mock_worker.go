@@ -7,6 +7,7 @@ package mock_worker
 import (
 	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
+	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // MockWorker is a mock of Worker interface
@@ -33,17 +34,17 @@ func (m *MockWorker) EXPECT() *MockWorkerMockRecorder {
 }
 
 // StartWorkerPool mocks base method
-func (m *MockWorker) StartWorkerPool() error {
+func (m *MockWorker) StartWorkerPool(arg0 func(interface{}) (reconcile.Result, error)) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "StartWorkerPool")
+	ret := m.ctrl.Call(m, "StartWorkerPool", arg0)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // StartWorkerPool indicates an expected call of StartWorkerPool
-func (mr *MockWorkerMockRecorder) StartWorkerPool() *gomock.Call {
+func (mr *MockWorkerMockRecorder) StartWorkerPool(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartWorkerPool", reflect.TypeOf((*MockWorker)(nil).StartWorkerPool))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartWorkerPool", reflect.TypeOf((*MockWorker)(nil).StartWorkerPool), arg0)
 }
 
 // SubmitJob mocks base method

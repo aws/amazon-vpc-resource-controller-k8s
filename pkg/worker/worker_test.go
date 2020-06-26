@@ -35,9 +35,9 @@ var (
 	maxRequeue                      = 3
 )
 
-func GetMockWorkerPool(ctx context.Context, workerFunc func(interface{}) (ctrl.Result, error)) Worker {
+func GetMockWorkerPool(ctx context.Context) Worker {
 	log := zap.New(zap.UseDevMode(true)).WithValues("worker resource Id", resourceName)
-	return NewDefaultWorkerPool(resourceName, workerCount, workerFunc, maxRequeue, log, ctx)
+	return NewDefaultWorkerPool(resourceName, workerCount, maxRequeue, log, ctx)
 }
 
 func MockWorkerFunc(job interface{}) (result ctrl.Result, err error) {
@@ -51,7 +51,7 @@ func MockWorkerFunc(job interface{}) (result ctrl.Result, err error) {
 func TestNewWorkerPool(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	w := GetMockWorkerPool(ctx, MockWorkerFunc)
+	w := GetMockWorkerPool(ctx)
 	assert.NotNil(t, w)
 }
 
@@ -59,8 +59,8 @@ func TestNewWorkerPool(t *testing.T) {
 func TestWorker_SubmitJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	w := GetMockWorkerPool(ctx, MockWorkerFunc)
-	w.StartWorkerPool()
+	w := GetMockWorkerPool(ctx)
+	w.StartWorkerPool(MockWorkerFunc)
 
 	// Count to verify job executed
 	var jobCount = 2
@@ -84,8 +84,8 @@ func TestWorker_SubmitJob_Duplicate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w := GetMockWorkerPool(ctx, MockWorkerFunc)
-	w.StartWorkerPool()
+	w := GetMockWorkerPool(ctx)
+	w.StartWorkerPool(MockWorkerFunc)
 
 	// Count to verify
 	var jobCompletedCounter = 0
@@ -115,8 +115,8 @@ func TestWorker_SubmitJob_RequeueOnError(t *testing.T) {
 		return ctrl.Result{}, fmt.Errorf("error")
 	}
 
-	w := GetMockWorkerPool(ctx, workerFunc)
-	w.StartWorkerPool()
+	w := GetMockWorkerPool(ctx)
+	w.StartWorkerPool(workerFunc)
 
 	var invoked = 0
 	w.SubmitJob(&invoked)

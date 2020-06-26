@@ -18,8 +18,10 @@ package controllers
 
 import (
 	"context"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -33,7 +35,8 @@ type PodReconciler struct {
 	client.Client
 	Log      logr.Logger
 	Scheme   *runtime.Scheme
-	handlers []handler.Handler
+	Handlers []handler.Handler
+	Manager  node.Manager
 }
 
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
@@ -43,14 +46,21 @@ type PodReconciler struct {
 // based on the resource type
 func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx := context.Background()
-	logger := r.Log.WithValues("pod", req.NamespacedName)
 
 	pod := &corev1.Pod{}
 	if err := r.Client.Get(ctx, req.NamespacedName, pod); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	logger := r.Log.WithValues("pod", req.NamespacedName, "node", pod.Spec.NodeName)
 
-	// TODO: Check if node is managed. Pending CR
+	node, managed := r.Manager.GetNode(pod.Spec.NodeName)
+	if !managed {
+		r.Log.Info("pod's node is not managed")
+		return ctrl.Result{}, nil
+	} else if !node.IsReady() {
+		r.Log.Info("pod's node is not ready to handle request yet, will retry")
+		return ctrl.Result{Requeue: true, RequeueAfter: time.Millisecond * 500}, nil
+	}
 
 	// Compute the aggregate resources across all containers for each resource type
 	aggregateResources := make(map[string]int64)
@@ -67,13 +77,12 @@ func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	// For each resource, if a handler can allocate/de-allocate a resource then delegate the allocation/de-allocation
 	// task to the respective handler
 	for resourceName, totalCount := range aggregateResources {
-		for _, handler := range r.handlers {
+		for _, handler := range r.Handlers {
 			if handler.CanHandle(resourceName) {
 				var err error
 				if !pod.DeletionTimestamp.IsZero() {
 					err = handler.HandleDelete(resourceName, pod)
 				} else {
-					// TODO: If resource is already allocated, don't send the request.
 					err = handler.HandleCreate(resourceName, totalCount, pod)
 				}
 				if err != nil {

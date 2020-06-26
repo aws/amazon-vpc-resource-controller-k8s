@@ -20,20 +20,22 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
+
 	"github.com/go-logr/logr"
 )
 
 type node struct {
 	// lock to perform serial operations on a node
 	lock sync.RWMutex
-	// os is the operating system of the worker node
-	os string
-	// instanceId of the worker node
-	instanceId string
 	// log is the logger setup with the key value pair set to node's name
 	log logr.Logger
 	// ready status indicates if the node is ready to process request or not
 	ready bool
+	// instance stores the ec2 instance details that is shared by all the providers
+	instance ec2.EC2Instance
 }
 
 var (
@@ -43,45 +45,97 @@ var (
 )
 
 type Node interface {
-	InitResources() error
-	DeleteResources() error
-	UpdateResources() error
+	InitResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
+	DeleteResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
+	UpdateResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
+	IsReady() bool
 }
 
 // NewNode returns a new node object
-func NewNode(log logr.Logger, instanceId string, os string) Node {
+func NewNode(log logr.Logger, nodeName string, instanceId string, os string) Node {
 	return &node{
-		log:        log,
-		os:         os,
-		instanceId: instanceId,
+		log:      log,
+		instance: ec2.NewEC2Instance(nodeName, instanceId, os),
 	}
 }
 
 // UpdateNode refreshes the capacity if it's reset to 0
-func (n *node) UpdateResources() error {
+func (n *node) UpdateResources(resourceProviders []provider.ResourceProvider, _ api.EC2APIHelper) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
-	// TODO: Check for windows pod if capacity has been reset to zero.
+	var errUpdates []error
+	for _, resourceProvider := range resourceProviders {
+		err := resourceProvider.UpdateResourceCapacity(n.instance)
+		if err != nil {
+			n.log.Error(err, "failed to initialize resource capacity")
+			errUpdates = append(errUpdates, err)
+		}
+	}
+	if len(errUpdates) > 0 {
+		return fmt.Errorf("failed to update one or more resources %v", errUpdates)
+	}
+
 	return nil
 }
 
 // InitResources initializes the resource pool and provider of all supported resources
-func (n *node) InitResources() error {
+func (n *node) InitResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
-	// TODO: Initialize all the providers.
+	err := n.instance.LoadDetails(helper)
+	if err != nil {
+		n.log.Error(err, "failed to load instance details")
+		return err
+	}
+
+	var initializedProviders []provider.ResourceProvider
+	var errInit error
+	for _, resourceProvider := range resourceProviders {
+		errInit = resourceProvider.InitResource(n.instance)
+		if errInit != nil {
+			break
+		}
+		initializedProviders = append(initializedProviders, resourceProvider)
+	}
+
+	if errInit != nil && len(initializedProviders) > 0 {
+		for _, resourceProvider := range initializedProviders {
+			errDeInit := resourceProvider.DeInitResource(n.instance)
+			n.log.Error(errDeInit, "failed to de initialize resource")
+		}
+	}
 
 	n.ready = true
-	return nil
+	return errInit
 }
 
 // DeleteResources performs clean up of all the resource pools and provider of the nodes
-func (n *node) DeleteResources() error {
+func (n *node) DeleteResources(resourceProviders []provider.ResourceProvider, _ api.EC2APIHelper) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
-	// TODO: De initialize all providers.
+	var errDelete []error
+	for _, resourceProvider := range resourceProviders {
+		err := resourceProvider.DeInitResource(n.instance)
+		if err != nil {
+			errDelete = append(errDelete, err)
+			n.log.Error(err, "failed to de initialize provider")
+		}
+	}
+
+	if len(errDelete) > 0 {
+		return fmt.Errorf("failed to intalize the resources %v", errDelete)
+	}
+
 	return nil
+}
+
+// IsReady returns true if all the providers have been initialized
+func (n *node) IsReady() bool {
+	n.lock.RLock()
+	defer n.lock.RUnlock()
+
+	return n.ready
 }

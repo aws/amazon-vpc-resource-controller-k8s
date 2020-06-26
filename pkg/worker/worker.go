@@ -61,7 +61,7 @@ var (
 )
 
 type Worker interface {
-	StartWorkerPool() error
+	StartWorkerPool(func(interface{}) (ctrl.Result, error)) error
 	SubmitJob(job interface{}) error
 }
 
@@ -85,15 +85,14 @@ type worker struct {
 }
 
 // NewDefaultWorkerPool returns a new worker pool for a give resource type with the given configuration
-func NewDefaultWorkerPool(resourceName string, workerCount int, workerFunc func(interface{}) (ctrl.Result, error),
-	maxRequeue int, logger logr.Logger, ctx context.Context) Worker {
+func NewDefaultWorkerPool(resourceName string, workerCount int, maxRequeue int,
+	logger logr.Logger, ctx context.Context) Worker {
 
 	prometheusRegister()
 
 	return &worker{
 		resourceName:    resourceName,
 		maxRetriesOnErr: maxRequeue,
-		workerFunc:      workerFunc,
 		maxWorkerCount:  workerCount,
 		Log:             logger,
 		queue:           workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
@@ -110,6 +109,10 @@ func prometheusRegister() {
 
 		prometheusRegistered = true
 	}
+}
+
+func (w *worker) SetWorkerFunc(workerFunc func(interface{}) (ctrl.Result, error)) {
+	w.workerFunc = workerFunc
 }
 
 // SubmitJob adds the job to the rate limited queue
@@ -161,11 +164,11 @@ func (w *worker) processNextItem() (cont bool) {
 }
 
 // StartWorkerPool starts the worker pool that starts the worker routines that concurrently listen on the channel
-func (w *worker) StartWorkerPool() error {
+func (w *worker) StartWorkerPool(workerFunc func(interface{}) (ctrl.Result, error)) error {
 	if w.workersStarted {
 		return WorkersAlreadyStartedError
 	}
-
+	w.workerFunc = workerFunc
 	w.workersStarted = true
 
 	go func() {

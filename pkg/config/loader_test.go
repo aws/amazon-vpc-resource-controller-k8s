@@ -29,7 +29,6 @@ func TestLoadResourceConfig(t *testing.T) {
 	podENIConfig := defaultResourceConfig[ResourceNamePodENI]
 	assert.Equal(t, ResourceNamePodENI, podENIConfig.Name)
 	assert.Equal(t, PodENIDefaultWorker, podENIConfig.WorkerCount)
-	assert.Equal(t, PodENIDefaultBuffer, podENIConfig.BufferSize)
 	assert.Equal(t, map[string]bool{OSLinux: true, OSWindows: false}, podENIConfig.SupportedOS)
 	assert.Nil(t, podENIConfig.WarmPoolConfig)
 
@@ -37,7 +36,6 @@ func TestLoadResourceConfig(t *testing.T) {
 	ipV4Config := defaultResourceConfig[ResourceNameIPAddress]
 	assert.Equal(t, ResourceNameIPAddress, ipV4Config.Name)
 	assert.Equal(t, IPv4DefaultWorker, ipV4Config.WorkerCount)
-	assert.Equal(t, IPv4DefaultBuffer, ipV4Config.BufferSize)
 	assert.Equal(t, map[string]bool{OSLinux: false, OSWindows: true}, ipV4Config.SupportedOS)
 
 	// Verify default Warm pool configuration for IPv4 Address
