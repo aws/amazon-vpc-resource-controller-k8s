@@ -76,7 +76,7 @@ func prometheusRegister() {
 // K8sWrapper represents an interface with all the common operations on K8s objects
 type K8sWrapper interface {
 	GetPod(namespace string, name string) (*v1.Pod, error)
-	AnnotatePod(podNamespace string, podName string,  key string, val string) error
+	AnnotatePod(podNamespace string, podName string, key string, val string) error
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
 }
 
@@ -94,7 +94,7 @@ func NewK8sWrapper(client client.Client) K8sWrapper {
 }
 
 // AnnotatePod annotates the pod with the provided key and value
-func (k *k8sWrapper) AnnotatePod(podNamespace string, podName string,  key string, val string) error {
+func (k *k8sWrapper) AnnotatePod(podNamespace string, podName string, key string, val string) error {
 	annotatePodRequestCallCount.WithLabelValues(key).Inc()
 	ctx := context.Background()
 
@@ -139,7 +139,7 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 	ctx := context.Background()
 
 	request := types.NamespacedName{
-		Name:      nodeName,
+		Name: nodeName,
 	}
 
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -158,7 +158,6 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 
 		newNode := node.DeepCopy()
 		newNode.Status.Capacity[v1.ResourceName(resourceName)] = resource.MustParse(strconv.Itoa(capacity))
-
 
 		return k.client.Patch(ctx, newNode, client.MergeFrom(node))
 	})

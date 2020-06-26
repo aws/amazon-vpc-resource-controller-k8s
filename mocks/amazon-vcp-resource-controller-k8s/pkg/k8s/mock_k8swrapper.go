@@ -33,32 +33,32 @@ func (m *MockK8sWrapper) EXPECT() *MockK8sWrapperMockRecorder {
 	return m.recorder
 }
 
-// AdvertiseCapacity mocks base method
-func (m *MockK8sWrapper) AdvertiseCapacity(arg0, arg1 string, arg2 int) error {
+// AdvertiseCapacityIfNotSet mocks base method
+func (m *MockK8sWrapper) AdvertiseCapacityIfNotSet(arg0, arg1 string, arg2 int) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AdvertiseCapacity", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "AdvertiseCapacityIfNotSet", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// AdvertiseCapacity indicates an expected call of AdvertiseCapacity
-func (mr *MockK8sWrapperMockRecorder) AdvertiseCapacity(arg0, arg1, arg2 interface{}) *gomock.Call {
+// AdvertiseCapacityIfNotSet indicates an expected call of AdvertiseCapacityIfNotSet
+func (mr *MockK8sWrapperMockRecorder) AdvertiseCapacityIfNotSet(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AdvertiseCapacity", reflect.TypeOf((*MockK8sWrapper)(nil).AdvertiseCapacity), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AdvertiseCapacityIfNotSet", reflect.TypeOf((*MockK8sWrapper)(nil).AdvertiseCapacityIfNotSet), arg0, arg1, arg2)
 }
 
 // AnnotatePod mocks base method
-func (m *MockK8sWrapper) AnnotatePod(arg0 *v1.Pod, arg1, arg2 string) error {
+func (m *MockK8sWrapper) AnnotatePod(arg0, arg1, arg2, arg3 string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AnnotatePod", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "AnnotatePod", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // AnnotatePod indicates an expected call of AnnotatePod
-func (mr *MockK8sWrapperMockRecorder) AnnotatePod(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockK8sWrapperMockRecorder) AnnotatePod(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AnnotatePod", reflect.TypeOf((*MockK8sWrapper)(nil).AnnotatePod), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AnnotatePod", reflect.TypeOf((*MockK8sWrapper)(nil).AnnotatePod), arg0, arg1, arg2, arg3)
 }
 
 // GetPod mocks base method

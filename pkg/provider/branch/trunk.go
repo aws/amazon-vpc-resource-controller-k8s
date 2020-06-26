@@ -29,7 +29,7 @@ import (
 
 const (
 	// MaxAllocatableVlanIds is the maximum number of Vlan Ids that can be allocated per trunk.
-	MaxAllocatableVlanIds = 101
+	MaxAllocatableVlanIds = 121
 )
 
 var (
@@ -108,6 +108,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance) error {
 	// Get trunk network interface
 	trunkInterface, err := t.ec2ApiHelper.GetTrunkInterface(t.instanceId)
 	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("get_trunk").Inc()
 		return fmt.Errorf("failed to find trunk interface: %v", err)
 	}
 
@@ -117,6 +118,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance) error {
 
 		freeIndex, err := instance.GetHighestUnusedDeviceIndex()
 		if err != nil {
+			trunkENIOperationsErrCount.WithLabelValues("find_free_index").Inc()
 			log.Error(err, "failed to find free device index")
 			return err
 		}
@@ -124,6 +126,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance) error {
 		trunk, err := t.ec2ApiHelper.CreateAndAttachNetworkInterface(t.instanceId, t.subnetId, nil, &freeIndex,
 			&TrunkEniDescription, &InterfaceTypeTrunk, 0)
 		if err != nil {
+			trunkENIOperationsErrCount.WithLabelValues("create_trunk_eni").Inc()
 			log.Error(err, "failed to create trunk interface")
 			return err
 		}
@@ -141,14 +144,12 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance) error {
 	// Get the branch associated with the trunk and store the result in the cache
 	associations, err := t.ec2ApiHelper.DescribeTrunkInterfaceAssociation(trunkInterface.NetworkInterfaceId)
 	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("describe_trunk_assoc").Inc()
 		return fmt.Errorf("failed to describe associations for trunk %s: %v", *trunkInterface.NetworkInterfaceId, err)
-	}
-	if associations == nil {
-		return nil
 	}
 
 	// Return if no branches are associated with the trunk
-	if len(associations) == 0 {
+	if associations == nil || len(associations) == 0 {
 		log.Info("successfully initialized trunk with no branch eni currently associated",
 			"trunk id", t.trunkENIId)
 		return nil
@@ -166,6 +167,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance) error {
 		err := t.markVlanAssigned(*branchENI.VlanId)
 		if err != nil {
 			// This should never happen
+			trunkENIOperationsErrCount.WithLabelValues("mark_vlan_assigned").Inc()
 			log.Error(err, "vlan id is already assigned, skipping the branch interface",
 				"interface", *branchENI.BranchENId)
 			continue
@@ -178,6 +180,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance) error {
 	// Describe the list of associated branch network interfaces to get the MAC and IPv4 address
 	branchInterfaces, err := t.ec2ApiHelper.DescribeNetworkInterfaces(branchInterfaceIds)
 	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("describe_branch_enis").Inc()
 		return fmt.Errorf("failed to find branch interfaces on trunk %s: %v",
 			*trunkInterface.NetworkInterfaceId, err)
 	}
@@ -229,8 +232,10 @@ func (t *trunkENI) CreateAndAssociateBranchToTrunk(securityGroups []*string) (*B
 	// Assign a vlan id from the list of available vlan ids
 	vlanId, err := t.assignVlanId()
 	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("assign_vlan_id").Inc()
 		errDelete := t.DeleteBranchNetworkInterface(branchENI)
 		if errDelete != nil {
+			trunkENIOperationsErrCount.WithLabelValues("delete_branch").Inc()
 			return nil, fmt.Errorf("failed to assing vlan id %v, failed to delete %v", err, errDelete)
 		}
 		return nil, err
@@ -242,8 +247,10 @@ func (t *trunkENI) CreateAndAssociateBranchToTrunk(securityGroups []*string) (*B
 	// Associate branch to trunk interface
 	_, err = t.ec2ApiHelper.AssociateBranchToTrunk(t.trunkENIId, nwInterface.NetworkInterfaceId, &vlanId)
 	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("associate_branch").Inc()
 		errDelete := t.DeleteBranchNetworkInterface(branchENI)
 		if errDelete != nil {
+			trunkENIOperationsErrCount.WithLabelValues("delete_branch").Inc()
 			return nil, fmt.Errorf("failed to associate trunk to branch %v, failed to delete %v", err, errDelete)
 		}
 		return nil, err
@@ -261,15 +268,18 @@ func (t *trunkENI) DeleteBranchNetworkInterface(branchENI *BranchENI) error {
 	// Ensure that the branch ENI was created by the controller and it was not tampered with.
 	cacheEntry, isPresent := t.getBranchFromCache(branchENI.BranchENId)
 	if !isPresent {
+		trunkENIOperationsErrCount.WithLabelValues("get_branch_from_cache").Inc()
 		return fmt.Errorf("branch eni was not created by the controller %s not deleting", *branchENI.BranchENId)
 	}
 	if !cmp.Equal(branchENI, cacheEntry) {
+		trunkENIOperationsErrCount.WithLabelValues("compare_branch").Inc()
 		return fmt.Errorf("cahced entry %v don't match the expected entry %v not deleting", *branchENI, *cacheEntry)
 	}
 
 	// Delete Branch network interface first
 	err := t.ec2ApiHelper.DeleteNetworkInterface(branchENI.BranchENId)
 	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("delete_branch").Inc()
 		return err
 	}
 
@@ -352,6 +362,7 @@ func (t *trunkENI) freeVlanId(vlanId int64) {
 
 	isUsed := t.usedVlanIds[vlanId]
 	if !isUsed {
+		trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id").Inc()
 		t.log.Error(fmt.Errorf("failed to free a unused vlan id"), "", "vlan id", vlanId)
 		return
 	}

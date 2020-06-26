@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	mockec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mockk8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
@@ -36,8 +37,8 @@ import (
 )
 
 var (
-	mockPodName      = "pod-name"
-	mockPodNamespace = "pod-namespace"
+	mockPodName      = "pod_name"
+	mockPodNamespace = "pod_namespace"
 	mockPod          = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
@@ -49,8 +50,8 @@ var (
 		Status: v1.PodStatus{},
 	}
 
-	createJob = worker.NewOnDemandCreateJob(mockPodName, mockPodNamespace, 1)
-	deleteJob = worker.NewOnDemandDeleteJob(mockPodName, mockPodNamespace)
+	createJob = worker.NewOnDemandCreateJob(mockPodNamespace, mockPodName, 1)
+	deleteJob = worker.NewOnDemandDeleteJob(mockPodNamespace, mockPodName)
 
 	branch1annotation, _ = json.Marshal([]*BranchENI{branch1})
 
@@ -279,20 +280,37 @@ func TestBranchENIProvider_DeInitResources(t *testing.T) {
 
 // TestBranchENIProvider_GetResourceCapacity tests that the correct capacity is returned for supported instance types
 func TestBranchENIProvider_GetResourceCapacity(t *testing.T) {
-	provider := getProvider()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8sWrapper := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mockec2.NewMockEC2Instance(ctrl)
 
 	supportedInstanceType := "c5.xlarge"
 
-	capacity := provider.GetResourceCapacity(supportedInstanceType)
-	assert.Equal(t, vpc.InstanceBranchENIsAvailable[supportedInstanceType], capacity)
+	mockInstance.EXPECT().Type().Return(supportedInstanceType)
+	mockInstance.EXPECT().Name().Return(nodeName)
+	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNamePodENI,
+		vpc.InstanceBranchENIsAvailable[supportedInstanceType])
+
+	err := provider.UpdateResourceCapacity(mockInstance)
+	assert.NoError(t, err)
 }
 
 // TestBranchENIProvider_GetResourceCapacity_NotSupported tests that 0 is returned for non supported instance types
 func TestBranchENIProvider_GetResourceCapacity_NotSupported(t *testing.T) {
-	provider := getProvider()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-	capacity := provider.GetResourceCapacity("t3.medium")
-	assert.Zero(t, capacity)
+	provider := getProvider()
+	mockInstance := mockec2.NewMockEC2Instance(ctrl)
+
+	supportedInstanceType := "t3.medium"
+
+	mockInstance.EXPECT().Type().Return(supportedInstanceType)
+
+	err := provider.UpdateResourceCapacity(mockInstance)
+	assert.NoError(t, err)
 }
 
 // TestBranchENIProvider_CreateAndAnnotateResources tests that create is invoked equal to the number of resources to
@@ -309,7 +327,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 
 	provider.trunkENICache[nodeName] = fakeTrunk
 
-	mockK8sWrapper.EXPECT().AnnotatePod(mockPod, config.ResourceNamePodENI, string(expectedAnnotation))
+	mockK8sWrapper.EXPECT().AnnotatePod(mockPodNamespace, mockPodName, config.ResourceNamePodENI, string(expectedAnnotation))
 
 	_, err := provider.CreateAndAnnotateResources(mockPod, resCount)
 
@@ -335,13 +353,13 @@ func TestBranchENIProvider_ProcessAsyncJob_Create(t *testing.T) {
 	defer ctrl.Finish()
 
 	provider, mockK8sWrapper := getProviderAndMockK8sWrapper(ctrl)
-	worker.NewOnDemandCreateJob(mockPodName, mockPodNamespace, 1)
+	worker.NewOnDemandCreateJob(mockPodNamespace, mockPodName, 1)
 
 	fakeTrunk := NewFakeTrunkENI()
 	provider.trunkENICache[nodeName] = fakeTrunk
 
 	mockK8sWrapper.EXPECT().GetPod(mockPodNamespace, mockPodName).Return(mockPod, nil)
-	mockK8sWrapper.EXPECT().AnnotatePod(mockPod, config.ResourceNamePodENI, string(branch1annotation))
+	mockK8sWrapper.EXPECT().AnnotatePod(mockPodNamespace, mockPodName, config.ResourceNamePodENI, string(branch1annotation))
 
 	_, err := provider.ProcessAsyncJob(createJob)
 	assert.Error(t, mockError, err)
@@ -354,7 +372,7 @@ func TestBranchENIProvider_ProcessAsyncJob_Delete(t *testing.T) {
 	defer ctrl.Finish()
 
 	provider, mockK8sWrapper := getProviderAndMockK8sWrapper(ctrl)
-	worker.NewOnDemandCreateJob(mockPodName, mockPodNamespace, 1)
+	worker.NewOnDemandCreateJob(mockPodNamespace, mockPodName, 1)
 
 	fakeTrunk := NewFakeTrunkENI()
 	provider.trunkENICache[nodeName] = fakeTrunk
@@ -375,7 +393,7 @@ func TestBranchENIProvider_ProcessAsyncJob_PodDeletedBeforeRequest(t *testing.T)
 	defer ctrl.Finish()
 
 	provider, mockK8sWrapper := getProviderAndMockK8sWrapper(ctrl)
-	worker.NewOnDemandCreateJob(mockPodName, mockPodNamespace, 1)
+	worker.NewOnDemandCreateJob(mockPodNamespace, mockPodName, 1)
 
 	fakeTrunk := NewFakeTrunkENI()
 	provider.trunkENICache[nodeName] = fakeTrunk

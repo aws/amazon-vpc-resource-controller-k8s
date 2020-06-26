@@ -23,9 +23,9 @@ import (
 )
 
 var (
-	podName = "pod-name"
+	podName      = "pod-name"
 	podNamespace = "pod-namespace"
-	reqCount = int64(2)
+	reqCount     = int64(2)
 )
 
 // TestNewOnDemandCreateJob tests the fields of Create Job
