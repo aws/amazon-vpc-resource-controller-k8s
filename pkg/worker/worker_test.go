@@ -30,8 +30,8 @@ import (
 var (
 	resourceName                    = "vpc.amazonaws.com/pod-eni"
 	workerCount                     = 1
-	mockTimeToProcessWorkerFunc     = time.Duration(20)
-	bufferTimeBwWorkerFuncExecution = time.Duration(3)
+	mockTimeToProcessWorkerFunc     = time.Duration(5)
+	bufferTimeBwWorkerFuncExecution = time.Duration(1)
 	maxRequeue                      = 3
 )
 
@@ -60,8 +60,7 @@ func TestWorker_SubmitJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w := GetMockWorkerPool(ctx)
-	err := w.StartWorkerPool(MockWorkerFunc)
-	assert.NoError(t, err)
+	w.StartWorkerPool(MockWorkerFunc)
 
 	// Count to verify job executed
 	var jobCount = 2
@@ -80,6 +79,31 @@ func TestWorker_SubmitJob(t *testing.T) {
 	assert.Equal(t, job2, 1)
 }
 
+// TestWorker_SubmitJob_Duplicate ensures that duplicate jobs are only processed once.
+func TestWorker_SubmitJob_Duplicate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := GetMockWorkerPool(ctx)
+	w.StartWorkerPool(MockWorkerFunc)
+
+	// Count to verify
+	var jobCompletedCounter = 0
+
+	// Submit 2 jobs
+	var jobCount = 2
+	for i := 0; i < jobCount; i++ {
+		err := w.SubmitJob(&jobCompletedCounter)
+		assert.NoError(t, err)
+	}
+
+	// Wait till the job complete. If the test is flaky, increase the buffer sleep time.
+	time.Sleep(time.Millisecond * (mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Duration(jobCount))
+
+	// Verify only one job got completed.
+	assert.Equal(t, 1, jobCompletedCounter)
+}
+
 func TestWorker_SubmitJob_RequeueOnError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -92,14 +116,12 @@ func TestWorker_SubmitJob_RequeueOnError(t *testing.T) {
 	}
 
 	w := GetMockWorkerPool(ctx)
-	err := w.StartWorkerPool(workerFunc)
-	assert.NoError(t, err)
+	w.StartWorkerPool(workerFunc)
 
 	var invoked = 0
 	w.SubmitJob(&invoked)
 
 	time.Sleep((mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Millisecond * time.Duration(maxRequeue))
 
-	// expected invocation = max requeue + the first invocation
-	assert.Equal(t, maxRequeue+1, invoked)
+	assert.Equal(t, maxRequeue, invoked)
 }

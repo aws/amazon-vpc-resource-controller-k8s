@@ -24,7 +24,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -32,9 +31,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	crdv1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
+	vpcresourcescontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/vpcresources"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
@@ -59,32 +58,21 @@ func init() {
 
 	_ = corev1.AddToScheme(scheme)
 	_ = vpcresourcesv1beta1.AddToScheme(scheme)
-	_ = crdv1alpha1.AddToScheme(scheme)
 	// +kubebuilder:scaffold:scheme
 }
-
-// +kubebuilder:rbac:groups=crd.k8s.amazonaws.com,resources=eniconfigs,verbs=get;list;watch
-// +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies/status,verbs=get;update;patch
 
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
-	var enableDevLogging bool
-
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&enableDevLogging, "enable-dev-logging", false,
-		"Enable developer mode logging for the controller."+
-			"With dev mode logging, you will get Debug logs and more structured logging with extra details")
 	flag.Parse()
 
-	ctrl.SetLogger(zap.New(zap.UseDevMode(enableDevLogging)))
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
-	config := ctrl.GetConfigOrDie()
-	mgr, err := ctrl.NewManager(config, ctrl.Options{
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		SyncPeriod:         &syncPeriod,
 		Scheme:             scheme,
 		MetricsBindAddress: metricsAddr,
@@ -92,22 +80,8 @@ func main() {
 		LeaderElection:     enableLeaderElection,
 		LeaderElectionID:   "bb6ce178.k8s.aws",
 	})
-
-	// With kube-builder, we have to manually specify the fields on which the objects must be indexed, in order to
-	// list objects using the k8s cache with field selectors
-	mgr.GetFieldIndexer().IndexField(&corev1.Pod{}, "spec.nodeName", func(object runtime.Object) []string {
-		pod := object.(*corev1.Pod)
-		return []string{pod.Spec.NodeName}
-	})
-
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
-	}
-
-	clientSet, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		setupLog.Error(err, "failed to create client set")
 		os.Exit(1)
 	}
 
@@ -117,7 +91,7 @@ func main() {
 		ctrl.Log.WithName("cache helper"))
 
 	// Get the resource providers and handlers
-	resourceHandlers, nodeManager := setUpResources(mgr, clientSet, cacheHelper)
+	resourceHandlers, nodeManager := setUpResources(mgr, cacheHelper)
 
 	if err = (&corecontroller.PodReconciler{
 		Client:   mgr.GetClient(),
@@ -138,22 +112,27 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
 		os.Exit(1)
 	}
+	if err = (&vpcresourcescontroller.SecurityGroupPolicyReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("SecurityGroupPolicy"),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SecurityGroupPolicy")
+		os.Exit(1)
+	}
 
 	// +kubebuilder:scaffold:builder
 	setupLog.Info("setting up webhook server")
 	webhookServer := mgr.GetWebhookServer()
+
+	//TODO: if we need validating webhook for pod.
+	//webhookServer.Register("/validate-v1-pod", &webhook.Admission{Handler: &podValidator{}})
 
 	setupLog.Info("registering webhooks to the webhook server")
 	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{Handler: &webhookcore.PodResourceInjector{
 		Client:      mgr.GetClient(),
 		CacheHelper: cacheHelper,
 		Log:         ctrl.Log.WithName("webhook").WithName("Pod Mutating"),
-	}})
-
-	// Validating webhook for pod.
-	webhookServer.Register("/validate-v1-pod", &webhook.Admission{Handler: &webhookcore.AnnotationValidator{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("webhook").WithName("Annotation Validator"),
 	}})
 
 	setupLog.Info("starting manager")
@@ -164,7 +143,7 @@ func main() {
 }
 
 // setUpResources sets up all resource providers and the node manager
-func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset, cacheHelper webhookutils.K8sCacheHelper) ([]handler.Handler, node.Manager) {
+func setUpResources(manager manager.Manager, cacheHelper *webhookutils.K8sCacheHelper) ([]handler.Handler, node.Manager) {
 
 	var resourceProviders []provider.ResourceProvider
 
@@ -174,7 +153,10 @@ func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset, ca
 	}
 
 	ec2APIHelper := api.NewEC2APIHelper(ec2Wrapper)
-	k8sWrapper := k8s.NewK8sWrapper(manager.GetClient(), clientSet.CoreV1())
+	k8sWrapper := k8s.NewK8sWrapper(manager.GetClient())
+
+	// Set up the node manager
+	nodeManager := node.NewNodeManager(ctrl.Log.WithName("node manager"), resourceProviders, ec2APIHelper)
 
 	// Load the default resource config
 	resourceConfig := config.LoadResourceConfig()
@@ -185,16 +167,13 @@ func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset, ca
 
 	// Set up warm resource handlers
 
-	// Set up the node manager
-	nodeManager := node.NewNodeManager(ctrl.Log.WithName("node manager"), resourceProviders, ec2APIHelper, k8sWrapper)
-
 	return []handler.Handler{onDemandHandler}, nodeManager
 }
 
 // getOnDemandResourceProviders returns all the providers for resource type on demand
 func getOnDemandResourceProviders(resourceConfig map[string]config.ResourceConfig, k8sWrapper k8s.K8sWrapper,
 	ec2APIHelper api.EC2APIHelper, providers *[]provider.ResourceProvider,
-	cacheHelper webhookutils.K8sCacheHelper) map[string]provider.ResourceProvider {
+	cacheHelper *webhookutils.K8sCacheHelper) map[string]provider.ResourceProvider {
 
 	// Load Branch ENI Config
 	branchConfig := resourceConfig[config.ResourceNamePodENI]

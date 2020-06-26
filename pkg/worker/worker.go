@@ -24,7 +24,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 // Prometheus metrics
@@ -57,12 +56,13 @@ var (
 
 // Errors
 var (
+	BufferOverflowError        = errors.New("failed to accept new jobs to the buffer, buffer is at full capacity")
 	WorkersAlreadyStartedError = errors.New("failed to start the workers as they are already running")
 )
 
 type Worker interface {
 	StartWorkerPool(func(interface{}) (ctrl.Result, error)) error
-	SubmitJob(job interface{})
+	SubmitJob(job interface{}) error
 }
 
 type worker struct {
@@ -103,10 +103,9 @@ func NewDefaultWorkerPool(resourceName string, workerCount int, maxRequeue int,
 // prometheusRegister registers the metrics.
 func prometheusRegister() {
 	if !prometheusRegistered {
-		metrics.Registry.MustRegister(
-			jobsSubmittedCount,
-			jobsCompletedCount,
-			jobsFailedCount)
+		prometheus.MustRegister(jobsSubmittedCount)
+		prometheus.MustRegister(jobsCompletedCount)
+		prometheus.MustRegister(jobsFailedCount)
 
 		prometheusRegistered = true
 	}
@@ -117,9 +116,10 @@ func (w *worker) SetWorkerFunc(workerFunc func(interface{}) (ctrl.Result, error)
 }
 
 // SubmitJob adds the job to the rate limited queue
-func (w *worker) SubmitJob(job interface{}) {
+func (w *worker) SubmitJob(job interface{}) error {
 	w.queue.Add(job)
 	jobsSubmittedCount.WithLabelValues(w.resourceName).Inc()
+	return nil
 }
 
 // runWorker runs a worker that listens on new item on the worker queue
@@ -146,16 +146,16 @@ func (w *worker) processNextItem() (cont bool) {
 			jobsFailedCount.WithLabelValues(w.resourceName).Inc()
 			return
 		}
-		log.Error(err, "re-queuing job", "retry count", w.queue.NumRequeues(job))
+		log.Error(err, "requeuing job", "retry count", w.queue.NumRequeues(job))
 		w.queue.AddRateLimited(job)
 		return
 	} else if result.Requeue {
-		log.V(1).Info("timed retry", "retry after", result.RequeueAfter)
+		log.Info("timed retry", "retry after", result.RequeueAfter)
 		w.queue.AddAfter(job, result.RequeueAfter)
 		return
 	}
 
-	log.V(1).Info("completed job successfully")
+	log.Info("completed job successfully")
 
 	w.queue.Forget(job)
 	jobsCompletedCount.WithLabelValues(w.resourceName).Inc()

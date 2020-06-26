@@ -36,8 +36,6 @@ const (
 	VPCManagedBy = "controller"
 	// HasTrunkAttachedLabel is the label denoting that the trunk ENI is attached to node or not
 	HasTrunkAttachedLabel = "vpc.amazonaws.com/has-trunk-attached"
-	// CustomNetworkingLabel is the label with the name of ENIConfig to be used by the node for custom networking
-	CustomNetworkingLabel = "k8s.amazonaws.com/eniConfig"
 	// NodeLabelOS is the Kubernetes Operating System label
 	NodeLabelOS = "kubernetes.io/os"
 	// NodeLabelOS is the Kubernetes Operating System label used before k8s version 1.16

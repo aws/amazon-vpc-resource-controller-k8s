@@ -39,15 +39,15 @@ type node struct {
 }
 
 var (
-	ErrInitResources = fmt.Errorf("failed to initalize resources")
+	ErrInitResources   = fmt.Errorf("failed to initalize resources")
+	ErrDeleteResources = fmt.Errorf("failed to delete resources")
+	ErrUpdateResources = fmt.Errorf("failed to update resources")
 )
 
 type Node interface {
 	InitResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
 	DeleteResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
 	UpdateResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
-
-	UpdateSubnet(subnetID string)
 	IsReady() bool
 }
 
@@ -130,13 +130,6 @@ func (n *node) DeleteResources(resourceProviders []provider.ResourceProvider, _ 
 	}
 
 	return nil
-}
-
-func (n *node) UpdateSubnet(subnetID string) {
-	if n.instance.SubnetID() != subnetID {
-		n.log.Info("setting the subnet id using cni custom networking", "id", subnetID)
-		n.instance.SetSubnet(subnetID)
-	}
 }
 
 // IsReady returns true if all the providers have been initialized
