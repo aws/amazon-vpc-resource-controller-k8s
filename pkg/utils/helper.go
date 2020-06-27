@@ -80,7 +80,7 @@ func (kch *K8sCacheHelper) filterPodSecurityGroups(
 
 		if (!hasPodSelector && !hasSASelector) || !hasSecurityGroup {
 			sgpLogger.Info(
-				"Found an invalid SecurityGroupPolicy due to either both of podSelector and saSelector are null, " +
+				"Found an invalid SecurityGroupPolicy due to either both of podSelector and saSelector are null, "+
 					"or security groups is nil or empty.",
 				"Invalid SGP", types.NamespacedName{Name: sgp.Name, Namespace: sgp.Namespace},
 				"Security Groups", sgp.Spec.SecurityGroups)

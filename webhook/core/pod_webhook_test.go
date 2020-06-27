@@ -171,10 +171,31 @@ func TestPodResourceInjector_WithoutSGP_Handle(t *testing.T) {
 	assert.True(t, len(resp.Patches) == 0)
 }
 
+// TestPodResourceInjector_Without_Pod_namespace_Handle tests how Handle handles empty namespace in pod
+func TestPodResourceInjector_Without_Pod_namespace_Handle(t *testing.T) {
+	pod := NewPod("test", "test_sa", "")
+	resp := getResponse(pod, handlerPa)
+	assert.True(t, resp.Allowed)
+	for _, p := range resp.Patches {
+		assert.True(t, p.Operation == "add")
+		assert.True(t, p.Path == "/spec/containers/0/resources/limits" ||
+			p.Path == "/spec/containers/0/resources/requests" ||
+			p.Path == "/metadata/namespace")
+
+		if p.Path == "/metadata/namespace" {
+			assert.True(t, p.Value.(string) == namespace)
+			continue
+		}
+		pv := p.Value.(map[string]interface{})
+		assert.True(t, pv[vpcresourceconfig.ResourceNamePodENI] == resourceLimit)
+	}
+}
+
 func getResponse(pod *corev1.Pod, injector *PodResourceInjector) admission.Response {
 	podRaw, _ := json.Marshal(pod)
 	req := admission.Request{
 		AdmissionRequest: v1beta1.AdmissionRequest{
+			Namespace: namespace,
 			Operation: v1beta1.Create,
 			Object: runtime.RawExtension{
 				Raw: podRaw,

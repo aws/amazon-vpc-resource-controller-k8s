@@ -32,7 +32,6 @@ type PodResourceInjector struct {
 
 func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Request) admission.Response {
 	pod := &corev1.Pod{}
-	webhookLog := prj.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
 	err := prj.decoder.Decode(req, pod)
 	if err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
@@ -51,6 +50,13 @@ func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Reques
 		pod.Spec.Containers[0].Resources.Requests = make(corev1.ResourceList)
 	}
 
+	// To avoid empty string namespace failing client retrieving service account later.
+	if pod.Namespace == "" {
+		pod.Namespace = req.Namespace
+	}
+
+	webhookLog := prj.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
+
 	// Attach private ip to Windows pod which is not running on Host Network.
 	// Attach ENI to non-Windows pod which is not running on Host Network.
 	if shouldInjectPrivateIP(pod) {
@@ -58,14 +64,14 @@ func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Reques
 			"resource name", vpcresourceconfig.ResourceNameIPAddress, "resource count", resourceLimit)
 		pod.Spec.Containers[0].Resources.Limits[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
 		pod.Spec.Containers[0].Resources.Requests[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
-	} else if sgList, cacheErr := prj.CacheHelper.GetPodSecurityGroups(pod); len(sgList) > 0 {
+	} else if sgList, cacheErr := prj.CacheHelper.GetPodSecurityGroups(pod); cacheErr != nil {
+		webhookLog.Error(cacheErr, "Webhook client failed to Get or List objects from cache.")
+		return admission.Denied("Webhood encountered error to Get or List object from k8s cache.")
+	} else if len(sgList) > 0 {
 		webhookLog.Info("Injecting resource to the first container of the pod",
 			"resource name", vpcresourceconfig.ResourceNamePodENI, "resource count", resourceLimit)
 		pod.Spec.Containers[0].Resources.Limits[vpcresourceconfig.ResourceNamePodENI] = resource.MustParse(resourceLimit)
 		pod.Spec.Containers[0].Resources.Requests[vpcresourceconfig.ResourceNamePodENI] = resource.MustParse(resourceLimit)
-	} else if cacheErr != nil {
-		webhookLog.Error(cacheErr, "Webhook client failed to Get or List objects from cache.")
-		return admission.Denied("Webhood encountered error to Get or List object from k8s cache.")
 	} else {
 		return admission.Allowed("Pod will not be injected with resources limits.")
 	}
