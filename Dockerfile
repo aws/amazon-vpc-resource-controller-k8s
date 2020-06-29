@@ -2,6 +2,9 @@
 FROM golang:1.13 as builder
 
 WORKDIR /workspace
+
+ENV GOPROXY direct
+
 # Copy the Go Modules manifests
 COPY go.mod go.mod
 COPY go.sum go.sum
@@ -16,8 +19,6 @@ COPY apis/ apis/
 COPY pkg/ pkg/
 COPY controllers/ controllers/
 COPY webhook/ webhook/
-
-ENV GOPROXY direct
 
 # Build
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o manager main.go
