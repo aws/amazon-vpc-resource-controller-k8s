@@ -47,6 +47,20 @@ rules:
   - patch
   - update
 - apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts/status
+  verbs:
+  - get
+- apiGroups:
   - vpcresources.k8s.aws
   resources:
   - securitygrouppolicies

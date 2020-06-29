@@ -111,13 +111,11 @@ func TestPodReconciler_Reconcile_Create(t *testing.T) {
 
 	reconciler, mockHandler, mockManager, mockNode := getPodReconcilerAndMockHandler(ctrl, mockPod)
 
-	gomock.InOrder(
-		mockManager.EXPECT().GetNode(mockNodeName).Return(mockNode, true),
-		mockNode.EXPECT().IsReady().Return(true),
-		mockHandler.EXPECT().CanHandle(mockResourceName).Return(true),
-		mockHandler.EXPECT().HandleCreate(mockResourceName, int64(3), gomock.Any()).Return(nil),
-		mockHandler.EXPECT().CanHandle(mockUnsupportedResourceName).Return(false),
-	)
+	mockManager.EXPECT().GetNode(mockNodeName).Return(mockNode, true)
+	mockNode.EXPECT().IsReady().Return(true)
+	mockHandler.EXPECT().CanHandle(mockResourceName).Return(true)
+	mockHandler.EXPECT().HandleCreate(mockResourceName, int64(3), gomock.Any()).Return(nil)
+	mockHandler.EXPECT().CanHandle(mockUnsupportedResourceName).Return(false)
 
 	reconciler.Reconcile(mockReq)
 }
@@ -133,13 +131,11 @@ func TestPodReconciler_Reconcile_Delete(t *testing.T) {
 	pod.DeletionTimestamp = &ti
 	reconciler, mockHandler, mockManager, mockNode := getPodReconcilerAndMockHandler(ctrl, pod)
 
-	gomock.InOrder(
-		mockManager.EXPECT().GetNode(mockNodeName).Return(mockNode, true),
-		mockNode.EXPECT().IsReady().Return(true),
-		mockHandler.EXPECT().CanHandle(mockResourceName).Return(true),
-		mockHandler.EXPECT().HandleDelete(mockResourceName, gomock.Any()).Return(nil),
-		mockHandler.EXPECT().CanHandle(mockUnsupportedResourceName).Return(false),
-	)
+	mockManager.EXPECT().GetNode(mockNodeName).Return(mockNode, true)
+	mockNode.EXPECT().IsReady().Return(true)
+	mockHandler.EXPECT().CanHandle(mockResourceName).Return(true)
+	mockHandler.EXPECT().HandleDelete(mockResourceName, gomock.Any()).Return(nil)
+	mockHandler.EXPECT().CanHandle(mockUnsupportedResourceName).Return(false)
 
 	reconciler.Reconcile(mockReq)
 }
