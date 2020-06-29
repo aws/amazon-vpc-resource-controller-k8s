@@ -30,8 +30,8 @@ import (
 var (
 	resourceName                    = "vpc.amazonaws.com/pod-eni"
 	workerCount                     = 1
-	mockTimeToProcessWorkerFunc     = time.Duration(5)
-	bufferTimeBwWorkerFuncExecution = time.Duration(1)
+	mockTimeToProcessWorkerFunc     = time.Duration(20)
+	bufferTimeBwWorkerFuncExecution = time.Duration(3)
 	maxRequeue                      = 3
 )
 
@@ -123,5 +123,6 @@ func TestWorker_SubmitJob_RequeueOnError(t *testing.T) {
 
 	time.Sleep((mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Millisecond * time.Duration(maxRequeue))
 
-	assert.Equal(t, maxRequeue, invoked)
+	// expected invocation = max requeue + the first invocation
+	assert.Equal(t, maxRequeue+1, invoked)
 }

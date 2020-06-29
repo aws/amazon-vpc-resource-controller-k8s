@@ -155,9 +155,6 @@ func setUpResources(manager manager.Manager, cacheHelper *webhookutils.K8sCacheH
 	ec2APIHelper := api.NewEC2APIHelper(ec2Wrapper)
 	k8sWrapper := k8s.NewK8sWrapper(manager.GetClient())
 
-	// Set up the node manager
-	nodeManager := node.NewNodeManager(ctrl.Log.WithName("node manager"), resourceProviders, ec2APIHelper)
-
 	// Load the default resource config
 	resourceConfig := config.LoadResourceConfig()
 
@@ -166,6 +163,9 @@ func setUpResources(manager manager.Manager, cacheHelper *webhookutils.K8sCacheH
 	onDemandHandler := handler.NewOnDemandHandler(ctrl.Log.WithName("on demand handler"), onDemandProviders)
 
 	// Set up warm resource handlers
+
+	// Set up the node manager
+	nodeManager := node.NewNodeManager(ctrl.Log.WithName("node manager"), resourceProviders, ec2APIHelper)
 
 	return []handler.Handler{onDemandHandler}, nodeManager
 }
