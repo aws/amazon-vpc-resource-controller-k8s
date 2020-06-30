@@ -159,7 +159,7 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 		newNode := node.DeepCopy()
 		newNode.Status.Capacity[v1.ResourceName(resourceName)] = resource.MustParse(strconv.Itoa(capacity))
 
-		return k.client.Patch(ctx, newNode, client.MergeFrom(node))
+		return k.client.Status().Patch(ctx, newNode, client.MergeFrom(node))
 	})
 
 	if err != nil {
