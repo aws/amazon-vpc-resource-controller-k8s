@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 type EC2Wrapper interface {
@@ -265,35 +266,37 @@ var (
 
 func prometheusRegister() {
 	if !prometheusRegistered {
-		prometheus.MustRegister(ec2APICallCnt)
-		prometheus.MustRegister(ec2APIErrCnt)
-		prometheus.MustRegister(ec2DescribeInstancesAPICnt)
-		prometheus.MustRegister(ec2DescribeInstancesAPIErrCnt)
-		prometheus.MustRegister(ec2CreateNetworkInterfaceAPICallCnt)
-		prometheus.MustRegister(ec2CreateNetworkInterfaceAPIErrCnt)
-		prometheus.MustRegister(ec2TagNetworkInterfaceAPICallCnt)
-		prometheus.MustRegister(ec2TagNetworkInterfaceAPIErrCnt)
-		prometheus.MustRegister(ec2AttachNetworkInterfaceAPICallCnt)
-		prometheus.MustRegister(ec2AttachNetworkInterfaceAPIErrCnt)
-		prometheus.MustRegister(ec2DescribeNetworkInterfaceAPICallCnt)
-		prometheus.MustRegister(ec2DescribeNetworkInterfaceAPIErrCnt)
-		prometheus.MustRegister(numAssignedSecondaryIPAddress)
-		prometheus.MustRegister(numUnassignedSecondaryIPAddress)
-		prometheus.MustRegister(ec2AssignPrivateIPAddressAPICallCnt)
-		prometheus.MustRegister(ec2AssignPrivateIPAddressAPIErrCnt)
-		prometheus.MustRegister(ec2DetachNetworkInterfaceAPICallCnt)
-		prometheus.MustRegister(ec2DetachNetworkInterfaceAPIErrCnt)
-		prometheus.MustRegister(ec2DeleteNetworkInterfaceAPICallCnt)
-		prometheus.MustRegister(ec2DeleteNetworkInterfaceAPIErrCnt)
-		prometheus.MustRegister(ec2DescribeSubnetsAPICallCnt)
-		prometheus.MustRegister(ec2DescribeSubnetsAPIErrCnt)
-		prometheus.MustRegister(ec2AssociateTrunkInterfaceAPICallCnt)
-		prometheus.MustRegister(ec2AssociateTrunkInterfaceAPIErrCnt)
-		prometheus.MustRegister(ec2describeTrunkInterfaceAssociationAPICallCnt)
-		prometheus.MustRegister(ec2describeTrunkInterfaceAssociationAPIErrCnt)
-		prometheus.MustRegister(ec2modifyNetworkInterfaceAttributeAPICallCnt)
-		prometheus.MustRegister(ec2modifyNetworkInterfaceAttributeAPIErrCnt)
-		prometheus.MustRegister(ec2APICallLatencies)
+
+		metrics.Registry.MustRegister(
+			ec2APICallCnt,
+			ec2APIErrCnt,
+			ec2DescribeInstancesAPICnt,
+			ec2DescribeInstancesAPIErrCnt,
+			ec2CreateNetworkInterfaceAPICallCnt,
+			ec2CreateNetworkInterfaceAPIErrCnt,
+			ec2TagNetworkInterfaceAPICallCnt,
+			ec2TagNetworkInterfaceAPIErrCnt,
+			ec2AttachNetworkInterfaceAPICallCnt,
+			ec2AttachNetworkInterfaceAPIErrCnt,
+			ec2DescribeNetworkInterfaceAPICallCnt,
+			ec2DescribeNetworkInterfaceAPIErrCnt,
+			numAssignedSecondaryIPAddress,
+			numUnassignedSecondaryIPAddress,
+			ec2AssignPrivateIPAddressAPICallCnt,
+			ec2AssignPrivateIPAddressAPIErrCnt,
+			ec2DetachNetworkInterfaceAPICallCnt,
+			ec2DetachNetworkInterfaceAPIErrCnt,
+			ec2DeleteNetworkInterfaceAPICallCnt,
+			ec2DeleteNetworkInterfaceAPIErrCnt,
+			ec2DescribeSubnetsAPICallCnt,
+			ec2DescribeSubnetsAPIErrCnt,
+			ec2AssociateTrunkInterfaceAPICallCnt,
+			ec2AssociateTrunkInterfaceAPIErrCnt,
+			ec2describeTrunkInterfaceAssociationAPICallCnt,
+			ec2describeTrunkInterfaceAssociationAPIErrCnt,
+			ec2modifyNetworkInterfaceAttributeAPICallCnt,
+			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
+			ec2APICallLatencies)
 
 		prometheusRegistered = true
 	}

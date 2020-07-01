@@ -35,6 +35,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 var (
@@ -112,9 +113,10 @@ func NewBranchENIProvider(logger logr.Logger, k8sWrapper k8s.K8sWrapper,
 
 // prometheusRegister registers prometheus metrics
 func prometheusRegister() {
-	prometheus.MustRegister(branchProviderOperationsErrCount)
-	prometheus.MustRegister(trunkENIOperationsErrCount)
-	prometheus.MustRegister(branchProviderOperationLatency)
+	metrics.Registry.MustRegister(
+		branchProviderOperationsErrCount,
+		trunkENIOperationsErrCount,
+		branchProviderOperationLatency)
 
 	prometheusRegistered = true
 }
@@ -180,18 +182,27 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 	// Get the pod from cache
 	pod, err := b.k8s.GetPod(onDemandJob.PodNamespace, onDemandJob.PodName)
 	if err != nil {
-		branchProviderOperationsErrCount.WithLabelValues("get_pod").Inc()
+		branchProviderOperationsErrCount.WithLabelValues("get_pod_cache").Inc()
 		return ctrl.Result{}, err
 	}
 
 	// TODO: Fix use case where CREATE is ongoing and DELETE is requested.
-
 	if onDemandJob.Operation == worker.OperationDelete {
 		return b.DeleteResources(pod)
 	} else if onDemandJob.Operation == worker.OperationCreate {
 		if _, ok := pod.Annotations[config.ResourceNamePodENI]; !ok {
-			// Pod doesn't have an annotation yet. Create Branch ENI and annotate the pod
-			return b.CreateAndAnnotateResources(pod, int(onDemandJob.RequestCount))
+			// Get the pod object again directly from API Server as the cache can be stale
+			pod, err = b.k8s.GetPodFromAPIServer(onDemandJob.PodNamespace, onDemandJob.PodName)
+			if err != nil {
+				branchProviderOperationsErrCount.WithLabelValues("get_pod_api_server").Inc()
+				return ctrl.Result{}, err
+			}
+			if _, ok := pod.Annotations[config.ResourceNamePodENI]; !ok {
+				// Pod doesn't have an annotation yet. Create Branch ENI and annotate the pod
+				return b.CreateAndAnnotateResources(pod, int(onDemandJob.RequestCount))
+			}
+			b.log.Info("skipping pod event as the pod already has pod-eni allocated",
+				"namespace", pod.Namespace, "name", pod.Name)
 		}
 		return ctrl.Result{}, nil
 	}

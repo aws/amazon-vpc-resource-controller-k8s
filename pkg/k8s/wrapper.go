@@ -23,9 +23,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 var (
@@ -62,13 +65,30 @@ var (
 		},
 		[]string{"resource_name"},
 	)
+
+	getPodFromAPIServeCallCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "get_pod_from_api_server_call_count",
+			Help: "The number of requests to get the pod directly from API Server",
+		},
+	)
+
+	getPodFromAPIServeErrCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "get_pod_from_api_server_err_count",
+			Help: "The number of requests that failed to get the pod directly from API Server",
+		},
+	)
 )
 
 func prometheusRegister() {
-	prometheus.MustRegister(annotatePodRequestErrCount)
-	prometheus.MustRegister(annotatePodRequestCallCount)
-	prometheus.MustRegister(advertiseResourceRequestErrCount)
-	prometheus.MustRegister(advertiseResourceRequestCallCount)
+	metrics.Registry.MustRegister(
+		annotatePodRequestCallCount,
+		annotatePodRequestErrCount,
+		advertiseResourceRequestErrCount,
+		advertiseResourceRequestCallCount,
+		getPodFromAPIServeCallCount,
+		getPodFromAPIServeErrCount)
 
 	prometheusRegistered = true
 }
@@ -76,21 +96,36 @@ func prometheusRegister() {
 // K8sWrapper represents an interface with all the common operations on K8s objects
 type K8sWrapper interface {
 	GetPod(namespace string, name string) (*v1.Pod, error)
+	GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error)
 	AnnotatePod(podNamespace string, podName string, key string, val string) error
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
 }
 
 // k8sWrapper is the wrapper object with the client
 type k8sWrapper struct {
-	client client.Client
+	cacheClient client.Client
+	coreV1      corev1.CoreV1Interface
 }
 
 // NewK8sWrapper returns a new K8sWrapper
-func NewK8sWrapper(client client.Client) K8sWrapper {
+func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface) K8sWrapper {
 	if !prometheusRegistered {
 		prometheusRegister()
 	}
-	return &k8sWrapper{client: client}
+	return &k8sWrapper{cacheClient: client, coreV1: coreV1}
+}
+
+func (k *k8sWrapper) GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error) {
+	getPodFromAPIServeCallCount.Inc()
+	pod, err := k.coreV1.Pods(namespace).Get(name, metav1.GetOptions{
+		TypeMeta:        metav1.TypeMeta{},
+		ResourceVersion: "",
+	})
+	if err != nil {
+		getPodFromAPIServeErrCount.Inc()
+	}
+
+	return pod, err
 }
 
 // AnnotatePod annotates the pod with the provided key and value
@@ -106,13 +141,13 @@ func (k *k8sWrapper) AnnotatePod(podNamespace string, podName string, key string
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		// Get the latest copy of the pod from cache
 		pod := &v1.Pod{}
-		if err := k.client.Get(ctx, request, pod); err != nil {
+		if err := k.cacheClient.Get(ctx, request, pod); err != nil {
 			return err
 		}
 		newPod := pod.DeepCopy()
 		newPod.Annotations[key] = val
 
-		return k.client.Patch(ctx, newPod, client.MergeFrom(pod))
+		return k.cacheClient.Patch(ctx, newPod, client.MergeFrom(pod))
 	})
 
 	if err != nil {
@@ -128,7 +163,7 @@ func (k *k8sWrapper) GetPod(namespace string, name string) (*v1.Pod, error) {
 	ctx := context.Background()
 
 	pod := &v1.Pod{}
-	if err := k.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, pod); err != nil {
+	if err := k.cacheClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, pod); err != nil {
 		return nil, err
 	}
 	return pod, nil
@@ -144,7 +179,7 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		node := &v1.Node{}
-		if err := k.client.Get(ctx, request, node); err != nil {
+		if err := k.cacheClient.Get(ctx, request, node); err != nil {
 			return err
 		}
 
@@ -159,7 +194,7 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 		newNode := node.DeepCopy()
 		newNode.Status.Capacity[v1.ResourceName(resourceName)] = resource.MustParse(strconv.Itoa(capacity))
 
-		return k.client.Status().Patch(ctx, newNode, client.MergeFrom(node))
+		return k.cacheClient.Status().Patch(ctx, newNode, client.MergeFrom(node))
 	})
 
 	if err != nil {

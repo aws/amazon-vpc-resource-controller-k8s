@@ -28,8 +28,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	fakeClientSet "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	fakeClient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 var (
@@ -75,8 +76,11 @@ var (
 func getMockK8sWrapperWithClient() (K8sWrapper, client.Client) {
 	scheme := runtime.NewScheme()
 	_ = v1.AddToScheme(scheme)
-	fakeClient := fake.NewFakeClientWithScheme(scheme, mockPod, mockNode)
-	return NewK8sWrapper(fakeClient), fakeClient
+
+	client := fakeClient.NewFakeClientWithScheme(scheme, mockPod, mockNode)
+	clientSet := fakeClientSet.NewSimpleClientset(mockPod, mockNode)
+
+	return NewK8sWrapper(client, clientSet.CoreV1()), client
 }
 
 // TestK8sWrapper_AnnotatePod tests that annotate pod doesn't throw error on adding a new annotation to pod
@@ -177,4 +181,21 @@ func TestK8sWrapper_AdvertiseCapacity_AlreadySet(t *testing.T) {
 	capacity, _ := mockNode.Status.Capacity[v1.ResourceName(existingResource)]
 	assert.NoError(t, err)
 	assert.Equal(t, existingResourceQuantity, capacity.Value())
+}
+
+// TestK8sWrapper_GetPodFromAPIServer tests if the pod is returned if it's stored with API server
+func TestK8sWrapper_GetPodFromAPIServer(t *testing.T) {
+	wrapper, _ := getMockK8sWrapperWithClient()
+	pod, err := wrapper.GetPodFromAPIServer(podNamespace, podName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, mockPod, pod)
+}
+
+// TestK8sWrapper_GetPodFromAPIServer_NoError tests that error is returned when the pod doesn't exist
+func TestK8sWrapper_GetPodFromAPIServer_NoError(t *testing.T) {
+	wrapper, _ := getMockK8sWrapperWithClient()
+	_, err := wrapper.GetPodFromAPIServer(podNamespace, podName+"not-exists")
+
+	assert.NotNil(t, err)
 }

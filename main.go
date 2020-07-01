@@ -24,6 +24,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -72,7 +73,8 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	config := ctrl.GetConfigOrDie()
+	mgr, err := ctrl.NewManager(config, ctrl.Options{
 		SyncPeriod:         &syncPeriod,
 		Scheme:             scheme,
 		MetricsBindAddress: metricsAddr,
@@ -85,13 +87,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	clientSet, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		setupLog.Error(err, "failed to create client set")
+		os.Exit(1)
+	}
+
 	// creating a cache helper to handle security groups.
 	cacheHelper := webhookutils.NewK8sCacheHelper(
 		mgr.GetClient(),
 		ctrl.Log.WithName("cache helper"))
 
 	// Get the resource providers and handlers
-	resourceHandlers, nodeManager := setUpResources(mgr, cacheHelper)
+	resourceHandlers, nodeManager := setUpResources(mgr, clientSet, cacheHelper)
 
 	if err = (&corecontroller.PodReconciler{
 		Client:   mgr.GetClient(),
@@ -143,7 +151,7 @@ func main() {
 }
 
 // setUpResources sets up all resource providers and the node manager
-func setUpResources(manager manager.Manager, cacheHelper *webhookutils.K8sCacheHelper) ([]handler.Handler, node.Manager) {
+func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset, cacheHelper *webhookutils.K8sCacheHelper) ([]handler.Handler, node.Manager) {
 
 	var resourceProviders []provider.ResourceProvider
 
@@ -153,7 +161,7 @@ func setUpResources(manager manager.Manager, cacheHelper *webhookutils.K8sCacheH
 	}
 
 	ec2APIHelper := api.NewEC2APIHelper(ec2Wrapper)
-	k8sWrapper := k8s.NewK8sWrapper(manager.GetClient())
+	k8sWrapper := k8s.NewK8sWrapper(manager.GetClient(), clientSet.CoreV1())
 
 	// Load the default resource config
 	resourceConfig := config.LoadResourceConfig()

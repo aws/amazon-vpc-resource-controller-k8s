@@ -24,6 +24,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 // Prometheus metrics
@@ -103,9 +104,10 @@ func NewDefaultWorkerPool(resourceName string, workerCount int, maxRequeue int,
 // prometheusRegister registers the metrics.
 func prometheusRegister() {
 	if !prometheusRegistered {
-		prometheus.MustRegister(jobsSubmittedCount)
-		prometheus.MustRegister(jobsCompletedCount)
-		prometheus.MustRegister(jobsFailedCount)
+		metrics.Registry.MustRegister(
+			jobsSubmittedCount,
+			jobsCompletedCount,
+			jobsFailedCount)
 
 		prometheusRegistered = true
 	}
