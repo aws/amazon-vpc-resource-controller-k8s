@@ -5,10 +5,11 @@
 package mock_node
 
 import (
+	reflect "reflect"
+
 	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	provider "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
 // MockNode is a mock of Node interface

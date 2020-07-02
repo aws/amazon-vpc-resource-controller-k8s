@@ -5,9 +5,10 @@
 package mock_api
 
 import (
+	reflect "reflect"
+
 	ec2 "github.com/aws/aws-sdk-go/service/ec2"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
 // MockEC2Wrapper is a mock of EC2Wrapper interface
