@@ -133,14 +133,17 @@ func main() {
 	setupLog.Info("setting up webhook server")
 	webhookServer := mgr.GetWebhookServer()
 
-	//TODO: if we need validating webhook for pod.
-	//webhookServer.Register("/validate-v1-pod", &webhook.Admission{Handler: &podValidator{}})
-
 	setupLog.Info("registering webhooks to the webhook server")
 	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{Handler: &webhookcore.PodResourceInjector{
 		Client:      mgr.GetClient(),
 		CacheHelper: cacheHelper,
 		Log:         ctrl.Log.WithName("webhook").WithName("Pod Mutating"),
+	}})
+
+	// Validating webhook for pod.
+	webhookServer.Register("/validate-v1-pod", &webhook.Admission{Handler: &webhookcore.AnnotationValidator{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("webhook").WithName("Annotation Validator"),
 	}})
 
 	setupLog.Info("starting manager")

@@ -5,9 +5,10 @@
 package mock_k8s
 
 import (
+	reflect "reflect"
+
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
-	reflect "reflect"
 )
 
 // MockK8sWrapper is a mock of K8sWrapper interface

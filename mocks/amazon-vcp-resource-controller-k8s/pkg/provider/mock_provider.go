@@ -5,9 +5,10 @@
 package mock_provider
 
 import (
+	reflect "reflect"
+
 	ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 

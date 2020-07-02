@@ -5,9 +5,10 @@
 package mock_ec2
 
 import (
+	reflect "reflect"
+
 	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
 // MockEC2Instance is a mock of EC2Instance interface

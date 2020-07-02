@@ -17,6 +17,8 @@ limitations under the License.
 package branch
 
 import (
+	"encoding/json"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
@@ -26,9 +28,6 @@ import (
 
 // TODO: Commenting because no Interface is exposed by the cache helper. Ask hao to fix
 //
-import (
-	"encoding/json"
-)
 
 //	"testing"
 //	"time"
