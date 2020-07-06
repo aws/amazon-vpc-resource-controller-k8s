@@ -1,4 +1,4 @@
-package test
+package integration
 
 import (
 	"flag"
@@ -17,7 +17,7 @@ import (
 
 const (
 	defaultHost            = "http://127.0.0.1:8080"
-	integrationTestAppName = "integration-test-app"
+	integrationTestAppName = "integration-test-test-app"
 )
 
 func init() {
@@ -43,7 +43,7 @@ func RegisterFlags(flags *flag.FlagSet) {
 	flag.StringVar(&framework.TestContext.GatherKubeSystemResourceUsageData, "gather-resource-usage", "false", "If set to 'true' or 'all' framework will be monitoring resource usage of system all add-ons in (some) e2e tests, if set to 'master' framework will be monitoring master node only, if set to 'none' of 'false' monitoring will be turned off.")
 
 	// Custom flags
-	flags.StringVar(&LocalTestContext.AssetsDir, "assets", "assets", "The directory that holds assets used by the integration test.")
+	flags.StringVar(&LocalTestContext.AssetsDir, "assets", "assets", "The directory that holds assets used by the integration-test test.")
 
 	// Configure ginkgo as done by framework.RegisterCommonFlags
 	// Turn on verbose by default to get spec names
@@ -67,9 +67,9 @@ var _ = ginkgo.BeforeSuite(func() {
 	fmt.Printf("Using KUBECONFIG=\"%s\"\n", framework.TestContext.KubeConfig)
 })
 
-var _ = ginkgo.Describe("[cni-integration]", func() {
+var _ = ginkgo.Describe("[cni-integration-test]", func() {
 	var f *framework.Framework
-	f = framework.NewDefaultFramework("cni-integration")
+	f = framework.NewDefaultFramework("cni-integration-test")
 
 	ginkgo.It("should enable pod-pod communication", func() {
 		serverPod := newTestPod()
