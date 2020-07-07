@@ -54,6 +54,7 @@ type EC2Instance interface {
 	Type() string
 	InstanceID() string
 	SubnetID() string
+	SetSubnet(subnetID string)
 	SubnetCidrBlock() string
 }
 
@@ -75,10 +76,13 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	if err != nil {
 		return err
 	}
-	i.subnetID = *instance.SubnetId
+	// Custom networking is not set, must get the instance subnet id
+	if i.subnetID == "" {
+		i.subnetID = *instance.SubnetId
+	}
 	i.instanceType = *instance.InstanceType
 
-	subnet, err := ec2APIHelper.GetSubnet(instance.SubnetId)
+	subnet, err := ec2APIHelper.GetSubnet(&i.subnetID)
 	if err != nil {
 		return err
 	}
@@ -96,6 +100,11 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	}
 
 	return nil
+}
+
+// SetSubnet sets the subnet ID in case the node is using cni custom networking
+func (i *ec2Instance) SetSubnet(subnetID string) {
+	i.subnetID = subnetID
 }
 
 // Os returns the os of the instance

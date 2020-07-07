@@ -25,6 +25,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 
 	"github.com/go-logr/logr"
@@ -42,6 +43,8 @@ type manager struct {
 	resourceProviders []provider.ResourceProvider
 	// ec2APIHelper is the helper function to get instance details from EC2 API
 	ec2APIHelper api.EC2APIHelper
+	// k8sWrapper is the wrapper to get k8s object
+	k8sWrapper k8s.K8sWrapper
 }
 
 type Manager interface {
@@ -51,12 +54,13 @@ type Manager interface {
 }
 
 // NewNodeManager returns a new node manager
-func NewNodeManager(logger logr.Logger, provider []provider.ResourceProvider, ec2APIHelper api.EC2APIHelper) Manager {
+func NewNodeManager(logger logr.Logger, provider []provider.ResourceProvider, ec2APIHelper api.EC2APIHelper, k8sWrapper k8s.K8sWrapper) Manager {
 	return &manager{
 		resourceProviders: provider,
 		Log:               logger,
 		dataStore:         make(map[string]Node),
 		ec2APIHelper:      ec2APIHelper,
+		k8sWrapper:        k8sWrapper,
 	}
 }
 
@@ -113,6 +117,7 @@ func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func([]p
 		if shouldManageNode {
 			log.V(1).Info("no updates on the managed status of the node")
 			postUnlockOperation = node.UpdateResources
+			err = m.updateSubnetIfUsingENIConfig(node, v1Node)
 			return
 		}
 
@@ -140,6 +145,11 @@ func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func([]p
 
 		node := NewNode(m.Log.WithName("node initializer").WithValues("name",
 			v1Node.Name), v1Node.Name, instanceId, os)
+
+		err = m.updateSubnetIfUsingENIConfig(node, v1Node)
+		if err != nil {
+			return
+		}
 
 		m.dataStore[v1Node.Name] = node
 		postUnlockOperation = node.InitResources
@@ -169,6 +179,26 @@ func (m *manager) deleteNode(nodeName string) (postUnlockOperation func([]provid
 	log.Info("node removed from list of managed node")
 
 	return
+}
+
+// updateSubnetIfUsingENIConfig updates the subnet id for the node to the subnet specified in ENIConfig if the node is
+// using custom networking
+func (m *manager) updateSubnetIfUsingENIConfig(node Node, k8sNode *v1.Node) error {
+	eniConfigName, isPresent := k8sNode.Labels[config.CustomNetworkingLabel]
+	if isPresent {
+		eniConfig, err := m.k8sWrapper.GetENIConfig(eniConfigName)
+		if err != nil {
+			return fmt.Errorf("failed to find the ENIConfig %s: %v", eniConfigName, err)
+		}
+		if eniConfig.Spec.Subnet != "" {
+			m.Log.V(1).Info("node is using custom networking, updating the subnet", "node", k8sNode.Name,
+				"subnet", eniConfig.Spec.Subnet)
+			node.UpdateSubnet(eniConfig.Spec.Subnet)
+			return nil
+		}
+		return fmt.Errorf("failed to find subnet in eniconfig spec %s", eniConfigName)
+	}
+	return nil
 }
 
 // performPostUnlockOperation performs the operation on a node without taking the node manager lock

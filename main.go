@@ -32,9 +32,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	crdv1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
-	vpcresourcescontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/vpcresources"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
@@ -59,8 +59,13 @@ func init() {
 
 	_ = corev1.AddToScheme(scheme)
 	_ = vpcresourcesv1beta1.AddToScheme(scheme)
+	_ = crdv1alpha1.AddToScheme(scheme)
 	// +kubebuilder:scaffold:scheme
 }
+
+// +kubebuilder:rbac:groups=crd.k8s.amazonaws.com,resources=eniconfigs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies/status,verbs=get;update;patch
 
 func main() {
 	var metricsAddr string
@@ -133,14 +138,6 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
 		os.Exit(1)
 	}
-	if err = (&vpcresourcescontroller.SecurityGroupPolicyReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("SecurityGroupPolicy"),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "SecurityGroupPolicy")
-		os.Exit(1)
-	}
 
 	// +kubebuilder:scaffold:builder
 	setupLog.Info("setting up webhook server")
@@ -189,7 +186,7 @@ func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset, ca
 	// Set up warm resource handlers
 
 	// Set up the node manager
-	nodeManager := node.NewNodeManager(ctrl.Log.WithName("node manager"), resourceProviders, ec2APIHelper)
+	nodeManager := node.NewNodeManager(ctrl.Log.WithName("node manager"), resourceProviders, ec2APIHelper, k8sWrapper)
 
 	return []handler.Handler{onDemandHandler}, nodeManager
 }

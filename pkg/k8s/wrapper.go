@@ -20,6 +20,7 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -105,6 +106,7 @@ type K8sWrapper interface {
 	GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error)
 	AnnotatePod(podNamespace string, podName string, key string, val string) error
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
+	GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error)
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -119,6 +121,15 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface) K8sWrapp
 		prometheusRegister()
 	}
 	return &k8sWrapper{cacheClient: client, coreV1: coreV1}
+}
+
+func (k *k8sWrapper) GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error) {
+	sgp := &v1alpha1.ENIConfig{}
+	err := k.cacheClient.Get(context.Background(), types.NamespacedName{
+		Name: eniConfigName,
+	}, sgp)
+
+	return sgp, err
 }
 
 // GetPodFromAPIServer returns the pod details by querying the API Server directly

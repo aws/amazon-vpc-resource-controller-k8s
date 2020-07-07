@@ -61,6 +61,14 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - crd.k8s.amazonaws.com
+  resources:
+  - eniconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - vpcresources.k8s.aws
   resources:
   - securitygrouppolicies

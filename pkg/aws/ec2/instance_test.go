@@ -93,6 +93,23 @@ func TestEc2Instance_LoadDetails(t *testing.T) {
 	assert.Equal(t, []bool{true, false, true}, ec2Instance.deviceIndexes)
 }
 
+// TestEc2Instance_LoadDetails_SubnetPreLoaded if the subnet is already loaded it's not set to the value of the instance's
+// subnet
+func TestEc2Instance_LoadDetails_SubnetPreLoaded(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+	customNWSubnet := "custom-networking"
+	ec2Instance.subnetID = customNWSubnet
+
+	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&customNWSubnet).Return(subnet, nil)
+
+	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
+	assert.NoError(t, err)
+}
+
 // TestEc2Instance_LoadDetails_ErrInstanceDetails tests that if error is returned in loading instance details then the
 // operation fails
 func TestEc2Instance_LoadDetails_ErrInstanceDetails(t *testing.T) {

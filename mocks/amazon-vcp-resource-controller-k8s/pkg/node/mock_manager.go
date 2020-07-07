@@ -5,11 +5,10 @@
 package mock_node
 
 import (
-	reflect "reflect"
-
 	node "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
+	reflect "reflect"
 )
 
 // MockManager is a mock of Manager interface

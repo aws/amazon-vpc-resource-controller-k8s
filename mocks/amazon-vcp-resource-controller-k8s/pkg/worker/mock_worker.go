@@ -5,9 +5,8 @@
 package mock_worker
 
 import (
-	reflect "reflect"
-
 	gomock "github.com/golang/mock/gomock"
+	reflect "reflect"
 	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 

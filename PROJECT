@@ -1,6 +1,6 @@
 domain: k8s.aws
 multigroup: true
-repo: amazon-vpc-resource-controller-k8s
+repo: github.com/aws/amazon-vpc-resource-controller-k8s
 resources:
 - group: vpcresources
   kind: SecurityGroupPolicy

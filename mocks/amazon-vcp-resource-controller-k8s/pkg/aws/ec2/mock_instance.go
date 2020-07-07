@@ -5,10 +5,9 @@
 package mock_ec2
 
 import (
-	reflect "reflect"
-
 	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	gomock "github.com/golang/mock/gomock"
+	reflect "reflect"
 )
 
 // MockEC2Instance is a mock of EC2Instance interface
@@ -115,6 +114,18 @@ func (m *MockEC2Instance) Os() string {
 func (mr *MockEC2InstanceMockRecorder) Os() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Os", reflect.TypeOf((*MockEC2Instance)(nil).Os))
+}
+
+// SetSubnet mocks base method
+func (m *MockEC2Instance) SetSubnet(arg0 string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetSubnet", arg0)
+}
+
+// SetSubnet indicates an expected call of SetSubnet
+func (mr *MockEC2InstanceMockRecorder) SetSubnet(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSubnet", reflect.TypeOf((*MockEC2Instance)(nil).SetSubnet), arg0)
 }
 
 // SubnetCidrBlock mocks base method
