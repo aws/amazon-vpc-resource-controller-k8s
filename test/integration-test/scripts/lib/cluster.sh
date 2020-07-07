@@ -30,58 +30,53 @@ function test-deployment() {
 }
 
 function get-security-groups() {
-  aws eks describe-cluster --name "$1" | grep -iwo 'sg-[a-zA-z0-9]*' | xargs
+  aws eks describe-cluster --name "$1" | grep -iwo 'sg-[a-zA-z0-9]*' | xargs | cut -d " " -f 1
+}
+
+function create-security-group() {
+  local vpcid=$(aws eks describe-cluster --name "$1" | grep -iwo 'vpc-[a-zA-z0-9]*' | xargs)
+  local output=$(aws ec2 create-security-group --group-name "$2" --description "Trunk ENI Integration Test" --vpc-id "$vpcid")
+  local sg=$(echo "$output" | grep sg- | cut -d '"' -f 4)
+  sleep 3
+  set-security-groups "$sg"
+  sleep 5
+  echo "$sg"
+}
+
+function delete-security-group() {
+  if aws ec2 delete-security-group --group-id "$1"
+  then
+    echo "$(tput setaf 2)Security Group $1 was successfully deleted$(tput sgr 0)"
+  else
+    echo "$(tput setaf 1)Security Group $1 failed to be deleted$(tput sgr 0)"
+  fi
 }
 
 function set-security-groups() {
-#  SGS=$(aws eks describe-cluster --name "$1" | grep -iwo 'sg-[a-zA-z0-9]*' | xargs)
-#    IFS=' '
-#    read -ra ARRAY <<<"$SGS"
-#    SG_ONE=$ARRAY
-  SGS=$(get-security-groups "$1")
-  local sg1=$(echo $SGS | cut -d " " -f 1)
-  local sg2=$(echo $SGS | cut -d " " -f 2)
-
   # adding ingress rule into selected security group.
   aws ec2 authorize-security-group-ingress \
-      --group-id $sg1 \
+      --group-id "$1" \
       --protocol all \
       --port 0-60000 \
       --cidr 0.0.0.0/0
 
   aws ec2 authorize-security-group-egress \
-      --group-id $sg1 \
+      --group-id "$1" \
       --protocol all \
       --port 0-60000 \
       --cidr 0.0.0.0/0
-
-  aws ec2 authorize-security-group-ingress \
-      --group-id $sg2 \
-      --protocol all \
-      --port 0-60000 \
-      --cidr 0.0.0.0/0
-
-  aws ec2 authorize-security-group-egress \
-      --group-id $sg2 \
-      --protocol all \
-      --port 0-60000 \
-      --cidr 0.0.0.0/0
-
-  echo $SGS
 }
 
+# TODO: may be okay to remove port and cidr above and below to avoid rule mismatch error.
 function revoke-security-group-rule() {
-  SGS=$(get-security-groups "$1")
-  local sg1=$(echo $SGS | cut -d " " -f 1)
-  local sg2=$(echo $SGS | cut -d " " -f 2)
   aws ec2 revoke-security-group-ingress \
-      --group-id $sg1 \
+      --group-id "$1" \
       --protocol all \
       --port 0-60000 \
       --cidr 0.0.0.0/0
 
   aws ec2 revoke-security-group-ingress \
-      --group-id $sg2 \
+      --group-id "$1" \
       --protocol all \
       --port 0-60000 \
       --cidr 0.0.0.0/0
