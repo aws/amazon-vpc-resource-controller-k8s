@@ -82,16 +82,9 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 	secondaryPrivateIPCount int, interfaceType *string) (*ec2.NetworkInterface, error) {
 	eniDescription := CreateENIDescriptionPrefix + *description
 
-	var ec2SecurityGroups []*string
-	if securityGroups != nil && len(securityGroups) != 0 {
-		// Only add security groups if there are one or more security group provided, otherwise API call will fail instead
-		// of creating the interface with default security groups
-		ec2SecurityGroups = aws.StringSlice(securityGroups)
-	}
-
 	createInput := &ec2.CreateNetworkInterfaceInput{
 		Description: aws.String(eniDescription),
-		Groups:      ec2SecurityGroups,
+		Groups:      aws.StringSlice(securityGroups),
 		SubnetId:    subnetId,
 	}
 

@@ -65,13 +65,18 @@ func init() {
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
+	var enableDevLogging bool
+
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.BoolVar(&enableDevLogging, "enable-dev-logging", false,
+		"Enable developer mode logging for the controller."+
+			"With dev mode logging, you will get Debug logs and more structured logging with extra details")
 	flag.Parse()
 
-	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+	ctrl.SetLogger(zap.New(zap.UseDevMode(enableDevLogging)))
 
 	config := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(config, ctrl.Options{
@@ -82,6 +87,14 @@ func main() {
 		LeaderElection:     enableLeaderElection,
 		LeaderElectionID:   "bb6ce178.k8s.aws",
 	})
+
+	// With kube-builder, we have to manually specify the fields on which the objects must be indexed, in order to
+	// list objects using the k8s cache with field selectors
+	mgr.GetFieldIndexer().IndexField(&corev1.Pod{}, "spec.nodeName", func(object runtime.Object) []string {
+		pod := object.(*corev1.Pod)
+		return []string{pod.Spec.NodeName}
+	})
+
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
@@ -154,7 +167,7 @@ func main() {
 }
 
 // setUpResources sets up all resource providers and the node manager
-func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset, cacheHelper *webhookutils.K8sCacheHelper) ([]handler.Handler, node.Manager) {
+func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset, cacheHelper webhookutils.K8sCacheHelper) ([]handler.Handler, node.Manager) {
 
 	var resourceProviders []provider.ResourceProvider
 
@@ -184,7 +197,7 @@ func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset, ca
 // getOnDemandResourceProviders returns all the providers for resource type on demand
 func getOnDemandResourceProviders(resourceConfig map[string]config.ResourceConfig, k8sWrapper k8s.K8sWrapper,
 	ec2APIHelper api.EC2APIHelper, providers *[]provider.ResourceProvider,
-	cacheHelper *webhookutils.K8sCacheHelper) map[string]provider.ResourceProvider {
+	cacheHelper webhookutils.K8sCacheHelper) map[string]provider.ResourceProvider {
 
 	// Load Branch ENI Config
 	branchConfig := resourceConfig[config.ResourceNamePodENI]

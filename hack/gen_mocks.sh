@@ -11,6 +11,9 @@ mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/worker/mock
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/handler/mock_handler.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler Handler
 # package provider mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/provider/mock_provider.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider ResourceProvider
-#package node mocks
+mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk/mock_trunk.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk TrunkENI
+# package node mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/node/mock_manager.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node Manager
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/node/mock_node.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node Node
+# package utils mocks
+mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/utils/mock_k8shelper.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils K8sCacheHelper

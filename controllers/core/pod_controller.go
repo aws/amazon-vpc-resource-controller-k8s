@@ -25,6 +25,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,13 +50,22 @@ func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	pod := &corev1.Pod{}
 	if err := r.Client.Get(ctx, req.NamespacedName, pod); err != nil {
+		if errors.IsNotFound(err) {
+			// Pod is deleted and no longer available in cache, notify all handlers to clean up
+			for _, handler := range r.Handlers {
+				err := handler.HandleDelete(req.Namespace, req.Name)
+				if err != nil {
+					r.Log.Error(err, "failed to clean up pod resources")
+				}
+			}
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	logger := r.Log.WithValues("pod", req.NamespacedName, "node", pod.Spec.NodeName)
 
 	node, managed := r.Manager.GetNode(pod.Spec.NodeName)
 	if !managed {
-		r.Log.Info("pod's node is not managed")
+		r.Log.V(1).Info("pod's node is not managed, skipping pod event")
 		return ctrl.Result{}, nil
 	} else if !node.IsReady() {
 		r.Log.Info("pod's node is not ready to handle request yet, will retry")
@@ -81,9 +91,9 @@ func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 			if handler.CanHandle(resourceName) {
 				var err error
 				if !pod.DeletionTimestamp.IsZero() {
-					err = handler.HandleDelete(resourceName, pod)
+					err = handler.HandleDeleting(resourceName, pod)
 				} else {
-					err = handler.HandleCreate(resourceName, totalCount, pod)
+					err = handler.HandleCreate(resourceName, int(totalCount), pod)
 				}
 				if err != nil {
 					logger.Error(err, "error handling resources")

@@ -24,11 +24,16 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+)
+
+const (
+	NodeNameSpec = "spec.nodeName"
 )
 
 var (
@@ -96,6 +101,7 @@ func prometheusRegister() {
 // K8sWrapper represents an interface with all the common operations on K8s objects
 type K8sWrapper interface {
 	GetPod(namespace string, name string) (*v1.Pod, error)
+	ListPods(nodeName string) (*v1.PodList, error)
 	GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error)
 	AnnotatePod(podNamespace string, podName string, key string, val string) error
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
@@ -115,6 +121,7 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface) K8sWrapp
 	return &k8sWrapper{cacheClient: client, coreV1: coreV1}
 }
 
+// GetPodFromAPIServer returns the pod details by querying the API Server directly
 func (k *k8sWrapper) GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error) {
 	getPodFromAPIServeCallCount.Inc()
 	pod, err := k.coreV1.Pods(namespace).Get(name, metav1.GetOptions{
@@ -126,6 +133,17 @@ func (k *k8sWrapper) GetPodFromAPIServer(namespace string, name string) (*v1.Pod
 	}
 
 	return pod, err
+}
+
+// ListPods lists the pod for a given node name by querying the API server cache
+func (k *k8sWrapper) ListPods(nodeName string) (*v1.PodList, error) {
+	ctx := context.Background()
+
+	podList := &v1.PodList{}
+	err := k.cacheClient.List(ctx, podList, &client.ListOptions{
+		FieldSelector: fields.OneTermEqualSelector(NodeNameSpec, nodeName)})
+
+	return podList, err
 }
 
 // AnnotatePod annotates the pod with the provided key and value
@@ -163,10 +181,9 @@ func (k *k8sWrapper) GetPod(namespace string, name string) (*v1.Pod, error) {
 	ctx := context.Background()
 
 	pod := &v1.Pod{}
-	if err := k.cacheClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, pod); err != nil {
-		return nil, err
-	}
-	return pod, nil
+	err := k.cacheClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, pod)
+	return pod, err
+
 }
 
 // AdvertiseCapacity advertises the resource capacity for the given resource

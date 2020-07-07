@@ -50,7 +50,7 @@ func (mr *MockManagerMockRecorder) AddOrUpdateNode(arg0 interface{}) *gomock.Cal
 }
 
 // DeleteNode mocks base method
-func (m *MockManager) DeleteNode(arg0 *v1.Node) error {
+func (m *MockManager) DeleteNode(arg0 string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DeleteNode", arg0)
 	ret0, _ := ret[0].(error)

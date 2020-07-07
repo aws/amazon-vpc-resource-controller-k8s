@@ -79,11 +79,9 @@ func (mr *MockResourceProviderMockRecorder) ProcessAsyncJob(arg0 interface{}) *g
 }
 
 // SubmitAsyncJob mocks base method
-func (m *MockResourceProvider) SubmitAsyncJob(arg0 interface{}) error {
+func (m *MockResourceProvider) SubmitAsyncJob(arg0 interface{}) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SubmitAsyncJob", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
+	m.ctrl.Call(m, "SubmitAsyncJob", arg0)
 }
 
 // SubmitAsyncJob indicates an expected call of SubmitAsyncJob

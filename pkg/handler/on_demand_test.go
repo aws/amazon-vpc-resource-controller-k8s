@@ -17,6 +17,7 @@ limitations under the License.
 package handler
 
 import (
+	"fmt"
 	"testing"
 
 	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
@@ -27,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -34,28 +36,44 @@ var (
 	mockResourceName = "resource-name"
 	mockPodName      = "pod-name"
 	mockPodNamespace = "pod-namespace"
+	mockUID          = "pod-uid"
+	mockNodeName     = "node-name"
+
+	mockError = fmt.Errorf("mock-error")
 
 	mockPod = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      mockPodName,
 			Namespace: mockPodNamespace,
+			UID:       types.UID(mockUID),
 		},
-		Spec:   v1.PodSpec{},
+		Spec: v1.PodSpec{
+			NodeName: mockNodeName,
+		},
 		Status: v1.PodStatus{},
 	}
 
 	createJob = worker.OnDemandJob{
+		UID:          types.UID(mockUID),
 		Operation:    worker.OperationCreate,
 		PodName:      mockPodName,
 		PodNamespace: mockPodNamespace,
 		RequestCount: 1,
 	}
 
-	deleteJob = worker.OnDemandJob{
-		Operation:    worker.OperationDelete,
+	deletedJob = worker.OnDemandJob{
+		Operation:    worker.OperationDeleted,
 		PodName:      mockPodName,
 		PodNamespace: mockPodNamespace,
+	}
+
+	deletingJob = worker.OnDemandJob{
+		Operation:    worker.OperationDeleting,
+		UID:          types.UID(mockUID),
+		PodName:      mockPodName,
+		PodNamespace: mockPodNamespace,
+		NodeName:     mockNodeName,
 	}
 )
 
@@ -95,22 +113,34 @@ func Test_HandleCreate(t *testing.T) {
 
 	handler, mockProvider := getHandlerWithMock(ctrl)
 
-	mockProvider.EXPECT().SubmitAsyncJob(createJob).Return(nil)
+	mockProvider.EXPECT().SubmitAsyncJob(createJob)
 
 	err := handler.HandleCreate(mockResourceName, 1, mockPod)
 	assert.NoError(t, err)
 }
 
 // Test_HandleDelete tests that the delete job is submitted to the respective worker on delete operation
-func Test_HandleDelete(t *testing.T) {
+func Test_HandleDeleted(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	handler, mockProvider := getHandlerWithMock(ctrl)
 
-	mockProvider.EXPECT().SubmitAsyncJob(deleteJob).Return(nil)
+	mockProvider.EXPECT().SubmitAsyncJob(deletedJob)
 
-	err := handler.HandleDelete(mockResourceName, mockPod)
+	err := handler.HandleDelete(mockPodNamespace, mockPodName)
+	assert.NoError(t, err)
+}
+
+func Test_HandleDeleting(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	handler, mockProvider := getHandlerWithMock(ctrl)
+
+	mockProvider.EXPECT().SubmitAsyncJob(deletingJob)
+
+	err := handler.HandleDeleting(mockResourceName, mockPod)
 	assert.NoError(t, err)
 }
 
@@ -119,25 +149,8 @@ func Test_HandleCreate_error(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, mockProvider := getHandlerWithMock(ctrl)
+	handler, _ := getHandlerWithMock(ctrl)
 
-	mockProvider.EXPECT().SubmitAsyncJob(createJob).
-		Return(worker.BufferOverflowError)
-
-	err := handler.HandleCreate(mockResourceName, 1, mockPod)
-	assert.Error(t, err, worker.BufferOverflowError)
-}
-
-// Test_HandleDelete_error tests that the delete operation returns error if submit job returns an error
-func Test_HandleDelete_error(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	handler, mockProvider := getHandlerWithMock(ctrl)
-
-	mockProvider.EXPECT().SubmitAsyncJob(deleteJob).
-		Return(worker.BufferOverflowError)
-
-	err := handler.HandleDelete(mockResourceName, mockPod)
-	assert.Error(t, err, worker.BufferOverflowError)
+	err := handler.HandleCreate(mockResourceName+"not-supported", 1, mockPod)
+	assert.NotNil(t, err)
 }
