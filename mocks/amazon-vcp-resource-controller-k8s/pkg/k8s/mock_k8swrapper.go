@@ -5,10 +5,10 @@
 package mock_k8s
 
 import (
-	reflect "reflect"
-
+	v1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
+	reflect "reflect"
 )
 
 // MockK8sWrapper is a mock of K8sWrapper interface
@@ -60,6 +60,21 @@ func (m *MockK8sWrapper) AnnotatePod(arg0, arg1, arg2, arg3 string) error {
 func (mr *MockK8sWrapperMockRecorder) AnnotatePod(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AnnotatePod", reflect.TypeOf((*MockK8sWrapper)(nil).AnnotatePod), arg0, arg1, arg2, arg3)
+}
+
+// GetENIConfig mocks base method
+func (m *MockK8sWrapper) GetENIConfig(arg0 string) (*v1alpha1.ENIConfig, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetENIConfig", arg0)
+	ret0, _ := ret[0].(*v1alpha1.ENIConfig)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetENIConfig indicates an expected call of GetENIConfig
+func (mr *MockK8sWrapperMockRecorder) GetENIConfig(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetENIConfig", reflect.TypeOf((*MockK8sWrapper)(nil).GetENIConfig), arg0)
 }
 
 // GetPod mocks base method

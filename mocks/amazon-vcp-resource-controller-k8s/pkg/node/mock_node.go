@@ -5,11 +5,10 @@
 package mock_node
 
 import (
-	reflect "reflect"
-
 	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	provider "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	gomock "github.com/golang/mock/gomock"
+	reflect "reflect"
 )
 
 // MockNode is a mock of Node interface
@@ -89,4 +88,16 @@ func (m *MockNode) UpdateResources(arg0 []provider.ResourceProvider, arg1 api.EC
 func (mr *MockNodeMockRecorder) UpdateResources(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateResources", reflect.TypeOf((*MockNode)(nil).UpdateResources), arg0, arg1)
+}
+
+// UpdateSubnet mocks base method
+func (m *MockNode) UpdateSubnet(arg0 string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "UpdateSubnet", arg0)
+}
+
+// UpdateSubnet indicates an expected call of UpdateSubnet
+func (mr *MockNodeMockRecorder) UpdateSubnet(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSubnet", reflect.TypeOf((*MockNode)(nil).UpdateSubnet), arg0)
 }
