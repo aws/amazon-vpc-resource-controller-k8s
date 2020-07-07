@@ -23,6 +23,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,22 +47,19 @@ func (r *NodeReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	logger := r.Log.WithValues("node", req.NamespacedName)
 
 	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
+		if errors.IsNotFound(err) {
+			err := r.Manager.DeleteNode(req.Name)
+			if err != nil {
+				logger.Error(err, "failed to delete node from manager")
+			}
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Process Delete Event
-	if !node.DeletionTimestamp.IsZero() {
-		err := r.Manager.DeleteNode(node)
-		if err != nil {
-			logger.Error(err, "failed to delete node")
-			return ctrl.Result{}, err
-		}
-	} else { // Process Add Event
-		err := r.Manager.AddOrUpdateNode(node)
-		if err != nil {
-			logger.Error(err, "failed to add node")
-			return ctrl.Result{}, err
-		}
+	err := r.Manager.AddOrUpdateNode(node)
+	if err != nil {
+		logger.Error(err, "failed to add node")
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil

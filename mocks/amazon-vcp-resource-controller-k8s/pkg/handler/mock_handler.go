@@ -49,7 +49,7 @@ func (mr *MockHandlerMockRecorder) CanHandle(arg0 interface{}) *gomock.Call {
 }
 
 // HandleCreate mocks base method
-func (m *MockHandler) HandleCreate(arg0 string, arg1 int64, arg2 *v1.Pod) error {
+func (m *MockHandler) HandleCreate(arg0 string, arg1 int, arg2 *v1.Pod) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HandleCreate", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
@@ -63,7 +63,7 @@ func (mr *MockHandlerMockRecorder) HandleCreate(arg0, arg1, arg2 interface{}) *g
 }
 
 // HandleDelete mocks base method
-func (m *MockHandler) HandleDelete(arg0 string, arg1 *v1.Pod) error {
+func (m *MockHandler) HandleDelete(arg0, arg1 string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HandleDelete", arg0, arg1)
 	ret0, _ := ret[0].(error)
@@ -74,4 +74,18 @@ func (m *MockHandler) HandleDelete(arg0 string, arg1 *v1.Pod) error {
 func (mr *MockHandlerMockRecorder) HandleDelete(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleDelete", reflect.TypeOf((*MockHandler)(nil).HandleDelete), arg0, arg1)
+}
+
+// HandleDeleting mocks base method
+func (m *MockHandler) HandleDeleting(arg0 string, arg1 *v1.Pod) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HandleDeleting", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// HandleDeleting indicates an expected call of HandleDeleting
+func (mr *MockHandlerMockRecorder) HandleDeleting(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleDeleting", reflect.TypeOf((*MockHandler)(nil).HandleDeleting), arg0, arg1)
 }

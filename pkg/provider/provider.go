@@ -30,7 +30,7 @@ type ResourceProvider interface {
 	// UpdateResourceCapacity updates the resource capacity
 	UpdateResourceCapacity(instance ec2.EC2Instance) error
 	// SubmitAsyncJob submits a job to the worker
-	SubmitAsyncJob(job interface{}) error
+	SubmitAsyncJob(job interface{})
 	// ProcessAsyncJob processes a job form the worker queue
 	ProcessAsyncJob(job interface{}) (ctrl.Result, error)
 }

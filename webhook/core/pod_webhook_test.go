@@ -49,13 +49,10 @@ func getPodResourceInjector() *PodResourceInjector {
 	)
 	decoder, _ := admission.NewDecoder(testScheme)
 	pa := &PodResourceInjector{
-		Client:  testClient,
-		decoder: decoder,
-		CacheHelper: &webhookutils.K8sCacheHelper{
-			Client: testClient,
-			Log:    logger,
-		},
-		Log: logger,
+		Client:      testClient,
+		decoder:     decoder,
+		CacheHelper: webhookutils.NewK8sCacheHelper(testClient, logger),
+		Log:         logger,
 	}
 	return pa
 }
@@ -71,13 +68,10 @@ func getPodResourceInjectorWithoutSGP() *PodResourceInjector {
 	)
 	decoder, _ := admission.NewDecoder(testScheme)
 	pa := &PodResourceInjector{
-		Client:  testClient,
-		decoder: decoder,
-		CacheHelper: &webhookutils.K8sCacheHelper{
-			Client: testClient,
-			Log:    logger,
-		},
-		Log: logger,
+		Client:      testClient,
+		decoder:     decoder,
+		CacheHelper: webhookutils.NewK8sCacheHelper(testClient, logger),
+		Log:         logger,
 	}
 	return pa
 }

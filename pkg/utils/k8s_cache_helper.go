@@ -13,21 +13,21 @@ import (
 or webhooks.
 */
 
-type K8sCacheHelper struct {
+type k8sCacheHelper struct {
 	Client client.Client
 	Log    logr.Logger
 }
 
 // NewK8sCacheHelper creates and returns a controller-runtime cache operator.
-func NewK8sCacheHelper(client client.Client, log logr.Logger) *K8sCacheHelper {
-	return &K8sCacheHelper{
+func NewK8sCacheHelper(client client.Client, log logr.Logger) K8sCacheHelper {
+	return &k8sCacheHelper{
 		Client: client,
 		Log:    log,
 	}
 }
 
 // GetSecurityGroupsFromPod returns security groups assigned to a testPod based on it's NamespacedName.
-func (kch *K8sCacheHelper) GetSecurityGroupsFromPod(podId types.NamespacedName) ([]string, error) {
+func (kch *k8sCacheHelper) GetSecurityGroupsFromPod(podId types.NamespacedName) ([]string, error) {
 	pod := &corev1.Pod{}
 
 	if err := kch.Client.Get(context.Background(), podId, pod); err != nil {

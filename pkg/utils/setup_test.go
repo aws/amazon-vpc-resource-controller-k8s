@@ -19,7 +19,7 @@ var (
 	testClient            client.Client
 	testSecurityGroupsOne []string
 	testSecurityGroupsTwo []string
-	helper                *K8sCacheHelper
+	helper                k8sCacheHelper
 	name                  string
 	namespace             string
 	saName                string
@@ -47,7 +47,7 @@ func init() {
 		NewSecurityGroupPolicyTwo(name+"_2", namespace, append(testSecurityGroupsOne, testSecurityGroupsTwo...)),
 	)
 
-	helper = &K8sCacheHelper{
+	helper = k8sCacheHelper{
 		Client: testClient,
 		Log:    ctrl.Log.WithName("testLog"),
 	}

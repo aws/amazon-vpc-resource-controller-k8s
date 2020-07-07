@@ -141,7 +141,7 @@ func Test_deleteNode(t *testing.T) {
 	assert.True(t, managed)
 
 	// Delete node
-	postUnlockOperation, err := manager.deleteNode(v1Node)
+	postUnlockOperation, err := manager.deleteNode(v1Node.Name)
 	assert.NoError(t, err)
 	assert.Equal(t, reflect.ValueOf(node.DeleteResources).Pointer(), reflect.ValueOf(postUnlockOperation).Pointer())
 
@@ -156,7 +156,7 @@ func Test_deleteNode_notExists(t *testing.T) {
 	manager := getMockManager()
 
 	// Delete node
-	postUnlockOperation, err := manager.deleteNode(v1Node)
+	postUnlockOperation, err := manager.deleteNode(v1Node.Name)
 	assert.NoError(t, err)
 	assert.Nil(t, postUnlockOperation)
 }

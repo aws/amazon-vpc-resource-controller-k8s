@@ -36,9 +36,14 @@ func RemoveDuplicatedSg(list []string) []string {
 	return processedList
 }
 
+type K8sCacheHelper interface {
+	GetPodSecurityGroups(pod *corev1.Pod) ([]string, error)
+	GetSecurityGroupsFromPod(podId types.NamespacedName) ([]string, error)
+}
+
 // GetPodSecurityGroups decide if the testPod can be mutated to inject ENI annotation for security groups.
 // The function returns security group list and true or false for mutating testPod.
-func (kch *K8sCacheHelper) GetPodSecurityGroups(pod *corev1.Pod) ([]string, error) {
+func (kch *k8sCacheHelper) GetPodSecurityGroups(pod *corev1.Pod) ([]string, error) {
 	helperLog := kch.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
 
 	// Build SGP list from cache.
@@ -66,7 +71,7 @@ func (kch *K8sCacheHelper) GetPodSecurityGroups(pod *corev1.Pod) ([]string, erro
 	return sgList, nil
 }
 
-func (kch *K8sCacheHelper) filterPodSecurityGroups(
+func (kch *k8sCacheHelper) filterPodSecurityGroups(
 	sgpList *vpcresourcesv1beta1.SecurityGroupPolicyList,
 	pod *corev1.Pod,
 	sa *corev1.ServiceAccount) []string {

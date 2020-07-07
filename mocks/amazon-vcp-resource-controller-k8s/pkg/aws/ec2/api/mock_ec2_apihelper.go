@@ -35,7 +35,7 @@ func (m *MockEC2APIHelper) EXPECT() *MockEC2APIHelperMockRecorder {
 }
 
 // AssociateBranchToTrunk mocks base method
-func (m *MockEC2APIHelper) AssociateBranchToTrunk(arg0, arg1 *string, arg2 *int64) (*ec2.AssociateTrunkInterfaceOutput, error) {
+func (m *MockEC2APIHelper) AssociateBranchToTrunk(arg0, arg1 *string, arg2 int) (*ec2.AssociateTrunkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AssociateBranchToTrunk", arg0, arg1, arg2)
 	ret0, _ := ret[0].(*ec2.AssociateTrunkInterfaceOutput)
@@ -65,7 +65,7 @@ func (mr *MockEC2APIHelperMockRecorder) AttachNetworkInterfaceToInstance(arg0, a
 }
 
 // CreateAndAttachNetworkInterface mocks base method
-func (m *MockEC2APIHelper) CreateAndAttachNetworkInterface(arg0, arg1 *string, arg2 []*string, arg3 *int64, arg4, arg5 *string, arg6 int) (*ec2.NetworkInterface, error) {
+func (m *MockEC2APIHelper) CreateAndAttachNetworkInterface(arg0, arg1 *string, arg2 []string, arg3 *int64, arg4, arg5 *string, arg6 int) (*ec2.NetworkInterface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateAndAttachNetworkInterface", arg0, arg1, arg2, arg3, arg4, arg5, arg6)
 	ret0, _ := ret[0].(*ec2.NetworkInterface)
@@ -80,7 +80,7 @@ func (mr *MockEC2APIHelperMockRecorder) CreateAndAttachNetworkInterface(arg0, ar
 }
 
 // CreateNetworkInterface mocks base method
-func (m *MockEC2APIHelper) CreateNetworkInterface(arg0, arg1 *string, arg2 []*string, arg3 int, arg4 *string) (*ec2.NetworkInterface, error) {
+func (m *MockEC2APIHelper) CreateNetworkInterface(arg0, arg1 *string, arg2 []string, arg3 int, arg4 *string) (*ec2.NetworkInterface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateNetworkInterface", arg0, arg1, arg2, arg3, arg4)
 	ret0, _ := ret[0].(*ec2.NetworkInterface)

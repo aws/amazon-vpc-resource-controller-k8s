@@ -45,12 +45,12 @@ var (
 
 	// branch to trunk association id
 	branchAssociationId = "association-00000000000000"
-	vlanId              = int64(0)
+	vlanId              = 0
 
 	// Security groups for the network interfaces
 	securityGroup1 = "sg-00000000000000001"
 	securityGroup2 = "sg-00000000000000002"
-	securityGroups = []*string{&securityGroup1, &securityGroup2}
+	securityGroups = []string{securityGroup1, securityGroup2}
 
 	eniDescription           = "mock description of eni"
 	eniDescriptionWithPrefix = "aws-k8s-" + eniDescription
@@ -61,7 +61,7 @@ var (
 	associateTrunkInterfaceInput = &ec2.AssociateTrunkInterfaceInput{
 		BranchInterfaceId: &branchInterfaceId,
 		TrunkInterfaceId:  &trunkInterfaceId,
-		VlanId:            &vlanId,
+		VlanId:            aws.Int64(int64(vlanId)),
 	}
 
 	associateTrunkInterfaceOutput = &ec2.AssociateTrunkInterfaceOutput{
@@ -70,7 +70,7 @@ var (
 
 	createNetworkInterfaceInput = &ec2.CreateNetworkInterfaceInput{
 		Description: &eniDescriptionWithPrefix,
-		Groups:      securityGroups,
+		Groups:      aws.StringSlice(securityGroups),
 		SubnetId:    &subnetId,
 	}
 
@@ -144,7 +144,7 @@ var (
 		{
 			BranchInterfaceId: &branchInterfaceId,
 			TrunkInterfaceId:  &trunkInterfaceId,
-			VlanId:            &vlanId,
+			VlanId:            aws.Int64(int64(vlanId)),
 		},
 	}}
 
@@ -219,7 +219,7 @@ func TestEc2APIHelper_AssociateBranchToTrunk(t *testing.T) {
 	mockWrapper.EXPECT().AssociateTrunkInterface(associateTrunkInterfaceInput).
 		Return(associateTrunkInterfaceOutput, nil)
 
-	_, err := ec2ApiHelper.AssociateBranchToTrunk(&trunkInterfaceId, &branchInterfaceId, &vlanId)
+	_, err := ec2ApiHelper.AssociateBranchToTrunk(&trunkInterfaceId, &branchInterfaceId, vlanId)
 
 	assert.NoError(t, err)
 }
@@ -236,7 +236,7 @@ func TestEc2APIHelper_AssociateBranchToTrunk_AssociationIdMissing(t *testing.T) 
 	mockWrapper.EXPECT().AssociateTrunkInterface(associateTrunkInterfaceInput).
 		Return(&ec2.AssociateTrunkInterfaceOutput{}, nil)
 
-	_, err := ec2ApiHelper.AssociateBranchToTrunk(&trunkInterfaceId, &branchInterfaceId, &vlanId)
+	_, err := ec2ApiHelper.AssociateBranchToTrunk(&trunkInterfaceId, &branchInterfaceId, vlanId)
 
 	assert.NotNil(t, err)
 }
@@ -251,7 +251,7 @@ func TestEc2APIHelper_AssociateBranchToTrunk_Error(t *testing.T) {
 	// Return empty association response
 	mockWrapper.EXPECT().AssociateTrunkInterface(associateTrunkInterfaceInput).Return(nil, mockError)
 
-	_, err := ec2ApiHelper.AssociateBranchToTrunk(&trunkInterfaceId, &branchInterfaceId, &vlanId)
+	_, err := ec2ApiHelper.AssociateBranchToTrunk(&trunkInterfaceId, &branchInterfaceId, vlanId)
 
 	assert.Error(t, mockError, err)
 }

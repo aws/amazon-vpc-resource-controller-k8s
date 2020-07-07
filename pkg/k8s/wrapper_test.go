@@ -49,7 +49,7 @@ var (
 			Namespace:   podNamespace,
 			Annotations: map[string]string{oldAnnotation: oldAnnotation},
 		},
-		Spec:   v1.PodSpec{},
+		Spec:   v1.PodSpec{NodeName: mockNode.Name},
 		Status: v1.PodStatus{},
 	}
 
@@ -198,4 +198,15 @@ func TestK8sWrapper_GetPodFromAPIServer_NoError(t *testing.T) {
 	_, err := wrapper.GetPodFromAPIServer(podNamespace, podName+"not-exists")
 
 	assert.NotNil(t, err)
+}
+
+// TestK8sWrapper_ListPods tests that list pod returns the list of pods with the given node name in their node spec
+// https://github.com/kubernetes/client-go/issues/326
+func TestK8sWrapper_ListPods(t *testing.T) {
+	wrapper, _ := getMockK8sWrapperWithClient()
+
+	podList, err := wrapper.ListPods(nodeName)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(podList.Items))
+	assert.Equal(t, mockPod.UID, podList.Items[0].UID)
 }

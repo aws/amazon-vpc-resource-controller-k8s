@@ -18,6 +18,8 @@ package node
 
 import (
 	"fmt"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -44,7 +46,7 @@ type manager struct {
 
 type Manager interface {
 	AddOrUpdateNode(v1Node *v1.Node) error
-	DeleteNode(v1node *v1.Node) error
+	DeleteNode(nodeName string) error
 	GetNode(nodeName string) (node Node, managed bool)
 }
 
@@ -83,17 +85,17 @@ func (m *manager) AddOrUpdateNode(v1Node *v1.Node) error {
 }
 
 // DeleteNode deletes the nodes from the cache and cleans up the resources used by all the resource providers
-func (m *manager) DeleteNode(v1Node *v1.Node) error {
+func (m *manager) DeleteNode(nodeName string) error {
 	// postUnlockOperation is any operation that involves making network call. It must be done after
 	// releasing the node manager lock to allow concurrent processing of multiple nodes and not blocking
 	// the GetNode call in the critical path of pod processing.
-	postUnlockOperation, err := m.deleteNode(v1Node)
+	postUnlockOperation, err := m.deleteNode(nodeName)
 
 	if err != nil {
 		return err
 	}
 
-	return m.performPostUnlockOperation(v1Node.Name, postUnlockOperation)
+	return m.performPostUnlockOperation(nodeName, postUnlockOperation)
 }
 
 // addOrUpdateNode adds eligible nodes to the cache. If the node was previously managed and
@@ -109,7 +111,7 @@ func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func([]p
 	if managed { // Cache hit
 		shouldManageNode := m.isSelectedForManagement(v1Node)
 		if shouldManageNode {
-			log.Info("no updates on the managed status of the node")
+			log.V(1).Info("no updates on the managed status of the node")
 			postUnlockOperation = node.UpdateResources
 			return
 		}
@@ -122,7 +124,7 @@ func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func([]p
 	} else { // Cache miss
 		isSelected := m.isSelectedForManagement(v1Node)
 		if !isSelected {
-			log.Info("skipping as node is not eligible for management by controller")
+			log.V(1).Info("skipping as node is not eligible for management by controller")
 			return
 		}
 
@@ -148,20 +150,20 @@ func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func([]p
 }
 
 // deleteNode deletes the nodes from the node manager cache
-func (m *manager) deleteNode(v1Node *v1.Node) (postUnlockOperation func([]provider.ResourceProvider, api.EC2APIHelper) error, err error) {
+func (m *manager) deleteNode(nodeName string) (postUnlockOperation func([]provider.ResourceProvider, api.EC2APIHelper) error, err error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	log := m.Log.WithValues("node name", v1Node.Name, "request", "delete")
+	log := m.Log.WithValues("node name", nodeName, "request", "delete")
 
-	node, managed := m.dataStore[v1Node.Name]
+	node, managed := m.dataStore[nodeName]
 
 	if !managed {
 		log.Info("node is not managed by controller, not processing the request")
 		return
 	}
 
-	delete(m.dataStore, v1Node.Name)
+	delete(m.dataStore, nodeName)
 	postUnlockOperation = node.DeleteResources
 
 	log.Info("node removed from list of managed node")
@@ -177,15 +179,16 @@ func (m *manager) performPostUnlockOperation(nodeName string, postUnlockOperatio
 	}
 
 	err := postUnlockOperation(m.resourceProviders, m.ec2APIHelper)
+	operationName := runtime.FuncForPC(reflect.ValueOf(postUnlockOperation).Pointer()).Name()
 	if err == nil {
-		log.Info("successfully performed node operation", "operation", postUnlockOperation)
+		log.V(1).Info("successfully performed node operation", "operation", operationName)
 		return nil
 	}
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	log.Error(err, "failed to performed node operation", "operation", postUnlockOperation)
+	log.Error(err, "failed to performed node operation", "operation", operationName)
 
 	if err == ErrInitResources {
 		// Remove entry from the cache, so it's initialized again

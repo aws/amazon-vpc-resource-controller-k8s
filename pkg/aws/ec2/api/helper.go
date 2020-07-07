@@ -58,8 +58,8 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper) EC2APIHelper {
 }
 
 type EC2APIHelper interface {
-	AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string, vlanId *int64) (*ec2.AssociateTrunkInterfaceOutput, error)
-	CreateNetworkInterface(description *string, subnetId *string, securityGroups []*string,
+	AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string, vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error)
+	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string,
 		secondaryPrivateIPCount int, interfaceType *string) (*ec2.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2.Subnet, error)
@@ -67,7 +67,7 @@ type EC2APIHelper interface {
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error)
 	GetTrunkInterface(instanceId *string) (*ec2.NetworkInterface, error)
-	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []*string,
+	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string,
 		deviceIndex *int64, description *string, interfaceType *string, secondaryIPCount int) (*ec2.NetworkInterface, error)
 	AttachNetworkInterfaceToInstance(instanceId *string, nwInterfaceId *string, deviceIndex *int64) (*string, error)
 	SetDeleteOnTermination(attachmentId *string, eniId *string) error
@@ -78,13 +78,13 @@ type EC2APIHelper interface {
 }
 
 // CreateNetworkInterface creates a new network interface
-func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *string, securityGroups []*string,
+func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *string, securityGroups []string,
 	secondaryPrivateIPCount int, interfaceType *string) (*ec2.NetworkInterface, error) {
 	eniDescription := CreateENIDescriptionPrefix + *description
 
 	createInput := &ec2.CreateNetworkInterfaceInput{
 		Description: aws.String(eniDescription),
-		Groups:      securityGroups,
+		Groups:      aws.StringSlice(securityGroups),
 		SubnetId:    subnetId,
 	}
 
@@ -212,12 +212,12 @@ func (h *ec2APIHelper) DescribeTrunkInterfaceAssociation(trunkInterfaceId *strin
 
 // AssociateBranchToTrunk associates a branch network interface to a trunk network interface
 func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string,
-	vlanId *int64) (*ec2.AssociateTrunkInterfaceOutput, error) {
+	vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error) {
 
 	associateTrunkInterfaceIP := &ec2.AssociateTrunkInterfaceInput{
 		BranchInterfaceId: branchInterfaceId,
 		TrunkInterfaceId:  trunkInterfaceId,
-		VlanId:            vlanId,
+		VlanId:            aws.Int64(int64(vlanId)),
 	}
 
 	associateTrunkInterfaceOutput, err := h.ec2Wrapper.AssociateTrunkInterface(associateTrunkInterfaceIP)
@@ -255,7 +255,7 @@ func (h *ec2APIHelper) GetTrunkInterface(instanceId *string) (*ec2.NetworkInterf
 
 // CreateAndAttachNetworkInterface creates and attaches the network interface to the instance. The function will
 // wait till the interface is successfully attached
-func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []*string,
+func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string,
 	deviceIndex *int64, description *string, interfaceType *string, secondaryIPCount int) (*ec2.NetworkInterface, error) {
 
 	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, secondaryIPCount, interfaceType)

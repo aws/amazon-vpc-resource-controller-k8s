@@ -25,6 +25,7 @@ import v1 "k8s.io/api/core/v1"
 // Group required by the pod which we would know only after receiving the pod request.
 type Handler interface {
 	CanHandle(resourceName string) bool
-	HandleCreate(resourceName string, requestCount int64, pod *v1.Pod) error
-	HandleDelete(resourceName string, pod *v1.Pod) error
+	HandleCreate(resourceName string, requestCount int, pod *v1.Pod) error
+	HandleDeleting(resourceName string, pod *v1.Pod) error
+	HandleDelete(podNamespace string, podName string) error
 }

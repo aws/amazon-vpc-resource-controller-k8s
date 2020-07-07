@@ -49,11 +49,9 @@ func (mr *MockWorkerMockRecorder) StartWorkerPool(arg0 interface{}) *gomock.Call
 }
 
 // SubmitJob mocks base method
-func (m *MockWorker) SubmitJob(arg0 interface{}) error {
+func (m *MockWorker) SubmitJob(arg0 interface{}) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SubmitJob", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
+	m.ctrl.Call(m, "SubmitJob", arg0)
 }
 
 // SubmitJob indicates an expected call of SubmitJob

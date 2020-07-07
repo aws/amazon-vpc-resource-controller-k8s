@@ -23,7 +23,7 @@ const resourceLimit = "1"
 type PodResourceInjector struct {
 	Client      client.Client
 	decoder     *admission.Decoder
-	CacheHelper *webhookutils.K8sCacheHelper
+	CacheHelper webhookutils.K8sCacheHelper
 	Log         logr.Logger
 }
 
