@@ -27,6 +27,9 @@ const (
 	IPv4DefaultWPSize  = 3
 	IPv4DefaultMaxDev  = 1
 	IPv4DefaultResSize = 0
+
+	DefaultEC2APIQPS   = 6
+	DefaultEC2APIBurst = 8
 )
 
 // LoadResourceConfig returns the Resource Configuration for all resources managed by the VPC Resource Controller. Currently

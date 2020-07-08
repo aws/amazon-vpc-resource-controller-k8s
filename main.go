@@ -19,6 +19,9 @@ package main
 import (
 	"context"
 	"flag"
+	"net/http"
+	_ "net/http"
+	_ "net/http/pprof"
 	"os"
 	"time"
 
@@ -71,17 +74,33 @@ func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var enableDevLogging bool
+	var roleARN string
+	var enableProfiling bool
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&roleARN, "role-arn", "", "Role ARN that will be assumed to make EC2 API calls "+
+		"to perform operations on the user's VPC. This parameter is not required if running the controller on your worker node.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&enableDevLogging, "enable-dev-logging", false,
 		"Enable developer mode logging for the controller."+
 			"With dev mode logging, you will get Debug logs and more structured logging with extra details")
+	flag.BoolVar(&enableProfiling, "enable-profiling", false, "Enable runtime profiling for debugging"+
+		"purposes.")
 	flag.Parse()
 
+	// Dev mode logging disabled by default, to enable set the enableDevLogging argument
 	ctrl.SetLogger(zap.New(zap.UseDevMode(enableDevLogging)))
+
+	// Profiler disabled by default, to enable set the enableProfiling argument
+	if enableProfiling {
+		// To use the profiler - https://golang.org/pkg/net/http/pprof/
+		go func() {
+			setupLog.Info("starting profiler",
+				"error", http.ListenAndServe("localhost:6060", nil))
+		}()
+	}
 
 	config := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(config, ctrl.Options{
@@ -92,6 +111,10 @@ func main() {
 		LeaderElection:     enableLeaderElection,
 		LeaderElectionID:   "bb6ce178.k8s.aws",
 	})
+	if err != nil {
+		setupLog.Error(err, "unable to start manager")
+		os.Exit(1)
+	}
 
 	// With kube-builder, we have to manually specify the fields on which the objects must be indexed, in order to
 	// list objects using the k8s cache with field selectors
@@ -99,11 +122,6 @@ func main() {
 		pod := object.(*corev1.Pod)
 		return []string{pod.Spec.NodeName}
 	})
-
-	if err != nil {
-		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
-	}
 
 	clientSet, err := kubernetes.NewForConfig(config)
 	if err != nil {
@@ -117,7 +135,7 @@ func main() {
 		ctrl.Log.WithName("cache helper"))
 
 	// Get the resource providers and handlers
-	resourceHandlers, nodeManager := setUpResources(mgr, clientSet, cacheHelper)
+	resourceHandlers, nodeManager := setUpResources(mgr, clientSet, cacheHelper, roleARN)
 
 	if err = (&corecontroller.PodReconciler{
 		Client:   mgr.GetClient(),
@@ -164,11 +182,12 @@ func main() {
 }
 
 // setUpResources sets up all resource providers and the node manager
-func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset, cacheHelper webhookutils.K8sCacheHelper) ([]handler.Handler, node.Manager) {
+func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset,
+	cacheHelper webhookutils.K8sCacheHelper, roleARN string) ([]handler.Handler, node.Manager) {
 
 	var resourceProviders []provider.ResourceProvider
 
-	ec2Wrapper, err := api.NewEC2Wrapper()
+	ec2Wrapper, err := api.NewEC2Wrapper(roleARN, config.DefaultEC2APIQPS, config.DefaultEC2APIBurst, setupLog)
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
 	}

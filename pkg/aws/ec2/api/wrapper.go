@@ -17,13 +17,27 @@ limitations under the License.
 package api
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
+	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
+	"github.com/aws/aws-sdk-go/aws/ec2metadata"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/sts"
+	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+)
+
+const (
+	MaxRetries = 3
 )
 
 type EC2Wrapper interface {
@@ -306,28 +320,88 @@ type ec2Wrapper struct {
 	ec2ServiceClient *ec2.EC2
 }
 
-var EC2Client EC2Wrapper
-
-func NewEC2Wrapper() (EC2Wrapper, error) {
-	session := session.Must(session.NewSession())
-
-	ec2MetadataClient := NewMetaDataClient(nil)
-
-	instanceIdentityDocument, err := ec2MetadataClient.GetInstanceIdentityDocument()
-	if err != nil {
-		return &ec2Wrapper{}, err
-	}
-
-	ec2ServiceClient := ec2.New(session, aws.NewConfig().WithMaxRetries(MetadataRetries).WithRegion(instanceIdentityDocument.Region))
-
-	// Register prometheus metrics prior to return
+func NewEC2Wrapper(roleARN string, qps int, burst int, log logr.Logger) (EC2Wrapper, error) {
+	// Register the metrics
 	prometheusRegister()
 
-	EC2Client = &ec2Wrapper{
-		ec2ServiceClient: ec2ServiceClient,
+	// Create a new session
+	sess := session.Must(session.NewSession())
+
+	// Get the region from the ec2 Metadata if the region is missing in the session config
+	if aws.StringValue(sess.Config.Region) == "" {
+		ec2Metadata := ec2metadata.New(sess)
+		region, err := ec2Metadata.Region()
+		if err != nil {
+			return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
+		}
+		log.V(1).Info("setting the region from instance metadata")
+		sess.Config.Region = aws.String(region)
 	}
 
-	return EC2Client, nil
+	log.Info("using the region", "region", sess.Config.Region)
+
+	// Create a rate limited http client
+	client, err := utils.NewRateLimitedClient(qps, burst)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v", qps, burst, err)
+	}
+
+	log.Info("created rate limited http client", "qps", qps, "burst", burst)
+
+	var providers []credentials.Provider
+
+	// Add the regional and global (in case regional is disabled by user) credential providers to the chain when the role
+	// ARN is provided by the user
+	if roleARN != "" {
+		// Add the regional sts end point
+		regionalSTSEndpoint, err := endpoints.DefaultResolver().
+			EndpointFor("sts", aws.StringValue(sess.Config.Region), endpoints.STSRegionalEndpointOption)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get the regional sts endoint for region %s: %v",
+				*sess.Config.Region, err)
+		}
+
+		regionalProvider := &stscreds.AssumeRoleProvider{
+			Client: sts.New(sess, aws.NewConfig().WithHTTPClient(client).
+				WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
+			RoleARN:  roleARN,
+			Duration: time.Minute * 60,
+		}
+		providers = append(providers, regionalProvider)
+
+		// Add the global sts end point
+		globalSTSEndpoint, err := endpoints.DefaultResolver().
+			EndpointFor("sts", aws.StringValue(sess.Config.Region))
+		if err != nil {
+			return nil, fmt.Errorf("failed to get the global sts endoint for region %s: %v",
+				*sess.Config.Region, err)
+		}
+
+		// If the regional STS endpoint is different than the global STS endpoint then add the provider
+		if regionalSTSEndpoint.URL != globalSTSEndpoint.URL {
+			globalProvider := &stscreds.AssumeRoleProvider{
+				Client: sts.New(sess, aws.NewConfig().WithHTTPClient(client).
+					WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
+				RoleARN:  roleARN,
+				Duration: time.Minute * 60,
+			}
+			providers = append(providers, globalProvider)
+		}
+		log.Info("initialized the regional/global providers", "roleARN", roleARN)
+
+		// Role ARN is not provided, will use the credential provider using instance metadata
+	} else {
+		provider := &ec2rolecreds.EC2RoleProvider{
+			Client: ec2metadata.New(sess),
+		}
+		providers = append(providers, provider)
+	}
+
+	sess.Config.Credentials = credentials.NewChainCredentials(providers)
+
+	return &ec2Wrapper{
+		ec2ServiceClient: ec2.New(sess),
+	}, nil
 }
 
 func timeSinceMs(start time.Time) float64 {
