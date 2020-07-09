@@ -1,0 +1,9 @@
+apiVersion: crd.k8s.amazonaws.com/v1alpha1
+kind: ENIConfig
+metadata:
+  name: trunk-eni-test
+spec:
+  subnet: PRIVATE_SUBNET
+  securityGroups:
+    - SG_ONE
+    - SG_TWO

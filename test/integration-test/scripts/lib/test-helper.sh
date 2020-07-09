@@ -397,3 +397,85 @@ function test-service() {
   kubectl delete deploy hello-world hello-world-eni
   kubectl delete svc $service_name_eni $service_name
 }
+
+test-custom-networking() {
+  echo "Turning off trunk ENI feature, aws-node will take seconds to be recreated..."
+  kubectl set env ds aws-node -n kube-system ENABLE_POD_ENI=false
+  sleep 30
+  local vpc_id=$(aws eks describe-cluster --name "$CLUSTER_NAME" | grep -iwo 'vpc-[a-zA-z0-9]*' | xargs)
+
+  local subnet_id=$(aws ec2 describe-subnets \
+        --filters "Name=tag:aws:cloudformation:logical-id,Values=SubnetPrivateUSWEST2A" "Name=vpc-id,Values=$vpc_id" \
+        --query 'Subnets[0].SubnetId' --output text)
+  echo "using subnet $subnet_id in VPC $vpc_id"
+  local ng_name=custom-networking-workers
+  local node_id=$(aws ec2 describe-instances \
+        --filter "Name=tag:eks:nodegroup-name,Values=$ng_name" "Name=instance-state-code,Values=16" "Name=tag:eks:cluster-name,Values=$CLUSTER_NAME" \
+        --query 'Reservations[*].Instances[*].InstanceId' --output text)
+  echo "using node $node_id"
+  if [ -z "$node_id" ];
+  then
+    echo "Creating private networking NodeGroup"
+    eksctl create nodegroup --config-file=$DIR/test/integration-test/config/public-nodegroup.yaml || exit 1
+    sleep 60
+  else
+    if aws ec2 terminate-instances --instance-ids "$node_id";
+      then
+        echo "Terminate instance $node_id successfully. Wait 300s to let ASG create a new instance."
+        sleep 300
+      else
+        echo "Failed terminating instance $node_id."
+        exit 1
+    fi
+  fi
+  local node_sg=$(aws ec2 describe-instances \
+    --filter "Name=tag:eks:nodegroup-name,Values=$ng_name" "Name=tag:eks:cluster-name,Values=$CLUSTER_NAME" \
+    --query 'Reservations[*].Instances[*].NetworkInterfaces[*].Groups[1].GroupId' --output text)
+  echo "if there is previous CRD eniconfig, delete it..."
+  kubectl delete eniconfig trunk-eni-test
+  sleep 10
+  sed -i '' -e "s/PRIVATE_SUBNET/$subnet_id/g" "$DIR"/test/integration-test/config/eniconfig.yaml
+  sleep 3
+  sed -i '' -e "s/SG_ONE/$SG_ONE/g" "$DIR"/test/integration-test/config/eniconfig.yaml
+  sleep 3
+  sed -i '' -e "s/SG_TWO/$node_sg/g" "$DIR"/test/integration-test/config/eniconfig.yaml
+  sleep 3
+  echo "creating a new crd for eniconfig"
+  kubectl apply -f "$DIR"/test/integration-test/config/eniconfig.yaml
+  sleep 5
+  local node_name=$(kubectl get no -o name -l role=custom-networking | cut -d "/" -f 2)
+  echo "labeling node $node_name"
+  kubectl label nodes "$node_name" k8s.amazonaws.com/eniConfig=trunk-eni-test
+  sleep 5
+  echo "turning on trunk ENI feature, aws-node will take seconds to be recreated..."
+  kubectl set env ds aws-node -n kube-system ENABLE_POD_ENI=true
+  echo "waiting trunk ENI pod to be created"
+  sleep 120
+  kubectl apply -f "$DIR"/test/integration-test/config/eni-pod-custom-networking.yaml
+  sleep 60
+  if kubectl exec -it eni-custom -- ping google.com -c5;
+  then
+    echo "$(tput setaf 2)Custom networking with ENI pod passed.$(tput sgr 0)"
+  else
+    echo "$(tput setaf 1)Custom networking with ENI pod failed.$(tput sgr 0)"
+  fi
+
+  if test-eni-pod-to-k8s-service "$node_name";
+  then
+    echo "$(tput setaf 2)Custom networking with ENI pod service test passed.$(tput sgr 0)"
+  else
+    echo "$(tput setaf 1)Custom networking with ENI pod service test failed.$(tput sgr 0)"
+  fi
+
+  kubectl delete -f "$DIR"/test/integration-test/config/eni-pod-custom-networking.yaml
+  sed -i '' -e "s/$subnet_id/PRIVATE_SUBNET/" "$DIR"/test/integration-test/config/eniconfig.yaml
+  sleep 3
+  sed -i '' -e "s/$SG_ONE/SG_ONE/" "$DIR"/test/integration-test/config/eniconfig.yaml
+  sleep 3
+  sed -i '' -e "s/$node_sg/SG_TWO/" "$DIR"/test/integration-test/config/eniconfig.yaml
+  sleep 3
+
+  echo "deleting testing custom setting nodegroup $ng_name..."
+#  eksctl delete nodegroup --cluster="$CLUSTER_NAME" --name=$ng_name
+#  sleep 60
+}

@@ -15,7 +15,7 @@ fi
 source $DIR/test/integration-test/scripts/lib/common.sh
 source $DIR/test/integration-test/scripts/lib/aws.sh
 source $DIR/test/integration-test/scripts/lib/cluster.sh
-source $DIR/test/integration-test/scripts/lib/verifier-test.sh
+source $DIR/test/integration-test/scripts/lib/test-helper.sh
 OS=$(go env GOOS)
 ARCH=$(go env GOARCH)
 AWS_REGION=${AWS_REGION:-us-west-2}
@@ -235,8 +235,6 @@ test-revoke-security-group-rules
 sleep 10
 test-regular-pod-to-node-port
 sleep 10
-test-eni-pod-to-service-on-nodeport
-sleep 10
 
 echo "***** launching private networking nodegroup to test trunk ENI with nodePort *****"
 PRIVATE_NG_NAME=trunk-eni-workers
@@ -247,6 +245,11 @@ if ! eksctl get nodegroup --cluster=eni-integration | grep $PRIVATE_NG_NAME;
   else
     echo "Private NodeGroup $PRIVATE_NG_NAME is already available."
 fi
+test-eni-pod-to-service-on-nodeport
+sleep 10
+
+echo "***** launching a node group to test custom networking *****"
+test-custom-networking
 
 echo "cleaning up testing resources"
 sleep 60

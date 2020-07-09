@@ -1,0 +1,23 @@
+---
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: eni-integration
+  region: us-west-2
+
+managedNodeGroups:
+  - name: custom-networking-workers
+    minSize: 1
+    maxSize: 1
+    desiredCapacity: 1
+    volumeSize: 10
+    ssh:
+      allow: true
+      publicKeyPath: ~/.ssh/id_rsa.pub
+    labels: {role: custom-networking}
+    tags:
+      nodegroup-role: worker
+    instanceType: c5.large
+    privateNetworking: false
+    availabilityZones: ["us-west-2a"]
