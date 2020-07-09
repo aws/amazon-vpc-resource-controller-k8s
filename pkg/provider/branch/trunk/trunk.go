@@ -94,6 +94,8 @@ type trunkENI struct {
 	subnetId string
 	// subnetCidrBlock is the cidr block of the subnet of trunk interface
 	subnetCidrBlock string
+	// instanceSecurityGroup is the security group of the primary network interface
+	instanceSecurityGroups []string
 	// usedVlanIds is the list of boolean value representing the used vlan ids
 	usedVlanIds []bool
 	// branchENIs is the list of BranchENIs associated with the trunk
@@ -132,20 +134,21 @@ type ENIDetails struct {
 
 // NewTrunkENI returns a new Trunk ENI interface.
 func NewTrunkENI(logger logr.Logger, instanceId string, instanceSubnetId string,
-	instanceSubnetCidrBlock string, helper api.EC2APIHelper) TrunkENI {
+	instanceSubnetCidrBlock string, instanceSecurityGroups []string, helper api.EC2APIHelper) TrunkENI {
 
 	availVlans := make([]bool, MaxAllocatableVlanIds)
 	// VlanID 0 cannot be assigned.
 	availVlans[0] = true
 
 	return &trunkENI{
-		log:             logger,
-		instanceId:      instanceId,
-		subnetId:        instanceSubnetId,
-		subnetCidrBlock: instanceSubnetCidrBlock,
-		usedVlanIds:     availVlans,
-		ec2ApiHelper:    helper,
-		branchENIs:      make(map[string]*BranchENIs),
+		log:                    logger,
+		instanceId:             instanceId,
+		subnetId:               instanceSubnetId,
+		subnetCidrBlock:        instanceSubnetCidrBlock,
+		usedVlanIds:            availVlans,
+		ec2ApiHelper:           helper,
+		instanceSecurityGroups: instanceSecurityGroups,
+		branchENIs:             make(map[string]*BranchENIs),
 	}
 }
 
@@ -287,6 +290,11 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		return nil, fmt.Errorf("cannot create new eni entry already exist, older entry : %v", *branchENI)
 	}
 
+	// If the security group is empty use the instance security group
+	if securityGroups == nil || securityGroups != nil && len(securityGroups) == 0 {
+		securityGroups = t.instanceSecurityGroups
+	}
+
 	var newENIs []*ENIDetails
 	var err error
 	var nwInterface *awsEC2.NetworkInterface
@@ -333,7 +341,8 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		branchENIDetails: newENIs,
 	})
 
-	log.V(1).Info("successfully created branch interface/s", "interface/s", newENIs)
+	log.V(1).Info("successfully created branch interface/s", "interface/s", newENIs,
+		"security group used", securityGroups)
 
 	return newENIs, nil
 }

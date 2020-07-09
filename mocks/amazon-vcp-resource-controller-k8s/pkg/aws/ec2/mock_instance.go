@@ -74,6 +74,20 @@ func (mr *MockEC2InstanceMockRecorder) InstanceID() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceID", reflect.TypeOf((*MockEC2Instance)(nil).InstanceID))
 }
 
+// InstanceSecurityGroup mocks base method
+func (m *MockEC2Instance) InstanceSecurityGroup() []string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InstanceSecurityGroup")
+	ret0, _ := ret[0].([]string)
+	return ret0
+}
+
+// InstanceSecurityGroup indicates an expected call of InstanceSecurityGroup
+func (mr *MockEC2InstanceMockRecorder) InstanceSecurityGroup() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceSecurityGroup", reflect.TypeOf((*MockEC2Instance)(nil).InstanceSecurityGroup))
+}
+
 // LoadDetails mocks base method
 func (m *MockEC2Instance) LoadDetails(arg0 api.EC2APIHelper) error {
 	m.ctrl.T.Helper()

@@ -42,6 +42,8 @@ type ec2Instance struct {
 	subnetCidrBlock string
 	// deviceIndexes is the list of indexes used by the EC2 Instance
 	deviceIndexes []bool
+	// instanceSecurityGroups is the security group used by the primary network interface
+	instanceSecurityGroups []string
 }
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
@@ -56,6 +58,7 @@ type EC2Instance interface {
 	SubnetID() string
 	SetSubnet(subnetID string)
 	SubnetCidrBlock() string
+	InstanceSecurityGroup() []string
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -97,6 +100,14 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	for _, nwInterface := range instance.NetworkInterfaces {
 		index := nwInterface.Attachment.DeviceIndex
 		i.deviceIndexes[*index] = true
+
+		// Load the Security group of the primary network interface
+		if i.instanceSecurityGroups == nil && *nwInterface.PrivateIpAddress == *instance.PrivateIpAddress {
+			// TODO: Group can change, should be refreshed each time we want to use this
+			for _, group := range nwInterface.Groups {
+				i.instanceSecurityGroups = append(i.instanceSecurityGroups, *group.GroupId)
+			}
+		}
 	}
 
 	return nil
@@ -135,6 +146,11 @@ func (i *ec2Instance) Name() string {
 // Type returns the instance type of the node
 func (i *ec2Instance) Type() string {
 	return i.instanceType
+}
+
+// InstanceSecurityGroup returns the instance security group of the primary network interface
+func (i *ec2Instance) InstanceSecurityGroup() []string {
+	return i.instanceSecurityGroups
 }
 
 // GetHighestUnusedDeviceIndex assigns a free device index from the end of the list since IPAMD assigns indexes from

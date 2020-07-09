@@ -38,11 +38,12 @@ import (
 
 var (
 	// Instance details
-	InstanceId      = "i-00000000000000000"
-	SubnetId        = "subnet-00000000000000000"
-	SubnetCidrBlock = "192.168.0.0/16"
-	NodeName        = "test-node"
-	FakeInstance    = ec2.NewEC2Instance(NodeName, InstanceId, config.OSLinux)
+	InstanceId            = "i-00000000000000000"
+	SubnetId              = "subnet-00000000000000000"
+	SubnetCidrBlock       = "192.168.0.0/16"
+	NodeName              = "test-node"
+	FakeInstance          = ec2.NewEC2Instance(NodeName, InstanceId, config.OSLinux)
+	InstanceSecurityGroup = []string{"sg-1", "sg-2"}
 
 	// Mock Pod 1
 	MockPodName1       = "pod_name"
@@ -179,17 +180,18 @@ func getMockHelperAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *mockEC2AP
 func getMockTrunk() trunkENI {
 	log := zap.New(zap.UseDevMode(true)).WithName("node manager")
 	return trunkENI{
-		subnetCidrBlock: SubnetCidrBlock,
-		subnetId:        SubnetId,
-		instanceId:      InstanceId,
-		log:             log,
-		usedVlanIds:     make([]bool, MaxAllocatableVlanIds),
-		branchENIs:      map[string]*BranchENIs{},
+		subnetCidrBlock:        SubnetCidrBlock,
+		subnetId:               SubnetId,
+		instanceId:             InstanceId,
+		log:                    log,
+		instanceSecurityGroups: InstanceSecurityGroup,
+		usedVlanIds:            make([]bool, MaxAllocatableVlanIds),
+		branchENIs:             map[string]*BranchENIs{},
 	}
 }
 
 func TestNewTrunkENI(t *testing.T) {
-	trunkENI := NewTrunkENI(nil, InstanceId, SubnetId, SubnetCidrBlock, nil)
+	trunkENI := NewTrunkENI(nil, InstanceId, SubnetId, SubnetCidrBlock, InstanceSecurityGroup, nil)
 	assert.NotNil(t, trunkENI)
 }
 
@@ -735,11 +737,8 @@ func TestTrunkENI_InitTrunk_TrunkExists_DanglingENIs(t *testing.T) {
 	_, isPresent = trunkENI.branchENIs[MockNamespacedName2]
 	assert.False(t, isPresent)
 
-	assert.Equal(t, EniDetails1.ID, trunkENI.deleteQueue[0].ID)
-	assert.Equal(t, EniDetails1.VlanID, trunkENI.deleteQueue[0].VlanID)
-
-	assert.Equal(t, EniDetails2.ID, trunkENI.deleteQueue[1].ID)
-	assert.Equal(t, EniDetails2.VlanID, trunkENI.deleteQueue[1].VlanID)
+	assert.Equal(t, []string{EniDetails1.ID, EniDetails2.ID},
+		[]string{trunkENI.deleteQueue[0].ID, trunkENI.deleteQueue[1].ID})
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs test branch is created and associated with the trunk and valid eni details
@@ -761,6 +760,36 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	)
 
 	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
+	expectedENIDetails := []*ENIDetails{EniDetails1, EniDetails2}
+
+	assert.NoError(t, err)
+	// VLan ID are marked as used
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+	assert.True(t, trunkENI.usedVlanIds[VlanId2])
+	// The returned content is as expected
+	assert.Equal(t, expectedENIDetails, eniDetails)
+	assert.Equal(t, expectedENIDetails, trunkENI.branchENIs[MockNamespacedName2].branchENIDetails)
+}
+
+// TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup test branch is created and with instance security group
+// if no security group is passed.
+func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper := getMockHelperAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+
+	gomock.InOrder(
+		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, InstanceSecurityGroup, 0, nil).
+			Return(BranchInterface1, nil),
+		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(nil, nil),
+		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, InstanceSecurityGroup, 0, nil).
+			Return(BranchInterface2, nil),
+		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(nil, nil),
+	)
+
+	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, []string{}, 2)
 	expectedENIDetails := []*ENIDetails{EniDetails1, EniDetails2}
 
 	assert.NoError(t, err)

@@ -22,16 +22,23 @@ import (
 
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
 
 var (
-	nodeName   = "name"
-	os         = "linux"
-	instanceID = "i-000000000000000"
-	subnetID   = "subnet-id"
+	nodeName      = "name"
+	os            = "linux"
+	instanceID    = "i-000000000000000"
+	subnetID      = "subnet-id"
+	privateIPAddr = "192.168.1.0"
+
+	securityGroup1 = "sg-1"
+	securityGroup2 = "sg-2"
+
+	securityGroup3 = "sg-3"
 
 	instanceType    = "c5.large"
 	subnetCidrBlock = "192.168.0.0/16"
@@ -40,12 +47,32 @@ var (
 	deviceIndex2 = int64(2)
 
 	nwInterfaces = &ec2.Instance{
-		InstanceId:   &instanceID,
-		InstanceType: &instanceType,
-		SubnetId:     &subnetID,
+		InstanceId:       &instanceID,
+		InstanceType:     &instanceType,
+		SubnetId:         &subnetID,
+		PrivateIpAddress: &privateIPAddr,
 		NetworkInterfaces: []*ec2.InstanceNetworkInterface{
-			{Attachment: &ec2.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex0}},
-			{Attachment: &ec2.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex2}},
+			{
+				PrivateIpAddress: &privateIPAddr,
+				Groups: []*ec2.GroupIdentifier{
+					{
+						GroupId: &securityGroup1,
+					},
+					{
+						GroupId: &securityGroup2,
+					},
+				},
+				Attachment: &ec2.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex0},
+			},
+			{
+				PrivateIpAddress: aws.String("192.168.1.2"),
+				Groups: []*ec2.GroupIdentifier{
+					{
+						GroupId: &securityGroup3,
+					},
+				},
+				Attachment: &ec2.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex2},
+			},
 		},
 	}
 
@@ -91,6 +118,7 @@ func TestEc2Instance_LoadDetails(t *testing.T) {
 	assert.Equal(t, subnetCidrBlock, ec2Instance.SubnetCidrBlock())
 	assert.Equal(t, instanceType, ec2Instance.Type())
 	assert.Equal(t, []bool{true, false, true}, ec2Instance.deviceIndexes)
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.InstanceSecurityGroup())
 }
 
 // TestEc2Instance_LoadDetails_SubnetPreLoaded if the subnet is already loaded it's not set to the value of the instance's
