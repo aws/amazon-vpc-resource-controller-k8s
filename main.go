@@ -25,6 +25,7 @@ import (
 	"os"
 	"time"
 
+	zapRaw "go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -46,6 +47,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
 	webhookutils "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhook/core"
 	// +kubebuilder:scaffold:imports
@@ -76,10 +78,12 @@ func main() {
 	var enableDevLogging bool
 	var roleARN string
 	var enableProfiling bool
+	var logLevel string
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&roleARN, "role-arn", "", "Role ARN that will be assumed to make EC2 API calls "+
 		"to perform operations on the user's VPC. This parameter is not required if running the controller on your worker node.")
+	flag.StringVar(&logLevel, "log-level", "info", "Set the controller log level - info(default), debug")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -88,10 +92,22 @@ func main() {
 			"With dev mode logging, you will get Debug logs and more structured logging with extra details")
 	flag.BoolVar(&enableProfiling, "enable-profiling", false, "Enable runtime profiling for debugging"+
 		"purposes.")
+
 	flag.Parse()
 
 	// Dev mode logging disabled by default, to enable set the enableDevLogging argument
-	ctrl.SetLogger(zap.New(zap.UseDevMode(enableDevLogging)))
+	logLvl := zapRaw.NewAtomicLevelAt(0)
+	if logLevel == "debug" {
+		logLvl = zapRaw.NewAtomicLevelAt(-1)
+	}
+	ctrl.SetLogger(zap.New(zap.UseDevMode(enableDevLogging), zap.Level(&logLvl)))
+
+	// Variables injected with ldflags on building the binary
+	setupLog.Info("version",
+		"GitVersion", version.GitVersion,
+		"GitCommit", version.GitCommit,
+		"BuildDate", version.BuildDate,
+	)
 
 	// Profiler disabled by default, to enable set the enableProfiling argument
 	if enableProfiling {

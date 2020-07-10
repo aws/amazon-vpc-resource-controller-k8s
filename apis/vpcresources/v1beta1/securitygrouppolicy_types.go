@@ -29,7 +29,7 @@ type SecurityGroupPolicySpec struct {
 	SecurityGroups         GroupIds               `json:"securityGroups,omitempty"`
 }
 
-// GroupIds has security groups carried in the CRD SecurityGroupPolicy.
+// GroupIds contains the list of security groups that will be applied to the network interface of the pod matching the criteria.
 type GroupIds struct {
 	// Groups is the list of EC2 Security Groups Ids that need to be applied to the ENI of a Pod.
 	// +kubebuilder:validation:MinItems=1
@@ -37,7 +37,8 @@ type GroupIds struct {
 	Groups []string `json:"groupIds,omitempty"`
 }
 
-// ServiceAccountSelector provides the selector for service account label matches and its name matches.
+// ServiceAccountSelector contains the selection criteria for matching pod with service account that matches the label selector
+// requirement and the exact name of the service account.
 type ServiceAccountSelector struct {
 	*metav1.LabelSelector `json:",omitempty"`
 	// matchNames is the list of service account names. The requirements are ANDed

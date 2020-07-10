@@ -1,6 +1,9 @@
-
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+IMAGE_NAME=amazon/vpc-resource-controller
+REPO=$(AWS_ACCOUNT).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE_NAME)
+VERSION=$(shell git describe --dirty --tags --always)
+
+IMAGE ?= $(REPO):$(VERSION)
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:trivialVersions=true"
 
@@ -11,15 +14,15 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
-all: manager
+all: controller
 
 # Run tests
 test: generate fmt vet manifests
 	go test ./... -coverprofile cover.out
 
-# Build manager binary
-manager: generate fmt vet
-	go build -o bin/manager main.go
+# Build controller binary
+controller: generate fmt vet
+	go build -o bin/controller main.go
 
 # Run against the configured Kubernetes cluster in ~/.kube/config
 run: generate fmt vet manifests
@@ -34,13 +37,17 @@ uninstall: manifests
 	kustomize build config/crd | kubectl delete -f -
 
 # Deploy controller in the configured Kubernetes cluster in ~/.kube/config
-deploy: manifests
-	cd config/manager && kustomize edit set image controller=${IMG}
+deploy: check-env manifests
+	cd config/controller && kustomize edit set image controller=${IMAGE}
 	kustomize build config/default | kubectl apply -f -
+
+undeploy: check-env
+	cd config/controller && kustomize edit set image controller=${IMAGE}
+	kustomize build config/default | kubectl delete -f -
 
 # Generate manifests e.g. CRD, RBAC etc.
 manifests: controller-gen
-	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=manager-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=controller-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 # Run go fmt against code
 fmt:
@@ -55,12 +62,12 @@ generate: controller-gen
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 # Build the docker image
-docker-build: test
-	docker build . -t ${IMG}
+docker-build: check-env test
+	docker build . -t ${IMAGE}
 
 # Push the docker image
-docker-push:
-	docker push ${IMG}
+docker-push: check-env
+	docker push ${IMAGE}
 
 # find or download controller-gen
 # download controller-gen if necessary
@@ -78,3 +85,14 @@ CONTROLLER_GEN=$(GOBIN)/controller-gen
 else
 CONTROLLER_GEN=$(shell which controller-gen)
 endif
+
+check-env:
+	@:$(call check_var, AWS_ACCOUNT, AWS account ID for publishing docker images)
+	@:$(call check_var, AWS_REGION, AWS region for publishing docker images)
+
+check_var = \
+    $(strip $(foreach 1,$1, \
+        $(call __check_var,$1,$(strip $(value 2)))))
+__check_var = \
+    $(if $(value $1),, \
+      $(error Undefined variable $1$(if $2, ($2))))

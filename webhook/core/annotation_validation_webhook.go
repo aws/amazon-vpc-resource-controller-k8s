@@ -24,7 +24,7 @@ type AnnotationValidator struct {
 	Log     logr.Logger
 }
 
-const validUserInfo = "system:serviceaccount:amazon-vpc-resource-controller-k8s-system:default"
+const validUserInfo = "system:serviceaccount:kube-system:default"
 
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts/status,verbs=get

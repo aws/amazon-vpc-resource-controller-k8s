@@ -4,21 +4,29 @@ Controller for managing [Amazon AWS VPC](https://aws.amazon.com/vpc/) resources 
 
 ## Installation
 
-To apply the Security Group Policy CRD yaml.
-```
-make install
-```
+Prerequisite steps
+
+- Create a repository in [ECR](https://console.aws.amazon.com/ecr/home) with the name ```amazon/amazon-k8s-cni```
+- Install [cert manager](https://cert-manager.io/docs/installation/kubernetes/) on your cluster
 
 To build the docker image.
 ```
-make docker-build
+make docker-build AWS_ACCOUNT=<account-id> AWS_REGION=<region-code>
+```
+To push the docker image.
+```
+make docker-push AWS_ACCOUNT=<account-id> AWS_REGION=<region-code>
 ```
 
 After pushing the docker image, to apply the yaml for the vpc-resource-controller and the vpc-admission-webhook on your cluster.
 ```
-make deploy
+make deploy AWS_ACCOUNT=<account-id> AWS_REGION=<region-code>
 ```
-
+To build, push and deploy in one command
+```
+make docker-build docker-push deploy AWS_ACCOUNT=<account-id> AWS_REGION=<region-code>
+```
+ 
 ## Requirements for managing pod-eni
 
 In order to manage Branch ENI for pods, the account has to be Whitelisted for ENI Trunking/Branching.

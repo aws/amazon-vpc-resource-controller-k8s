@@ -90,6 +90,8 @@ spec:
                   type: object
               type: object
             securityGroups:
+              description: GroupIds contains the list of security groups that will
+                be applied to the network interface of the pod matching the criteria.
               properties:
                 groupIds:
                   description: Groups is the list of EC2 Security Groups Ids that
@@ -101,6 +103,9 @@ spec:
                   type: array
               type: object
             serviceAccountSelector:
+              description: ServiceAccountSelector contains the selection criteria
+                for matching pod with service account that matches the label selector
+                requirement and the exact name of the service account.
               properties:
                 matchExpressions:
                   description: matchExpressions is a list of label selector requirements.
