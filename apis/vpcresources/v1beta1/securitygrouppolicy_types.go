@@ -24,9 +24,9 @@ import (
 
 // SecurityGroupPolicySpec defines the desired state of SecurityGroupPolicy
 type SecurityGroupPolicySpec struct {
-	PodSelector            *metav1.LabelSelector  `json:"podSelector,omitempty"`
-	ServiceAccountSelector ServiceAccountSelector `json:"serviceAccountSelector,omitempty"`
-	SecurityGroups         GroupIds               `json:"securityGroups,omitempty"`
+	PodSelector            *metav1.LabelSelector `json:"podSelector,omitempty"`
+	ServiceAccountSelector *metav1.LabelSelector `json:"serviceAccountSelector,omitempty"`
+	SecurityGroups         GroupIds              `json:"securityGroups,omitempty"`
 }
 
 // GroupIds contains the list of security groups that will be applied to the network interface of the pod matching the criteria.

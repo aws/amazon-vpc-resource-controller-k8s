@@ -79,8 +79,7 @@ func (kch *k8sCacheHelper) filterPodSecurityGroups(
 	sgpLogger := kch.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
 	for _, sgp := range sgpList.Items {
 		hasPodSelector := sgp.Spec.PodSelector != nil
-		hasSASelector := sgp.Spec.ServiceAccountSelector.MatchNames != nil ||
-			sgp.Spec.ServiceAccountSelector.LabelSelector != nil
+		hasSASelector := sgp.Spec.ServiceAccountSelector != nil
 		hasSecurityGroup := sgp.Spec.SecurityGroups.Groups != nil && len(sgp.Spec.SecurityGroups.Groups) > 0
 
 		if (!hasPodSelector && !hasSASelector) || !hasSecurityGroup {
@@ -102,10 +101,10 @@ func (kch *k8sCacheHelper) filterPodSecurityGroups(
 			sgpLogger.Error(podSelectorError, "Failed converting SGP pod selector to match pod labels.",
 				"SGP name", sgp.Name, "SGP namespace", sgp.Namespace)
 		}
+
 		if saSelector, saSelectorError :=
-			metav1.LabelSelectorAsSelector(sgp.Spec.ServiceAccountSelector.LabelSelector); saSelectorError == nil {
-			if Include(sa.Name, sgp.Spec.ServiceAccountSelector.MatchNames) &&
-				saSelector.Matches(labels.Set(sa.Labels)) {
+			metav1.LabelSelectorAsSelector(sgp.Spec.ServiceAccountSelector); saSelectorError == nil {
+			if saSelector.Matches(labels.Set(sa.Labels)) {
 				saMatched = true
 			}
 		} else {

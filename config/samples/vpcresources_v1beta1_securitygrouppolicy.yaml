@@ -1,4 +1,3 @@
----
 # Example of SecurityGroupPolicy that uses Pod labels to determine if a new Pod get a ENI with the specified Security Groups.
 apiVersion: vpcresources.k8s.aws/v1beta1
 kind: SecurityGroupPolicy
@@ -19,15 +18,13 @@ spec:
       - sg-07b9fafd9006da7d5
       - sg-f7990sfng33684fad
 ---
-# Example of SecurityGroupPolicy that uses Service Account name & labels to determine if a new Pod get a ENI with the specified Security Groups.
+# Example of SecurityGroupPolicy that uses Service Account labels to determine if a new Pod get a ENI with the specified Security Groups.
 apiVersion: vpcresources.k8s.aws/v1beta1
 kind: SecurityGroupPolicy
 metadata:
   name: securitygrouppolicy-sample-serviceaccountselector
 spec:
-  serviceAccountSelector: # Select eligible Pod using the Service Account name and label. The result from each item will be ANDed to retrieve final result.
-    matchNames: # Select Pod having Service Account that exactly match the list below.
-      - my-serviceaccount
+  serviceAccountSelector: # Select eligible Pod using the Service Account labels. The result from each item will be ANDed to retrieve final result.
     matchLabels: # Select Service Account with label that exactly match the key and value given below.
       role: db
     matchExpressions: # Select Service Account with label that matches the pattern In/NotIn/Exists/DoesNotExist for given key-value pair.
