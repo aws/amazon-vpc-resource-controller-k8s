@@ -41,7 +41,11 @@ var (
 	branchInterfaceId  = "eni-00000000000000001"
 	branchInterfaceId2 = "eni-00000000000000002"
 	attachmentId       = "attach-000000000000000"
+	eniID              = "eni-00000000000000003"
 	deviceIndex        = int64(0)
+
+	ipAddress1 = "192.168.1.1"
+	ipAddress2 = "192.168.1.2"
 
 	// branch to trunk association id
 	branchAssociationId = "association-00000000000000"
@@ -180,6 +184,40 @@ var (
 				SubnetId:     &subnetId,
 			}},
 		}},
+	}
+
+	assignPrivateIPInput = &ec2.AssignPrivateIpAddressesInput{
+		NetworkInterfaceId:             &eniID,
+		SecondaryPrivateIpAddressCount: aws.Int64(int64(2)),
+	}
+
+	assignPrivateIPOutput = &ec2.AssignPrivateIpAddressesOutput{
+		AssignedPrivateIpAddresses: []*ec2.AssignedPrivateIpAddress{
+			{
+				PrivateIpAddress: &ipAddress1,
+			},
+			{
+				PrivateIpAddress: &ipAddress2,
+			},
+		},
+	}
+
+	describeNetworkInterfaceInput = &ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{{
+			Name:   aws.String("network-interface-id"),
+			Values: []*string{&eniID},
+		}},
+	}
+
+	describeNetworkInterfaceOutput = &ec2.DescribeNetworkInterfacesOutput{
+		NetworkInterfaces: []*ec2.NetworkInterface{
+			{
+				PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+					{PrivateIpAddress: &ipAddress1},
+					{PrivateIpAddress: &ipAddress2},
+				},
+			},
+		},
 	}
 
 	maxRetryOnError = 3
@@ -853,3 +891,62 @@ func TestEC2APIHelper_GetInstanceDetails_Error(t *testing.T) {
 	_, err := ec2ApiHelper.GetInstanceDetails(&instanceId)
 	assert.Error(t, mockError, err)
 }
+
+// TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady tests that once new IP addresses are assigned they are returned
+// only when the IPs are attached to the instance
+func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	mockWrapper.EXPECT().AssignPrivateIPAddresses(assignPrivateIPInput).Return(assignPrivateIPOutput, nil)
+	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInput).Return(describeNetworkInterfaceOutput, nil)
+
+	createdIPs, err := ec2ApiHelper.AssignIPv4AddressesAndWaitTillReady(eniID, 2)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{ipAddress1, ipAddress2} ,createdIPs)
+}
+
+// TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_Error tests that error is returned if the assign private IP call
+// fails
+func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	mockWrapper.EXPECT().AssignPrivateIPAddresses(assignPrivateIPInput).Return(nil, mockError)
+
+	_, err := ec2ApiHelper.AssignIPv4AddressesAndWaitTillReady(eniID, 2)
+
+	assert.Error(t, mockError, err)
+}
+
+// TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_AttachedAfterSecondDescribe tests if the describe call is called
+// till all the newly assigned ips are returned
+func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_AttachedAfterSecondDescribe(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	mockWrapper.EXPECT().AssignPrivateIPAddresses(assignPrivateIPInput).Return(assignPrivateIPOutput, nil)
+	gomock.InOrder(
+		// First call returns just one ip address
+		mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInput).Return(&ec2.DescribeNetworkInterfacesOutput{
+			NetworkInterfaces: []*ec2.NetworkInterface{
+				{PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+					{PrivateIpAddress: &ipAddress1},
+				}}}}, nil),
+		// Second call all created IPs returned
+		mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInput).Return(describeNetworkInterfaceOutput, nil),
+	)
+
+	createdIPs, err := ec2ApiHelper.AssignIPv4AddressesAndWaitTillReady(eniID, 2)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{ipAddress1, ipAddress2} ,createdIPs)
+}
+

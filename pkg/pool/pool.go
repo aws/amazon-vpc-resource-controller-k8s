@@ -63,6 +63,8 @@ type pool struct {
 	pendingCreate int
 	// pendingDelete represents the number of resources being deleted asynchronously
 	pendingDelete int
+	// nodeName k8s name of the node
+	nodeName string
 }
 
 type coolDownResource struct {
@@ -73,13 +75,14 @@ type coolDownResource struct {
 }
 
 func NewResourcePool(log logr.Logger, poolConfig *config.WarmPoolConfig, usedResources map[string]string,
-	warmResources []string, capacity int) Pool {
+	warmResources []string, nodeName string, capacity int) Pool {
 	pool := &pool{
 		log:            log,
 		warmPoolConfig: poolConfig,
 		usedResources:  usedResources,
 		warmResources:  warmResources,
 		capacity:       capacity,
+		nodeName:       nodeName,
 	}
 	return pool
 }
@@ -253,7 +256,7 @@ func (p *pool) ReconcilePool() worker.WarmPoolJob {
 
 		log.Info("created job to add resources for warm pool", "requested count", deviation)
 
-		return worker.NewWarmPoolCreateJob(deviation)
+		return worker.NewWarmPoolCreateJob(p.nodeName, deviation)
 
 	} else if - deviation > p.warmPoolConfig.MaxDeviation {
 		// Need to delete from warm pool
@@ -271,7 +274,7 @@ func (p *pool) ReconcilePool() worker.WarmPoolJob {
 
 		log.Info("created job to delete resources from warm pool", "resources to delete", resourceToDelete)
 
-		return worker.NewWarmPoolDeleteJob(resourceToDelete)
+		return worker.NewWarmPoolDeleteJob(p.nodeName, resourceToDelete)
 	}
 
 	log.V(1).Info("no need for reconciliation")

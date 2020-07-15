@@ -33,6 +33,21 @@ func (m *MockEC2APIHelper) EXPECT() *MockEC2APIHelperMockRecorder {
 	return m.recorder
 }
 
+// AssignIPv4AddressesAndWaitTillReady mocks base method
+func (m *MockEC2APIHelper) AssignIPv4AddressesAndWaitTillReady(arg0 string, arg1 int) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AssignIPv4AddressesAndWaitTillReady", arg0, arg1)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AssignIPv4AddressesAndWaitTillReady indicates an expected call of AssignIPv4AddressesAndWaitTillReady
+func (mr *MockEC2APIHelperMockRecorder) AssignIPv4AddressesAndWaitTillReady(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignIPv4AddressesAndWaitTillReady", reflect.TypeOf((*MockEC2APIHelper)(nil).AssignIPv4AddressesAndWaitTillReady), arg0, arg1)
+}
+
 // AssociateBranchToTrunk mocks base method
 func (m *MockEC2APIHelper) AssociateBranchToTrunk(arg0, arg1 *string, arg2 int) (*ec2.AssociateTrunkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
@@ -237,6 +252,20 @@ func (m *MockEC2APIHelper) SetDeleteOnTermination(arg0, arg1 *string) error {
 func (mr *MockEC2APIHelperMockRecorder) SetDeleteOnTermination(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDeleteOnTermination", reflect.TypeOf((*MockEC2APIHelper)(nil).SetDeleteOnTermination), arg0, arg1)
+}
+
+// UnassignPrivateIpAddresses mocks base method
+func (m *MockEC2APIHelper) UnassignPrivateIpAddresses(arg0, arg1 string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UnassignPrivateIpAddresses", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UnassignPrivateIpAddresses indicates an expected call of UnassignPrivateIpAddresses
+func (mr *MockEC2APIHelperMockRecorder) UnassignPrivateIpAddresses(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnassignPrivateIpAddresses", reflect.TypeOf((*MockEC2APIHelper)(nil).UnassignPrivateIpAddresses), arg0, arg1)
 }
 
 // WaitForNetworkInterfaceStatusChange mocks base method

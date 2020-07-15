@@ -34,6 +34,8 @@ var (
 		MaxDeviation: 1,
 	}
 
+	nodeName = "node-name"
+
 	pod1 = "test/pod-1"
 	pod2 = "default/pod-2"
 	pod3 = "test/pod-3"
@@ -68,7 +70,7 @@ func getMockPool(poolConfig *config.WarmPoolConfig, usedResources map[string]str
 }
 
 func TestPool_NewResourcePool(t *testing.T) {
-	pool := NewResourcePool(nil, poolConfig, usedResources, warmPoolResources, 5)
+	pool := NewResourcePool(nil, poolConfig, usedResources, warmPoolResources, nodeName, 5)
 	assert.NotNil(t, pool)
 }
 

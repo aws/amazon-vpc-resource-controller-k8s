@@ -44,6 +44,8 @@ type ec2Instance struct {
 	deviceIndexes []bool
 	// instanceSecurityGroups is the security group used by the primary network interface
 	instanceSecurityGroups []string
+	// primaryENIID is the ID of the primary network interface of the instance
+	primaryENIID string
 }
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
@@ -58,6 +60,7 @@ type EC2Instance interface {
 	SubnetID() string
 	SetSubnet(subnetID string)
 	SubnetCidrBlock() string
+	PrimaryNetworkInterfaceID() string
 	InstanceSecurityGroup() []string
 }
 
@@ -103,6 +106,7 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 
 		// Load the Security group of the primary network interface
 		if i.instanceSecurityGroups == nil && *nwInterface.PrivateIpAddress == *instance.PrivateIpAddress {
+			i.primaryENIID = *nwInterface.NetworkInterfaceId
 			// TODO: Group can change, should be refreshed each time we want to use this
 			for _, group := range nwInterface.Groups {
 				i.instanceSecurityGroups = append(i.instanceSecurityGroups, *group.GroupId)
@@ -146,6 +150,10 @@ func (i *ec2Instance) Name() string {
 // Type returns the instance type of the node
 func (i *ec2Instance) Type() string {
 	return i.instanceType
+}
+
+func (i *ec2Instance) PrimaryNetworkInterfaceID() string {
+	return i.primaryENIID
 }
 
 // InstanceSecurityGroup returns the instance security group of the primary network interface

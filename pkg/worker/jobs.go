@@ -31,6 +31,8 @@ const (
 	OperationDeleted Operations = "Deleted"
 	// OperationDeleting represents pods that are being deleted
 	OperationDeleting Operations = "Deleting"
+	// OperationIgnore represents job that don't need execution
+	OperationIgnore Operations = "Ignore"
 )
 
 // OnDemandJob represents the job that will be executed by the respective worker
@@ -104,20 +106,24 @@ type WarmPoolJob struct {
 	Resources []string
 	// ResourceCount is the number of resource to be created
 	ResourceCount int
+	// NodeName is the name of the node
+	NodeName string
 }
 
 // NewWarmPoolCreateJob returns a job on warm pool of resource
-func NewWarmPoolCreateJob(count int) WarmPoolJob {
+func NewWarmPoolCreateJob(nodeName string, count int) WarmPoolJob {
 	return WarmPoolJob{
-		Operations: OperationCreate,
+		Operations:    OperationCreate,
+		NodeName:      nodeName,
 		ResourceCount: count,
 	}
 }
 
-func NewWarmPoolDeleteJob(resourcesToDelete []string) WarmPoolJob {
+func NewWarmPoolDeleteJob(nodeName string, resourcesToDelete []string) WarmPoolJob {
 	return WarmPoolJob{
-		Operations: OperationDeleted,
-		Resources:  resourcesToDelete,
+		Operations:    OperationDeleted,
+		NodeName:      nodeName,
+		Resources:     resourcesToDelete,
 		ResourceCount: len(resourcesToDelete),
 	}
 }

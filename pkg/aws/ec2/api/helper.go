@@ -47,6 +47,13 @@ var (
 		Steps:    7,
 		Cap:      time.Second * 30,
 	}
+	waitForIPAttachment = wait.Backoff{
+		Duration: time.Millisecond * 50,
+		Factor:   2.0,
+		Jitter:   0.1,
+		Steps:    5,
+		Cap:      time.Second * 2,
+	}
 )
 
 type ec2APIHelper struct {
@@ -75,6 +82,8 @@ type EC2APIHelper interface {
 	DetachAndDeleteNetworkInterface(attachmentId *string, nwInterfaceId *string) error
 	WaitForNetworkInterfaceStatusChange(networkInterfaceId *string, desiredStatus string) error
 	GetInstanceDetails(instanceId *string) (*ec2.Instance, error)
+	AssignIPv4AddressesAndWaitTillReady(eniID string, count int) ([]string, error)
+	UnassignPrivateIpAddresses(eniID string, ip string) error
 }
 
 // CreateNetworkInterface creates a new network interface
@@ -396,6 +405,70 @@ func (h *ec2APIHelper) GetInstanceDetails(instanceId *string) (*ec2.Instance, er
 	}
 
 	return nil, fmt.Errorf("failed to find instance details for input %v", *describeInstanceInput)
+}
+
+// AssignIPv4AddressesAndWaitTillReady assigns IPv4 Address to the interface and waits till the IP Address is attached
+// to the instance
+func (h *ec2APIHelper) AssignIPv4AddressesAndWaitTillReady(eniID string, count int) ([]string, error) {
+	input := &ec2.AssignPrivateIpAddressesInput{
+		NetworkInterfaceId:             &eniID,
+		SecondaryPrivateIpAddressCount: aws.Int64(int64(count)),
+	}
+
+	assignPrivateIPOutput, err := h.ec2Wrapper.AssignPrivateIPAddresses(input)
+	if err != nil {
+		return nil, err
+	}
+
+	if assignPrivateIPOutput != nil && assignPrivateIPOutput.AssignedPrivateIpAddresses != nil &&
+		len(assignPrivateIPOutput.AssignedPrivateIpAddresses) == 0 {
+		return nil, fmt.Errorf("failed ot create %v ip address to eni %s", count, eniID)
+	}
+
+	ErrIPNotAttachedYet := fmt.Errorf("private IPv4 address is not attached yet")
+
+	err = retry.OnError(waitForIPAttachment,
+		func(err error) bool {
+			if err == ErrIPNotAttachedYet {
+				// Retry in case IPs are not attached yet
+				return true
+			}
+			return false
+		}, func() error {
+			interfaces, err := h.DescribeNetworkInterfaces([]*string{&eniID})
+			if err == nil && len(interfaces) == 1 && interfaces[0].PrivateIpAddresses != nil {
+				ipAddress := map[string]bool{}
+				for _, ipAddr := range interfaces[0].PrivateIpAddresses {
+					ipAddress[*ipAddr.PrivateIpAddress] = true
+				}
+				for _, ip := range assignPrivateIPOutput.AssignedPrivateIpAddresses {
+					if _, ok := ipAddress[*ip.PrivateIpAddress]; !ok {
+						return ErrIPNotAttachedYet
+					}
+				}
+				return nil
+			}
+			return err
+		})
+
+	if err != nil {
+		return nil, err
+	}
+
+	var createdIps []string
+	for _, ip := range assignPrivateIPOutput.AssignedPrivateIpAddresses {
+		createdIps = append(createdIps, *ip.PrivateIpAddress)
+	}
+	return createdIps, nil
+}
+
+func (h *ec2APIHelper) UnassignPrivateIpAddresses(eniID string, ip string) error {
+	unassignPrivateIpAddressesInput := &ec2.UnassignPrivateIpAddressesInput{
+		NetworkInterfaceId: &eniID,
+		PrivateIpAddresses: []*string{&ip},
+	}
+	_, err := h.ec2Wrapper.UnassignPrivateIPAddresses(unassignPrivateIpAddressesInput)
+	return err
 }
 
 // DetachAndDeleteNetworkInterface detaches the network interface first and then deletes it

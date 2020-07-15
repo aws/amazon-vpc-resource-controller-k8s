@@ -130,6 +130,20 @@ func (mr *MockEC2InstanceMockRecorder) Os() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Os", reflect.TypeOf((*MockEC2Instance)(nil).Os))
 }
 
+// PrimaryNetworkInterfaceID mocks base method
+func (m *MockEC2Instance) PrimaryNetworkInterfaceID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PrimaryNetworkInterfaceID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// PrimaryNetworkInterfaceID indicates an expected call of PrimaryNetworkInterfaceID
+func (mr *MockEC2InstanceMockRecorder) PrimaryNetworkInterfaceID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryNetworkInterfaceID", reflect.TypeOf((*MockEC2Instance)(nil).PrimaryNetworkInterfaceID))
+}
+
 // SetSubnet mocks base method
 func (m *MockEC2Instance) SetSubnet(arg0 string) {
 	m.ctrl.T.Helper()

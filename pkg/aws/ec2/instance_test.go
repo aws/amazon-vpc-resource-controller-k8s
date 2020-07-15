@@ -43,6 +43,8 @@ var (
 	instanceType    = "c5.large"
 	subnetCidrBlock = "192.168.0.0/16"
 
+	primaryInterfaceID = "192.168.0.2"
+
 	deviceIndex0 = int64(0)
 	deviceIndex2 = int64(2)
 
@@ -53,6 +55,7 @@ var (
 		PrivateIpAddress: &privateIPAddr,
 		NetworkInterfaces: []*ec2.InstanceNetworkInterface{
 			{
+				NetworkInterfaceId: &primaryInterfaceID,
 				PrivateIpAddress: &privateIPAddr,
 				Groups: []*ec2.GroupIdentifier{
 					{
@@ -119,6 +122,7 @@ func TestEc2Instance_LoadDetails(t *testing.T) {
 	assert.Equal(t, instanceType, ec2Instance.Type())
 	assert.Equal(t, []bool{true, false, true}, ec2Instance.deviceIndexes)
 	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.InstanceSecurityGroup())
+	assert.Equal(t, primaryInterfaceID, ec2Instance.PrimaryNetworkInterfaceID())
 }
 
 // TestEc2Instance_LoadDetails_SubnetPreLoaded if the subnet is already loaded it's not set to the value of the instance's
