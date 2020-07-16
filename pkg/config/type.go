@@ -16,6 +16,8 @@ limitations under the License.
 
 package config
 
+import "time"
+
 // TODO: Find more appropriate package for the labels and annotation constants.
 
 // K8s Pod Annotations
@@ -46,6 +48,11 @@ const (
 	OSWindows = "windows"
 	// OSLinux is the the linux Operating System
 	OSLinux = "linux"
+)
+
+var (
+	// CoolDownPeriod is the time to let kube-proxy propagates IP tables rules before assigning the resource back to new pod
+	CoolDownPeriod = time.Second * 30
 )
 
 // ResourceConfig is the configuration for each resource type

@@ -95,3 +95,29 @@ func NewOnDemandProcessDeleteQueueJob(nodeName string) OnDemandJob {
 		NodeName:  nodeName,
 	}
 }
+
+// WarmPoolJob represents the job for a resource handler for warm pool resources
+type WarmPoolJob struct {
+	// Operation is the type of operation on warm pool
+	Operations Operations
+	// Resources can hold the resource to delete or the created resources
+	Resources []string
+	// ResourceCount is the number of resource to be created
+	ResourceCount int
+}
+
+// NewWarmPoolCreateJob returns a job on warm pool of resource
+func NewWarmPoolCreateJob(count int) WarmPoolJob {
+	return WarmPoolJob{
+		Operations: OperationCreate,
+		ResourceCount: count,
+	}
+}
+
+func NewWarmPoolDeleteJob(resourcesToDelete []string) WarmPoolJob {
+	return WarmPoolJob{
+		Operations: OperationDeleted,
+		Resources:  resourcesToDelete,
+		ResourceCount: len(resourcesToDelete),
+	}
+}
