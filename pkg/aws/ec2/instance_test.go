@@ -56,7 +56,7 @@ var (
 		NetworkInterfaces: []*ec2.InstanceNetworkInterface{
 			{
 				NetworkInterfaceId: &primaryInterfaceID,
-				PrivateIpAddress: &privateIPAddr,
+				PrivateIpAddress:   &privateIPAddr,
 				Groups: []*ec2.GroupIdentifier{
 					{
 						GroupId: &securityGroup1,

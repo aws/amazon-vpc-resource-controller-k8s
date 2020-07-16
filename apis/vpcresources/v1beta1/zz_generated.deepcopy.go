@@ -111,7 +111,11 @@ func (in *SecurityGroupPolicySpec) DeepCopyInto(out *SecurityGroupPolicySpec) {
 		*out = new(v1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
-	in.ServiceAccountSelector.DeepCopyInto(&out.ServiceAccountSelector)
+	if in.ServiceAccountSelector != nil {
+		in, out := &in.ServiceAccountSelector, &out.ServiceAccountSelector
+		*out = new(v1.LabelSelector)
+		(*in).DeepCopyInto(*out)
+	}
 	in.SecurityGroups.DeepCopyInto(&out.SecurityGroups)
 }
 

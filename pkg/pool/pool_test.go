@@ -48,7 +48,7 @@ var (
 )
 
 func getMockPool(poolConfig *config.WarmPoolConfig, usedResources map[string]string,
-	warmResources []string, capacity int) pool {
+	warmResources []string, capacity int) *pool {
 
 	usedResourcesCopy := map[string]string{}
 	for k, v := range usedResources {
@@ -58,7 +58,7 @@ func getMockPool(poolConfig *config.WarmPoolConfig, usedResources map[string]str
 	warmResourcesCopy := make([]string, len(warmResources))
 	copy(warmResourcesCopy, warmResources)
 
-	pool := pool{
+	pool := &pool{
 		log:            zap.New(zap.UseDevMode(true)).WithValues("pool", "res-id/node-name"),
 		warmPoolConfig: poolConfig,
 		usedResources:  usedResourcesCopy,
@@ -226,9 +226,9 @@ func TestPool_UpdatePool_OperationDelete_Failed(t *testing.T) {
 func TestPool_ProcessCoolDownQueue(t *testing.T) {
 	warmPool := getMockPool(poolConfig, usedResources, []string{}, 3)
 	warmPool.coolDownQueue = []coolDownResource{
-		{resourceID: res3, deletionTimestamp: time.Now().Add(- time.Second * 33)},
-		{resourceID: res4, deletionTimestamp: time.Now().Add(- time.Second * 32)},
-		{resourceID: res5, deletionTimestamp: time.Now().Add(- time.Second * 10)},
+		{resourceID: res3, deletionTimestamp: time.Now().Add(-time.Second * 33)},
+		{resourceID: res4, deletionTimestamp: time.Now().Add(-time.Second * 32)},
+		{resourceID: res5, deletionTimestamp: time.Now().Add(-time.Second * 10)},
 	}
 
 	needFurtherProcessing := warmPool.ProcessCoolDownQueue()
@@ -247,7 +247,7 @@ func TestPool_ProcessCoolDownQueue_NoFurtherProcessingRequired(t *testing.T) {
 	warmPool := getMockPool(poolConfig, usedResources, []string{}, 3)
 
 	warmPool.coolDownQueue = []coolDownResource{
-		{resourceID: res3, deletionTimestamp: time.Now().Add(- time.Second * 33)}}
+		{resourceID: res3, deletionTimestamp: time.Now().Add(-time.Second * 33)}}
 
 	needFurtherProcessing := warmPool.ProcessCoolDownQueue()
 

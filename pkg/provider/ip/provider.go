@@ -36,16 +36,12 @@ import (
 )
 
 type ipv4Provider struct {
-	// lock to allow multiple routines to access the cache concurrently
-	lock sync.RWMutex
 	// log is the logger initialized with ip provider details
 	log logr.Logger
 	// ec2APIHelper to make ec2 API calls for IPv4 management
 	ec2APIHelper api.EC2APIHelper
 	// workerPool with worker routine to execute asynchronous job on the ip provider
 	workerPool worker.Worker
-	// instanceResources stores the ENIManager and the resource pool per instance
-	instanceProviderAndPool map[string]ResourceProviderAndPool
 	// k8sWrapper to list the pods on node initialization
 	k8sWrapper k8s.K8sWrapper
 	// config is the warm pool configuration for the resource IPv4
@@ -54,6 +50,10 @@ type ipv4Provider struct {
 	notifyPoolAdded func(resourceName string, nodeName string, pool pool.Pool)
 	// notifyPoolDeleted notifies the handler when a new pool is removed
 	notifyPoolDeleted func(resourceName string, nodeName string)
+	// lock to allow multiple routines to access the cache concurrently
+	lock sync.RWMutex // guards the following
+	// instanceResources stores the ENIManager and the resource pool per instance
+	instanceProviderAndPool map[string]ResourceProviderAndPool
 }
 
 // InstanceResource contains the instance's ENI manager and the resource pool
@@ -65,10 +65,10 @@ type ResourceProviderAndPool struct {
 func NewIPv4Provider(log logr.Logger, ec2APIHelper api.EC2APIHelper, workerPool worker.Worker,
 	k8sWrapper k8s.K8sWrapper) provider.ResourceProvider {
 	return &ipv4Provider{
-		log:                     log,
-		ec2APIHelper:            ec2APIHelper,
-		workerPool:              workerPool,
-		k8sWrapper:              k8sWrapper,
+		log:          log,
+		ec2APIHelper: ec2APIHelper,
+		workerPool:   workerPool,
+		k8sWrapper:   k8sWrapper,
 	}
 }
 

@@ -258,7 +258,7 @@ func (p *pool) ReconcilePool() worker.WarmPoolJob {
 
 		return worker.NewWarmPoolCreateJob(p.nodeName, deviation)
 
-	} else if - deviation > p.warmPoolConfig.MaxDeviation {
+	} else if -deviation > p.warmPoolConfig.MaxDeviation {
 		// Need to delete from warm pool
 		deviation = -deviation
 		var resourceToDelete []string

@@ -33,18 +33,18 @@ var (
 )
 
 type eniManager struct {
-	// lock to prevent multiple routines concurrently accessing the eni for same node
-	lock       sync.Mutex
-	// availENIs is the list of ENIs attached to the instance
-	availENIs  []*eniDetails
-	// ipToENIMap is the map from ip to the ENI that it belongs to
-	ipToENIMap map[string]*eniDetails
 	// instance is the pointer to the instance details
-	instance   ec2.EC2Instance
+	instance ec2.EC2Instance
+	// lock to prevent multiple routines concurrently accessing the eni for same node
+	lock sync.Mutex // lock guards the following resources
+	// attachedENIs is the list of ENIs attached to the instance
+	attachedENIs []*eni
+	// ipToENIMap is the map from ip to the ENI that it belongs to
+	ipToENIMap map[string]*eni
 }
 
 // eniDetails stores the eniID along with the number of new IPs that can be assigned form it
-type eniDetails struct {
+type eni struct {
 	eniID             string
 	remainingCapacity int
 }
@@ -58,7 +58,7 @@ type ENIManager interface {
 // NewENIManager returns a new ENI Manager
 func NewENIManager(instance ec2.EC2Instance) *eniManager {
 	return &eniManager{
-		ipToENIMap: map[string]*eniDetails{},
+		ipToENIMap: map[string]*eni{},
 		instance:   instance,
 	}
 }
@@ -75,7 +75,7 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, err
 	var availIPs []string
 	for _, nwInterface := range nwInterfaces {
 		if nwInterface.PrivateIpAddresses != nil {
-			eni := &eniDetails{
+			eni := &eni{
 				remainingCapacity: ipLimit,
 				eniID:             *nwInterface.NetworkInterfaceId,
 			}
@@ -84,7 +84,7 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, err
 				availIPs = append(availIPs, *ip.PrivateIpAddress)
 				e.ipToENIMap[*ip.PrivateIpAddress] = eni
 			}
-			e.availENIs = append(e.availENIs, eni)
+			e.attachedENIs = append(e.attachedENIs, eni)
 		}
 	}
 
@@ -100,8 +100,8 @@ func (e *eniManager) CreateIPV4Address(required int, ec2APIHelper api.EC2APIHelp
 	var assignedIPv4Address []string
 
 	// Loop till we reach the last available ENI and list of assigned IPv4 addresses is less than the required IPv4 addresses
-	for index := 0; index < len(e.availENIs) && len(assignedIPv4Address) < required; index++ {
-		remainingCapacity := e.availENIs[index].remainingCapacity
+	for index := 0; index < len(e.attachedENIs) && len(assignedIPv4Address) < required; index++ {
+		remainingCapacity := e.attachedENIs[index].remainingCapacity
 		if remainingCapacity > 0 {
 			canAssign := 0
 			// Number of IPs wanted is the number of IPs required minus the number of IPs assigned till now.
@@ -113,21 +113,27 @@ func (e *eniManager) CreateIPV4Address(required int, ec2APIHelper api.EC2APIHelp
 				canAssign = want
 			}
 			// Assign the IPv4 Addresses from this ENI
-			assignedIPs, err := ec2APIHelper.AssignIPv4AddressesAndWaitTillReady(e.availENIs[index].eniID, canAssign)
-			if err != nil {
+			assignedIPs, err := ec2APIHelper.AssignIPv4AddressesAndWaitTillReady(e.attachedENIs[index].eniID, canAssign)
+			if err != nil && len(assignedIPs) == 0 {
 				// Return the list of IPs that were actually created along with the error
 				return assignedIPs, err
+			} else if err != nil {
+				// Just log and continue processing the assigned IPs
+				log.Error(err, "failed to assign all the requested IPs",
+					"requested", want, "got", len(assignedIPs))
 			}
 			// Update the remaining capacity
-			e.availENIs[index].remainingCapacity = remainingCapacity - canAssign
+			e.attachedENIs[index].remainingCapacity = remainingCapacity - canAssign
 			// Append the assigned IPs on this ENI to the list of IPs created across all the ENIs
 			assignedIPv4Address = append(assignedIPv4Address, assignedIPs...)
 			// Add the mapping from IP to ENI, so that we can easily delete the IP and increment the remaining IP count
 			// on the ENI
-			e.addIPtoENIMapping(e.availENIs[index], assignedIPs)
+			for _, ip := range assignedIPs {
+				e.ipToENIMap[ip] = e.attachedENIs[index]
+			}
 
 			log.Info("assigned IPv4 addresses", "ip", assignedIPs,
-				"eni", e.availENIs[index].eniID, "want", want, "can provide up", canAssign)
+				"eni", e.attachedENIs[index].eniID, "want", want, "can provide up", canAssign)
 		}
 	}
 
@@ -138,11 +144,11 @@ func (e *eniManager) CreateIPV4Address(required int, ec2APIHelper api.EC2APIHelp
 	// If the existing ENIs could not assign the required IPs, loop till the new ENIs can assign the required
 	// number of IPv4 Addresses
 	for len(assignedIPv4Address) < required &&
-		len(e.availENIs) < eniLimit {
+		len(e.attachedENIs) < eniLimit {
 
 		deviceIndex, err := e.instance.GetHighestUnusedDeviceIndex()
 		if err != nil {
-			// TODO: Refresh device index
+			// TODO: Refresh device index for linux nodes only
 			return assignedIPv4Address, err
 		}
 		want := required - len(assignedIPv4Address)
@@ -153,14 +159,14 @@ func (e *eniManager) CreateIPV4Address(required int, ec2APIHelper api.EC2APIHelp
 			aws.String(e.instance.SubnetID()), e.instance.InstanceSecurityGroup(), aws.Int64(deviceIndex),
 			&ENIDescription, nil, want)
 		if err != nil {
-			// TODO: Check if any clean up is required here?
+			// TODO: Check if any clean up is required here for linux nodes only?
 			return assignedIPv4Address, err
 		}
-		eni := &eniDetails{
+		eni := &eni{
 			remainingCapacity: ipLimit - want,
 			eniID:             *nwInterface.NetworkInterfaceId,
 		}
-		e.availENIs = append(e.availENIs, eni)
+		e.attachedENIs = append(e.attachedENIs, eni)
 		for _, assignedIP := range nwInterface.PrivateIpAddresses {
 			if !*assignedIP.Primary {
 				assignedIPv4Address = append(assignedIPv4Address, *assignedIP.PrivateIpAddress)
@@ -171,7 +177,7 @@ func (e *eniManager) CreateIPV4Address(required int, ec2APIHelper api.EC2APIHelp
 	}
 
 	var err error
-	// This should never happen
+	// This can happen if the subnet doesn't have remaining IPs
 	if len(assignedIPv4Address) < required {
 		err = fmt.Errorf("not able to create the desired number of IPv4 addresses, required %d, created %d",
 			required, len(assignedIPv4Address))
@@ -188,24 +194,23 @@ func (e *eniManager) DeleteIPV4Address(ipList []string, ec2APIHelper api.EC2APIH
 
 	var failedToUnAssign []string
 	var errors []error
-	for _, ip := range ipList {
-		eni, ok := e.ipToENIMap[ip]
-		if !ok {
-			log.Error(fmt.Errorf("failed to find the eni for ip %s", ip), "skipping the IP address deletion")
-			continue
-		}
-		// TODO: Club unassign requests for same ENI into one request for efficiency
-		err := ec2APIHelper.UnassignPrivateIpAddresses(eni.eniID, ip)
+
+	groupedIPs := e.groupIPsPerENI(ipList)
+	for eni, ips := range groupedIPs {
+
+		err := ec2APIHelper.UnassignPrivateIpAddresses(eni.eniID, ips)
 		if err != nil {
 			errors = append(errors, err)
-			log.Info("failed to deleted secondary IPv4 address", "eni", eni.eniID, "ip", ip)
-			failedToUnAssign = append(failedToUnAssign, ip)
+			log.Info("failed to deleted secondary IPv4 address", "eni", eni.eniID,
+				"IPv4 addresses", ips)
+			failedToUnAssign = append(failedToUnAssign, ips...)
 			continue
 		}
-		log.Info("deleted secondary IPv4 address", "eni", eni.eniID, "ip", ip)
-		// Delete the mapping and increment the capacity of the ENI
-		delete(e.ipToENIMap, ip)
-		eni.remainingCapacity++
+		eni.remainingCapacity += len(ips)
+		for _, ip := range ips {
+			delete(e.ipToENIMap, ip)
+		}
+		log.Info("deleted secondary IPv4 address", "eni", eni.eniID, "IPv4 addresses", ips)
 	}
 
 	ipLimit := vpc.InstanceIPsAvailable[e.instance.Type()] - 1
@@ -213,24 +218,24 @@ func (e *eniManager) DeleteIPV4Address(ipList []string, ec2APIHelper api.EC2APIH
 
 	// Clean up ENIs that just have the primary network interface attached to them
 	i := 0
-	for _, eni := range e.availENIs {
+	for _, eni := range e.attachedENIs {
 		// ENI doesn't have any secondary IP attached to it and is not the primary network interface
 		if eni.remainingCapacity == ipLimit && primaryENIID != eni.eniID {
 			err := ec2APIHelper.DeleteNetworkInterface(&eni.eniID)
 			if err != nil {
 				errors = append(errors, err)
-				e.availENIs[i] = eni
+				e.attachedENIs[i] = eni
 				i++
 				continue
 			}
 			log.Info("deleted ENI successfully as it has no secondary IP attached",
 				"id", eni.eniID)
 		} else {
-			e.availENIs[i] = eni
+			e.attachedENIs[i] = eni
 			i++
 		}
 	}
-	e.availENIs = e.availENIs[:i]
+	e.attachedENIs = e.attachedENIs[:i]
 
 	if errors != nil && len(errors) > 0 {
 		return failedToUnAssign, fmt.Errorf("failed to unassign one or more ip addresses %v", errors)
@@ -239,9 +244,15 @@ func (e *eniManager) DeleteIPV4Address(ipList []string, ec2APIHelper api.EC2APIH
 	return nil, nil
 }
 
-// addIPtoENIMapping adds the list of ip address to point the ENI from which they are allocated
-func (e *eniManager) addIPtoENIMapping(eni *eniDetails, ipAddress []string) {
-	for _, ip := range ipAddress {
-		e.ipToENIMap[ip] = eni
+// groupIPsPerENI groups the IPs to delete per ENI
+func (e *eniManager) groupIPsPerENI(deleteList []string) map[*eni][]string {
+	toDelete := map[*eni][]string{}
+	for _, ip := range deleteList {
+		eni := e.ipToENIMap[ip]
+		ls := toDelete[eni]
+		ls = append(ls, ip)
+		toDelete[eni] = ls
 	}
+
+	return toDelete
 }

@@ -255,7 +255,7 @@ func (mr *MockEC2APIHelperMockRecorder) SetDeleteOnTermination(arg0, arg1 interf
 }
 
 // UnassignPrivateIpAddresses mocks base method
-func (m *MockEC2APIHelper) UnassignPrivateIpAddresses(arg0, arg1 string) error {
+func (m *MockEC2APIHelper) UnassignPrivateIpAddresses(arg0 string, arg1 []string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UnassignPrivateIpAddresses", arg0, arg1)
 	ret0, _ := ret[0].(error)

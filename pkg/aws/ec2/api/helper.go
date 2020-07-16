@@ -51,7 +51,7 @@ var (
 		Duration: time.Millisecond * 50,
 		Factor:   2.0,
 		Jitter:   0.1,
-		Steps:    5,
+		Steps:    7,
 		Cap:      time.Second * 2,
 	}
 )
@@ -83,7 +83,7 @@ type EC2APIHelper interface {
 	WaitForNetworkInterfaceStatusChange(networkInterfaceId *string, desiredStatus string) error
 	GetInstanceDetails(instanceId *string) (*ec2.Instance, error)
 	AssignIPv4AddressesAndWaitTillReady(eniID string, count int) ([]string, error)
-	UnassignPrivateIpAddresses(eniID string, ip string) error
+	UnassignPrivateIpAddresses(eniID string, ips []string) error
 }
 
 // CreateNetworkInterface creates a new network interface
@@ -410,6 +410,8 @@ func (h *ec2APIHelper) GetInstanceDetails(instanceId *string) (*ec2.Instance, er
 // AssignIPv4AddressesAndWaitTillReady assigns IPv4 Address to the interface and waits till the IP Address is attached
 // to the instance
 func (h *ec2APIHelper) AssignIPv4AddressesAndWaitTillReady(eniID string, count int) ([]string, error) {
+	var assignedIPs []string
+
 	input := &ec2.AssignPrivateIpAddressesInput{
 		NetworkInterfaceId:             &eniID,
 		SecondaryPrivateIpAddressCount: aws.Int64(int64(count)),
@@ -417,12 +419,12 @@ func (h *ec2APIHelper) AssignIPv4AddressesAndWaitTillReady(eniID string, count i
 
 	assignPrivateIPOutput, err := h.ec2Wrapper.AssignPrivateIPAddresses(input)
 	if err != nil {
-		return nil, err
+		return assignedIPs, err
 	}
 
 	if assignPrivateIPOutput != nil && assignPrivateIPOutput.AssignedPrivateIpAddresses != nil &&
 		len(assignPrivateIPOutput.AssignedPrivateIpAddresses) == 0 {
-		return nil, fmt.Errorf("failed ot create %v ip address to eni %s", count, eniID)
+		return assignedIPs, fmt.Errorf("failed ot create %v ip address to eni %s", count, eniID)
 	}
 
 	ErrIPNotAttachedYet := fmt.Errorf("private IPv4 address is not attached yet")
@@ -435,37 +437,46 @@ func (h *ec2APIHelper) AssignIPv4AddressesAndWaitTillReady(eniID string, count i
 			}
 			return false
 		}, func() error {
+			// Describe the network interface on which the new IPs are assigned
 			interfaces, err := h.DescribeNetworkInterfaces([]*string{&eniID})
+			// Re initialize the slice so we don't add IPs multiple time
+			assignedIPs = []string{}
 			if err == nil && len(interfaces) == 1 && interfaces[0].PrivateIpAddresses != nil {
+				// Get the map of IPs returned by the describe network interface call
 				ipAddress := map[string]bool{}
 				for _, ipAddr := range interfaces[0].PrivateIpAddresses {
 					ipAddress[*ipAddr.PrivateIpAddress] = true
 				}
+				// Verify the describe network interface returns all the IPs that were assigned in the
+				// AssignPrivateIPAddresses call
 				for _, ip := range assignPrivateIPOutput.AssignedPrivateIpAddresses {
 					if _, ok := ipAddress[*ip.PrivateIpAddress]; !ok {
-						return ErrIPNotAttachedYet
+						// Even if one IP is not assigned, set the error so that we only return only the IPs that
+						// are successfully assigned on the ENI
+						err = ErrIPNotAttachedYet
+					} else {
+						assignedIPs = append(assignedIPs, *ip.PrivateIpAddress)
 					}
 				}
-				return nil
+				//
+				return err
 			}
 			return err
 		})
 
 	if err != nil {
-		return nil, err
+		// If some of the assigned IP addresses were not yet returned in the describe network interface call,
+		// returns the list of IPs that were returned
+		return assignedIPs, err
 	}
 
-	var createdIps []string
-	for _, ip := range assignPrivateIPOutput.AssignedPrivateIpAddresses {
-		createdIps = append(createdIps, *ip.PrivateIpAddress)
-	}
-	return createdIps, nil
+	return assignedIPs, nil
 }
 
-func (h *ec2APIHelper) UnassignPrivateIpAddresses(eniID string, ip string) error {
+func (h *ec2APIHelper) UnassignPrivateIpAddresses(eniID string, ips []string) error {
 	unassignPrivateIpAddressesInput := &ec2.UnassignPrivateIpAddressesInput{
 		NetworkInterfaceId: &eniID,
-		PrivateIpAddresses: []*string{&ip},
+		PrivateIpAddresses: aws.StringSlice(ips),
 	}
 	_, err := h.ec2Wrapper.UnassignPrivateIPAddresses(unassignPrivateIpAddressesInput)
 	return err
