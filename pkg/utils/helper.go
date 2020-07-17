@@ -65,7 +65,7 @@ func (kch *k8sCacheHelper) GetPodSecurityGroups(pod *corev1.Pod) ([]string, erro
 
 	sgList := kch.filterPodSecurityGroups(sgpList, pod, sa)
 	if len(sgList) > 0 {
-		helperLog.Info("Pod matched a SecurityGroupPolicy and will get the following Security Groups:",
+		helperLog.V(1).Info("Pod matched a SecurityGroupPolicy and will get the following Security Groups:",
 			"Security Groups", sgList)
 	}
 	return sgList, nil

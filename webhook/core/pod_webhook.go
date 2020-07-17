@@ -81,7 +81,7 @@ func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Reques
 		webhookLog.Error(err, "Marshalling pod failed:")
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
-	webhookLog.Info("Mutating Pod finished.",
+	webhookLog.V(1).Info("Mutating Pod finished.",
 		"Resources Limits", pod.Spec.Containers[0].Resources.Limits)
 
 	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)

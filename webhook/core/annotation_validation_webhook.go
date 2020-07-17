@@ -43,7 +43,7 @@ func (av *AnnotationValidator) Handle(ctx context.Context, req admission.Request
 	}
 
 	if podEniJSON, ok := pod.Annotations[config.ResourceNamePodENI]; ok {
-		webhookLog.Info("Got annotation:", config.ResourceNamePodENI, podEniJSON)
+		webhookLog.V(1).Info("Got annotation:", config.ResourceNamePodENI, podEniJSON)
 		if req.Operation == v1beta1.Create {
 			// Check who is setting the annotation
 			if req.UserInfo.Username != validUserInfo {
@@ -52,7 +52,7 @@ func (av *AnnotationValidator) Handle(ctx context.Context, req admission.Request
 			}
 		} else if req.Operation == v1beta1.Update {
 			// Check if the pod-eni annotation has been changed
-			webhookLog.Info("Operation is update, checking that pod-eni annotation wasn't modified")
+			webhookLog.V(1).Info("Operation is update, checking that pod-eni annotation wasn't modified")
 			oldPod := &corev1.Pod{}
 			objectKey := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
 			err := av.Client.Get(ctx, objectKey, oldPod)
@@ -75,7 +75,7 @@ func (av *AnnotationValidator) Handle(ctx context.Context, req admission.Request
 			}
 		}
 	}
-	webhookLog.Info("Validating pod finished.")
+	webhookLog.V(1).Info("Validating pod finished.")
 	return admission.Allowed("Validation succeeded")
 }
 
