@@ -18,6 +18,7 @@ package ec2
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
@@ -40,6 +41,8 @@ type ec2Instance struct {
 	subnetID string
 	// subnetCidrBlock is the cidr block of the instance's subnet
 	subnetCidrBlock string
+	// subnetMask is the mask of the subnet CIDR block
+	subnetMask string
 	// deviceIndexes is the list of indexes used by the EC2 Instance
 	deviceIndexes []bool
 	// instanceSecurityGroups is the security group used by the primary network interface
@@ -58,6 +61,7 @@ type EC2Instance interface {
 	Type() string
 	InstanceID() string
 	SubnetID() string
+	SubnetMask() string
 	SetSubnet(subnetID string)
 	SubnetCidrBlock() string
 	PrimaryNetworkInterfaceID() string
@@ -93,6 +97,8 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		return err
 	}
 	i.subnetCidrBlock = *subnet.CidrBlock
+
+	i.subnetMask = strings.Split(*subnet.CidrBlock, "/")[1]
 
 	maxENIs, ok := vpc.InstanceENIsAvailable[i.instanceType]
 	if !ok {
@@ -182,4 +188,11 @@ func (i *ec2Instance) FreeDeviceIndex(index int64) {
 	defer i.lock.Unlock()
 
 	i.deviceIndexes[index] = false
+}
+
+func (i *ec2Instance) SubnetMask() string {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	return i.subnetMask
 }

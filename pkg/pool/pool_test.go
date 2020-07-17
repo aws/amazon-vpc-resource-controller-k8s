@@ -39,7 +39,6 @@ var (
 	pod1 = "test/pod-1"
 	pod2 = "default/pod-2"
 	pod3 = "test/pod-3"
-	pod4 = "default/pod-4"
 
 	res1, res2, res3, res4, res5, res6 = "res-1", "res-2", "res-3", "res-4", "res-5", "res-6"
 
@@ -167,7 +166,7 @@ func TestPool_UpdatePool_OperationCreate_Succeed(t *testing.T) {
 	warmPool := getMockPool(poolConfig, usedResources, []string{}, 3)
 
 	createdResources := []string{res3, res4}
-	shouldReconcile := warmPool.UpdatePool(worker.WarmPoolJob{
+	shouldReconcile := warmPool.UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationCreate,
 		Resources:     createdResources,
 		ResourceCount: 2,
@@ -182,7 +181,7 @@ func TestPool_UpdatePool_OperationCreate_Succeed(t *testing.T) {
 func TestPool_UpdatePool_OperationCreate_Failed(t *testing.T) {
 	warmPool := getMockPool(poolConfig, usedResources, []string{}, 3)
 
-	shouldReconcile := warmPool.UpdatePool(worker.WarmPoolJob{
+	shouldReconcile := warmPool.UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationCreate,
 		Resources:     nil,
 		ResourceCount: 2,
@@ -195,7 +194,7 @@ func TestPool_UpdatePool_OperationCreate_Failed(t *testing.T) {
 func TestPool_UpdatePool_OperationDelete_Succeed(t *testing.T) {
 	warmPool := getMockPool(poolConfig, usedResources, []string{}, 3)
 
-	shouldReconcile := warmPool.UpdatePool(worker.WarmPoolJob{
+	shouldReconcile := warmPool.UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationDeleted,
 		Resources:     nil,
 		ResourceCount: 1,
@@ -211,7 +210,7 @@ func TestPool_UpdatePool_OperationDelete_Failed(t *testing.T) {
 	warmPool := getMockPool(poolConfig, usedResources, []string{}, 3)
 
 	failedResources := []string{res3, res4}
-	shouldReconcile := warmPool.UpdatePool(worker.WarmPoolJob{
+	shouldReconcile := warmPool.UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationDeleted,
 		Resources:     failedResources,
 		ResourceCount: 2,
@@ -277,7 +276,7 @@ func TestPool_ReconcilePool_MaxCapacity(t *testing.T) {
 	job := warmPool.ReconcilePool()
 
 	// no need to reconcile
-	assert.Equal(t, worker.WarmPoolJob{}, job)
+	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}, job)
 }
 
 // TestPool_ReconcilePool_NotRequired tests if the deviation form warm pool is equal to or less than the max deviation
@@ -290,7 +289,7 @@ func TestPool_ReconcilePool_NotRequired(t *testing.T) {
 
 	// deviation = 2(desired WP) - 1(actual WP + pending create) = 1, (deviation)1 > (max deviation)1 => false,
 	// so no need create right now
-	assert.Equal(t, worker.WarmPoolJob{}, job)
+	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}, job)
 }
 
 // TestPool_ReconcilePool tests job with operation type create is returned when the warm pool deviates form max deviation
@@ -301,7 +300,7 @@ func TestPool_ReconcilePool_Create(t *testing.T) {
 
 	// deviation = 2(desired WP) - 0(actual WP + pending create) = 0, (deviation)0 > (max deviation)1 => true,
 	// create (deviation)2 resources
-	assert.Equal(t, worker.WarmPoolJob{Operations: worker.OperationCreate, ResourceCount: 2}, job)
+	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationCreate, ResourceCount: 2}, job)
 	assert.Equal(t, warmPool.pendingCreate, 2)
 }
 
@@ -315,7 +314,7 @@ func TestPool_ReconcilePool_Create_LimitByMaxCapacity(t *testing.T) {
 
 	// deviation = 2(desired WP) - 0(actual WP + pending create) = 2, (deviation)2 >= (max deviation)1 => true, so
 	// need to create (deviation)2 resources. But since remaining capacity is just 1, so we create 1 resource instead
-	assert.Equal(t, worker.WarmPoolJob{Operations: worker.OperationCreate, ResourceCount: 1}, job)
+	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationCreate, ResourceCount: 1}, job)
 	assert.Equal(t, warmPool.pendingCreate, 1)
 }
 
@@ -327,7 +326,7 @@ func TestPool_ReconcilePool_Delete_NotRequired(t *testing.T) {
 	job := warmPool.ReconcilePool()
 
 	// deviation = 2(desired WP) - 3(actual WP) = -1, (-deviation)1 > (max deviation)1 => false, so no need delete
-	assert.Equal(t, worker.WarmPoolJob{}, job)
+	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}, job)
 	assert.Equal(t, warmPool.pendingDelete, 0)
 }
 
@@ -339,7 +338,7 @@ func TestPool_ReconcilePool_Delete(t *testing.T) {
 	job := warmPool.ReconcilePool()
 
 	// deviation = 2(desired WP) - 3(actual WP) = -1, (-deviation)1 > (max deviation)1 => false, so no need delete
-	assert.Equal(t, worker.WarmPoolJob{Operations: worker.OperationDeleted,
+	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationDeleted,
 		Resources: []string{res6, res5}, ResourceCount: 2}, job)
 	assert.Equal(t, 2, warmPool.pendingDelete)
 }

@@ -39,14 +39,21 @@ var (
 	eniID2 = "eni-000000000000002"
 
 	subnetID   = "subnet-0000000001"
+	subnetMask = "16"
 	instanceSG = []string{"sg-1"}
 
-	ip1 = "192.168.1.0"
-	ip2 = "192.168.1.1"
-	ip3 = "192.168.1.2"
-	ip4 = "192.168.2.0"
-	ip5 = "192.168.2.1"
-	ip6 = "192.168.2.2"
+	ip1         = "192.168.1.0"
+	ip1WithMask = ip1 + "/" + subnetMask
+	ip2         = "192.168.1.1"
+	ip2WithMask = ip2 + "/" + subnetMask
+	ip3         = "192.168.1.2"
+	ip3WithMask = ip3 + "/" + subnetMask
+	ip4         = "192.168.2.0"
+	ip4WithMask = ip4 + "/" + subnetMask
+	ip5         = "192.168.2.1"
+	ip5WithMask = ip5 + "/" + subnetMask
+	ip6         = "192.168.2.2"
+	ip6WithMask = ip6 + "/" + subnetMask
 
 	mockError = fmt.Errorf("mock-error")
 
@@ -57,14 +64,14 @@ var (
 		{
 			NetworkInterfaceId: &eniID1,
 			PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
-				{PrivateIpAddress: &ip1},
-				{PrivateIpAddress: &ip2},
+				{PrivateIpAddress: &ip1, Primary: aws.Bool(false)},
+				{PrivateIpAddress: &ip2, Primary: aws.Bool(false)},
 			},
 		},
 		{
 			NetworkInterfaceId: &eniID2,
 			PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
-				{PrivateIpAddress: &ip3},
+				{PrivateIpAddress: &ip3, Primary: aws.Bool(false)},
 			},
 		},
 	}
@@ -120,6 +127,7 @@ func TestEni_InitResources(t *testing.T) {
 
 	mockInstance.EXPECT().Type().Return(instanceType)
 	mockInstance.EXPECT().InstanceID().Return(instanceID)
+	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(3)
 
 	mockEc2APIHelper.EXPECT().GetNetworkInterfaceOfInstance(&instanceID).Return(nwInterfaces, nil)
 
@@ -132,7 +140,7 @@ func TestEni_InitResources(t *testing.T) {
 
 	assert.NoError(t, err)
 	// Assert all the IPs are returned
-	assert.Equal(t, []string{ip1, ip2, ip3}, allIPs)
+	assert.Equal(t, []string{ip1WithMask, ip2WithMask, ip3WithMask}, allIPs)
 	// Assert ENIs are added to the list of available ENIs
 	assert.Equal(t, []*eni{expectedENIDetails1, expectedENIDetails2}, manager.attachedENIs)
 	// Assert the ENI to IP mapping is as expected
@@ -167,12 +175,13 @@ func TestEniManager_CreateIPV4Address_FromSingleENI(t *testing.T) {
 	manager.attachedENIs = []*eni{createENIDetails(eniID1, 2)}
 
 	mockEc2APIHelper.EXPECT().AssignIPv4AddressesAndWaitTillReady(eniID1, 2).Return([]string{ip1, ip2}, nil)
+	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(2)
 	mockInstance.EXPECT().Type().Return(instanceType).Times(2)
 
 	ips, err := manager.CreateIPV4Address(2, mockEc2APIHelper, log)
 
 	assert.NoError(t, err)
-	assert.Equal(t, []string{ip1, ip2}, ips)
+	assert.Equal(t, []string{ip1WithMask, ip2WithMask}, ips)
 	assert.Equal(t, 0, manager.attachedENIs[0].remainingCapacity)
 }
 
@@ -192,12 +201,13 @@ func TestEniManager_CreateIPV4Address_FromMultipleENI(t *testing.T) {
 	)
 
 	mockInstance.EXPECT().Type().Return(instanceType).Times(2)
+	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(2)
 
 	ips, err := manager.CreateIPV4Address(2, mockEc2APIHelper, log)
 
 	assert.NoError(t, err)
 	// Assert returned Ips are as expected
-	assert.Equal(t, []string{ip1, ip2}, ips)
+	assert.Equal(t, []string{ip1WithMask, ip2WithMask}, ips)
 	// Assert the remaining capacity for the eni manager is reduced
 	assert.Equal(t, 0, manager.attachedENIs[0].remainingCapacity)
 	assert.Equal(t, 2, manager.attachedENIs[1].remainingCapacity)
@@ -221,6 +231,7 @@ func TestEniManager_CreateIPV4Address_FromNewENI(t *testing.T) {
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int64(3), nil).Times(2)
 	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
 	mockInstance.EXPECT().SubnetID().Return(subnetID).Times(2)
+	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(4)
 	mockInstance.EXPECT().InstanceSecurityGroup().Return(instanceSG).Times(2)
 
 	gomock.InOrder(
@@ -236,7 +247,7 @@ func TestEniManager_CreateIPV4Address_FromNewENI(t *testing.T) {
 	expectedNewENI2 := createENIDetails(*networkInterface2.NetworkInterfaceId, 2)
 
 	assert.NoError(t, err)
-	assert.Equal(t, []string{ip2, ip3, ip4, ip6}, ips)
+	assert.Equal(t, []string{ip2WithMask, ip3WithMask, ip4WithMask, ip6WithMask}, ips)
 	assert.Equal(t, []*eni{existingENI, expectedNewENI1, expectedNewENI2}, manager.attachedENIs)
 	assert.Equal(t, map[string]*eni{ip2: expectedNewENI1, ip3: expectedNewENI1, ip4: expectedNewENI1, ip6: expectedNewENI2}, manager.ipToENIMap)
 }

@@ -18,6 +18,7 @@ package provider
 
 import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -33,4 +34,8 @@ type ResourceProvider interface {
 	SubmitAsyncJob(job interface{})
 	// ProcessAsyncJob processes a job form the worker queue
 	ProcessAsyncJob(job interface{}) (ctrl.Result, error)
+	// GetPool returns the warm pool for resources that support warm pool
+	GetPool(nodeName string) (pool.Pool, bool)
+	// IsInstanceSupported returns true if an instance type is supported by the provider
+	IsInstanceSupported(instance ec2.EC2Instance) bool
 }

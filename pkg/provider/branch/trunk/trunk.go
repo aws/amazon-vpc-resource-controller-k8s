@@ -30,7 +30,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
@@ -66,10 +65,8 @@ type TrunkENI interface {
 	InitTrunk(instance ec2.EC2Instance, pods []v1.Pod) error
 	// CreateAndAssociateBranchENIs creates and associate branch interface/s to trunk interface
 	CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int) ([]*ENIDetails, error)
-	// MarkPodBeingDeleted marks that the pod is being deleted
-	MarkPodBeingDeleted(UID types.UID, podNamespace string, podName string) error
 	// PushBranchENIsToCoolDownQueue pushes the branch interface belonging to the pod to the cool down queue
-	PushBranchENIsToCoolDownQueue(podNamespace string, podName string) error
+	PushBranchENIsToCoolDownQueue(UID string) error
 	// DeleteCooledDownENIs deletes the interfaces that have been sitting in the queue for cool down period
 	DeleteCooledDownENIs()
 	// Reconcile compares the cache state with the list of pods to identify events that were missed and clean up the dangling interfaces
@@ -99,18 +96,9 @@ type trunkENI struct {
 	// usedVlanIds is the list of boolean value representing the used vlan ids
 	usedVlanIds []bool
 	// branchENIs is the list of BranchENIs associated with the trunk
-	branchENIs map[string]*BranchENIs
+	uidToBranchENIMap map[string][]*ENIDetails
 	// deleteQueue is the queue of ENIs that are being cooled down before being deleted
 	deleteQueue []*ENIDetails
-}
-
-type BranchENIs struct {
-	// isPodDeleted denotes if the pod has been deleted and branch is safe to remove
-	isPodBeingDeleted bool
-	// UID is the unique identifier of the pod that owns the Branch ENI
-	UID types.UID
-	// podENI is the json convertible data structure with the pod details
-	branchENIDetails []*ENIDetails
 }
 
 // PodENI is a json convertible structure that stores the Branch ENI details that can be
@@ -148,7 +136,7 @@ func NewTrunkENI(logger logr.Logger, instanceId string, instanceSubnetId string,
 		usedVlanIds:            availVlans,
 		ec2ApiHelper:           helper,
 		instanceSecurityGroups: instanceSecurityGroups,
-		branchENIs:             make(map[string]*BranchENIs),
+		uidToBranchENIMap:      make(map[string][]*ENIDetails),
 	}
 }
 
@@ -212,11 +200,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		if len(eniListFromPod) == 0 {
 			continue
 		}
-		namespacedName := getPodName(pod.Namespace, pod.Name)
-		branchENIs := &BranchENIs{
-			UID:              pod.UID,
-			branchENIDetails: []*ENIDetails{},
-		}
+		var branchENIs []*ENIDetails
 		for _, eni := range eniListFromPod {
 			ec2ENICopy, isPresent := eniMapFromEC2[eni.ID]
 			if !isPresent {
@@ -226,10 +210,10 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 			}
 			t.markVlanAssigned(ec2ENICopy.VlanID)
 
-			branchENIs.branchENIDetails = append(branchENIs.branchENIDetails, ec2ENICopy)
+			branchENIs = append(branchENIs, ec2ENICopy)
 			delete(eniMapFromEC2, eni.ID)
 		}
-		t.branchENIs[namespacedName] = branchENIs
+		t.uidToBranchENIMap[string(pod.UID)] = branchENIs
 	}
 
 	// Delete the pods that don't belong to any pod.
@@ -242,7 +226,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	}
 
 	log.V(1).Info("successfully initialized trunk with all associated branch interfaces",
-		"trunk", t.trunkENIId, "branch interfaces", t.branchENIs)
+		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
 
 	return nil
 }
@@ -257,21 +241,21 @@ func (t *trunkENI) Reconcile(pods []v1.Pod) error {
 	currentPodSet := make(map[string]struct{})
 	var isPresent struct{}
 	for _, pod := range pods {
-		currentPodSet[getPodName(pod.Namespace, pod.Name)] = isPresent
+		currentPodSet[string(pod.UID)] = isPresent
 	}
 
-	for namespacedName, branch := range t.branchENIs {
-		_, exists := currentPodSet[namespacedName]
+	for uid, branchENIs := range t.uidToBranchENIMap {
+		_, exists := currentPodSet[uid]
 		if !exists {
-			for _, eni := range branch.branchENIDetails {
+			for _, eni := range branchENIs {
 				// Pod could have been deleted recently, set the timestamp to current time as controller is not aware of the actual time.
 				eni.deletionTimeStamp = time.Now()
 				t.deleteQueue = append(t.deleteQueue, eni)
 			}
-			delete(t.branchENIs, namespacedName)
+			delete(t.uidToBranchENIMap, uid)
 
-			t.log.Info("deleted pod that doesn't exist anymore", "pod", namespacedName,
-				"eni", branch.branchENIDetails)
+			t.log.Info("deleted pod that doesn't exist anymore", "pod uid", uid,
+				"eni", branchENIs)
 		}
 	}
 
@@ -282,16 +266,15 @@ func (t *trunkENI) Reconcile(pods []v1.Pod) error {
 // network interface. It returns a Json convertible structure which has all the required details of the branch ENI
 func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int) ([]*ENIDetails, error) {
 	log := t.log.WithValues("request", "create", "pod namespace", pod.Namespace, "pod name", pod.Name)
-	podNamespacedName := getPodName(pod.Namespace, pod.Name)
 
-	branchENI, isPresent := t.getBranchFromCache(podNamespacedName)
+	branchENI, isPresent := t.getBranchFromCache(string(pod.UID))
 	if isPresent {
 		// Possible when older pod with same namespace and name is still being deleted
-		return nil, fmt.Errorf("cannot create new eni entry already exist, older entry : %v", *branchENI)
+		return nil, fmt.Errorf("cannot create new eni entry already exist, older entry : %v", branchENI)
 	}
 
 	// If the security group is empty use the instance security group
-	if securityGroups == nil || securityGroups != nil && len(securityGroups) == 0 {
+	if securityGroups == nil || len(securityGroups) == 0 {
 		securityGroups = t.instanceSecurityGroups
 	}
 
@@ -336,10 +319,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		return nil, err
 	}
 
-	t.addBranchToCache(podNamespacedName, &BranchENIs{
-		UID:              pod.UID,
-		branchENIDetails: newENIs,
-	})
+	t.addBranchToCache(string(pod.UID), newENIs)
 
 	log.V(1).Info("successfully created branch interface/s", "interface/s", newENIs,
 		"security group used", securityGroups)
@@ -348,59 +328,26 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 }
 
 // DeleteBranchNetworkInterface deletes the branch network interface and returns an error in case of failure to delete
-func (t *trunkENI) PushBranchENIsToCoolDownQueue(podNamespace string, podName string) error {
+func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) error {
 	// Lock is required as Reconciler is also performing operation concurrently
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	podNamespacedName := getPodName(podNamespace, podName)
-
-	branchENI, isPresent := t.branchENIs[podNamespacedName]
+	branchENIs, isPresent := t.uidToBranchENIMap[UID]
 	if !isPresent {
 		trunkENIOperationsErrCount.WithLabelValues("get_branch_from_cache").Inc()
-		return fmt.Errorf("failed to find branch ENI in cache for pod %s", podNamespacedName)
-	}
-	if !branchENI.isPodBeingDeleted {
-		trunkENIOperationsErrCount.WithLabelValues("delete_event_before_deleting").Inc()
-		return fmt.Errorf("recieved delete event directly for %s before recieving deleting event, not deleting the"+
-			" branch/es %v", podNamespacedName, branchENI.branchENIDetails)
+		return fmt.Errorf("failed to find branch ENI in cache for pod %s", UID)
 	}
 
-	for _, eni := range branchENI.branchENIDetails {
+	for _, eni := range branchENIs {
 		eni.deletionTimeStamp = time.Now()
 		t.deleteQueue = append(t.deleteQueue, eni)
 	}
 
-	delete(t.branchENIs, podNamespacedName)
+	delete(t.uidToBranchENIMap, UID)
 
 	t.log.Info("moved branch network interfaces to delete queue", "interface/s",
-		branchENI.branchENIDetails, "pod namespace", podNamespace, "pod name", podName)
-
-	return nil
-}
-
-// MarkBranchBeingDeleted marks branch ENI for the given pod as being deleted. By marking the pod as being deleted we
-// can ensure we are not deleting the Branch ENI for a new pod with same namespace and name.
-func (t *trunkENI) MarkPodBeingDeleted(UID types.UID, podNamespace string, podName string) error {
-	t.lock.Lock()
-	defer t.lock.Unlock()
-
-	podNamespacedName := getPodName(podNamespace, podName)
-	// Get the associated branch
-	branchENI, isPresent := t.branchENIs[podNamespacedName]
-	if !isPresent {
-		return fmt.Errorf("failed to find branch ENI for pod %s", podNamespacedName)
-	}
-
-	if branchENI.UID != UID {
-		return fmt.Errorf("branch doesn't belong to the given pod %s, actual owner %s", UID, branchENI.UID)
-	}
-
-	if !branchENI.isPodBeingDeleted {
-		branchENI.isPodBeingDeleted = true
-		t.log.Info("marked the pod as being deleted",
-			"uid", UID, "namespace", podNamespace, "name", podName)
-	}
+		branchENIs, "uid", UID)
 
 	return nil
 }
@@ -531,33 +478,25 @@ func (t *trunkENI) popENIFromDeleteQueue() (eni *ENIDetails, hasENI bool) {
 	return eni, hasENI
 }
 
-// getPodName returns the pod namespace with name
-func getPodName(podNamespace string, podName string) string {
-	if podNamespace == "" {
-		podNamespace = "default"
-	}
-	return podNamespace + "/" + podName
-}
-
 // addBranchToCache adds the given branch to the cache if not already present
-func (t *trunkENI) addBranchToCache(ownerID string, branchENI *BranchENIs) {
+func (t *trunkENI) addBranchToCache(UID string, branchENIs []*ENIDetails) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	if _, ok := t.branchENIs[ownerID]; ok {
-		t.log.Info("branch eni already exist not adding again", "request", branchENI)
+	if _, ok := t.uidToBranchENIMap[UID]; ok {
+		t.log.Info("branch eni already exist not adding again", "request", branchENIs)
 		return
 	}
 
-	t.branchENIs[ownerID] = branchENI
+	t.uidToBranchENIMap[UID] = branchENIs
 }
 
 // getBranchFromCache returns the branch from the cache
-func (t *trunkENI) getBranchFromCache(ownerID string) (branch *BranchENIs, isPresent bool) {
+func (t *trunkENI) getBranchFromCache(UID string) (branchENIs []*ENIDetails, isPresent bool) {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
-	branch, isPresent = t.branchENIs[ownerID]
+	branchENIs, isPresent = t.uidToBranchENIMap[UID]
 	return
 }
 

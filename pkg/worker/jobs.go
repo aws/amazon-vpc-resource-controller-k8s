@@ -31,8 +31,8 @@ const (
 	OperationDeleted Operations = "Deleted"
 	// OperationDeleting represents pods that are being deleted
 	OperationDeleting Operations = "Deleting"
-	// OperationIgnore represents job that don't need execution
-	OperationIgnore Operations = "Ignore"
+	// OperationReconcileNotRequired represents job that don't need execution
+	OperationReconcileNotRequired Operations = "NoReconcile"
 )
 
 // OnDemandJob represents the job that will be executed by the respective worker
@@ -40,7 +40,7 @@ type OnDemandJob struct {
 	// Operation is the type of operation to perform on the given pod
 	Operation Operations
 	// UID is the unique ID of the pod
-	UID types.UID
+	UID string
 	// PodName is the name of the pod
 	PodName string
 	// PodNamespace is the pod's namespace
@@ -52,33 +52,21 @@ type OnDemandJob struct {
 }
 
 // NewOnDemandDeleteJob returns an on demand job for operation Create or Update
-func NewOnDemandCreateJob(uid string, podNamespace string, podName string, requestCount int) OnDemandJob {
+func NewOnDemandCreateJob(podNamespace string, podName string, requestCount int) OnDemandJob {
 	return OnDemandJob{
 		Operation:    OperationCreate,
-		UID:          types.UID(uid),
-		PodName:      podName,
 		PodNamespace: podNamespace,
+		PodName:      podName,
 		RequestCount: requestCount,
 	}
 }
 
-// NewOnDemandDeletingJob returns an on demand job for operation Deleting
-func NewOnDemandDeletingJob(uid string, podNamespace string, podName string, nodeName string) OnDemandJob {
-	return OnDemandJob{
-		Operation:    OperationDeleting,
-		UID:          types.UID(uid),
-		PodName:      podName,
-		PodNamespace: podNamespace,
-		NodeName:     nodeName,
-	}
-}
-
 // NewOnDemandDeleteJob returns an on demand job for operation Deleted
-func NewOnDemandDeletedJob(podNamespace string, podName string) OnDemandJob {
+func NewOnDemandDeletedJob(nodeName string, uid types.UID) OnDemandJob {
 	return OnDemandJob{
-		Operation:    OperationDeleted,
-		PodName:      podName,
-		PodNamespace: podNamespace,
+		Operation: OperationDeleted,
+		NodeName:  nodeName,
+		UID:       string(uid),
 	}
 }
 
@@ -111,19 +99,26 @@ type WarmPoolJob struct {
 }
 
 // NewWarmPoolCreateJob returns a job on warm pool of resource
-func NewWarmPoolCreateJob(nodeName string, count int) WarmPoolJob {
-	return WarmPoolJob{
+func NewWarmPoolCreateJob(nodeName string, count int) *WarmPoolJob {
+	return &WarmPoolJob{
 		Operations:    OperationCreate,
 		NodeName:      nodeName,
 		ResourceCount: count,
 	}
 }
 
-func NewWarmPoolDeleteJob(nodeName string, resourcesToDelete []string) WarmPoolJob {
-	return WarmPoolJob{
+func NewWarmPoolDeleteJob(nodeName string, resourcesToDelete []string) *WarmPoolJob {
+	return &WarmPoolJob{
 		Operations:    OperationDeleted,
 		NodeName:      nodeName,
 		Resources:     resourcesToDelete,
 		ResourceCount: len(resourcesToDelete),
+	}
+}
+
+func NewWarmProcessDeleteQueueJob(nodeName string) *WarmPoolJob {
+	return &WarmPoolJob{
+		Operations: OperationProcessDeleteQueue,
+		NodeName:   nodeName,
 	}
 }

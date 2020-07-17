@@ -66,10 +66,12 @@ func (n *node) UpdateResources(resourceProviders []provider.ResourceProvider, _ 
 
 	var errUpdates []error
 	for _, resourceProvider := range resourceProviders {
-		err := resourceProvider.UpdateResourceCapacity(n.instance)
-		if err != nil {
-			n.log.Error(err, "failed to initialize resource capacity")
-			errUpdates = append(errUpdates, err)
+		if resourceProvider.IsInstanceSupported(n.instance) {
+			err := resourceProvider.UpdateResourceCapacity(n.instance)
+			if err != nil {
+				n.log.Error(err, "failed to initialize resource capacity")
+				errUpdates = append(errUpdates, err)
+			}
 		}
 	}
 	if len(errUpdates) > 0 {
@@ -93,11 +95,14 @@ func (n *node) InitResources(resourceProviders []provider.ResourceProvider, help
 	var initializedProviders []provider.ResourceProvider
 	var errInit error
 	for _, resourceProvider := range resourceProviders {
-		errInit = resourceProvider.InitResource(n.instance)
-		if errInit != nil {
-			break
+		// Check if the instance is supported and then initialize the provider
+		if resourceProvider.IsInstanceSupported(n.instance) {
+			errInit = resourceProvider.InitResource(n.instance)
+			if errInit != nil {
+				break
+			}
+			initializedProviders = append(initializedProviders, resourceProvider)
 		}
-		initializedProviders = append(initializedProviders, resourceProvider)
 	}
 
 	if errInit != nil && len(initializedProviders) > 0 {
@@ -118,10 +123,12 @@ func (n *node) DeleteResources(resourceProviders []provider.ResourceProvider, _ 
 
 	var errDelete []error
 	for _, resourceProvider := range resourceProviders {
-		err := resourceProvider.DeInitResource(n.instance)
-		if err != nil {
-			errDelete = append(errDelete, err)
-			n.log.Error(err, "failed to de initialize provider")
+		if resourceProvider.IsInstanceSupported(n.instance) {
+			err := resourceProvider.DeInitResource(n.instance)
+			if err != nil {
+				errDelete = append(errDelete, err)
+				n.log.Error(err, "failed to de initialize provider")
+			}
 		}
 	}
 

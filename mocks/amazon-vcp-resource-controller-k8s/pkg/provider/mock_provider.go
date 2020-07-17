@@ -6,6 +6,7 @@ package mock_provider
 
 import (
 	ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
+	pool "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
 	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -48,6 +49,21 @@ func (mr *MockResourceProviderMockRecorder) DeInitResource(arg0 interface{}) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeInitResource", reflect.TypeOf((*MockResourceProvider)(nil).DeInitResource), arg0)
 }
 
+// GetPool mocks base method
+func (m *MockResourceProvider) GetPool(arg0 string) (pool.Pool, bool) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPool", arg0)
+	ret0, _ := ret[0].(pool.Pool)
+	ret1, _ := ret[1].(bool)
+	return ret0, ret1
+}
+
+// GetPool indicates an expected call of GetPool
+func (mr *MockResourceProviderMockRecorder) GetPool(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPool", reflect.TypeOf((*MockResourceProvider)(nil).GetPool), arg0)
+}
+
 // InitResource mocks base method
 func (m *MockResourceProvider) InitResource(arg0 ec2.EC2Instance) error {
 	m.ctrl.T.Helper()
@@ -60,6 +76,20 @@ func (m *MockResourceProvider) InitResource(arg0 ec2.EC2Instance) error {
 func (mr *MockResourceProviderMockRecorder) InitResource(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitResource", reflect.TypeOf((*MockResourceProvider)(nil).InitResource), arg0)
+}
+
+// IsInstanceSupported mocks base method
+func (m *MockResourceProvider) IsInstanceSupported(arg0 ec2.EC2Instance) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsInstanceSupported", arg0)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsInstanceSupported indicates an expected call of IsInstanceSupported
+func (mr *MockResourceProviderMockRecorder) IsInstanceSupported(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsInstanceSupported", reflect.TypeOf((*MockResourceProvider)(nil).IsInstanceSupported), arg0)
 }
 
 // ProcessAsyncJob mocks base method

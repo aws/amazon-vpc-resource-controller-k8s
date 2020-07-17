@@ -16,7 +16,10 @@ limitations under the License.
 
 package handler
 
-import v1 "k8s.io/api/core/v1"
+import (
+	v1 "k8s.io/api/core/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+)
 
 // Handler interface allows different types of resource implementation to be clubbed under a single handler.
 // For instance, warm resource handler would handle all the types of resources that support warm pools. An example
@@ -25,7 +28,6 @@ import v1 "k8s.io/api/core/v1"
 // Group required by the pod which we would know only after receiving the pod request.
 type Handler interface {
 	CanHandle(resourceName string) bool
-	HandleCreate(resourceName string, requestCount int, pod *v1.Pod) error
-	HandleDeleting(resourceName string, pod *v1.Pod) error
-	HandleDelete(podNamespace string, podName string) error
+	HandleCreate(resourceName string, requestCount int, pod *v1.Pod) (ctrl.Result, error)
+	HandleDelete(resourceName string, pod *v1.Pod) (ctrl.Result, error)
 }

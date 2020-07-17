@@ -184,6 +184,20 @@ func (mr *MockEC2InstanceMockRecorder) SubnetID() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubnetID", reflect.TypeOf((*MockEC2Instance)(nil).SubnetID))
 }
 
+// SubnetMask mocks base method
+func (m *MockEC2Instance) SubnetMask() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SubnetMask")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// SubnetMask indicates an expected call of SubnetMask
+func (mr *MockEC2InstanceMockRecorder) SubnetMask() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubnetMask", reflect.TypeOf((*MockEC2Instance)(nil).SubnetMask))
+}
+
 // Type mocks base method
 func (m *MockEC2Instance) Type() string {
 	m.ctrl.T.Helper()

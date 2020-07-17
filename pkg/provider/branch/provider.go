@@ -27,6 +27,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
@@ -34,7 +35,6 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
@@ -189,10 +189,8 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 	switch onDemandJob.Operation {
 	case worker.OperationCreate:
 		return b.CreateAndAnnotateResources(onDemandJob.PodNamespace, onDemandJob.PodName, onDemandJob.RequestCount)
-	case worker.OperationDeleting:
-		return b.MarkPodBeingDeleted(onDemandJob.NodeName, onDemandJob.UID, onDemandJob.PodNamespace, onDemandJob.PodName)
 	case worker.OperationDeleted:
-		return b.DeleteBranchUsedByPods(onDemandJob.PodNamespace, onDemandJob.PodName)
+		return b.DeleteBranchUsedByPods(onDemandJob.NodeName, onDemandJob.UID)
 	case worker.OperationProcessDeleteQueue:
 		return b.ProcessDeleteQueue(onDemandJob.NodeName)
 	case worker.OperationReconcile:
@@ -329,42 +327,23 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	return ctrl.Result{}, nil
 }
 
-// DeleteResources deletes the branch ENIs present in the annotation of the pod
-func (b *branchENIProvider) MarkPodBeingDeleted(nodeName string, uid types.UID, podNamespace string, podName string) (ctrl.Result, error) {
-
-	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
-	if !isPresent {
-		branchProviderOperationsErrCount.WithLabelValues("get_trunk_delete").Inc()
-		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", nodeName)
-	}
-
-	err := trunkENI.MarkPodBeingDeleted(uid, podNamespace, podName)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{}, nil
-}
-
-func (b *branchENIProvider) DeleteBranchUsedByPods(podNamespace string, podName string) (ctrl.Result, error) {
-	log := b.log.WithValues("pod namespace", podNamespace, "pod name", podName)
-
+func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) (ctrl.Result, error) {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
 
-	var err error
-	for nodeName, trunkENI := range b.trunkENICache {
-		err = trunkENI.PushBranchENIsToCoolDownQueue(podNamespace, podName)
-		if err == nil {
-			log.V(1).Info("pushed the branch interface/s to cool down queue", "node name", nodeName)
-			break
-		}
+	log := b.log.WithValues("node", nodeName, "uid", UID)
+
+	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
+	if !isPresent {
+		return ctrl.Result{}, fmt.Errorf("failed to find trunk ENI on the node %s", nodeName)
 	}
 
-	// None of the trunk ENI owned that pod.
+	err := trunkENI.PushBranchENIsToCoolDownQueue(UID)
 	if err != nil {
-		log.Error(err, "failed to delete the branch interfaces used by the pod")
+		return ctrl.Result{}, fmt.Errorf("failed to delte branch eni used by the pod %s", UID)
 	}
+
+	log.V(1).Info("deleted branch interface/s used by the pod")
 
 	return ctrl.Result{}, err
 }
@@ -413,4 +392,17 @@ func (b *branchENIProvider) getTrunkFromCache(nodeName string) (trunkENI trunk.T
 
 	trunkENI, present = b.trunkENICache[nodeName]
 	return
+}
+
+// GetPool is not supported for Branch ENI
+func (b *branchENIProvider) GetPool(_ string) (pool.Pool, bool) {
+	return nil, false
+}
+
+// IsInstanceSupported returns true for linux node as pod eni is only supported for linux worker node
+func (b *branchENIProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
+	if instance.Os() == config.OSLinux {
+		return true
+	}
+	return false
 }

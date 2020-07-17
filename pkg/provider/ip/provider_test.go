@@ -117,7 +117,7 @@ func TestIpv4Provider_updatePoolAndReconcileIfRequired_NoFurtherReconcile(t *tes
 	mockPool := mock_pool.NewMockPool(ctrl)
 	provider := ipv4Provider{workerPool: mockWorker}
 
-	job := worker.WarmPoolJob{Operations: worker.OperationCreate}
+	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
 
 	mockPool.EXPECT().UpdatePool(job, true).Return(false)
 
@@ -134,7 +134,7 @@ func TestIpv4Provider_updatePoolAndReconcileIfRequired_ReconcileRequired(t *test
 	mockPool := mock_pool.NewMockPool(ctrl)
 	provider := ipv4Provider{workerPool: mockWorker}
 
-	job := worker.WarmPoolJob{Operations: worker.OperationCreate}
+	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
 
 	mockPool.EXPECT().UpdatePool(job, true).Return(true)
 	mockPool.EXPECT().ReconcilePool().Return(job)
@@ -155,7 +155,7 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool(t *testing.T) {
 	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
 	resourcesToDelete := []string{ip1, ip2}
 
-	deleteJob := worker.WarmPoolJob{
+	deleteJob := &worker.WarmPoolJob{
 		Operations:    worker.OperationDeleted,
 		Resources:     resourcesToDelete,
 		ResourceCount: 2,
@@ -163,7 +163,7 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool(t *testing.T) {
 	}
 
 	mockManager.EXPECT().DeleteIPV4Address(resourcesToDelete, nil, gomock.Any()).Return([]string{}, nil)
-	mockPool.EXPECT().UpdatePool(worker.WarmPoolJob{
+	mockPool.EXPECT().UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationDeleted,
 		Resources:     []string{},
 		ResourceCount: 2,
@@ -194,14 +194,14 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool_SomeResourceFail(t *testing
 	}
 
 	mockManager.EXPECT().DeleteIPV4Address(resourcesToDelete, nil, gomock.Any()).Return(failedResources, nil)
-	mockPool.EXPECT().UpdatePool(worker.WarmPoolJob{
+	mockPool.EXPECT().UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationDeleted,
 		Resources:     failedResources,
 		ResourceCount: 2,
 		NodeName:      nodeName,
 	}, true).Return(false)
 
-	ipv4Provider.DeletePrivateIPv4AndUpdatePool(deleteJob)
+	ipv4Provider.DeletePrivateIPv4AndUpdatePool(&deleteJob)
 }
 
 // TestIPv4Provider_CreatePrivateIPv4AndUpdatePool tests if resources are created then the job object is updated
@@ -216,7 +216,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool(t *testing.T) {
 	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
 	createdResources := []string{ip1, ip2}
 
-	createJob := worker.WarmPoolJob{
+	createJob := &worker.WarmPoolJob{
 		Operations:    worker.OperationCreate,
 		Resources:     []string{},
 		ResourceCount: 2,
@@ -224,7 +224,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool(t *testing.T) {
 	}
 
 	mockManager.EXPECT().CreateIPV4Address(2, nil, gomock.Any()).Return(createdResources, nil)
-	mockPool.EXPECT().UpdatePool(worker.WarmPoolJob{
+	mockPool.EXPECT().UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationCreate,
 		Resources:     createdResources,
 		ResourceCount: 2,
@@ -246,7 +246,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool_Fail(t *testing.T) {
 	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
 	createdResources := []string{ip1, ip2}
 
-	createJob := worker.WarmPoolJob{
+	createJob := &worker.WarmPoolJob{
 		Operations:    worker.OperationCreate,
 		Resources:     []string{},
 		ResourceCount: 2,
@@ -254,7 +254,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool_Fail(t *testing.T) {
 	}
 
 	mockManager.EXPECT().CreateIPV4Address(2, nil, gomock.Any()).Return(createdResources, fmt.Errorf("failed"))
-	mockPool.EXPECT().UpdatePool(worker.WarmPoolJob{
+	mockPool.EXPECT().UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationCreate,
 		Resources:     createdResources,
 		ResourceCount: 2,
@@ -296,6 +296,19 @@ func TestIPv4Provider_UpdateResourceCapacity(t *testing.T) {
 
 	err := ipv4Provider.UpdateResourceCapacity(mockInstance)
 	assert.NoError(t, err)
+}
+
+func TestIpv4Provider_GetPool(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ipv4Provider := getMockIpProvider()
+	mockPool := mock_pool.NewMockPool(ctrl)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, nil)
+
+	pool, found := ipv4Provider.GetPool(nodeName)
+	assert.True(t, found)
+	assert.Equal(t, mockPool, pool)
 }
 
 func getMockIpProvider() ipv4Provider {

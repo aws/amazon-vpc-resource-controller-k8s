@@ -85,7 +85,7 @@ var (
 )
 
 // getPodReconcilerAndMockHandler returns PodReconciler and mockHandler used to setup the pod reconciler
-func getPodReconcilerAndMockHandler(ctrl *gomock.Controller, mockPod *v1.Pod) (PodReconciler, *mock_handler.MockHandler,
+func getPodReconcilerAndMockHandler(ctrl *gomock.Controller, mockPod *v1.Pod) (*PodReconciler, *mock_handler.MockHandler,
 	*mock_node.MockManager, *mock_node.MockNode) {
 
 	scheme := runtime.NewScheme()
@@ -93,12 +93,13 @@ func getPodReconcilerAndMockHandler(ctrl *gomock.Controller, mockPod *v1.Pod) (P
 	mockHandler := mock_handler.NewMockHandler(ctrl)
 	mockManager := mock_node.NewMockManager(ctrl)
 	mockNode := mock_node.NewMockNode(ctrl)
-	podReconciler := PodReconciler{
-		Manager:  mockManager,
-		Client:   fake.NewFakeClientWithScheme(scheme, mockPod),
-		Log:      zap.New(zap.UseDevMode(true)).WithName("on demand handler"),
-		Scheme:   scheme,
-		Handlers: []handler.Handler{mockHandler},
+	podReconciler := &PodReconciler{
+		DeletePodQueue: make(map[string]*v1.Pod),
+		Manager:        mockManager,
+		Client:         fake.NewFakeClientWithScheme(scheme, mockPod),
+		Log:            zap.New(zap.UseDevMode(true)).WithName("on demand handler"),
+		Scheme:         scheme,
+		Handlers:       []handler.Handler{mockHandler},
 	}
 	return podReconciler, mockHandler, mockManager, mockNode
 }
@@ -114,7 +115,7 @@ func TestPodReconciler_Reconcile_Create(t *testing.T) {
 	mockManager.EXPECT().GetNode(mockNodeName).Return(mockNode, true)
 	mockNode.EXPECT().IsReady().Return(true)
 	mockHandler.EXPECT().CanHandle(mockResourceName).Return(true)
-	mockHandler.EXPECT().HandleCreate(mockResourceName, 3, gomock.Any()).Return(nil)
+	mockHandler.EXPECT().HandleCreate(mockResourceName, 3, gomock.Any()).Return(reconcile.Result{}, nil)
 	mockHandler.EXPECT().CanHandle(mockUnsupportedResourceName).Return(false)
 
 	reconciler.Reconcile(mockReq)
@@ -131,13 +132,23 @@ func TestPodReconciler_Reconcile_Delete(t *testing.T) {
 	pod.DeletionTimestamp = &ti
 	reconciler, mockHandler, mockManager, mockNode := getPodReconcilerAndMockHandler(ctrl, pod)
 
+	deletedPod := mockPod.DeepCopy()
+	deletedPod.Name = "deleted-pod"
+
+	deletedPodNamespacedName := types.NamespacedName{
+		Namespace: deletedPod.Namespace,
+		Name:      deletedPod.Name,
+	}
+	// Add the pod into the delete queue
+	reconciler.DeletePodQueue[deletedPodNamespacedName.String()] = deletedPod
+
 	mockManager.EXPECT().GetNode(mockNodeName).Return(mockNode, true)
 	mockNode.EXPECT().IsReady().Return(true)
 	mockHandler.EXPECT().CanHandle(mockResourceName).Return(true)
-	mockHandler.EXPECT().HandleDeleting(mockResourceName, gomock.Any()).Return(nil)
+	mockHandler.EXPECT().HandleDelete(mockResourceName, deletedPod).Return(reconcile.Result{}, nil)
 	mockHandler.EXPECT().CanHandle(mockUnsupportedResourceName).Return(false)
 
-	reconciler.Reconcile(mockReq)
+	reconciler.Reconcile(reconcile.Request{NamespacedName: deletedPodNamespacedName})
 }
 
 // TestPodReconciler_Reconcile_NonManaged tests that the request is ignore if the node is not managed

@@ -40,8 +40,9 @@ var (
 type Pool interface {
 	AssignResource(requesterID string) (resourceID string, shouldReconcile bool, err error)
 	FreeResource(requesterID string, resourceID string) (shouldReconcile bool, err error)
-	UpdatePool(job worker.WarmPoolJob, didSucceed bool) (shouldReconcile bool)
-	ReconcilePool() worker.WarmPoolJob
+	UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldReconcile bool)
+	ReconcilePool() *worker.WarmPoolJob
+	ProcessCoolDownQueue() bool
 }
 
 type pool struct {
@@ -157,7 +158,7 @@ func (p *pool) FreeResource(requesterID string, resourceID string) (shouldReconc
 }
 
 // UpdatePool updates the warm pool with the result of the asynchronous job executed by the provider
-func (p *pool) UpdatePool(job worker.WarmPoolJob, didSucceed bool) (shouldReconcile bool) {
+func (p *pool) UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldReconcile bool) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
@@ -218,7 +219,7 @@ func (p *pool) ProcessCoolDownQueue() (needFurtherProcessing bool) {
 
 // reconcilePoolIfRequired reconciles the Warm pool to make it reach it's desired state by submitting either create or delete
 // request to the warm pool
-func (p *pool) ReconcilePool() worker.WarmPoolJob {
+func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
@@ -230,10 +231,9 @@ func (p *pool) ReconcilePool() worker.WarmPoolJob {
 		"pending create", p.pendingCreate, "pending delete", &p.pendingDelete, "cool down queue",
 		len(p.coolDownQueue), "total created/pending resources", totalCreatedResources, "max capacity", p.capacity)
 
-	if totalCreatedResources == p.capacity {
-		log.V(1).Info("cannot reconcile, at max capacity", "total created resources",
-			totalCreatedResources)
-		return worker.WarmPoolJob{}
+	if len(p.usedResources)+p.pendingCreate+p.pendingDelete+len(p.coolDownQueue) == p.capacity {
+		log.V(1).Info("cannot reconcile, at max capacity")
+		return &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}
 	}
 
 	// Consider pending create as well so we don't create multiple subsequent create request
@@ -243,6 +243,10 @@ func (p *pool) ReconcilePool() worker.WarmPoolJob {
 	if deviation > p.warmPoolConfig.MaxDeviation {
 		// The maximum number of resources that can be created
 		canCreateUpto := p.capacity - totalCreatedResources
+		if canCreateUpto == 0 {
+			return &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}
+		}
+
 		// Need to add to warm pool
 		if deviation > canCreateUpto {
 			log.V(1).Info("can only create limited resources", "can create", canCreateUpto,
@@ -279,5 +283,5 @@ func (p *pool) ReconcilePool() worker.WarmPoolJob {
 
 	log.V(1).Info("no need for reconciliation")
 
-	return worker.WarmPoolJob{}
+	return &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}
 }

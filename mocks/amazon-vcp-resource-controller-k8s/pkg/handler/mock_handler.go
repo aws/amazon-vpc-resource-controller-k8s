@@ -8,6 +8,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
 	reflect "reflect"
+	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // MockHandler is a mock of Handler interface
@@ -48,11 +49,12 @@ func (mr *MockHandlerMockRecorder) CanHandle(arg0 interface{}) *gomock.Call {
 }
 
 // HandleCreate mocks base method
-func (m *MockHandler) HandleCreate(arg0 string, arg1 int, arg2 *v1.Pod) error {
+func (m *MockHandler) HandleCreate(arg0 string, arg1 int, arg2 *v1.Pod) (reconcile.Result, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HandleCreate", arg0, arg1, arg2)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(reconcile.Result)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // HandleCreate indicates an expected call of HandleCreate
@@ -62,29 +64,16 @@ func (mr *MockHandlerMockRecorder) HandleCreate(arg0, arg1, arg2 interface{}) *g
 }
 
 // HandleDelete mocks base method
-func (m *MockHandler) HandleDelete(arg0, arg1 string) error {
+func (m *MockHandler) HandleDelete(arg0 string, arg1 *v1.Pod) (reconcile.Result, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HandleDelete", arg0, arg1)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(reconcile.Result)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // HandleDelete indicates an expected call of HandleDelete
 func (mr *MockHandlerMockRecorder) HandleDelete(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleDelete", reflect.TypeOf((*MockHandler)(nil).HandleDelete), arg0, arg1)
-}
-
-// HandleDeleting mocks base method
-func (m *MockHandler) HandleDeleting(arg0 string, arg1 *v1.Pod) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HandleDeleting", arg0, arg1)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// HandleDeleting indicates an expected call of HandleDeleting
-func (mr *MockHandlerMockRecorder) HandleDeleting(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleDeleting", reflect.TypeOf((*MockHandler)(nil).HandleDeleting), arg0, arg1)
 }

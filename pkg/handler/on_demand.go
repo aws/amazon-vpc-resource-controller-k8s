@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 type onDemandResourceHandler struct {
@@ -46,39 +47,34 @@ func (h *onDemandResourceHandler) CanHandle(resourceName string) bool {
 }
 
 // HandleCreate provides the resource to the on demand resource by passing the Create Job to the respective Worker
-func (h *onDemandResourceHandler) HandleCreate(resourceName string, requestCount int, pod *v1.Pod) error {
+func (h *onDemandResourceHandler) HandleCreate(resourceName string, requestCount int, pod *v1.Pod) (ctrl.Result, error) {
 	resourceProvider, isPresent := h.providers[resourceName]
 
 	if !isPresent {
-		return fmt.Errorf("cannot handle resource %s, check canHandle before submitting jobs", resourceName)
+		return ctrl.Result{}, fmt.Errorf("cannot handle resource %s, check canHandle before submitting jobs", resourceName)
 	}
 
-	job := worker.NewOnDemandCreateJob(string(pod.UID), pod.Namespace, pod.Name, requestCount)
+	job := worker.NewOnDemandCreateJob(pod.Namespace, pod.Name, requestCount)
 	resourceProvider.SubmitAsyncJob(job)
 
-	return nil
-}
-
-func (h *onDemandResourceHandler) HandleDeleting(resourceName string, pod *v1.Pod) error {
-	resourceProvider, isPresent := h.providers[resourceName]
-
-	if !isPresent {
-		return fmt.Errorf("cannot handle resource %s, check canHandle before submitting jobs", resourceName)
-	}
-
-	job := worker.NewOnDemandDeletingJob(string(pod.UID), pod.Namespace, pod.Name, pod.Spec.NodeName)
-	resourceProvider.SubmitAsyncJob(job)
-
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // HandleDelete reclaims the on demand resource by passing the Delete Job to the respective Worker
-func (h *onDemandResourceHandler) HandleDelete(podNamespace string, podName string) error {
-	deleteJob := worker.NewOnDemandDeletedJob(podNamespace, podName)
-	// Since we don't have the node name nor the resource used by the pod after it's deleted, submit the job to all
-	// the providers.
-	for _, resourceProvider := range h.providers {
-		resourceProvider.SubmitAsyncJob(deleteJob)
+func (h *onDemandResourceHandler) HandleDelete(resourceName string, pod *v1.Pod) (ctrl.Result, error) {
+	resourceProvider, isPresent := h.providers[resourceName]
+
+	if !isPresent {
+		return ctrl.Result{}, fmt.Errorf("cannot handle resource %s, check canHandle before submitting jobs", resourceName)
 	}
-	return nil
+
+	if _, ok := pod.Annotations[resourceName]; !ok {
+		// Ignore the pod as it was not allocated the resource
+		return ctrl.Result{}, nil
+	}
+
+	deleteJob := worker.NewOnDemandDeletedJob(pod.Spec.NodeName, pod.UID)
+	resourceProvider.SubmitAsyncJob(deleteJob)
+
+	return ctrl.Result{}, nil
 }

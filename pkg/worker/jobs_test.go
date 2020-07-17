@@ -17,6 +17,7 @@ limitations under the License.
 package worker
 
 import (
+	"k8s.io/apimachinery/pkg/types"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,16 +27,16 @@ var (
 	podName      = "pod-name"
 	podNamespace = "pod-namespace"
 	podUid       = "pod-uid"
+	UID          = types.UID(podUid)
 	reqCount     = 2
 	nodeName     = "node-name"
 )
 
 // TestNewOnDemandCreateJob tests the fields of Create Job
 func TestNewOnDemandCreateJob(t *testing.T) {
-	onDemandJob := NewOnDemandCreateJob(podUid, podNamespace, podName, reqCount)
+	onDemandJob := NewOnDemandCreateJob(podNamespace, podName, reqCount)
 
 	assert.Equal(t, OperationCreate, onDemandJob.Operation)
-	assert.Equal(t, podUid, string(onDemandJob.UID))
 	assert.Equal(t, podName, onDemandJob.PodName)
 	assert.Equal(t, podNamespace, onDemandJob.PodNamespace)
 	assert.Equal(t, reqCount, onDemandJob.RequestCount)
@@ -43,21 +44,10 @@ func TestNewOnDemandCreateJob(t *testing.T) {
 
 // TestNewOnDemandDeleteJob tests the fields of Deleted Job
 func TestNewOnDemandDeletedJob(t *testing.T) {
-	onDemandJob := NewOnDemandDeletedJob(podNamespace, podName)
+	onDemandJob := NewOnDemandDeletedJob(nodeName, UID)
 
 	assert.Equal(t, OperationDeleted, onDemandJob.Operation)
-	assert.Equal(t, podName, onDemandJob.PodName)
-	assert.Equal(t, podNamespace, onDemandJob.PodNamespace)
-}
-
-func TestNewOnDemandDeletingJob(t *testing.T) {
-	onDemandJob := NewOnDemandDeletingJob(podUid, podNamespace, podName, nodeName)
-
-	assert.Equal(t, OperationDeleting, onDemandJob.Operation)
-	assert.Equal(t, podUid, string(onDemandJob.UID))
-	assert.Equal(t, podNamespace, onDemandJob.PodNamespace)
-	assert.Equal(t, podName, onDemandJob.PodName)
-	assert.Equal(t, nodeName, onDemandJob.NodeName)
+	assert.Equal(t, podUid, onDemandJob.UID)
 }
 
 func TestNewOnDemandReconcileJob(t *testing.T) {
@@ -72,4 +62,22 @@ func TestNewOnDemandProcessDeleteQueueJob(t *testing.T) {
 
 	assert.Equal(t, OperationProcessDeleteQueue, onDemandJob.Operation)
 	assert.Equal(t, nodeName, onDemandJob.NodeName)
+}
+
+func TestNewWarmPoolCreateJob(t *testing.T) {
+	warmPoolJob := NewWarmPoolCreateJob(nodeName, 2)
+
+	assert.Equal(t, OperationCreate, warmPoolJob.Operations)
+	assert.Equal(t, 2, warmPoolJob.ResourceCount)
+	assert.Equal(t, nodeName, warmPoolJob.NodeName)
+}
+
+func TestNewWarmPoolDeleteJob(t *testing.T) {
+	resources := []string{"res-1", "res-2"}
+	WarmPoolJob := NewWarmPoolDeleteJob(nodeName, resources)
+
+	assert.Equal(t, OperationDeleted, WarmPoolJob.Operations)
+	assert.Equal(t, nodeName, WarmPoolJob.NodeName)
+	assert.Equal(t, resources, WarmPoolJob.Resources)
+	assert.Equal(t, len(resources), WarmPoolJob.ResourceCount)
 }

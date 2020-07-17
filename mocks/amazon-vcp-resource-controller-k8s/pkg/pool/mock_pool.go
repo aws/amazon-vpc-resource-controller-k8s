@@ -64,11 +64,25 @@ func (mr *MockPoolMockRecorder) FreeResource(arg0, arg1 interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FreeResource", reflect.TypeOf((*MockPool)(nil).FreeResource), arg0, arg1)
 }
 
+// ProcessCoolDownQueue mocks base method
+func (m *MockPool) ProcessCoolDownQueue() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ProcessCoolDownQueue")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// ProcessCoolDownQueue indicates an expected call of ProcessCoolDownQueue
+func (mr *MockPoolMockRecorder) ProcessCoolDownQueue() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ProcessCoolDownQueue", reflect.TypeOf((*MockPool)(nil).ProcessCoolDownQueue))
+}
+
 // ReconcilePool mocks base method
-func (m *MockPool) ReconcilePool() worker.WarmPoolJob {
+func (m *MockPool) ReconcilePool() *worker.WarmPoolJob {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ReconcilePool")
-	ret0, _ := ret[0].(worker.WarmPoolJob)
+	ret0, _ := ret[0].(*worker.WarmPoolJob)
 	return ret0
 }
 
@@ -79,7 +93,7 @@ func (mr *MockPoolMockRecorder) ReconcilePool() *gomock.Call {
 }
 
 // UpdatePool mocks base method
-func (m *MockPool) UpdatePool(arg0 worker.WarmPoolJob, arg1 bool) bool {
+func (m *MockPool) UpdatePool(arg0 *worker.WarmPoolJob, arg1 bool) bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UpdatePool", arg0, arg1)
 	ret0, _ := ret[0].(bool)

@@ -28,7 +28,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/go-logr/logr"
@@ -46,10 +45,6 @@ type ipv4Provider struct {
 	k8sWrapper k8s.K8sWrapper
 	// config is the warm pool configuration for the resource IPv4
 	config *config.WarmPoolConfig
-	// notifyPoolAdded notifies the handler when a new pool is added
-	notifyPoolAdded func(resourceName string, nodeName string, pool pool.Pool)
-	// notifyPoolDeleted notifies the handler when a new pool is removed
-	notifyPoolDeleted func(resourceName string, nodeName string)
 	// lock to allow multiple routines to access the cache concurrently
 	lock sync.RWMutex // guards the following
 	// instanceResources stores the ENIManager and the resource pool per instance
@@ -62,13 +57,15 @@ type ResourceProviderAndPool struct {
 	resourcePool pool.Pool
 }
 
-func NewIPv4Provider(log logr.Logger, ec2APIHelper api.EC2APIHelper, workerPool worker.Worker,
-	k8sWrapper k8s.K8sWrapper) provider.ResourceProvider {
+func NewIPv4Provider(log logr.Logger, config *config.WarmPoolConfig, ec2APIHelper api.EC2APIHelper,
+	workerPool worker.Worker, k8sWrapper k8s.K8sWrapper) provider.ResourceProvider {
 	return &ipv4Provider{
-		log:          log,
-		ec2APIHelper: ec2APIHelper,
-		workerPool:   workerPool,
-		k8sWrapper:   k8sWrapper,
+		instanceProviderAndPool: make(map[string]ResourceProviderAndPool),
+		config:                  config,
+		log:                     log,
+		ec2APIHelper:            ec2APIHelper,
+		workerPool:              workerPool,
+		k8sWrapper:              k8sWrapper,
 	}
 }
 
@@ -93,25 +90,36 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 		if !present {
 			continue
 		}
-		podToResourceMap[utils.GetNamespacedName(pod.Namespace, pod.Name)] = annotation
+		podToResourceMap[string(pod.UID)] = annotation
 		usedIPSet[annotation] = struct{}{}
 	}
 
 	warmResources := difference(presentIPs, usedIPSet)
 
-	resourcePool := pool.NewResourcePool(nil, p.config, podToResourceMap,
-		warmResources, instance.Name(), getCapacity(instance.Type(), instance.Os()))
+	nodeCapacity := getCapacity(instance.Type(), instance.Os())
+	resourcePool := pool.NewResourcePool(p.log.WithName("ipv4 resource pool"), p.config, podToResourceMap,
+		warmResources, instance.Name(), nodeCapacity)
 
 	p.putInstanceProviderAndPool(nodeName, resourcePool, eniManager)
-	p.notifyPoolAdded(config.ResourceNameIPAddress, nodeName, resourcePool)
 
+	p.log.Info("initialized the resource provider for resource IPv4",
+		"capacity", nodeCapacity, "node name", nodeName)
+
+	// Reconcile pool after starting up and submit the async job
+	job := resourcePool.ReconcilePool()
+	if job.Operations != worker.OperationReconcileNotRequired {
+		p.SubmitAsyncJob(job)
+	}
+
+	// Submit the async job to periodically process the delete queue
+	p.SubmitAsyncJob(worker.NewWarmProcessDeleteQueueJob(nodeName))
 	return nil
 }
 
 func (p *ipv4Provider) DeInitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
-	p.getInstanceProviderAndPool(nodeName)
-	p.notifyPoolDeleted(config.ResourceNameIPAddress, nodeName)
+	p.deleteInstanceProviderAndPool(nodeName)
+
 	return nil
 }
 
@@ -133,6 +141,25 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	return nil
 }
 
+func (p *ipv4Provider) ProcessDeleteQueue(job *worker.WarmPoolJob) (ctrl.Result, error) {
+	resourceProviderAndPool, isPresent := p.getInstanceProviderAndPool(job.NodeName)
+	if !isPresent {
+		p.log.Info("forgetting the periodic check cool down period job", "node", job.NodeName)
+		return ctrl.Result{}, nil
+	}
+	// TODO: For efficiency run only when required in next release
+	resourceProviderAndPool.resourcePool.ProcessCoolDownQueue()
+
+	// After the cool down queue is processed check if we need to do reconciliation
+	job = resourceProviderAndPool.resourcePool.ReconcilePool()
+	if job.Operations != worker.OperationReconcileNotRequired {
+		p.SubmitAsyncJob(job)
+	}
+
+	// Re submit the job to execute after cool down period has ended
+	return ctrl.Result{Requeue: true, RequeueAfter: config.CoolDownPeriod}, nil
+}
+
 // SubmitAsyncJob submits an asynchronous job to the worker pool
 func (p *ipv4Provider) SubmitAsyncJob(job interface{}) {
 	p.workerPool.SubmitJob(job)
@@ -141,7 +168,7 @@ func (p *ipv4Provider) SubmitAsyncJob(job interface{}) {
 // ProcessAsyncJob processes the job, the function should be called using the worker pool in order to be processed
 // asynchronously
 func (p *ipv4Provider) ProcessAsyncJob(job interface{}) (ctrl.Result, error) {
-	warmPoolJob, isValid := job.(worker.WarmPoolJob)
+	warmPoolJob, isValid := job.(*worker.WarmPoolJob)
 	if !isValid {
 		return ctrl.Result{}, fmt.Errorf("invalid job type")
 	}
@@ -151,6 +178,8 @@ func (p *ipv4Provider) ProcessAsyncJob(job interface{}) (ctrl.Result, error) {
 		p.CreatePrivateIPv4AndUpdatePool(warmPoolJob)
 	case worker.OperationDeleted:
 		p.DeletePrivateIPv4AndUpdatePool(warmPoolJob)
+	case worker.OperationProcessDeleteQueue:
+		return p.ProcessDeleteQueue(warmPoolJob)
 	}
 
 	return ctrl.Result{}, nil
@@ -158,7 +187,7 @@ func (p *ipv4Provider) ProcessAsyncJob(job interface{}) (ctrl.Result, error) {
 
 // CreatePrivateIPv4AndUpdatePool executes the Create IPv4 workflow by assigning the desired number of IPv4 address
 // provided in the warm pool job
-func (p *ipv4Provider) CreatePrivateIPv4AndUpdatePool(job worker.WarmPoolJob) {
+func (p *ipv4Provider) CreatePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 	instanceResource, found := p.getInstanceProviderAndPool(job.NodeName)
 	if !found {
 		p.log.Error(fmt.Errorf("cannot find the instance provider and pool form the cache"), "node", job.NodeName)
@@ -175,7 +204,7 @@ func (p *ipv4Provider) CreatePrivateIPv4AndUpdatePool(job worker.WarmPoolJob) {
 }
 
 // DeletePrivateIPv4AndUpdatePool executes the Delete IPv4 workflow for the list of IPs provided in the warm pool job
-func (p *ipv4Provider) DeletePrivateIPv4AndUpdatePool(job worker.WarmPoolJob) {
+func (p *ipv4Provider) DeletePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 	instanceResource, found := p.getInstanceProviderAndPool(job.NodeName)
 	if !found {
 		p.log.Error(fmt.Errorf("cannot find the instance provider and pool form the cache"), "node", job.NodeName)
@@ -192,12 +221,13 @@ func (p *ipv4Provider) DeletePrivateIPv4AndUpdatePool(job worker.WarmPoolJob) {
 }
 
 // updatePoolAndReconcileIfRequired updates the resource pool and reconcile again and submit a new job if required
-func (p *ipv4Provider) updatePoolAndReconcileIfRequired(resourcePool pool.Pool, job worker.WarmPoolJob, didSucceed bool) {
+func (p *ipv4Provider) updatePoolAndReconcileIfRequired(resourcePool pool.Pool, job *worker.WarmPoolJob, didSucceed bool) {
+	// Update the pool to add the created/failed resource to the warm pool and decrement the pending count
 	shouldReconcile := resourcePool.UpdatePool(job, didSucceed)
 
 	if shouldReconcile {
 		job := resourcePool.ReconcilePool()
-		if job.Operations != worker.OperationIgnore {
+		if job.Operations != worker.OperationReconcileNotRequired {
 			p.SubmitAsyncJob(job)
 		}
 	}
@@ -260,4 +290,21 @@ func difference(allIPs []string, usedIPSet map[string]struct{}) []string {
 		}
 	}
 	return notUsed
+}
+
+// GetPool returns the warm pool for the IPv4 resources
+func (p *ipv4Provider) GetPool(nodeName string) (pool.Pool, bool) {
+	providerAndPool, exists := p.getInstanceProviderAndPool(nodeName)
+	if !exists {
+		return nil, false
+	}
+	return providerAndPool.resourcePool, true
+}
+
+// IsInstanceSupported returns true for windows node as IP as extended resource is only supported by windows node now
+func (p *ipv4Provider) IsInstanceSupported(instance ec2.EC2Instance) bool {
+	if instance.Os() == config.OSWindows {
+		return true
+	}
+	return false
 }

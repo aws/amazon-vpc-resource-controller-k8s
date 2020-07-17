@@ -17,7 +17,6 @@ limitations under the License.
 package handler
 
 import (
-	"fmt"
 	"testing"
 
 	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
@@ -39,14 +38,13 @@ var (
 	mockUID          = "pod-uid"
 	mockNodeName     = "node-name"
 
-	mockError = fmt.Errorf("mock-error")
-
 	mockPod = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      mockPodName,
-			Namespace: mockPodNamespace,
-			UID:       types.UID(mockUID),
+			Name:        mockPodName,
+			Namespace:   mockPodNamespace,
+			UID:         types.UID(mockUID),
+			Annotations: map[string]string{mockResourceName: "resource-id"},
 		},
 		Spec: v1.PodSpec{
 			NodeName: mockNodeName,
@@ -55,7 +53,6 @@ var (
 	}
 
 	createJob = worker.OnDemandJob{
-		UID:          types.UID(mockUID),
 		Operation:    worker.OperationCreate,
 		PodName:      mockPodName,
 		PodNamespace: mockPodNamespace,
@@ -63,14 +60,14 @@ var (
 	}
 
 	deletedJob = worker.OnDemandJob{
-		Operation:    worker.OperationDeleted,
-		PodName:      mockPodName,
-		PodNamespace: mockPodNamespace,
+		Operation: worker.OperationDeleted,
+		NodeName:  mockNodeName,
+		UID:       mockUID,
 	}
 
 	deletingJob = worker.OnDemandJob{
 		Operation:    worker.OperationDeleting,
-		UID:          types.UID(mockUID),
+		UID:          mockUID,
 		PodName:      mockPodName,
 		PodNamespace: mockPodNamespace,
 		NodeName:     mockNodeName,
@@ -115,7 +112,7 @@ func Test_HandleCreate(t *testing.T) {
 
 	mockProvider.EXPECT().SubmitAsyncJob(createJob)
 
-	err := handler.HandleCreate(mockResourceName, 1, mockPod)
+	_, err := handler.HandleCreate(mockResourceName, 1, mockPod)
 	assert.NoError(t, err)
 }
 
@@ -128,19 +125,7 @@ func Test_HandleDeleted(t *testing.T) {
 
 	mockProvider.EXPECT().SubmitAsyncJob(deletedJob)
 
-	err := handler.HandleDelete(mockPodNamespace, mockPodName)
-	assert.NoError(t, err)
-}
-
-func Test_HandleDeleting(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	handler, mockProvider := getHandlerWithMock(ctrl)
-
-	mockProvider.EXPECT().SubmitAsyncJob(deletingJob)
-
-	err := handler.HandleDeleting(mockResourceName, mockPod)
+	_, err := handler.HandleDelete(mockResourceName, mockPod)
 	assert.NoError(t, err)
 }
 
@@ -151,6 +136,6 @@ func Test_HandleCreate_error(t *testing.T) {
 
 	handler, _ := getHandlerWithMock(ctrl)
 
-	err := handler.HandleCreate(mockResourceName+"not-supported", 1, mockPod)
+	_, err := handler.HandleCreate(mockResourceName+"not-supported", 1, mockPod)
 	assert.NotNil(t, err)
 }

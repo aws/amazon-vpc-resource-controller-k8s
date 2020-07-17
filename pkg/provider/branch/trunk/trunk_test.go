@@ -46,11 +46,12 @@ var (
 	InstanceSecurityGroup = []string{"sg-1", "sg-2"}
 
 	// Mock Pod 1
-	MockPodName1       = "pod_name"
-	MockPodNamespace1  = "pod_namespace"
-	PodNamespacedName1 = "pod_namespace/pod_name"
-	MockPodUID1        = types.UID("uid-1")
-	MockPod1           = &v1.Pod{
+	MockPodName1      = "pod_name"
+	MockPodNamespace1 = "pod_namespace"
+	//PodNamespacedName1 = "pod_namespace/pod_name"
+	PodUID      = "uid-1"
+	MockPodUID1 = types.UID(PodUID)
+	MockPod1    = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
 			UID:       MockPodUID1,
@@ -67,7 +68,8 @@ var (
 	MockPodName2        = "pod_name_2"
 	MockPodNamespace2   = ""
 	MockNamespacedName2 = "default/pod_name_2"
-	MockPodUID2         = types.UID("uid-2")
+	PodUID2             = "uid-2"
+	MockPodUID2         = types.UID(PodUID2)
 
 	MockPod2 = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},
@@ -100,10 +102,7 @@ var (
 		SubnetCIDR: SubnetCidrBlock,
 	}
 
-	BranchENI1 = BranchENIs{
-		UID:              MockPodUID1,
-		branchENIDetails: []*ENIDetails{EniDetails1},
-	}
+	branchENIs1 = []*ENIDetails{EniDetails1}
 
 	BranchInterface1 = &awsEc2.NetworkInterface{
 		MacAddress:         &MacAddr1,
@@ -131,10 +130,7 @@ var (
 		PrivateIpAddress:   &BranchIp2,
 	}
 
-	BranchENI2 = BranchENIs{
-		UID:              MockPodUID2,
-		branchENIDetails: []*ENIDetails{EniDetails2},
-	}
+	branchENIs2 = []*ENIDetails{EniDetails2}
 
 	// Trunk Interface
 	trunkId        = "eni-00000000000000002"
@@ -186,7 +182,7 @@ func getMockTrunk() trunkENI {
 		log:                    log,
 		instanceSecurityGroups: InstanceSecurityGroup,
 		usedVlanIds:            make([]bool, MaxAllocatableVlanIds),
-		branchENIs:             map[string]*BranchENIs{},
+		uidToBranchENIMap:      map[string][]*ENIDetails{},
 	}
 }
 
@@ -244,19 +240,19 @@ func TestTrunkENI_markVlanAssigned(t *testing.T) {
 func TestTrunkENI_getBranchFromCache(t *testing.T) {
 	trunkENI := getMockTrunk()
 
-	trunkENI.branchENIs[PodNamespacedName1] = &BranchENI1
+	trunkENI.uidToBranchENIMap[PodUID] = branchENIs1
 
-	branchFromCache, isPresent := trunkENI.getBranchFromCache(PodNamespacedName1)
+	branchFromCache, isPresent := trunkENI.getBranchFromCache(PodUID)
 
 	assert.True(t, isPresent)
-	assert.Equal(t, BranchENI1, *branchFromCache)
+	assert.Equal(t, branchENIs1, branchFromCache)
 }
 
 // TestTrunkENI_getBranchFromCache_NotPresent tests false is returned if the branch eni is not present in cache
 func TestTrunkENI_getBranchFromCache_NotPresent(t *testing.T) {
 	trunkENI := getMockTrunk()
 
-	_, isPresent := trunkENI.getBranchFromCache(PodNamespacedName1)
+	_, isPresent := trunkENI.getBranchFromCache(PodUID)
 
 	assert.False(t, isPresent)
 }
@@ -265,23 +261,11 @@ func TestTrunkENI_getBranchFromCache_NotPresent(t *testing.T) {
 func TestTrunkENI_addBranchToCache(t *testing.T) {
 	trunkENI := getMockTrunk()
 
-	trunkENI.addBranchToCache(PodNamespacedName1, &BranchENI1)
+	trunkENI.addBranchToCache(PodUID, branchENIs1)
 
-	branchFromCache, ok := trunkENI.branchENIs[PodNamespacedName1]
+	branchFromCache, ok := trunkENI.uidToBranchENIMap[PodUID]
 	assert.True(t, ok)
-	assert.Equal(t, BranchENI1, *branchFromCache)
-}
-
-// TestTrunkENI_getPodName tests the pod name is returned int the format NS/name
-func TestTrunkENI_getPodName(t *testing.T) {
-	namespacedName := getPodName(MockPodNamespace1, MockPodName1)
-	assert.Equal(t, MockPodNamespace1+"/"+MockPodName1, namespacedName)
-}
-
-// TestTrunkENI_getPodName_defaultNS tests the pod name is returned as default/name for pod in default namespace
-func TestTrunkENI_getPodName_defaultNS(t *testing.T) {
-	namespacedName := getPodName(MockPodNamespace2, MockPodName2)
-	assert.Equal(t, "default/"+MockPodName2, namespacedName)
+	assert.Equal(t, branchENIs1, branchFromCache)
 }
 
 // TestTrunkENI_pushENIToDeleteQueue tests pushing to delete queue the data is stored in FIFO strategy
@@ -517,48 +501,14 @@ func TestTrunkENI_DeleteCooledDownENIs_DeleteFailed(t *testing.T) {
 	assert.Zero(t, len(trunkENI.deleteQueue))
 }
 
-// TestTrunkENI_MarkPodBeingDeleted tests pod is marked as deleting if present in cache on calling the delete operation
-func TestTrunkENI_MarkPodBeingDeleted(t *testing.T) {
-	trunkENI := getMockTrunk()
-	trunkENI.branchENIs[PodNamespacedName1] = &BranchENIs{UID: MockPodUID1}
-
-	err := trunkENI.MarkPodBeingDeleted(MockPodUID1, MockPodNamespace1, MockPodName1)
-
-	assert.NoError(t, err)
-	assert.True(t, trunkENI.branchENIs[PodNamespacedName1].isPodBeingDeleted)
-}
-
-// TestTrunkENI_MarkPodBeingDeleted_NewPodWithDiffUID tests pod is rejected on a delete event if the UID of previous pod
-// is different from new pod
-func TestTrunkENI_MarkPodBeingDeleted_NewPodWithDiffUID(t *testing.T) {
-	trunkENI := getMockTrunk()
-	trunkENI.branchENIs[PodNamespacedName1] = &BranchENIs{UID: MockPodUID1}
-
-	err := trunkENI.MarkPodBeingDeleted("new-uid", MockPodNamespace1, MockPodName1)
-
-	assert.NotNil(t, err)
-}
-
-// TestTrunkENI_MarkPodBeingDeleted_PodDontExist tests error is thrown if try to delete a pod that doesn't exist in the
-// cache
-func TestTrunkENI_MarkPodBeingDeleted_PodDontExist(t *testing.T) {
-	trunkENI := getMockTrunk()
-	err := trunkENI.MarkPodBeingDeleted(MockPodUID1, MockPodNamespace1, MockPodName1)
-
-	assert.NotNil(t, err)
-}
-
 // TestTrunkENI_PushBranchENIsToCoolDownQueue tests that ENIs are pushed to the delete queue if the pod is being deleted
 func TestTrunkENI_PushBranchENIsToCoolDownQueue(t *testing.T) {
 	trunkENI := getMockTrunk()
 
-	trunkENI.branchENIs[PodNamespacedName1] = &BranchENIs{
-		isPodBeingDeleted: true,
-		branchENIDetails:  []*ENIDetails{EniDetails1, EniDetails2},
-	}
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails1, EniDetails2}
 
-	err := trunkENI.PushBranchENIsToCoolDownQueue(MockPodNamespace1, MockPodName1)
-	_, isPresent := trunkENI.branchENIs[PodNamespacedName1]
+	err := trunkENI.PushBranchENIsToCoolDownQueue(PodUID)
+	_, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(trunkENI.deleteQueue))
@@ -567,37 +517,17 @@ func TestTrunkENI_PushBranchENIsToCoolDownQueue(t *testing.T) {
 	assert.False(t, isPresent)
 }
 
-// TestTrunkENI_PushBranchENIsToCoolDownQueue_PodNotDeleted tests that error is thrown if tried to delete pod that is not
-// marked as being deleted
-func TestTrunkENI_PushBranchENIsToCoolDownQueue_PodNotDeleted(t *testing.T) {
-	trunkENI := getMockTrunk()
-
-	trunkENI.branchENIs[PodNamespacedName1] = &BranchENIs{
-		isPodBeingDeleted: false,
-		branchENIDetails:  []*ENIDetails{EniDetails1, EniDetails2},
-	}
-
-	err := trunkENI.PushBranchENIsToCoolDownQueue(MockPodNamespace1, MockPodName1)
-	_, isPresent := trunkENI.branchENIs[PodNamespacedName1]
-
-	assert.NotNil(t, err)
-	assert.True(t, isPresent)
-}
-
 // TestTrunkENI_Reconcile tests that resources used by  pods that no longer exists are cleaned up
 func TestTrunkENI_Reconcile(t *testing.T) {
 	trunkENI := getMockTrunk()
-	trunkENI.branchENIs[PodNamespacedName1] = &BranchENIs{
-		UID:              MockPodUID1,
-		branchENIDetails: []*ENIDetails{EniDetails1, EniDetails2},
-	}
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails1, EniDetails2}
 
 	// Pod 1 doesn't exist anymore
 	podList := []v1.Pod{*MockPod2}
 
 	err := trunkENI.Reconcile(podList)
 	assert.NoError(t, err)
-	_, isPresent := trunkENI.branchENIs[PodNamespacedName1]
+	_, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 
 	assert.Equal(t, []*ENIDetails{EniDetails1, EniDetails2}, trunkENI.deleteQueue)
 	assert.False(t, isPresent)
@@ -606,17 +536,14 @@ func TestTrunkENI_Reconcile(t *testing.T) {
 // TestTrunkENI_Reconcile_NoStateChange tests that no resources are deleted in case the pod still exist in the API server
 func TestTrunkENI_Reconcile_NoStateChange(t *testing.T) {
 	trunkENI := getMockTrunk()
-	trunkENI.branchENIs[PodNamespacedName1] = &BranchENIs{
-		UID:              MockPodUID1,
-		branchENIDetails: []*ENIDetails{EniDetails1, EniDetails2},
-	}
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails1, EniDetails2}
 
 	podList := []v1.Pod{*MockPod1, *MockPod2}
 
 	err := trunkENI.Reconcile(podList)
 	assert.NoError(t, err)
 
-	_, isPresent := trunkENI.branchENIs[PodNamespacedName1]
+	_, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 	assert.Zero(t, trunkENI.deleteQueue)
 	assert.True(t, isPresent)
 }
@@ -698,23 +625,23 @@ func TestTrunkENI_InitTrunk_TrunkExists_WithBranches(t *testing.T) {
 	mockEC2APIHelper.EXPECT().DescribeTrunkInterfaceAssociation(&trunkId).Return(trunkAssociationsBranch1And2, nil)
 
 	err := trunkENI.InitTrunk(FakeInstance, []v1.Pod{*MockPod1, *MockPod2})
-	branchENI, isPresent := trunkENI.branchENIs[PodNamespacedName1]
+	branchENIs, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 
 	assert.NoError(t, err)
 	assert.True(t, isPresent)
 
 	// Assert eni details are correct
-	assert.Equal(t, Branch1Id, branchENI.branchENIDetails[0].ID)
-	assert.Equal(t, Branch2Id, branchENI.branchENIDetails[1].ID)
-	assert.Equal(t, VlanId1, branchENI.branchENIDetails[0].VlanID)
-	assert.Equal(t, VlanId2, branchENI.branchENIDetails[1].VlanID)
+	assert.Equal(t, Branch1Id, branchENIs[0].ID)
+	assert.Equal(t, Branch2Id, branchENIs[1].ID)
+	assert.Equal(t, VlanId1, branchENIs[0].VlanID)
+	assert.Equal(t, VlanId2, branchENIs[1].VlanID)
 
 	// Assert that Vlan ID's are marked as used and if you retry using then you get error
 	assert.True(t, trunkENI.usedVlanIds[EniDetails1.VlanID])
 	assert.True(t, trunkENI.usedVlanIds[EniDetails2.VlanID])
 
 	// Assert no entry for pod that didn't have a branch ENI
-	_, isPresent = trunkENI.branchENIs[MockNamespacedName2]
+	_, isPresent = trunkENI.uidToBranchENIMap[MockNamespacedName2]
 	assert.False(t, isPresent)
 }
 
@@ -732,12 +659,12 @@ func TestTrunkENI_InitTrunk_TrunkExists_DanglingENIs(t *testing.T) {
 	err := trunkENI.InitTrunk(FakeInstance, []v1.Pod{*MockPod2})
 	assert.NoError(t, err)
 
-	_, isPresent := trunkENI.branchENIs[PodNamespacedName1]
+	_, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 	assert.False(t, isPresent)
-	_, isPresent = trunkENI.branchENIs[MockNamespacedName2]
+	_, isPresent = trunkENI.uidToBranchENIMap[MockNamespacedName2]
 	assert.False(t, isPresent)
 
-	assert.Equal(t, []string{EniDetails1.ID, EniDetails2.ID},
+	assert.ElementsMatch(t, []string{EniDetails1.ID, EniDetails2.ID},
 		[]string{trunkENI.deleteQueue[0].ID, trunkENI.deleteQueue[1].ID})
 }
 
@@ -768,7 +695,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	assert.True(t, trunkENI.usedVlanIds[VlanId2])
 	// The returned content is as expected
 	assert.Equal(t, expectedENIDetails, eniDetails)
-	assert.Equal(t, expectedENIDetails, trunkENI.branchENIs[MockNamespacedName2].branchENIDetails)
+	assert.Equal(t, expectedENIDetails, trunkENI.uidToBranchENIMap[PodUID2])
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup test branch is created and with instance security group
@@ -798,7 +725,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.
 	assert.True(t, trunkENI.usedVlanIds[VlanId2])
 	// The returned content is as expected
 	assert.Equal(t, expectedENIDetails, eniDetails)
-	assert.Equal(t, expectedENIDetails, trunkENI.branchENIs[MockNamespacedName2].branchENIDetails)
+	assert.Equal(t, expectedENIDetails, trunkENI.uidToBranchENIMap[PodUID2])
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate tests if error is returned on associate then the created interfaces

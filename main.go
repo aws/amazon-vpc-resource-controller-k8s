@@ -47,6 +47,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip"
 	webhookutils "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
@@ -164,11 +165,12 @@ func main() {
 	resourceHandlers, nodeManager := setUpResources(mgr, clientSet, cacheHelper, roleARN)
 
 	if err = (&corecontroller.PodReconciler{
-		Client:   mgr.GetClient(),
-		Log:      ctrl.Log.WithName("controllers").WithName("Pod"),
-		Scheme:   mgr.GetScheme(),
-		Manager:  nodeManager,
-		Handlers: resourceHandlers,
+		Client:         mgr.GetClient(),
+		Log:            ctrl.Log.WithName("controllers").WithName("Pod"),
+		DeletePodQueue: make(map[string]*corev1.Pod),
+		Scheme:         mgr.GetScheme(),
+		Manager:        nodeManager,
+		Handlers:       resourceHandlers,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod")
 		os.Exit(1)
@@ -229,11 +231,14 @@ func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset,
 	onDemandHandler := handler.NewOnDemandHandler(ctrl.Log.WithName("on demand handler"), onDemandProviders)
 
 	// Set up warm resource handlers
+	warmResourceProviders := getWarmResourceProviders(resourceConfig, k8sWrapper, ec2APIHelper, &resourceProviders)
+	warmResourceHandler := handler.NewWarmResourceHandler(ctrl.Log.WithName("warm resource handler"),
+		k8sWrapper, warmResourceProviders)
 
 	// Set up the node manager
 	nodeManager := node.NewNodeManager(ctrl.Log.WithName("node manager"), resourceProviders, ec2APIHelper, k8sWrapper)
 
-	return []handler.Handler{onDemandHandler}, nodeManager
+	return []handler.Handler{onDemandHandler, warmResourceHandler}, nodeManager
 }
 
 // getOnDemandResourceProviders returns all the providers for resource type on demand
@@ -261,4 +266,27 @@ func getOnDemandResourceProviders(resourceConfig map[string]config.ResourceConfi
 	*providers = append(*providers, branchProvider)
 
 	return map[string]provider.ResourceProvider{branchConfig.Name: branchProvider}
+}
+
+// getWarmResourceProviders returns all the warm resource providers
+func getWarmResourceProviders(resourceConfig map[string]config.ResourceConfig, k8sWrapper k8s.K8sWrapper,
+	ec2APIHelper api.EC2APIHelper, providers *[]provider.ResourceProvider) map[string]provider.ResourceProvider {
+
+	ipV4Config := resourceConfig[config.ResourceNameIPAddress]
+
+	ipv4Worker := worker.NewDefaultWorkerPool(ipV4Config.Name, ipV4Config.WorkerCount,
+		config.WorkQueueDefaultMaxRetries, ctrl.Log.WithName("secondary ipv4 worker"), context.Background())
+	ipv4Provider := ip.NewIPv4Provider(ctrl.Log.WithName("secondary ipv4 provider"),
+		ipV4Config.WarmPoolConfig, ec2APIHelper, ipv4Worker, k8sWrapper)
+
+	err := ipv4Worker.StartWorkerPool(ipv4Provider.ProcessAsyncJob)
+	if err != nil {
+		setupLog.Error(err, "unable to start the ipv4 worker")
+		os.Exit(1)
+	}
+
+	*providers = append(*providers, ipv4Provider)
+
+	return map[string]provider.ResourceProvider{ipV4Config.Name: ipv4Provider}
+
 }

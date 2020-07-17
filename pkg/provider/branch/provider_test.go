@@ -43,6 +43,7 @@ var (
 
 	MockPodName1      = "pod_name"
 	MockPodNamespace1 = "pod_namespace"
+	PodUID1           = "uid-1"
 	MockPodUID1       = types.UID("uid-1")
 
 	MockPod1 = &v1.Pod{
@@ -193,10 +194,9 @@ func TestBranchENIProvider_DeleteBranchUsedByPods(t *testing.T) {
 	provider.trunkENICache[NodeName] = fakeTrunk1
 	provider.trunkENICache[NodeName+"2"] = fakeTrunk2
 
-	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(MockPodNamespace1, MockPodName1).Return(MockError)
-	fakeTrunk2.EXPECT().PushBranchENIsToCoolDownQueue(MockPodNamespace1, MockPodName1).Return(nil)
+	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1).Return(nil)
 
-	_, err := provider.DeleteBranchUsedByPods(MockPodNamespace1, MockPodName1)
+	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
 
 	assert.NoError(t, err)
 }
@@ -215,52 +215,11 @@ func TestBranchENIProvider_DeleteBranchUsedByPods_PodNotFound(t *testing.T) {
 	provider.trunkENICache[NodeName] = fakeTrunk1
 	provider.trunkENICache[NodeName+"2"] = fakeTrunk2
 
-	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(MockPodNamespace1, MockPodName1).Return(MockError)
-	fakeTrunk2.EXPECT().PushBranchENIsToCoolDownQueue(MockPodNamespace1, MockPodName1).Return(MockError)
+	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1).Return(MockError)
 
-	_, err := provider.DeleteBranchUsedByPods(MockPodNamespace1, MockPodName1)
+	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
 
 	assert.Error(t, MockError, err)
-}
-
-// TestBranchENIProvider_MarkPodBeingDeleted tests that if Trunk eni for pod is found, correct function is called
-func TestBranchENIProvider_MarkPodBeingDeleted(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	provider := getProvider()
-	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-	provider.trunkENICache[NodeName] = fakeTrunk
-
-	fakeTrunk.EXPECT().MarkPodBeingDeleted(MockPodUID1, MockPodNamespace1, MockPodName1).Return(nil)
-
-	_, err := provider.MarkPodBeingDeleted(NodeName, MockPodUID1, MockPodNamespace1, MockPodName1)
-	assert.NoError(t, err)
-}
-
-// TestBranchENIProvider_MarkPodBeingDeleted_Error tests that error is propogated back in case the trunk ENI function
-// returns an error
-func TestBranchENIProvider_MarkPodBeingDeleted_Error(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	provider := getProvider()
-	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-	provider.trunkENICache[NodeName] = fakeTrunk
-
-	fakeTrunk.EXPECT().MarkPodBeingDeleted(MockPodUID1, MockPodNamespace1, MockPodName1).Return(MockError)
-
-	_, err := provider.MarkPodBeingDeleted(NodeName, MockPodUID1, MockPodNamespace1, MockPodName1)
-	assert.Error(t, MockError, err)
-}
-
-// TestBranchENIProvider_MarkPodBeingDeleted_TrunkNotFound tests error is thrown if the trunk eni for given node is not
-// found in cache
-func TestBranchENIProvider_MarkPodBeingDeleted_TrunkNotFound(t *testing.T) {
-	provider := getProvider()
-
-	_, err := provider.MarkPodBeingDeleted(NodeName, MockPodUID1, MockPodNamespace1, MockPodName1)
-	assert.NotNil(t, err)
 }
 
 // TestBranchENIProvider_DeInitResources verifies that resources is removed from cache after calling de init workflow

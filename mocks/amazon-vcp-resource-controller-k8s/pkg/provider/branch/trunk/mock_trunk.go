@@ -9,7 +9,6 @@ import (
 	trunk "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
-	types "k8s.io/apimachinery/pkg/types"
 	reflect "reflect"
 )
 
@@ -77,32 +76,18 @@ func (mr *MockTrunkENIMockRecorder) InitTrunk(arg0, arg1 interface{}) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitTrunk", reflect.TypeOf((*MockTrunkENI)(nil).InitTrunk), arg0, arg1)
 }
 
-// MarkPodBeingDeleted mocks base method
-func (m *MockTrunkENI) MarkPodBeingDeleted(arg0 types.UID, arg1, arg2 string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MarkPodBeingDeleted", arg0, arg1, arg2)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// MarkPodBeingDeleted indicates an expected call of MarkPodBeingDeleted
-func (mr *MockTrunkENIMockRecorder) MarkPodBeingDeleted(arg0, arg1, arg2 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkPodBeingDeleted", reflect.TypeOf((*MockTrunkENI)(nil).MarkPodBeingDeleted), arg0, arg1, arg2)
-}
-
 // PushBranchENIsToCoolDownQueue mocks base method
-func (m *MockTrunkENI) PushBranchENIsToCoolDownQueue(arg0, arg1 string) error {
+func (m *MockTrunkENI) PushBranchENIsToCoolDownQueue(arg0 string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PushBranchENIsToCoolDownQueue", arg0, arg1)
+	ret := m.ctrl.Call(m, "PushBranchENIsToCoolDownQueue", arg0)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // PushBranchENIsToCoolDownQueue indicates an expected call of PushBranchENIsToCoolDownQueue
-func (mr *MockTrunkENIMockRecorder) PushBranchENIsToCoolDownQueue(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockTrunkENIMockRecorder) PushBranchENIsToCoolDownQueue(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PushBranchENIsToCoolDownQueue", reflect.TypeOf((*MockTrunkENI)(nil).PushBranchENIsToCoolDownQueue), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PushBranchENIsToCoolDownQueue", reflect.TypeOf((*MockTrunkENI)(nil).PushBranchENIsToCoolDownQueue), arg0)
 }
 
 // PushENIsToFrontOfDeleteQueue mocks base method

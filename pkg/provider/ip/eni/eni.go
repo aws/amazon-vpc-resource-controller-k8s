@@ -18,6 +18,7 @@ package eni
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
@@ -80,15 +81,17 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, err
 				eniID:             *nwInterface.NetworkInterfaceId,
 			}
 			for _, ip := range nwInterface.PrivateIpAddresses {
+				if *ip.Primary != true {
+					availIPs = append(availIPs, *ip.PrivateIpAddress)
+					e.ipToENIMap[*ip.PrivateIpAddress] = eni
+				}
 				eni.remainingCapacity--
-				availIPs = append(availIPs, *ip.PrivateIpAddress)
-				e.ipToENIMap[*ip.PrivateIpAddress] = eni
 			}
 			e.attachedENIs = append(e.attachedENIs, eni)
 		}
 	}
 
-	return availIPs, nil
+	return e.addSubnetMaskToIPSlice(availIPs), nil
 }
 
 // CreateIPV4Address creates IPv4 address and returns the list of assigned IPs along with the error if not all the required
@@ -183,7 +186,7 @@ func (e *eniManager) CreateIPV4Address(required int, ec2APIHelper api.EC2APIHelp
 			required, len(assignedIPv4Address))
 	}
 
-	return assignedIPv4Address, err
+	return e.addSubnetMaskToIPSlice(assignedIPv4Address), err
 }
 
 // DeleteIPV4Address deletes the list of IPv4 addresses and returns the list of IPs that failed to delete along with the
@@ -195,9 +198,10 @@ func (e *eniManager) DeleteIPV4Address(ipList []string, ec2APIHelper api.EC2APIH
 	var failedToUnAssign []string
 	var errors []error
 
+	ipList = e.stripSubnetMaskFromIPSlice(ipList)
+
 	groupedIPs := e.groupIPsPerENI(ipList)
 	for eni, ips := range groupedIPs {
-
 		err := ec2APIHelper.UnassignPrivateIpAddresses(eni.eniID, ips)
 		if err != nil {
 			errors = append(errors, err)
@@ -255,4 +259,18 @@ func (e *eniManager) groupIPsPerENI(deleteList []string) map[*eni][]string {
 	}
 
 	return toDelete
+}
+
+func (e *eniManager) addSubnetMaskToIPSlice(ipAddresses []string) []string {
+	for i := 0; i < len(ipAddresses); i++ {
+		ipAddresses[i] = ipAddresses[i] + "/" + e.instance.SubnetMask()
+	}
+	return ipAddresses
+}
+
+func (e *eniManager) stripSubnetMaskFromIPSlice(ipAddresses []string) []string {
+	for i := 0; i < len(ipAddresses); i++ {
+		ipAddresses[i] = strings.Split(ipAddresses[i], "/")[0]
+	}
+	return ipAddresses
 }
