@@ -235,9 +235,9 @@ func TestEniManager_CreateIPV4Address_FromNewENI(t *testing.T) {
 	mockInstance.EXPECT().InstanceSecurityGroup().Return(instanceSG).Times(2)
 
 	gomock.InOrder(
-		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, aws.Int64(3),
+		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
 			&ENIDescription, nil, 3).Return(networkInterface1, nil),
-		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, aws.Int64(3),
+		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
 			&ENIDescription, nil, 1).Return(networkInterface2, nil),
 	)
 
@@ -270,9 +270,9 @@ func TestEniManager_CreateIPV4Address_InBetweenENIFail(t *testing.T) {
 	mockInstance.EXPECT().InstanceSecurityGroup().Return(instanceSG).Times(2)
 
 	gomock.InOrder(
-		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, aws.Int64(3),
+		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
 			&ENIDescription, nil, 3).Return(networkInterface1, nil),
-		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, aws.Int64(3),
+		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
 			&ENIDescription, nil, 1).Return(nil, mockError),
 	)
 

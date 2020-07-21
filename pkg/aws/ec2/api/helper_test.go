@@ -56,6 +56,13 @@ var (
 	securityGroup2 = "sg-00000000000000002"
 	securityGroups = []string{securityGroup1, securityGroup2}
 
+	tags = []*ec2.Tag{
+		{
+			Key:   aws.String("mock-key"),
+			Value: aws.String("mock-val"),
+		},
+	}
+
 	eniDescription           = "mock description of eni"
 	eniDescriptionWithPrefix = "aws-k8s-" + eniDescription
 	mockError                = fmt.Errorf("failed to do ec2 call")
@@ -76,6 +83,12 @@ var (
 		Description: &eniDescriptionWithPrefix,
 		Groups:      aws.StringSlice(securityGroups),
 		SubnetId:    &subnetId,
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),
+				Tags:         tags,
+			},
+		},
 	}
 
 	createNetworkInterfaceOutput = &ec2.CreateNetworkInterfaceOutput{
@@ -144,8 +157,7 @@ var (
 		}},
 	}
 
-	describeTrunkInterfaceAssociationsOutput =
-		&ec2.DescribeTrunkInterfaceAssociationsOutput{InterfaceAssociations: []*ec2.TrunkInterfaceAssociation{
+	describeTrunkInterfaceAssociationsOutput = &ec2.DescribeTrunkInterfaceAssociationsOutput{InterfaceAssociations: []*ec2.TrunkInterfaceAssociation{
 		{
 			BranchInterfaceId: &branchInterfaceId,
 			TrunkInterfaceId:  &trunkInterfaceId,
@@ -312,7 +324,7 @@ func TestEc2APIHelper_CreateNetworkInterface_NoSecondaryIP(t *testing.T) {
 
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(createNetworkInterfaceOutput, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, 0, nil)
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, branchInterfaceId, *output.NetworkInterfaceId)
@@ -332,7 +344,7 @@ func TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIP(t *testing.T) {
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).
 		Return(createNetworkInterfaceOutput, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, 5, nil)
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 5, nil)
 
 	createNetworkInterfaceInput.SecondaryPrivateIpAddressCount = nil
 
@@ -351,7 +363,7 @@ func TestEc2APIHelper_CreateNetworkInterface_TypeTrunk(t *testing.T) {
 	createNetworkInterfaceInput.InterfaceType = &interfaceTypeTrunk
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(createNetworkInterfaceOutput, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, 0, &interfaceTypeTrunk)
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, &interfaceTypeTrunk)
 
 	createNetworkInterfaceInput.InterfaceType = nil
 
@@ -369,7 +381,7 @@ func TestEc2APIHelper_CreateNetworkInterface_EmptyResponse(t *testing.T) {
 
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(nil, nil)
 
-	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, 0, nil)
+	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, nil)
 
 	assert.NotNil(t, err)
 }
@@ -383,7 +395,7 @@ func TestEc2APIHelper_CreateNetworkInterface_Error(t *testing.T) {
 
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(nil, mockError)
 
-	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, 0, nil)
+	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, nil)
 
 	assert.Error(t, err, mockError)
 }
@@ -578,50 +590,6 @@ func TestEc2APIHelper_DescribeTrunkInterfaceAssociation_Error(t *testing.T) {
 	assert.Error(t, mockError, err)
 }
 
-// TestEc2APIHelper_GetTrunkInterface tests that trunk interface for the instance is returned under valid input
-func TestEc2APIHelper_GetTrunkInterface(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
-
-	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingInstanceId).
-		Return(describeNetworkInterfaceOutputUsingInterfaceId, nil)
-
-	nwInterface, err := ec2ApiHelper.GetTrunkInterface(&instanceId)
-
-	assert.NoError(t, err)
-	assert.Equal(t, trunkInterfaceId, *nwInterface.NetworkInterfaceId)
-}
-
-// TestEc2APIHelper_GetTrunkInterface_TrunkNotFound tests that no error is returned when trunk interface is not found
-func TestEc2APIHelper_GetTrunkInterface_TrunkNotFound(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
-
-	filters := []*ec2.Filter{{
-		Name:   aws.String("attachment.instance-id"),
-		Values: []*string{&instanceId},
-	}}
-
-	interfaces := []*ec2.NetworkInterface{
-		{
-			InterfaceType:      aws.String("interface"),
-			NetworkInterfaceId: &branchInterfaceId,
-		},
-	}
-
-	mockWrapper.EXPECT().DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
-		Filters: filters,
-	}).Return(&ec2.DescribeNetworkInterfacesOutput{NetworkInterfaces: interfaces}, nil)
-
-	_, err := ec2ApiHelper.GetTrunkInterface(&instanceId)
-
-	assert.NoError(t, err)
-}
-
 func TestEc2APIHelper_CreateAndAttachNetworkInterface(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -638,7 +606,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface(t *testing.T) {
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingOneInterfaceId).
 		Return(describeNetworkInterfaceOutputUsingOneInterfaceId, nil)
 
-	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups,
+	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
 		&deviceIndex, &eniDescription, nil, 0)
 
 	// Clean up
@@ -662,7 +630,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface_DeleteOnAttachFailed(t *te
 	// Test delete is called
 	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil)
 
-	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups,
+	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
 		&deviceIndex, &eniDescription, nil, 0)
 
 	assert.NotNil(t, err)
@@ -687,7 +655,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface_DeleteOnSetTerminationFail
 		Return(describeNetworkInterfaceOutputUsingOneInterfaceId, nil)
 	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil)
 
-	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups,
+	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
 		&deviceIndex, &eniDescription, nil, 0)
 
 	assert.NotNil(t, err)

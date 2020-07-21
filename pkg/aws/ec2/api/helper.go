@@ -24,7 +24,9 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
-	retry "k8s.io/client-go/util/retry"
+	"k8s.io/client-go/util/retry"
+
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 )
 
 const (
@@ -66,15 +68,15 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper) EC2APIHelper {
 
 type EC2APIHelper interface {
 	AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string, vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error)
-	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string,
+	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
 		secondaryPrivateIPCount int, interfaceType *string) (*ec2.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2.Subnet, error)
+	GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error)
 	GetNetworkInterfaceOfInstance(instanceId *string) ([]*ec2.NetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error)
-	GetTrunkInterface(instanceId *string) (*ec2.NetworkInterface, error)
-	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string,
+	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
 		deviceIndex *int64, description *string, interfaceType *string, secondaryIPCount int) (*ec2.NetworkInterface, error)
 	AttachNetworkInterfaceToInstance(instanceId *string, nwInterfaceId *string, deviceIndex *int64) (*string, error)
 	SetDeleteOnTermination(attachmentId *string, eniId *string) error
@@ -87,7 +89,7 @@ type EC2APIHelper interface {
 }
 
 // CreateNetworkInterface creates a new network interface
-func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *string, securityGroups []string,
+func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
 	secondaryPrivateIPCount int, interfaceType *string) (*ec2.NetworkInterface, error) {
 	eniDescription := CreateENIDescriptionPrefix + *description
 
@@ -98,10 +100,22 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 		ec2SecurityGroups = aws.StringSlice(securityGroups)
 	}
 
+	var tagSpecifications []*ec2.TagSpecification
+	if tags != nil && len(tags) != 0 {
+		// Create tag specifications if one or more tags are specified
+		tagSpecifications = []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),
+				Tags:         tags,
+			},
+		}
+	}
+
 	createInput := &ec2.CreateNetworkInterfaceInput{
-		Description: aws.String(eniDescription),
-		Groups:      ec2SecurityGroups,
-		SubnetId:    subnetId,
+		Description:       aws.String(eniDescription),
+		Groups:            ec2SecurityGroups,
+		SubnetId:          subnetId,
+		TagSpecifications: tagSpecifications,
 	}
 
 	if secondaryPrivateIPCount != 0 {
@@ -251,30 +265,12 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 		*associateTrunkInterfaceIP)
 }
 
-// GetTrunkInterface returns the first trunk interface associated with the instance. If no trunk is found
-// it tries to create the trunk interface
-func (h *ec2APIHelper) GetTrunkInterface(instanceId *string) (*ec2.NetworkInterface, error) {
-	networkInterfaces, err := h.GetNetworkInterfaceOfInstance(instanceId)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, nwInterface := range networkInterfaces {
-		if *nwInterface.InterfaceType == "trunk" {
-			return nwInterface, nil
-		}
-	}
-
-	// Trunk not found
-	return nil, nil
-}
-
 // CreateAndAttachNetworkInterface creates and attaches the network interface to the instance. The function will
 // wait till the interface is successfully attached
 func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string,
-	deviceIndex *int64, description *string, interfaceType *string, secondaryIPCount int) (*ec2.NetworkInterface, error) {
+	tags []*ec2.Tag, deviceIndex *int64, description *string, interfaceType *string, secondaryIPCount int) (*ec2.NetworkInterface, error) {
 
-	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, secondaryIPCount, interfaceType)
+	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, secondaryIPCount, interfaceType)
 	if err != nil {
 		return nil, err
 	}
@@ -480,6 +476,27 @@ func (h *ec2APIHelper) UnassignPrivateIpAddresses(eniID string, ips []string) er
 	}
 	_, err := h.ec2Wrapper.UnassignPrivateIPAddresses(unassignPrivateIpAddressesInput)
 	return err
+}
+
+func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error) {
+	filters := []*ec2.Filter{{
+		Name:   aws.String("tag:" + config.TrunkENIIDTag),
+		Values: []*string{trunkID},
+	}}
+
+	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}
+	describeNetworkInterfaceOutput, err := h.ec2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if describeNetworkInterfaceOutput != nil && describeNetworkInterfaceOutput.NetworkInterfaces != nil {
+		return describeNetworkInterfaceOutput.NetworkInterfaces, nil
+	}
+
+	return nil, fmt.Errorf("failed to find network interfaces for request %v",
+		*describeNetworkInterfacesInput)
 }
 
 // DetachAndDeleteNetworkInterface detaches the network interface first and then deletes it

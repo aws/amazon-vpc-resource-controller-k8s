@@ -126,8 +126,7 @@ func timeSinceMs(start time.Time) float64 {
 func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 	log := b.log.WithValues("node name", nodeName)
-	trunkENI := trunk.NewTrunkENI(log, instance.InstanceID(), instance.SubnetID(),
-		instance.SubnetCidrBlock(), instance.InstanceSecurityGroup(), b.ec2APIHelper)
+	trunkENI := trunk.NewTrunkENI(log, instance, b.ec2APIHelper)
 
 	// Initialize the Trunk ENI
 	start := time.Now()

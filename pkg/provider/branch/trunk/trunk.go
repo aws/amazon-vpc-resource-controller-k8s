@@ -19,6 +19,7 @@ package trunk
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
+	"github.com/aws/aws-sdk-go/aws"
 	awsEC2 "github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -85,14 +87,8 @@ type trunkENI struct {
 	ec2ApiHelper api.EC2APIHelper
 	// trunkENIId is the interface id of the trunk network interface
 	trunkENIId string
-	// instanceId is the id of the instance that owns the trunk interface
-	instanceId string
-	// subnetId is the id of the subnet of the trunk network interface
-	subnetId string
-	// subnetCidrBlock is the cidr block of the subnet of trunk interface
-	subnetCidrBlock string
-	// instanceSecurityGroup is the security group of the primary network interface
-	instanceSecurityGroups []string
+	// instance is the pointer to the instance details
+	instance ec2.EC2Instance
 	// usedVlanIds is the list of boolean value representing the used vlan ids
 	usedVlanIds []bool
 	// branchENIs is the list of BranchENIs associated with the trunk
@@ -121,22 +117,18 @@ type ENIDetails struct {
 }
 
 // NewTrunkENI returns a new Trunk ENI interface.
-func NewTrunkENI(logger logr.Logger, instanceId string, instanceSubnetId string,
-	instanceSubnetCidrBlock string, instanceSecurityGroups []string, helper api.EC2APIHelper) TrunkENI {
+func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2APIHelper) TrunkENI {
 
 	availVlans := make([]bool, MaxAllocatableVlanIds)
 	// VlanID 0 cannot be assigned.
 	availVlans[0] = true
 
 	return &trunkENI{
-		log:                    logger,
-		instanceId:             instanceId,
-		subnetId:               instanceSubnetId,
-		subnetCidrBlock:        instanceSubnetCidrBlock,
-		usedVlanIds:            availVlans,
-		ec2ApiHelper:           helper,
-		instanceSecurityGroups: instanceSecurityGroups,
-		uidToBranchENIMap:      make(map[string][]*ENIDetails),
+		log:               logger,
+		usedVlanIds:       availVlans,
+		ec2ApiHelper:      helper,
+		instance:          instance,
+		uidToBranchENIMap: make(map[string][]*ENIDetails),
 	}
 }
 
@@ -150,17 +142,24 @@ func PrometheusRegister() {
 // InitTrunk initializes the trunk network interface and all it's associated branch network interfaces by making calls
 // to EC2 API
 func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
-	log := t.log.WithValues("request", "initialize", "instance ID", t.instanceId)
+	instanceID := t.instance.InstanceID()
+	log := t.log.WithValues("request", "initialize", "instance ID", instance)
+
+	nwInterfaces, err := t.ec2ApiHelper.GetNetworkInterfaceOfInstance(&instanceID)
+	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("describe_instance_nw_interface").Inc()
+		return err
+	}
 
 	// Get trunk network interface
-	trunkInterface, err := t.ec2ApiHelper.GetTrunkInterface(&t.instanceId)
-	if err != nil {
-		trunkENIOperationsErrCount.WithLabelValues("get_trunk").Inc()
-		return fmt.Errorf("failed to find trunk interface: %v", err)
+	for _, nwInterface := range nwInterfaces {
+		if *nwInterface.InterfaceType == "trunk" {
+			t.trunkENIId = *nwInterface.NetworkInterfaceId
+		}
 	}
 
 	// Trunk interface doesn't exists, try to create a new trunk interface
-	if trunkInterface == nil {
+	if t.trunkENIId == "" {
 		freeIndex, err := instance.GetHighestUnusedDeviceIndex()
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("find_free_index").Inc()
@@ -168,8 +167,8 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 			return err
 		}
 
-		trunk, err := t.ec2ApiHelper.CreateAndAttachNetworkInterface(&t.instanceId, &t.subnetId, nil,
-			&freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, 0)
+		trunk, err := t.ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceID, aws.String(t.instance.SubnetID()),
+			nil, nil, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, 0)
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("create_trunk_eni").Inc()
 			log.Error(err, "failed to create trunk interface")
@@ -182,17 +181,17 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		return nil
 	}
 
-	t.trunkENIId = *trunkInterface.NetworkInterfaceId
-
-	// Get the list of branch ENIs associated with the Trunk ENI
-	eniListFromEC2, err := t.GetBranchInterfacesFromEC2()
+	// Get the list of branch ENIs
+	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&t.trunkENIId)
 	if err != nil {
 		return err
 	}
-	if eniListFromEC2 == nil {
-		log.V(1).Info("no branch associated with the trunk", "trunk id", t.trunkENIId)
+
+	// Convert the list of interfaces to a set
+	associatedBranchInterfaces := make(map[string]*awsEC2.NetworkInterface)
+	for _, branchInterface := range branchInterfaces {
+		associatedBranchInterfaces[*branchInterface.NetworkInterfaceId] = branchInterface
 	}
-	eniMapFromEC2 := t.getBranchInterfaceMap(eniListFromEC2)
 
 	// From the list of pods on the given node, and the branch ENIs from EC2 API call rebuild the internal cache
 	for _, pod := range podList {
@@ -202,27 +201,40 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		}
 		var branchENIs []*ENIDetails
 		for _, eni := range eniListFromPod {
-			ec2ENICopy, isPresent := eniMapFromEC2[eni.ID]
+			_, isPresent := associatedBranchInterfaces[eni.ID]
 			if !isPresent {
 				t.log.Error(fmt.Errorf("eni allocated to pod not found in ec2"), "eni not found", "eni", eni)
 				trunkENIOperationsErrCount.WithLabelValues("get_branch_eni_from_ec2").Inc()
 				continue
 			}
-			t.markVlanAssigned(ec2ENICopy.VlanID)
+			// Mark the Vlan ID from the pod's annotation
+			t.markVlanAssigned(eni.VlanID)
 
-			branchENIs = append(branchENIs, ec2ENICopy)
-			delete(eniMapFromEC2, eni.ID)
+			branchENIs = append(branchENIs, eni)
+			delete(associatedBranchInterfaces, eni.ID)
 		}
 		t.uidToBranchENIMap[string(pod.UID)] = branchENIs
 	}
 
 	// Delete the pods that don't belong to any pod.
-	for _, eni := range eniMapFromEC2 {
-		t.log.Info("pushing eni to delete queue as no pod owns it", "eni", eni)
-		eni.deletionTimeStamp = time.Now()
+	for _, branchInterface := range associatedBranchInterfaces {
+		t.log.Info("pushing eni to delete queue as no pod owns it", "eni",
+			*branchInterface.NetworkInterfaceId)
+
+		vlanId, err := t.getVlanIdFromTag(branchInterface.TagSet)
+		if err != nil {
+			trunkENIOperationsErrCount.WithLabelValues("get_vlan_from_tag").Inc()
+			log.Error(err, "failed to find vlan id", "interface", *branchInterface.NetworkInterfaceId)
+			continue
+		}
+
 		// Even thought the ENI is going to be deleted still mark Vlan ID assigned as ENI will sit in cool down queue for a while
-		t.markVlanAssigned(eni.VlanID)
-		t.pushENIToDeleteQueue(eni)
+		t.markVlanAssigned(vlanId)
+		t.pushENIToDeleteQueue(&ENIDetails{
+			ID:                *branchInterface.NetworkInterfaceId,
+			VlanID:            vlanId,
+			deletionTimeStamp: time.Now(),
+		})
 	}
 
 	log.V(1).Info("successfully initialized trunk with all associated branch interfaces",
@@ -275,7 +287,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 
 	// If the security group is empty use the instance security group
 	if securityGroups == nil || len(securityGroups) == 0 {
-		securityGroups = t.instanceSecurityGroups
+		securityGroups = t.instance.InstanceSecurityGroup()
 	}
 
 	var newENIs []*ENIDetails
@@ -284,25 +296,36 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 	var vlanID int
 
 	for i := 0; i < eniCount; i++ {
-		// Create Branch ENI
-		nwInterface, err = t.ec2ApiHelper.CreateNetworkInterface(&BranchEniDescription, &t.subnetId, securityGroups,
-			0, nil)
-		if err != nil {
-			break
-		}
-
-		newENI := &ENIDetails{ID: *nwInterface.NetworkInterfaceId, MACAdd: *nwInterface.MacAddress,
-			IPV4Addr: *nwInterface.PrivateIpAddress, SubnetCIDR: t.subnetCidrBlock}
-
-		newENIs = append(newENIs, newENI)
-
 		// Assign VLAN
 		vlanID, err = t.assignVlanId()
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("assign_vlan_id").Inc()
 			break
 		}
-		newENI.VlanID = vlanID
+
+		// Vlan ID tag workaround, as describe trunk association is not supported with assumed role
+		tags := []*awsEC2.Tag{
+			{
+				Key:   aws.String(config.VLandIDTag),
+				Value: aws.String(strconv.Itoa(vlanID)),
+			},
+			{
+				Key:   aws.String(config.TrunkENIIDTag),
+				Value: &t.trunkENIId,
+			},
+		}
+		// Create Branch ENI
+		nwInterface, err = t.ec2ApiHelper.CreateNetworkInterface(&BranchEniDescription,
+			aws.String(t.instance.SubnetID()), securityGroups, tags, 0, nil)
+		if err != nil {
+			t.freeVlanId(vlanID)
+			break
+		}
+
+		newENI := &ENIDetails{ID: *nwInterface.NetworkInterfaceId, MACAdd: *nwInterface.MacAddress,
+			IPV4Addr: *nwInterface.PrivateIpAddress, SubnetCIDR: t.instance.SubnetCidrBlock(), VlanID: vlanID}
+
+		newENIs = append(newENIs, newENI)
 
 		// Associate Branch to trunk
 		_, err = t.ec2ApiHelper.AssociateBranchToTrunk(&t.trunkENIId, nwInterface.NetworkInterfaceId, vlanID)
@@ -417,7 +440,8 @@ func (t *trunkENI) getBranchInterfacesUsedByPod(pod *v1.Pod) (eniDetails []*ENID
 	return
 }
 
-// GetBranchInterfacesFromEC2 returns the list of branch interfaces associated with the trunk ENI
+// GetBranchInterfacesFromEC2 returns the list of branch interfaces associated with the trunk ENI. This is not supported
+// yet
 func (t *trunkENI) GetBranchInterfacesFromEC2() (eniDetails []*ENIDetails, err error) {
 	// Get the branch associated with the trunk and store the result in the cache
 	associations, err := t.ec2ApiHelper.DescribeTrunkInterfaceAssociation(&t.trunkENIId)
@@ -438,7 +462,7 @@ func (t *trunkENI) GetBranchInterfacesFromEC2() (eniDetails []*ENIDetails, err e
 		eniDetail := &ENIDetails{
 			ID:         *association.BranchInterfaceId,
 			VlanID:     int(*association.VlanId),
-			SubnetCIDR: t.subnetCidrBlock,
+			SubnetCIDR: t.instance.SubnetCidrBlock(),
 		}
 		eniDetails = append(eniDetails, eniDetail)
 	}
@@ -534,4 +558,15 @@ func (t *trunkENI) freeVlanId(vlanId int) {
 		return
 	}
 	t.usedVlanIds[vlanId] = false
+}
+
+func (t *trunkENI) getVlanIdFromTag(tags []*awsEC2.Tag) (int, error) {
+
+	for _, tag := range tags {
+		if *tag.Key == config.VLandIDTag {
+			return strconv.Atoi(*tag.Value)
+		}
+	}
+
+	return 0, fmt.Errorf("failed to find vlan tag from the list of tags")
 }

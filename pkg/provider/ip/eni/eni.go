@@ -159,7 +159,7 @@ func (e *eniManager) CreateIPV4Address(required int, ec2APIHelper api.EC2APIHelp
 			want = ipLimit
 		}
 		nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
-			aws.String(e.instance.SubnetID()), e.instance.InstanceSecurityGroup(), aws.Int64(deviceIndex),
+			aws.String(e.instance.SubnetID()), e.instance.InstanceSecurityGroup(), nil, aws.Int64(deviceIndex),
 			&ENIDescription, nil, want)
 		if err != nil {
 			// TODO: Check if any clean up is required here for linux nodes only?
