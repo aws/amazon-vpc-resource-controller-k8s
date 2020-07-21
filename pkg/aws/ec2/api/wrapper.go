@@ -54,6 +54,7 @@ type EC2Wrapper interface {
 	AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error)
 	DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
+	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
 }
 
 var (
@@ -275,6 +276,20 @@ var (
 		[]string{"api"},
 	)
 
+	ec2CreateNetworkInterfacePermissionCallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_create_network_interface_permission_api_call_count",
+			Help: "The number of calls made to create network interface permission",
+		},
+	)
+
+	ec2CreateNetworkInterfacePermissionErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_create_network_interface_permission_api_err_count",
+			Help: "The number of errors encountered while making calls to create network interface permission",
+		},
+	)
+
 	prometheusRegistered = false
 )
 
@@ -317,70 +332,87 @@ func prometheusRegister() {
 }
 
 type ec2Wrapper struct {
-	ec2ServiceClient *ec2.EC2
+	instanceServiceClient *ec2.EC2
+	userServiceClient     *ec2.EC2
+	accountID             string
 }
 
+// NewEC2Wrapper takes the roleARN that will be assumed to make all the EC2 API Calls, if no roleARN
+// is passed then the ec2 client will be initialized with the instance's service role account.
 func NewEC2Wrapper(roleARN string, qps int, burst int, log logr.Logger) (EC2Wrapper, error) {
 	// Register the metrics
 	prometheusRegister()
 
+	ec2Wrapper := &ec2Wrapper{}
+
 	// Create a new session
-	sess := session.Must(session.NewSession())
+	instanceSession := session.Must(session.NewSession())
 
 	// Get the region from the ec2 Metadata if the region is missing in the session config
-	if aws.StringValue(sess.Config.Region) == "" {
-		ec2Metadata := ec2metadata.New(sess)
-		region, err := ec2Metadata.Region()
-		if err != nil {
-			return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
-		}
-		log.V(1).Info("setting the region from instance metadata")
-		sess.Config.Region = aws.String(region)
-	}
-
-	log.Info("using the region", "region", sess.Config.Region)
-
-	// Create a rate limited http client
-	client, err := utils.NewRateLimitedClient(qps, burst)
+	ec2Metadata := ec2metadata.New(instanceSession)
+	region, err := ec2Metadata.Region()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v", qps, burst, err)
+		return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
+	}
+	instanceSession.Config.Region = aws.String(region)
+	instanceIdentity, err := ec2Metadata.GetInstanceIdentityDocument()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get the instance identity document %v", err)
+	}
+	ec2Wrapper.accountID = instanceIdentity.AccountID
+
+	provider := &ec2rolecreds.EC2RoleProvider{
+		Client: ec2Metadata,
 	}
 
-	log.Info("created rate limited http client", "qps", qps, "burst", burst)
+	instanceSession.Config.Credentials = credentials.NewCredentials(provider)
 
-	var providers []credentials.Provider
+	ec2Wrapper.instanceServiceClient = ec2.New(instanceSession, aws.NewConfig().WithMaxRetries(MaxRetries).
+		WithRegion(*instanceSession.Config.Region))
 
-	// Add the regional and global (in case regional is disabled by user) credential providers to the chain when the role
-	// ARN is provided by the user
+	// Role ARN is passed, assume the role ARN to make EC2 API Calls
 	if roleARN != "" {
-		// Add the regional sts end point
+		var providers []credentials.Provider
+
+		userStsSession := session.Must(session.NewSession())
+		userStsSession.Config.Region = instanceSession.Config.Region
+
+		// Create a rate limited http client
+		client, err := utils.NewRateLimitedClient(qps, burst)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v", qps, burst, err)
+		}
+		log.Info("created rate limited http client", "qps", qps, "burst", burst)
+
+		// Get the regional sts end point
 		regionalSTSEndpoint, err := endpoints.DefaultResolver().
-			EndpointFor("sts", aws.StringValue(sess.Config.Region), endpoints.STSRegionalEndpointOption)
+			EndpointFor("sts", aws.StringValue(userStsSession.Config.Region), endpoints.STSRegionalEndpointOption)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get the regional sts endoint for region %s: %v",
-				*sess.Config.Region, err)
+				*userStsSession.Config.Region, err)
 		}
 
+		// Add the regional sts end point
 		regionalProvider := &stscreds.AssumeRoleProvider{
-			Client: sts.New(sess, aws.NewConfig().WithHTTPClient(client).
+			Client: sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
 				WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
 			RoleARN:  roleARN,
 			Duration: time.Minute * 60,
 		}
 		providers = append(providers, regionalProvider)
 
-		// Add the global sts end point
+		// Get the global sts end point
 		globalSTSEndpoint, err := endpoints.DefaultResolver().
-			EndpointFor("sts", aws.StringValue(sess.Config.Region))
+			EndpointFor("sts", aws.StringValue(userStsSession.Config.Region))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get the global sts endoint for region %s: %v",
-				*sess.Config.Region, err)
+				*userStsSession.Config.Region, err)
 		}
 
-		// If the regional STS endpoint is different than the global STS endpoint then add the provider
+		// If the regional STS endpoint is different than the global STS endpoint then add the global sts endpoint
 		if regionalSTSEndpoint.URL != globalSTSEndpoint.URL {
 			globalProvider := &stscreds.AssumeRoleProvider{
-				Client: sts.New(sess, aws.NewConfig().WithHTTPClient(client).
+				Client: sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
 					WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
 				RoleARN:  roleARN,
 				Duration: time.Minute * 60,
@@ -389,19 +421,14 @@ func NewEC2Wrapper(roleARN string, qps int, burst int, log logr.Logger) (EC2Wrap
 		}
 		log.Info("initialized the regional/global providers", "roleARN", roleARN)
 
-		// Role ARN is not provided, will use the credential provider using instance metadata
+		ec2Wrapper.userServiceClient = ec2.New(userStsSession, aws.NewConfig().WithHTTPClient(client))
+
 	} else {
-		provider := &ec2rolecreds.EC2RoleProvider{
-			Client: ec2metadata.New(sess),
-		}
-		providers = append(providers, provider)
+		// Role ARN is not provided, use the instance service account as the user service account
+		ec2Wrapper.userServiceClient = ec2Wrapper.instanceServiceClient
 	}
 
-	sess.Config.Credentials = credentials.NewChainCredentials(providers)
-
-	return &ec2Wrapper{
-		ec2ServiceClient: ec2.New(sess),
-	}, nil
+	return ec2Wrapper, nil
 }
 
 func timeSinceMs(start time.Time) float64 {
@@ -410,7 +437,7 @@ func timeSinceMs(start time.Time) float64 {
 
 func (e *ec2Wrapper) DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
 	start := time.Now()
-	describeInstancesOutput, err := e.ec2ServiceClient.DescribeInstances(input)
+	describeInstancesOutput, err := e.userServiceClient.DescribeInstances(input)
 	ec2APICallLatencies.WithLabelValues("describe_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -427,7 +454,7 @@ func (e *ec2Wrapper) DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.
 
 func (e *ec2Wrapper) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error) {
 	start := time.Now()
-	createNetworkInterfaceOutput, err := e.ec2ServiceClient.CreateNetworkInterface(input)
+	createNetworkInterfaceOutput, err := e.userServiceClient.CreateNetworkInterface(input)
 	ec2APICallLatencies.WithLabelValues("create_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -445,7 +472,7 @@ func (e *ec2Wrapper) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInp
 
 func (e *ec2Wrapper) AttachNetworkInterface(input *ec2.AttachNetworkInterfaceInput) (*ec2.AttachNetworkInterfaceOutput, error) {
 	start := time.Now()
-	attachNetworkInterfaceOutput, err := e.ec2ServiceClient.AttachNetworkInterface(input)
+	attachNetworkInterfaceOutput, err := e.userServiceClient.AttachNetworkInterface(input)
 	ec2APICallLatencies.WithLabelValues("attach_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -462,7 +489,7 @@ func (e *ec2Wrapper) AttachNetworkInterface(input *ec2.AttachNetworkInterfaceInp
 
 func (e *ec2Wrapper) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
 	start := time.Now()
-	deleteNetworkInterfaceOutput, err := e.ec2ServiceClient.DeleteNetworkInterface(input)
+	deleteNetworkInterfaceOutput, err := e.userServiceClient.DeleteNetworkInterface(input)
 	ec2APICallLatencies.WithLabelValues("delete_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -479,7 +506,7 @@ func (e *ec2Wrapper) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInp
 
 func (e *ec2Wrapper) DetachNetworkInterface(input *ec2.DetachNetworkInterfaceInput) (*ec2.DetachNetworkInterfaceOutput, error) {
 	start := time.Now()
-	detachNetworkInterfaceOutput, err := e.ec2ServiceClient.DetachNetworkInterface(input)
+	detachNetworkInterfaceOutput, err := e.userServiceClient.DetachNetworkInterface(input)
 	ec2APICallLatencies.WithLabelValues("detach_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -496,7 +523,7 @@ func (e *ec2Wrapper) DetachNetworkInterface(input *ec2.DetachNetworkInterfaceInp
 
 func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
 	start := time.Now()
-	describeNetworkInterfacesOutput, err := e.ec2ServiceClient.DescribeNetworkInterfaces(input)
+	describeNetworkInterfacesOutput, err := e.userServiceClient.DescribeNetworkInterfaces(input)
 	ec2APICallLatencies.WithLabelValues("describe_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -513,7 +540,7 @@ func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfa
 
 func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
 	start := time.Now()
-	assignPrivateIPAddressesOutput, err := e.ec2ServiceClient.AssignPrivateIpAddresses(input)
+	assignPrivateIPAddressesOutput, err := e.userServiceClient.AssignPrivateIpAddresses(input)
 	ec2APICallLatencies.WithLabelValues("assign_private_ip").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -531,7 +558,7 @@ func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddresse
 
 func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error) {
 	start := time.Now()
-	unAssignPrivateIPAddressesOutput, err := e.ec2ServiceClient.UnassignPrivateIpAddresses(input)
+	unAssignPrivateIPAddressesOutput, err := e.userServiceClient.UnassignPrivateIpAddresses(input)
 	ec2APICallLatencies.WithLabelValues("unassign_private_ip").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -549,7 +576,7 @@ func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddr
 
 func (e *ec2Wrapper) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
 	start := time.Now()
-	createTagsOutput, err := e.ec2ServiceClient.CreateTags(input)
+	createTagsOutput, err := e.userServiceClient.CreateTags(input)
 	ec2APICallLatencies.WithLabelValues("create_tags").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -566,7 +593,7 @@ func (e *ec2Wrapper) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutp
 
 func (e *ec2Wrapper) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
 	start := time.Now()
-	output, err := e.ec2ServiceClient.DescribeSubnets(input)
+	output, err := e.userServiceClient.DescribeSubnets(input)
 	ec2APICallLatencies.WithLabelValues("describe_subnets").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -581,9 +608,10 @@ func (e *ec2Wrapper) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.Desc
 	return output, err
 }
 
+// DescribeTrunkInterfaceAssociations cannot be used as it's not public yet.
 func (e *ec2Wrapper) DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error) {
 	start := time.Now()
-	describeTrunkInterfaceAssociationInput, err := e.ec2ServiceClient.DescribeTrunkInterfaceAssociations(input)
+	describeTrunkInterfaceAssociationInput, err := e.instanceServiceClient.DescribeTrunkInterfaceAssociations(input)
 	ec2APICallLatencies.WithLabelValues("describe_trunk_association").Observe(timeSinceMs(start))
 
 	// Metric Update
@@ -600,7 +628,7 @@ func (e *ec2Wrapper) DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunk
 
 func (e *ec2Wrapper) AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error) {
 	start := time.Now()
-	associateTrunkInterfaceOutput, err := e.ec2ServiceClient.AssociateTrunkInterface(input)
+	associateTrunkInterfaceOutput, err := e.instanceServiceClient.AssociateTrunkInterface(input)
 	ec2APICallLatencies.WithLabelValues("associate_trunk_to_branch").Observe(timeSinceMs(start))
 
 	// Metric Update
@@ -617,7 +645,7 @@ func (e *ec2Wrapper) AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceI
 
 func (e *ec2Wrapper) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error) {
 	start := time.Now()
-	modifyNetworkInterfaceAttributeOutput, err := e.ec2ServiceClient.ModifyNetworkInterfaceAttribute(input)
+	modifyNetworkInterfaceAttributeOutput, err := e.userServiceClient.ModifyNetworkInterfaceAttribute(input)
 	ec2APICallLatencies.WithLabelValues("modify_network_interface_attribute").Observe(timeSinceMs(start))
 
 	// Metric Update
@@ -630,4 +658,21 @@ func (e *ec2Wrapper) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInt
 	}
 
 	return modifyNetworkInterfaceAttributeOutput, err
+}
+
+func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error) {
+	// Add the account ID of the instance running the controller
+	input.AwsAccountId = &e.accountID
+	output, err := e.userServiceClient.CreateNetworkInterfacePermission(input)
+
+	// Metric Update
+	ec2APICallCnt.Inc()
+	ec2CreateNetworkInterfacePermissionCallCnt.Inc()
+
+	if err != nil {
+		ec2APIErrCnt.Inc()
+		ec2CreateNetworkInterfacePermissionErrCnt.Inc()
+	}
+
+	return output, err
 }

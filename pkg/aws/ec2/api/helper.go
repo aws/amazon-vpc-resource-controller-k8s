@@ -72,7 +72,7 @@ type EC2APIHelper interface {
 		secondaryPrivateIPCount int, interfaceType *string) (*ec2.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2.Subnet, error)
-	GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error)
+	GetBranchNetworkInterface(trunkID *string) (*ec2.DescribeNetworkInterfacesOutput, error)
 	GetNetworkInterfaceOfInstance(instanceId *string) ([]*ec2.NetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error)
@@ -243,6 +243,28 @@ func (h *ec2APIHelper) DescribeTrunkInterfaceAssociation(trunkInterfaceId *strin
 // AssociateBranchToTrunk associates a branch network interface to a trunk network interface
 func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string,
 	vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error) {
+
+	// Get attach permission from User's Service Linked Role. Account ID will be added by the EC2 API Wrapper
+	input := &ec2.CreateNetworkInterfacePermissionInput{
+		NetworkInterfaceId: branchInterfaceId,
+		Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
+	}
+
+	_, err := h.ec2Wrapper.CreateNetworkInterfacePermission(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get attach network interface permissions for branch %v", err)
+	}
+
+	// Get attach permission from User's Service Linked Role. Account ID will be added by the EC2 API Wrapper
+	input = &ec2.CreateNetworkInterfacePermissionInput{
+		NetworkInterfaceId: trunkInterfaceId,
+		Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
+	}
+
+	_, err = h.ec2Wrapper.CreateNetworkInterfacePermission(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get attach network interface permissions for trunk %v", err)
+	}
 
 	associateTrunkInterfaceIP := &ec2.AssociateTrunkInterfaceInput{
 		BranchInterfaceId: branchInterfaceId,
@@ -478,7 +500,7 @@ func (h *ec2APIHelper) UnassignPrivateIpAddresses(eniID string, ips []string) er
 	return err
 }
 
-func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error) {
+func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) (*ec2.DescribeNetworkInterfacesOutput, error) {
 	filters := []*ec2.Filter{{
 		Name:   aws.String("tag:" + config.TrunkENIIDTag),
 		Values: []*string{trunkID},
@@ -487,16 +509,7 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2.Networ
 	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}
 	describeNetworkInterfaceOutput, err := h.ec2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
 
-	if err != nil {
-		return nil, err
-	}
-
-	if describeNetworkInterfaceOutput != nil && describeNetworkInterfaceOutput.NetworkInterfaces != nil {
-		return describeNetworkInterfaceOutput.NetworkInterfaces, nil
-	}
-
-	return nil, fmt.Errorf("failed to find network interfaces for request %v",
-		*describeNetworkInterfacesInput)
+	return describeNetworkInterfaceOutput, err
 }
 
 // DetachAndDeleteNetworkInterface detaches the network interface first and then deletes it

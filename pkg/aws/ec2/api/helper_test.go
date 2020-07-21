@@ -233,6 +233,16 @@ var (
 		},
 	}
 
+	createNetworkInterfacePermissionInputBranch = &ec2.CreateNetworkInterfacePermissionInput{
+		NetworkInterfaceId: &branchInterfaceId,
+		Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
+	}
+
+	createNetworkInterfacePermissionInputTrunk = &ec2.CreateNetworkInterfacePermissionInput{
+		NetworkInterfaceId: &trunkInterfaceId,
+		Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
+	}
+
 	maxRetryOnError = 3
 )
 
@@ -276,6 +286,10 @@ func TestEc2APIHelper_AssociateBranchToTrunk(t *testing.T) {
 	// Return response with association id
 	mockWrapper.EXPECT().AssociateTrunkInterface(associateTrunkInterfaceInput).
 		Return(associateTrunkInterfaceOutput, nil)
+	mockWrapper.EXPECT().CreateNetworkInterfacePermission(createNetworkInterfacePermissionInputBranch).
+		Return(nil, nil)
+	mockWrapper.EXPECT().CreateNetworkInterfacePermission(createNetworkInterfacePermissionInputTrunk).
+		Return(nil, nil)
 
 	_, err := ec2ApiHelper.AssociateBranchToTrunk(&trunkInterfaceId, &branchInterfaceId, vlanId)
 
@@ -293,6 +307,10 @@ func TestEc2APIHelper_AssociateBranchToTrunk_AssociationIdMissing(t *testing.T) 
 	// Return empty association response
 	mockWrapper.EXPECT().AssociateTrunkInterface(associateTrunkInterfaceInput).
 		Return(&ec2.AssociateTrunkInterfaceOutput{}, nil)
+	mockWrapper.EXPECT().CreateNetworkInterfacePermission(createNetworkInterfacePermissionInputBranch).
+		Return(nil, nil)
+	mockWrapper.EXPECT().CreateNetworkInterfacePermission(createNetworkInterfacePermissionInputTrunk).
+		Return(nil, nil)
 
 	_, err := ec2ApiHelper.AssociateBranchToTrunk(&trunkInterfaceId, &branchInterfaceId, vlanId)
 
@@ -308,6 +326,10 @@ func TestEc2APIHelper_AssociateBranchToTrunk_Error(t *testing.T) {
 
 	// Return empty association response
 	mockWrapper.EXPECT().AssociateTrunkInterface(associateTrunkInterfaceInput).Return(nil, mockError)
+	mockWrapper.EXPECT().CreateNetworkInterfacePermission(createNetworkInterfacePermissionInputBranch).
+		Return(nil, nil)
+	mockWrapper.EXPECT().CreateNetworkInterfacePermission(createNetworkInterfacePermissionInputTrunk).
+		Return(nil, nil)
 
 	_, err := ec2ApiHelper.AssociateBranchToTrunk(&trunkInterfaceId, &branchInterfaceId, vlanId)
 

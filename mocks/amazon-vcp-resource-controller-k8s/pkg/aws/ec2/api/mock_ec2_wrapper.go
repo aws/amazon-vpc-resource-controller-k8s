@@ -93,6 +93,21 @@ func (mr *MockEC2WrapperMockRecorder) CreateNetworkInterface(arg0 interface{}) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).CreateNetworkInterface), arg0)
 }
 
+// CreateNetworkInterfacePermission mocks base method
+func (m *MockEC2Wrapper) CreateNetworkInterfacePermission(arg0 *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateNetworkInterfacePermission", arg0)
+	ret0, _ := ret[0].(*ec2.CreateNetworkInterfacePermissionOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreateNetworkInterfacePermission indicates an expected call of CreateNetworkInterfacePermission
+func (mr *MockEC2WrapperMockRecorder) CreateNetworkInterfacePermission(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateNetworkInterfacePermission", reflect.TypeOf((*MockEC2Wrapper)(nil).CreateNetworkInterfacePermission), arg0)
+}
+
 // CreateTags mocks base method
 func (m *MockEC2Wrapper) CreateTags(arg0 *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
 	m.ctrl.T.Helper()

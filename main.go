@@ -120,15 +120,16 @@ func main() {
 		}()
 	}
 
-	config := ctrl.GetConfigOrDie()
-	mgr, err := ctrl.NewManager(config, ctrl.Options{
-		SyncPeriod:             &syncPeriod,
-		Scheme:                 scheme,
-		MetricsBindAddress:     metricsAddr,
-		Port:                   9443,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "bb6ce178.k8s.aws",
-		HealthProbeBindAddress: ":61779", // the liveness endpoint is default to "/healthz"
+	kubeConfig := ctrl.GetConfigOrDie()
+	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
+		SyncPeriod:              &syncPeriod,
+		Scheme:                  scheme,
+		MetricsBindAddress:      metricsAddr,
+		Port:                    9443,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        config.LeaderElectionKey,
+		LeaderElectionNamespace: config.LeaderElectionNamespace,
+		HealthProbeBindAddress:  ":61779", // the liveness endpoint is default to "/healthz"
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -137,12 +138,16 @@ func main() {
 
 	// With kube-builder, we have to manually specify the fields on which the objects must be indexed, in order to
 	// list objects using the k8s cache with field selectors
-	mgr.GetFieldIndexer().IndexField(&corev1.Pod{}, "spec.nodeName", func(object runtime.Object) []string {
+	err = mgr.GetFieldIndexer().IndexField(&corev1.Pod{}, "spec.nodeName", func(object runtime.Object) []string {
 		pod := object.(*corev1.Pod)
 		return []string{pod.Spec.NodeName}
 	})
+	if err != nil {
+		setupLog.Error(err, "failed to add index field", "spec.nodeName")
+		os.Exit(1)
+	}
 
-	clientSet, err := kubernetes.NewForConfig(config)
+	clientSet, err := kubernetes.NewForConfig(kubeConfig)
 	if err != nil {
 		setupLog.Error(err, "failed to create client set")
 		os.Exit(1)

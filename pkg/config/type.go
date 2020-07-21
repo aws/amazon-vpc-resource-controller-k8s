@@ -56,6 +56,11 @@ const (
 	TrunkENIIDTag = "vpcresources.k8s.aws/trunk_eni_id"
 )
 
+const (
+	LeaderElectionKey       = "vpc-resource-controller"
+	LeaderElectionNamespace = "kube-system"
+)
+
 var (
 	// CoolDownPeriod is the time to let kube-proxy propagates IP tables rules before assigning the resource back to new pod
 	CoolDownPeriod = time.Second * 30

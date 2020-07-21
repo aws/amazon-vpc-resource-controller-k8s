@@ -45,3 +45,5 @@ spec:
           initialDelaySeconds: 30
           timeoutSeconds: 10
       terminationGracePeriodSeconds: 10
+      nodeSelector:
+        kubernetes.io/arch: linux

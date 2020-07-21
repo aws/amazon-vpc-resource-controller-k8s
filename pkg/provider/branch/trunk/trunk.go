@@ -182,14 +182,20 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	}
 
 	// Get the list of branch ENIs
-	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&t.trunkENIId)
+	branchInterfacesOutput, err := t.ec2ApiHelper.GetBranchNetworkInterface(&t.trunkENIId)
 	if err != nil {
 		return err
 	}
 
+	if branchInterfacesOutput != nil && branchInterfacesOutput.NetworkInterfaces != nil &&
+		len(branchInterfacesOutput.NetworkInterfaces) > 0 {
+		log.Info("no branches associated with the trunk", "trunk id", t.trunkENIId)
+		return nil
+	}
+
 	// Convert the list of interfaces to a set
 	associatedBranchInterfaces := make(map[string]*awsEC2.NetworkInterface)
-	for _, branchInterface := range branchInterfaces {
+	for _, branchInterface := range branchInterfacesOutput.NetworkInterfaces {
 		associatedBranchInterfaces[*branchInterface.NetworkInterfaceId] = branchInterface
 	}
 

@@ -181,10 +181,10 @@ func (mr *MockEC2APIHelperMockRecorder) DetachNetworkInterfaceFromInstance(arg0 
 }
 
 // GetBranchNetworkInterface mocks base method
-func (m *MockEC2APIHelper) GetBranchNetworkInterface(arg0 *string) ([]*ec2.NetworkInterface, error) {
+func (m *MockEC2APIHelper) GetBranchNetworkInterface(arg0 *string) (*ec2.DescribeNetworkInterfacesOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetBranchNetworkInterface", arg0)
-	ret0, _ := ret[0].([]*ec2.NetworkInterface)
+	ret0, _ := ret[0].(*ec2.DescribeNetworkInterfacesOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
