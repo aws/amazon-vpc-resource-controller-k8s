@@ -104,8 +104,7 @@ spec:
       tolerations:
         - operator: Exists
       containers:
-        - image: 744053100597.dkr.ecr.us-west-2.amazonaws.com/amazon-k8s-cni:1
-          #973117571331.dkr.ecr.us-west-2.amazonaws.com/amazon-k8s-cni:dedicated-eni
+        - image: 940911992744.dkr.ecr.us-west-2.amazonaws.com/eks/beta-preview:aws-node-cni-v1
           imagePullPolicy: Always
           ports:
             - containerPort: 61678
