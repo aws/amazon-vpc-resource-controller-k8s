@@ -58,7 +58,7 @@ var (
 	mockError = fmt.Errorf("mock-error")
 
 	instanceType      = "t3.small"
-	t3SmallIPCapacity = vpc.InstanceIPsAvailable[instanceType]
+	t3SmallIPCapacity = vpc.Limits[instanceType].IPv4PerInterface
 
 	nwInterfaces = []*ec2.NetworkInterface{
 		{

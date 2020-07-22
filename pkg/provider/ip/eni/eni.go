@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	ENIDescription = "aws-k0s-eni"
+	ENIDescription = "aws-k8s-eni"
 )
 
 type eniManager struct {
@@ -72,7 +72,12 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, err
 		return nil, err
 	}
 
-	ipLimit := vpc.InstanceIPsAvailable[e.instance.Type()]
+	limits, found := vpc.Limits[e.instance.Type()]
+	if !found {
+		return nil, fmt.Errorf("unsupported instance type")
+	}
+
+	ipLimit := limits.IPv4PerInterface
 	var availIPs []string
 	for _, nwInterface := range nwInterfaces {
 		if nwInterface.PrivateIpAddresses != nil {
@@ -141,8 +146,8 @@ func (e *eniManager) CreateIPV4Address(required int, ec2APIHelper api.EC2APIHelp
 	}
 
 	// List of secondary IPs supported minus the primary IP
-	ipLimit := vpc.InstanceIPsAvailable[e.instance.Type()] - 1
-	eniLimit := vpc.InstanceENIsAvailable[e.instance.Type()]
+	ipLimit := vpc.Limits[e.instance.Type()].IPv4PerInterface - 1
+	eniLimit := vpc.Limits[e.instance.Type()].Interface
 
 	// If the existing ENIs could not assign the required IPs, loop till the new ENIs can assign the required
 	// number of IPv4 Addresses
@@ -217,7 +222,7 @@ func (e *eniManager) DeleteIPV4Address(ipList []string, ec2APIHelper api.EC2APIH
 		log.Info("deleted secondary IPv4 address", "eni", eni.eniID, "IPv4 addresses", ips)
 	}
 
-	ipLimit := vpc.InstanceIPsAvailable[e.instance.Type()] - 1
+	ipLimit := vpc.Limits[e.instance.Type()].IPv4PerInterface - 1
 	primaryENIID := e.instance.PrimaryNetworkInterfaceID()
 
 	// Clean up ENIs that just have the primary network interface attached to them

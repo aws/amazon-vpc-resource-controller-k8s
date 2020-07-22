@@ -25,6 +25,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -48,6 +49,11 @@ var (
 	InterfaceTypeTrunk   = "trunk"
 	TrunkEniDescription  = "trunk-eni"
 	BranchEniDescription = "branch-eni"
+)
+
+var (
+	ErrCurrentlyAtMaxCapacity = fmt.Errorf("cannot create more branches at this point as used branches plus the " +
+		"delete queue is at max capacity")
 )
 
 var (
@@ -188,7 +194,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	}
 
 	if branchInterfacesOutput != nil && branchInterfacesOutput.NetworkInterfaces != nil &&
-		len(branchInterfacesOutput.NetworkInterfaces) > 0 {
+		len(branchInterfacesOutput.NetworkInterfaces) == 0 {
 		log.Info("no branches associated with the trunk", "trunk id", t.trunkENIId)
 		return nil
 	}
@@ -289,6 +295,10 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 	if isPresent {
 		// Possible when older pod with same namespace and name is still being deleted
 		return nil, fmt.Errorf("cannot create new eni entry already exist, older entry : %v", branchENI)
+	}
+
+	if !t.canCreateMore() {
+		return nil, ErrCurrentlyAtMaxCapacity
 	}
 
 	// If the security group is empty use the instance security group
@@ -575,4 +585,19 @@ func (t *trunkENI) getVlanIdFromTag(tags []*awsEC2.Tag) (int, error) {
 	}
 
 	return 0, fmt.Errorf("failed to find vlan tag from the list of tags")
+}
+
+func (t *trunkENI) canCreateMore() bool {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	var usedBranches int
+	for _, branches := range t.uidToBranchENIMap {
+		usedBranches += len(branches)
+	}
+
+	if usedBranches+len(t.deleteQueue) < vpc.Limits[t.instance.Type()].BranchInterface {
+		return true
+	}
+	return false
 }

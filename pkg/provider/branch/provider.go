@@ -203,7 +203,8 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 func (b *branchENIProvider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	instanceName := instance.Name()
 	instanceType := instance.Type()
-	capacity := vpc.InstanceBranchENIsAvailable[instanceType]
+	capacity := vpc.Limits[instanceType].BranchInterface
+
 	if capacity != 0 {
 		err := b.k8s.AdvertiseCapacityIfNotSet(instanceName, config.ResourceNamePodENI, capacity)
 		if err != nil {
@@ -296,6 +297,9 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 
 	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
 	if err != nil {
+		if err == trunk.ErrCurrentlyAtMaxCapacity {
+			return ctrl.Result{RequeueAfter: config.CoolDownPeriod, Requeue: true}, nil
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -400,7 +404,11 @@ func (b *branchENIProvider) GetPool(_ string) (pool.Pool, bool) {
 
 // IsInstanceSupported returns true for linux node as pod eni is only supported for linux worker node
 func (b *branchENIProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
-	if instance.Os() == config.OSLinux {
+	limits, found := vpc.Limits[instance.Type()]
+	if !found {
+		return false
+	}
+	if instance.Os() == config.OSLinux && limits.IsTrunkingCompatible {
 		return true
 	}
 	return false

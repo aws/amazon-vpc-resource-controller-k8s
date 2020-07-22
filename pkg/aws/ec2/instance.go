@@ -100,12 +100,12 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 
 	i.subnetMask = strings.Split(*subnet.CidrBlock, "/")[1]
 
-	maxENIs, ok := vpc.InstanceENIsAvailable[i.instanceType]
+	limits, ok := vpc.Limits[i.instanceType]
 	if !ok {
 		return fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s", i.instanceType)
 	}
 
-	i.deviceIndexes = make([]bool, maxENIs)
+	i.deviceIndexes = make([]bool, limits.Interface)
 	for _, nwInterface := range instance.NetworkInterfaces {
 		index := nwInterface.Attachment.DeviceIndex
 		i.deviceIndexes[*index] = true

@@ -266,16 +266,15 @@ func (p *ipv4Provider) deleteInstanceProviderAndPool(nodeName string) {
 // getCapacity returns the capacity based on the instance type and the instance os
 func getCapacity(instanceType string, instanceOs string) int {
 	// Assign only 1st ENIs non primary IP
-	ipLimit, found := vpc.InstanceIPsAvailable[instanceType]
-	eniLimit := vpc.InstanceENIsAvailable[instanceType]
+	limits, found := vpc.Limits[instanceType]
 	if !found {
 		return 0
 	}
 	var capacity int
 	if instanceOs == config.OSWindows {
-		capacity = ipLimit - 1
+		capacity = limits.IPv4PerInterface - 1
 	} else {
-		capacity = (ipLimit - 1) * eniLimit
+		capacity = (limits.IPv4PerInterface - 1) * limits.Interface
 	}
 
 	return capacity

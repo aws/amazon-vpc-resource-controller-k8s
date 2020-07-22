@@ -40,6 +40,7 @@ import (
 var (
 	// Instance details
 	InstanceId            = "i-00000000000000000"
+	InstanceType          = "c5.xlarge"
 	SubnetId              = "subnet-00000000000000000"
 	SubnetCidrBlock       = "192.168.0.0/16"
 	NodeName              = "test-node"
@@ -160,7 +161,7 @@ var (
 	}
 
 	branchInterfaceOutput = &awsEc2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces:  []*awsEc2.NetworkInterface{
+		NetworkInterfaces: []*awsEc2.NetworkInterface{
 			{
 				InterfaceType:      aws.String("branch"),
 				NetworkInterfaceId: &EniDetails1.ID,
@@ -172,7 +173,7 @@ var (
 				TagSet:             vlan2Tag,
 			},
 		},
-		NextToken:         nil,
+		NextToken: nil,
 	}
 
 	trunkAssociationsBranch1Only = []*awsEc2.TrunkInterfaceAssociation{
@@ -703,6 +704,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.trunkENIId = trunkId
 
+	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
 
@@ -734,6 +736,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.
 	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.trunkENIId = trunkId
 
+	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
 	mockInstance.EXPECT().InstanceSecurityGroup().Return(InstanceSecurityGroup)
@@ -766,6 +769,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.trunkENIId = trunkId
 
+	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
 
@@ -792,6 +796,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.trunkENIId = trunkId
 
+	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(1)
 

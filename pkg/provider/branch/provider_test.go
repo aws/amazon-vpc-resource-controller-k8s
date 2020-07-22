@@ -256,7 +256,7 @@ func TestBranchENIProvider_GetResourceCapacity(t *testing.T) {
 	mockInstance.EXPECT().Type().Return(supportedInstanceType)
 	mockInstance.EXPECT().Name().Return(NodeName)
 	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(NodeName, config.ResourceNamePodENI,
-		vpc.InstanceBranchENIsAvailable[supportedInstanceType])
+		vpc.Limits[supportedInstanceType].BranchInterface)
 
 	err := provider.UpdateResourceCapacity(mockInstance)
 	assert.NoError(t, err)
