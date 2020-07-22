@@ -421,6 +421,7 @@ func NewEC2Wrapper(roleARN string, qps int, burst int, log logr.Logger) (EC2Wrap
 		}
 		log.Info("initialized the regional/global providers", "roleARN", roleARN)
 
+		userStsSession.Config.Credentials = credentials.NewChainCredentials(providers)
 		ec2Wrapper.userServiceClient = ec2.New(userStsSession, aws.NewConfig().WithHTTPClient(client))
 
 	} else {
