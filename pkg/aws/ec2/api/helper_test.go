@@ -86,7 +86,7 @@ var (
 		TagSpecifications: []*ec2.TagSpecification{
 			{
 				ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),
-				Tags:         tags,
+				Tags:         append(tags, defaultControllerTag),
 			},
 		},
 	}

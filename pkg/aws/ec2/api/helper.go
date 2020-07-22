@@ -31,6 +31,8 @@ import (
 
 const (
 	CreateENIDescriptionPrefix = "aws-k8s-"
+	DefaultENITagKey           = "eks:eni:owner"
+	DefaultENITagVal           = "eks-vpc-resource-controller"
 )
 
 var (
@@ -55,6 +57,10 @@ var (
 		Jitter:   0.1,
 		Steps:    7,
 		Cap:      time.Second * 2,
+	}
+	defaultControllerTag = &ec2.Tag{
+		Key:   aws.String(DefaultENITagKey),
+		Value: aws.String(DefaultENITagVal),
 	}
 )
 
@@ -100,15 +106,17 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 		ec2SecurityGroups = aws.StringSlice(securityGroups)
 	}
 
-	var tagSpecifications []*ec2.TagSpecification
-	if tags != nil && len(tags) != 0 {
-		// Create tag specifications if one or more tags are specified
-		tagSpecifications = []*ec2.TagSpecification{
-			{
-				ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),
-				Tags:         tags,
-			},
-		}
+	if tags == nil {
+		tags = []*ec2.Tag{}
+	}
+
+	// Append the default controller tag to scope down the permissions on network interfaces using IAM roles
+	tags = append(tags, defaultControllerTag)
+	tagSpecifications := []*ec2.TagSpecification{
+		{
+			ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),
+			Tags:         tags,
+		},
 	}
 
 	createInput := &ec2.CreateNetworkInterfaceInput{
