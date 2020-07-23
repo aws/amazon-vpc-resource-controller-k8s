@@ -22,6 +22,7 @@ import (
 	"time"
 
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -148,6 +149,48 @@ var (
 				},
 			},
 		},
+	}
+
+	describeTrunkInterfaceInput = &ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: []*string{aws.String(trunkInterfaceId)},
+	}
+
+	branchTag1 = []*ec2.Tag{{
+		Key:   aws.String("tag-key-1"),
+		Value: aws.String("tag-val-1"),
+	}}
+	branchTag2 = []*ec2.Tag{{
+		Key:   aws.String("tag-key-2"),
+		Value: aws.String("tag-val-2"),
+	}}
+
+	networkInterface1 = ec2.NetworkInterface{
+		NetworkInterfaceId: &branchInterfaceId,
+		TagSet:             branchTag1,
+	}
+	networkInterface2 = ec2.NetworkInterface{
+		NetworkInterfaceId: &branchInterfaceId,
+		TagSet:             branchTag2,
+	}
+
+	tokenID = "token"
+
+	describeTrunkInterfaceInput1 = &ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{{
+			Name:   aws.String("tag:" + config.TrunkENIIDTag),
+			Values: []*string{&trunkInterfaceId},
+		}},
+	}
+	describeTrunkInterfaceInput2 = &ec2.DescribeNetworkInterfacesInput{
+		NextToken: &tokenID,
+	}
+
+	describeTrunkInterfaceOutput1 = &ec2.DescribeNetworkInterfacesOutput{
+		NetworkInterfaces: []*ec2.NetworkInterface{&networkInterface1},
+		NextToken:         &tokenID,
+	}
+	describeTrunkInterfaceOutput2 = &ec2.DescribeNetworkInterfacesOutput{
+		NetworkInterfaces: []*ec2.NetworkInterface{&networkInterface2},
 	}
 
 	describeTrunkInterfaceAssociationsInput = &ec2.DescribeTrunkInterfaceAssociationsInput{
@@ -970,4 +1013,19 @@ func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_DescribeReturnsPartial
 	assert.NotNil(t, err)
 	// Assert that even though 2 IPs were assigned, only 1 is returned because the describe call doesn't contain the second IP
 	assert.Equal(t, []string{ipAddress1}, createdIPs)
+}
+
+// TestEc2APIHelper_GetBranchNetworkInterface_PaginatedResults returns the branch interface when paginated results is returned
+func TestEc2APIHelper_GetBranchNetworkInterface_PaginatedResults(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput1).Return(describeTrunkInterfaceOutput1, nil)
+	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput2).Return(describeTrunkInterfaceOutput2, nil)
+
+	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId)
+	assert.NoError(t, err)
+	assert.ElementsMatch(t, []*ec2.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
 }

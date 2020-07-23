@@ -160,20 +160,17 @@ var (
 		},
 	}
 
-	branchInterfaceOutput = &awsEc2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*awsEc2.NetworkInterface{
-			{
-				InterfaceType:      aws.String("branch"),
-				NetworkInterfaceId: &EniDetails1.ID,
-				TagSet:             vlan1Tag,
-			},
-			{
-				InterfaceType:      aws.String("branch"),
-				NetworkInterfaceId: &EniDetails2.ID,
-				TagSet:             vlan2Tag,
-			},
+	branchInterfaces = []*awsEc2.NetworkInterface{
+		{
+			InterfaceType:      aws.String("branch"),
+			NetworkInterfaceId: &EniDetails1.ID,
+			TagSet:             vlan1Tag,
 		},
-		NextToken: nil,
+		{
+			InterfaceType:      aws.String("branch"),
+			NetworkInterfaceId: &EniDetails2.ID,
+			TagSet:             vlan2Tag,
+		},
 	}
 
 	trunkAssociationsBranch1Only = []*awsEc2.TrunkInterfaceAssociation{
@@ -649,7 +646,7 @@ func TestTrunkENI_InitTrunk_TrunkExists_WithBranches(t *testing.T) {
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
 	mockEC2APIHelper.EXPECT().GetNetworkInterfaceOfInstance(&InstanceId).Return(instanceNwInterfaces, nil)
-	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(branchInterfaceOutput, nil)
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(branchInterfaces, nil)
 	err := trunkENI.InitTrunk(FakeInstance, []v1.Pod{*MockPod1, *MockPod2})
 	branchENIs, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 
@@ -681,7 +678,7 @@ func TestTrunkENI_InitTrunk_TrunkExists_DanglingENIs(t *testing.T) {
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
 	mockEC2APIHelper.EXPECT().GetNetworkInterfaceOfInstance(&InstanceId).Return(instanceNwInterfaces, nil)
-	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(branchInterfaceOutput, nil)
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(branchInterfaces, nil)
 
 	err := trunkENI.InitTrunk(FakeInstance, []v1.Pod{*MockPod2})
 	assert.NoError(t, err)
