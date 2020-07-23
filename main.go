@@ -58,7 +58,7 @@ import (
 var (
 	scheme     = runtime.NewScheme()
 	setupLog   = ctrl.Log.WithName("setup")
-	syncPeriod = time.Hour
+	syncPeriod = time.Minute * 30
 )
 
 func init() {

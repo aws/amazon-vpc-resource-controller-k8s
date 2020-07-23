@@ -169,9 +169,7 @@ func (p *pool) UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldRecon
 		log.Error(fmt.Errorf("warm pool job failed: %v", job), "operation failed")
 	}
 
-	if job.Operations == worker.OperationCreate && didSucceed ||
-		job.Operations == worker.OperationDeleted && !didSucceed {
-
+	if job.Resources != nil && len(job.Resources) > 0 {
 		// TODO: limit the number of times a failed resource can be repeatedly tried to be deleted
 		// Add the resources to the warm pool
 		for _, resource := range job.Resources {

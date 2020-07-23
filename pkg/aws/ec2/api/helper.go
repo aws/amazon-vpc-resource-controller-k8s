@@ -45,18 +45,18 @@ var (
 		Cap:      time.Second * 10,
 	}
 	waitForENIAttachment = wait.Backoff{
-		Duration: time.Millisecond * 500,
+		Duration: time.Second,
 		Factor:   2.0,
 		Jitter:   0.1,
 		Steps:    7,
-		Cap:      time.Second * 30,
+		Cap:      time.Minute,
 	}
 	waitForIPAttachment = wait.Backoff{
 		Duration: time.Millisecond * 50,
 		Factor:   2.0,
 		Jitter:   0.1,
 		Steps:    7,
-		Cap:      time.Second * 2,
+		Cap:      time.Second * 5,
 	}
 	defaultControllerTag = &ec2.Tag{
 		Key:   aws.String(DefaultENITagKey),
@@ -388,7 +388,7 @@ func (h *ec2APIHelper) DetachNetworkInterfaceFromInstance(attachmentId *string) 
 // interface is equal to the desired state of the network interface
 func (h *ec2APIHelper) WaitForNetworkInterfaceStatusChange(networkInterfaceId *string, desiredStatus string) error {
 
-	ErrRetryAttachmentStatusCheck := fmt.Errorf("interface not in desired stateus yet %s, interface id %s",
+	ErrRetryAttachmentStatusCheck := fmt.Errorf("interface not in desired status yet %s, interface id %s",
 		desiredStatus, *networkInterfaceId)
 
 	err := retry.OnError(waitForENIAttachment,
