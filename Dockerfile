@@ -33,6 +33,9 @@ RUN GIT_VERSION=$(git describe --tags --dirty --always) && \
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM amazonlinux:2
+RUN yum update -y && \
+    yum clean all
+
 WORKDIR /
 COPY --from=builder /workspace/controller .
 
