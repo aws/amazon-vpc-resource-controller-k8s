@@ -47,7 +47,7 @@ type Node interface {
 	DeleteResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
 	UpdateResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
 
-	UpdateSubnet(subnetID string)
+	UpdateInstanceCustomSubnet(subnetID string)
 	IsReady() bool
 }
 
@@ -60,7 +60,7 @@ func NewNode(log logr.Logger, nodeName string, instanceId string, os string) Nod
 }
 
 // UpdateNode refreshes the capacity if it's reset to 0
-func (n *node) UpdateResources(resourceProviders []provider.ResourceProvider, _ api.EC2APIHelper) error {
+func (n *node) UpdateResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
@@ -77,6 +77,8 @@ func (n *node) UpdateResources(resourceProviders []provider.ResourceProvider, _ 
 	if len(errUpdates) > 0 {
 		return fmt.Errorf("failed to update one or more resources %v", errUpdates)
 	}
+
+	n.instance.UpdateCurrentSubnetAndCidrBlock(helper)
 
 	return nil
 }
@@ -139,11 +141,9 @@ func (n *node) DeleteResources(resourceProviders []provider.ResourceProvider, _ 
 	return nil
 }
 
-func (n *node) UpdateSubnet(subnetID string) {
-	if n.instance.SubnetID() != subnetID {
-		n.log.Info("setting the subnet id using cni custom networking", "id", subnetID)
-		n.instance.SetSubnet(subnetID)
-	}
+// UpdateInstanceCustomSubnet updates current required custom subnet
+func (n *node) UpdateInstanceCustomSubnet(subnetID string) {
+	n.instance.SetNewCustomNetworkingSubnetID(subnetID)
 }
 
 // IsReady returns true if all the providers have been initialized

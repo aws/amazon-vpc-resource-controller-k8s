@@ -144,16 +144,16 @@ func (mr *MockEC2InstanceMockRecorder) PrimaryNetworkInterfaceID() *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryNetworkInterfaceID", reflect.TypeOf((*MockEC2Instance)(nil).PrimaryNetworkInterfaceID))
 }
 
-// SetSubnet mocks base method
-func (m *MockEC2Instance) SetSubnet(arg0 string) {
+// SetNewCustomNetworkingSubnetID mocks base method
+func (m *MockEC2Instance) SetNewCustomNetworkingSubnetID(arg0 string) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetSubnet", arg0)
+	m.ctrl.Call(m, "SetNewCustomNetworkingSubnetID", arg0)
 }
 
-// SetSubnet indicates an expected call of SetSubnet
-func (mr *MockEC2InstanceMockRecorder) SetSubnet(arg0 interface{}) *gomock.Call {
+// SetNewCustomNetworkingSubnetID indicates an expected call of SetNewCustomNetworkingSubnetID
+func (mr *MockEC2InstanceMockRecorder) SetNewCustomNetworkingSubnetID(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSubnet", reflect.TypeOf((*MockEC2Instance)(nil).SetSubnet), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetNewCustomNetworkingSubnetID", reflect.TypeOf((*MockEC2Instance)(nil).SetNewCustomNetworkingSubnetID), arg0)
 }
 
 // SubnetCidrBlock mocks base method
@@ -210,4 +210,18 @@ func (m *MockEC2Instance) Type() string {
 func (mr *MockEC2InstanceMockRecorder) Type() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Type", reflect.TypeOf((*MockEC2Instance)(nil).Type))
+}
+
+// UpdateCurrentSubnetAndCidrBlock mocks base method
+func (m *MockEC2Instance) UpdateCurrentSubnetAndCidrBlock(arg0 api.EC2APIHelper) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateCurrentSubnetAndCidrBlock", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateCurrentSubnetAndCidrBlock indicates an expected call of UpdateCurrentSubnetAndCidrBlock
+func (mr *MockEC2InstanceMockRecorder) UpdateCurrentSubnetAndCidrBlock(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateCurrentSubnetAndCidrBlock", reflect.TypeOf((*MockEC2Instance)(nil).UpdateCurrentSubnetAndCidrBlock), arg0)
 }

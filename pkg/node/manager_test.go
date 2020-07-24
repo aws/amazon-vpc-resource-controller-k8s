@@ -20,25 +20,31 @@ import (
 	"reflect"
 	"testing"
 
-	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
-	"github.com/stretchr/testify/assert"
-
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 )
 
 var (
-	instanceID    = "i-01234567890abcdef"
-	providerId    = "aws:///us-west-2c/" + instanceID
-	eniConfigName = "eni-config-name"
-	subnetID      = "subnet-id"
+	instanceID     = "i-01234567890abcdef"
+	providerId     = "aws:///us-west-2c/" + instanceID
+	eniConfigName  = "eni-config-name"
+	subnetID       = "subnet-id"
+	customSubnetID = "custom-subnet-id"
+
+	subnetCidrBlock = "192.168.0.0/16"
+	subnet          = &ec2.Subnet{CidrBlock: &subnetCidrBlock}
 
 	eniConfig = &v1alpha1.ENIConfig{
 		Spec: v1alpha1.ENIConfigSpec{
@@ -72,13 +78,15 @@ func getMockManager() manager {
 }
 
 // getMockManagerWithK8sWrapper returns the mock manager with mock K8s object
-func getMockManagerWithK8sWrapper(ctrl *gomock.Controller) (manager, *mock_k8s.MockK8sWrapper) {
+func getMockManagerWithK8sWrapper(ctrl *gomock.Controller) (manager, *mock_k8s.MockK8sWrapper, *mock_api.MockEC2APIHelper) {
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockeEC2APIHelper := mock_api.NewMockEC2APIHelper(ctrl)
 	return manager{
-		dataStore:  make(map[string]Node),
-		Log:        zap.New(zap.UseDevMode(true)).WithName("node manager"),
-		k8sWrapper: mockK8sWrapper,
-	}, mockK8sWrapper
+		dataStore:    make(map[string]Node),
+		Log:          zap.New(zap.UseDevMode(true)).WithName("node manager"),
+		k8sWrapper:   mockK8sWrapper,
+		ec2APIHelper: mockeEC2APIHelper,
+	}, mockK8sWrapper, mockeEC2APIHelper
 }
 
 // Test_GetNewManager tests if new node manager is not nil
@@ -105,13 +113,12 @@ func Test_addOrUpdateNode_new_node_custom_networking(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	manager, mockK8sWrapper := getMockManagerWithK8sWrapper(ctrl)
+	manager, mockK8sWrapper, _ := getMockManagerWithK8sWrapper(ctrl)
 
 	nodeWithENIConfig := v1Node.DeepCopy()
 	nodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
 
 	mockK8sWrapper.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil)
-
 	postUnlockOperation, err := manager.addOrUpdateNode(nodeWithENIConfig)
 	node, _ := manager.GetNode(v1Node.Name)
 
@@ -125,13 +132,13 @@ func Test_addOrUpdateNode_new_node_custom_networking_eniConfig_notfound(t *testi
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	manager, mockK8sWrapper := getMockManagerWithK8sWrapper(ctrl)
+	manager, mockK8sWrapper, _ := getMockManagerWithK8sWrapper(ctrl)
 
 	nodeWithENIConfig := v1Node.DeepCopy()
 	nodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
+	nodeWithENIConfig.Labels[eniConfig.Spec.Subnet] = subnetID
 
 	mockK8sWrapper.EXPECT().GetENIConfig(eniConfigName).Return(nil, mockError)
-
 	_, err := manager.addOrUpdateNode(nodeWithENIConfig)
 	_, isPresent := manager.GetNode(v1Node.Name)
 
@@ -145,7 +152,7 @@ func Test_addOrUpdateNode_existing_node_custom_networking(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	manager, mockK8sWrapper := getMockManagerWithK8sWrapper(ctrl)
+	manager, mockK8sWrapper, _ := getMockManagerWithK8sWrapper(ctrl)
 
 	// Add node once
 	_, err := manager.addOrUpdateNode(v1Node)
@@ -156,7 +163,6 @@ func Test_addOrUpdateNode_existing_node_custom_networking(t *testing.T) {
 	updatedNodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
 
 	mockK8sWrapper.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil)
-
 	// Update the node, expect to get the eni config
 	postUnlockOperation, err := manager.addOrUpdateNode(updatedNodeWithENIConfig)
 	node, _ := manager.GetNode(v1Node.Name)

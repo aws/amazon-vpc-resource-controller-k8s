@@ -20,20 +20,24 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
-
-	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/assert"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 var (
 	nodeName  = "node-name"
 	mockError = fmt.Errorf("mock error")
+
+	cidrBlock  = "0.0.0.0/24"
+	mockSubnet = &ec2.Subnet{CidrBlock: &cidrBlock}
 )
 
 func getMockProviders(ctrl *gomock.Controller, count int) []*mock_provider.MockResourceProvider {
@@ -191,6 +195,8 @@ func TestNode_UpdateResources(t *testing.T) {
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
 	mockProviders := getMockProviders(ctrl, 2)
 	mockHelper := getMockEC2APIHelper(ctrl)
+
+	mockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mockHelper).Return(nil)
 
 	mockProviders[0].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[0].EXPECT().UpdateResourceCapacity(mockInstance).Return(nil)

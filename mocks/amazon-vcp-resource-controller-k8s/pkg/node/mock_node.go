@@ -76,6 +76,18 @@ func (mr *MockNodeMockRecorder) IsReady() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsReady", reflect.TypeOf((*MockNode)(nil).IsReady))
 }
 
+// UpdateInstanceCustomSubnet mocks base method
+func (m *MockNode) UpdateInstanceCustomSubnet(arg0 string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "UpdateInstanceCustomSubnet", arg0)
+}
+
+// UpdateInstanceCustomSubnet indicates an expected call of UpdateInstanceCustomSubnet
+func (mr *MockNodeMockRecorder) UpdateInstanceCustomSubnet(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateInstanceCustomSubnet", reflect.TypeOf((*MockNode)(nil).UpdateInstanceCustomSubnet), arg0)
+}
+
 // UpdateResources mocks base method
 func (m *MockNode) UpdateResources(arg0 []provider.ResourceProvider, arg1 api.EC2APIHelper) error {
 	m.ctrl.T.Helper()
@@ -88,16 +100,4 @@ func (m *MockNode) UpdateResources(arg0 []provider.ResourceProvider, arg1 api.EC
 func (mr *MockNodeMockRecorder) UpdateResources(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateResources", reflect.TypeOf((*MockNode)(nil).UpdateResources), arg0, arg1)
-}
-
-// UpdateSubnet mocks base method
-func (m *MockNode) UpdateSubnet(arg0 string) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "UpdateSubnet", arg0)
-}
-
-// UpdateSubnet indicates an expected call of UpdateSubnet
-func (mr *MockNodeMockRecorder) UpdateSubnet(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSubnet", reflect.TypeOf((*MockNode)(nil).UpdateSubnet), arg0)
 }

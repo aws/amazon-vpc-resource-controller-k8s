@@ -28,7 +28,7 @@ import (
 // ec2Instance stores all the information that can be shared across the providers for an instance
 type ec2Instance struct {
 	// lock is to prevent concurrent writes to the fields of the ec2Instance
-	lock sync.Mutex
+	lock sync.RWMutex
 	// name is the k8s name of the node
 	name string
 	// os is the operating system of the worker node
@@ -38,9 +38,13 @@ type ec2Instance struct {
 	// instanceType is the EC2 instance type
 	instanceType string
 	// subnetId is the instance's subnet id
-	subnetID string
-	// subnetCidrBlock is the cidr block of the instance's subnet
-	subnetCidrBlock string
+	instanceSubnetID string
+	// instanceSubnetCidrBlock is the cidr block of the instance's subnet
+	instanceSubnetCidrBlock string
+	// currentSubnetID is the subnet id we are using now
+	currentSubnetID string
+	//currentSubnetCirdBlock is the cidr block we are using now
+	currentSubnetCirdBlock string
 	// subnetMask is the mask of the subnet CIDR block
 	subnetMask string
 	// deviceIndexes is the list of indexes used by the EC2 Instance
@@ -49,6 +53,8 @@ type ec2Instance struct {
 	instanceSecurityGroups []string
 	// primaryENIID is the ID of the primary network interface of the instance
 	primaryENIID string
+	// latest updated custom networking subnet
+	newCustomNetworkingSubnetID string
 }
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
@@ -62,10 +68,11 @@ type EC2Instance interface {
 	InstanceID() string
 	SubnetID() string
 	SubnetMask() string
-	SetSubnet(subnetID string)
 	SubnetCidrBlock() string
 	PrimaryNetworkInterfaceID() string
 	InstanceSecurityGroup() []string
+	SetNewCustomNetworkingSubnetID(subnetID string)
+	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -86,20 +93,29 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	if err != nil {
 		return err
 	}
-	// Custom networking is not set, must get the instance subnet id
-	if i.subnetID == "" {
-		i.subnetID = *instance.SubnetId
-	}
-	i.instanceType = *instance.InstanceType
 
-	subnet, err := ec2APIHelper.GetSubnet(&i.subnetID)
+	// Set instance subnet and cidr during node initialization
+	i.instanceSubnetID = *instance.SubnetId
+	instanceSubnet, err := ec2APIHelper.GetSubnet(&i.instanceSubnetID)
 	if err != nil {
 		return err
 	}
-	i.subnetCidrBlock = *subnet.CidrBlock
+	i.instanceSubnetCidrBlock = *instanceSubnet.CidrBlock
 
-	i.subnetMask = strings.Split(*subnet.CidrBlock, "/")[1]
+	if i.newCustomNetworkingSubnetID != "" {
+		customSubnet, err := ec2APIHelper.GetSubnet(&i.newCustomNetworkingSubnetID)
+		if err != nil {
+			return err
+		}
+		i.currentSubnetID = i.newCustomNetworkingSubnetID
+		i.currentSubnetCirdBlock = *customSubnet.CidrBlock
+	} else {
+		i.currentSubnetID = i.instanceSubnetID
+		i.currentSubnetCirdBlock = i.instanceSubnetCidrBlock
+	}
 
+	i.subnetMask = strings.Split(i.instanceSubnetCidrBlock, "/")[1]
+	i.instanceType = *instance.InstanceType
 	limits, ok := vpc.Limits[i.instanceType]
 	if !ok {
 		return fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s", i.instanceType)
@@ -123,11 +139,6 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	return nil
 }
 
-// SetSubnet sets the subnet ID in case the node is using cni custom networking
-func (i *ec2Instance) SetSubnet(subnetID string) {
-	i.subnetID = subnetID
-}
-
 // Os returns the os of the instance
 func (i *ec2Instance) Os() string {
 	return i.os
@@ -140,12 +151,18 @@ func (i *ec2Instance) InstanceID() string {
 
 // SubnetId returns the subnet id of the instance
 func (i *ec2Instance) SubnetID() string {
-	return i.subnetID
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.currentSubnetID
 }
 
 // SubnetCidrBlock returns the subnet cidr block of the instance
 func (i *ec2Instance) SubnetCidrBlock() string {
-	return i.subnetCidrBlock
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.currentSubnetCirdBlock
 }
 
 // Name returns the name of the node
@@ -195,4 +212,31 @@ func (i *ec2Instance) SubnetMask() string {
 	defer i.lock.Unlock()
 
 	return i.subnetMask
+}
+
+// SetNewCustomNetworkingSubnetID set custom subnet in instance
+func (i *ec2Instance) SetNewCustomNetworkingSubnetID(subnet string) {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	i.newCustomNetworkingSubnetID = subnet
+}
+
+// UpdateCurrentSubnetAndCidrBlock updates subnet and CIDR block same time
+func (i *ec2Instance) UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	if i.newCustomNetworkingSubnetID == "" && i.currentSubnetID != i.instanceSubnetID {
+		i.currentSubnetID = i.instanceSubnetID
+		i.currentSubnetCirdBlock = i.instanceSubnetCidrBlock
+	} else if i.newCustomNetworkingSubnetID != "" && i.newCustomNetworkingSubnetID != i.currentSubnetID {
+		customSubnet, err := helper.GetSubnet(&i.newCustomNetworkingSubnetID)
+		if err != nil {
+			return err
+		}
+		i.currentSubnetID = i.newCustomNetworkingSubnetID
+		i.currentSubnetCirdBlock = *customSubnet.CidrBlock
+	}
+	return nil
 }

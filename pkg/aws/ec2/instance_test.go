@@ -132,14 +132,21 @@ func TestEc2Instance_LoadDetails_SubnetPreLoaded(t *testing.T) {
 	defer ctrl.Finish()
 
 	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
-	customNWSubnet := "custom-networking"
-	ec2Instance.subnetID = customNWSubnet
+	customNWSubnetID := "custom-networking"
+	ec2Instance.instanceSubnetID = subnetID
+	ec2Instance.instanceSubnetCidrBlock = "192.168.0.0/8"
+	ec2Instance.newCustomNetworkingSubnetID = customNWSubnetID
+	customSubnet := &ec2.Subnet{CidrBlock: &subnetCidrBlock}
 
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
-	mockEC2ApiHelper.EXPECT().GetSubnet(&customNWSubnet).Return(subnet, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(subnet, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&customNWSubnetID).Return(customSubnet, nil)
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NoError(t, err)
+	assert.True(t, ec2Instance.currentSubnetID == customNWSubnetID &&
+		ec2Instance.currentSubnetCirdBlock == *subnet.CidrBlock &&
+		ec2Instance.subnetMask == "16")
 }
 
 // TestEc2Instance_LoadDetails_ErrInstanceDetails tests that if error is returned in loading instance details then the
