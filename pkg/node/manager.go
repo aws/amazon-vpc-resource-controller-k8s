@@ -230,7 +230,7 @@ func (m *manager) performPostUnlockOperation(nodeName string, postUnlockOperatio
 
 // isSelectedForManagement returns true if the node should be managed by the controller
 func (m *manager) isSelectedForManagement(v1node *v1.Node) bool {
-	return isManagedLabelSet(v1node) || canAttachTrunk(v1node)
+	return isWindowsNode(v1node) || canAttachTrunk(v1node)
 }
 
 // getNodeInstanceID returns the EC2 instance ID of a node
@@ -258,16 +258,19 @@ func getNodeOS(node *v1.Node) string {
 	return os
 }
 
-// isManagedLabelSet returns true if the node has the vpc controller's key value pair set
-func isManagedLabelSet(node *v1.Node) bool {
+// isWindowsNode returns true if the "kubernetes.io/os" or "beta.kubernetes.io/os" is set to windows
+func isWindowsNode(node *v1.Node) bool {
 	labels := node.GetLabels()
 
-	nodeValue, ok := labels[config.VPCManagerLabel]
-	if ok && nodeValue == config.VPCManagedBy {
-		return true
+	nodeOS, ok := labels[config.NodeLabelOS]
+	if !ok {
+		nodeOS, ok = labels[config.NodeLabelOSBeta]
+		if !ok {
+			return false
+		}
 	}
 
-	return false
+	return nodeOS == config.OSWindows
 }
 
 // canAttachTrunk returns true if the node has capability to attach a Trunk ENI

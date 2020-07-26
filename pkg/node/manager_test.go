@@ -264,17 +264,27 @@ func Test_isPodENICapacitySet_Neg(t *testing.T) {
 	assert.False(t, isSet)
 }
 
-// Test_isManagedLabelSet tests if the managed label is set then true is returned
-func Test_isManagedLabelSet(t *testing.T) {
+// Test_isWindowsNode tests if the os label is set to windows then true is returned
+func Test_isWindowsNode(t *testing.T) {
 	v1NodeCopy := v1Node.DeepCopy()
-	v1NodeCopy.Labels[config.VPCManagerLabel] = config.VPCManagedBy
-	isSet := isManagedLabelSet(v1NodeCopy)
+	v1NodeCopy.Labels[config.NodeLabelOS] = config.OSWindows
+	isSet := isWindowsNode(v1NodeCopy)
 	assert.True(t, isSet)
 }
 
-// Test_isManagedLabelSet_neg tests if the managed label is unset then false is returned
-func Test_isManagedLabelSet_neg(t *testing.T) {
-	isSet := isManagedLabelSet(v1Node)
+// Test_isWindowsNode_BetaLabelSet tests if the beta os label is set then true is returned
+func Test_isWindowsNode_BetaLabelSet(t *testing.T) {
+	v1NodeCopy := v1Node.DeepCopy()
+	delete(v1NodeCopy.Labels, config.NodeLabelOS)
+	v1NodeCopy.Labels[config.NodeLabelOSBeta] = config.OSWindows
+
+	isSet := isWindowsNode(v1NodeCopy)
+	assert.True(t, isSet)
+}
+
+// Test_isWindowsNode_Linux tests if the node is OS linux then the function returns false
+func Test_isWindowsNode_Linux(t *testing.T) {
+	isSet := isWindowsNode(v1Node)
 	assert.False(t, isSet)
 }
 
