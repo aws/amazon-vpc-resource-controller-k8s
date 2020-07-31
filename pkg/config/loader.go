@@ -28,8 +28,13 @@ const (
 	IPv4DefaultMaxDev  = 1
 	IPv4DefaultResSize = 0
 
+	// EC2 API QPS
 	DefaultEC2APIQPS   = 6
 	DefaultEC2APIBurst = 8
+
+	// API Server QPS
+	DefaultAPIServerQPS   = 10
+	DefaultAPIServerBurst = 15
 )
 
 // LoadResourceConfig returns the Resource Configuration for all resources managed by the VPC Resource Controller. Currently

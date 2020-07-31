@@ -120,6 +120,9 @@ func main() {
 	}
 
 	kubeConfig := ctrl.GetConfigOrDie()
+	// Set the API Server QPS and Burst
+	kubeConfig.QPS = config.DefaultAPIServerQPS
+	kubeConfig.Burst = config.DefaultAPIServerBurst
 	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
 		SyncPeriod:              &syncPeriod,
 		Scheme:                  scheme,

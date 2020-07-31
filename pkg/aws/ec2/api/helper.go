@@ -138,14 +138,33 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 	if err != nil {
 		return nil, errors.Wrap(err, "eni wrapper: unable to create network interface")
 	}
-	if createOutput != nil &&
-		createOutput.NetworkInterface != nil &&
-		createOutput.NetworkInterface.NetworkInterfaceId != nil {
+	if createOutput == nil ||
+		createOutput.NetworkInterface == nil ||
+		createOutput.NetworkInterface.NetworkInterfaceId == nil {
 
-		return createOutput.NetworkInterface, nil
+		return nil, fmt.Errorf("network interface details not returned in response for requet %v", *createInput)
 	}
 
-	return nil, fmt.Errorf("network interface details not returned in response for requet %v", *createInput)
+	nwInterface := createOutput.NetworkInterface
+	// If the interface type is trunk then attach interface permissions
+	if interfaceType != nil && *interfaceType == "trunk" {
+		// Get attach permission from User's Service Linked Role. Account ID will be added by the EC2 API Wrapper
+		input := &ec2.CreateNetworkInterfacePermissionInput{
+			NetworkInterfaceId: nwInterface.NetworkInterfaceId,
+			Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
+		}
+
+		_, err = h.ec2Wrapper.CreateNetworkInterfacePermission(input)
+		if err != nil {
+			errDelete := h.DeleteNetworkInterface(nwInterface.NetworkInterfaceId)
+			if errDelete != nil {
+				return nwInterface, fmt.Errorf("failed to attach the network interface %v: failed to delete the nw interfac %v",
+					err, errDelete)
+			}
+			return nil, fmt.Errorf("failed to get attach network interface permissions for trunk %v", err)
+		}
+	}
+	return nwInterface, nil
 }
 
 // GetSubnet returns the subnet details of the given subnet
@@ -261,17 +280,6 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 	_, err := h.ec2Wrapper.CreateNetworkInterfacePermission(input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get attach network interface permissions for branch %v", err)
-	}
-
-	// Get attach permission from User's Service Linked Role. Account ID will be added by the EC2 API Wrapper
-	input = &ec2.CreateNetworkInterfacePermissionInput{
-		NetworkInterfaceId: trunkInterfaceId,
-		Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
-	}
-
-	_, err = h.ec2Wrapper.CreateNetworkInterfacePermission(input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get attach network interface permissions for trunk %v", err)
 	}
 
 	associateTrunkInterfaceIP := &ec2.AssociateTrunkInterfaceInput{
