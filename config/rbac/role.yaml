@@ -11,12 +11,8 @@ rules:
   resources:
   - nodes
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - ""
@@ -25,27 +21,15 @@ rules:
   verbs:
   - get
   - patch
-  - update
 - apiGroups:
   - ""
   resources:
   - pods
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
-  - update
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods/status
-  verbs:
-  - get
-  - patch
-  - update
 - apiGroups:
   - ""
   resources:
@@ -54,12 +38,6 @@ rules:
   - get
   - list
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - serviceaccounts/status
-  verbs:
-  - get
 - apiGroups:
   - crd.k8s.amazonaws.com
   resources:
@@ -73,18 +51,6 @@ rules:
   resources:
   - securitygrouppolicies
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
-- apiGroups:
-  - vpcresources.k8s.aws
-  resources:
-  - securitygrouppolicies/status
-  verbs:
-  - get
-  - patch
-  - update

@@ -71,8 +71,7 @@ func init() {
 }
 
 // +kubebuilder:rbac:groups=crd.k8s.amazonaws.com,resources=eniconfigs,verbs=get;list;watch
-// +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies,verbs=get;list;watch
 
 func main() {
 	var metricsAddr string

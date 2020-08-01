@@ -103,9 +103,10 @@ spec:
                   type: array
               type: object
             serviceAccountSelector:
-              description: ServiceAccountSelector contains the selection criteria
-                for matching pod with service account that matches the label selector
-                requirement and the exact name of the service account.
+              description: A label selector is a label query over a set of resources.
+                The result of matchLabels and matchExpressions are ANDed. An empty
+                label selector matches all objects. A null label selector matches
+                no objects.
               properties:
                 matchExpressions:
                   description: matchExpressions is a list of label selector requirements.
@@ -146,13 +147,6 @@ spec:
                     "In", and the values array contains only "value". The requirements
                     are ANDed.
                   type: object
-                matchNames:
-                  description: matchNames is the list of service account names. The
-                    requirements are ANDed
-                  items:
-                    type: string
-                  minItems: 1
-                  type: array
               type: object
           type: object
       type: object

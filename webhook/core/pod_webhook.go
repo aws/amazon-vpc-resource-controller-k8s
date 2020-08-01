@@ -27,9 +27,6 @@ type PodResourceInjector struct {
 	Log         logr.Logger
 }
 
-// +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch
-// +kubebuilder:rbac:groups=core,resources=serviceaccounts/status,verbs=get
-
 func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Request) admission.Response {
 	pod := &corev1.Pod{}
 	err := prj.decoder.Decode(req, pod)

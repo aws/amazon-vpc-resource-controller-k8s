@@ -46,8 +46,7 @@ type PodReconciler struct {
 	DeletePodQueue map[string]*corev1.Pod
 }
 
-// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=pods/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;patch
 
 // Reconcile reconciles the VPC Resources for the pod. Resources allocations are delegated to the respective handlers
 // based on the resource type
