@@ -28,9 +28,13 @@ const (
 	IPv4DefaultMaxDev  = 1
 	IPv4DefaultResSize = 0
 
-	// EC2 API QPS
-	DefaultEC2APIQPS   = 6
-	DefaultEC2APIBurst = 8
+	// EC2 API QPS for user service client
+	UserServiceClientQPS      = 6
+	UserServiceClientQPSBurst = 8
+
+	// EC2 API QPS for instance service client
+	InstanceServiceClientQPS   = 2
+	InstanceServiceClientBurst = 3
 
 	// API Server QPS
 	DefaultAPIServerQPS   = 10

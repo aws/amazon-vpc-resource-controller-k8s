@@ -222,7 +222,7 @@ func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset,
 
 	var resourceProviders []provider.ResourceProvider
 
-	ec2Wrapper, err := api.NewEC2Wrapper(roleARN, config.DefaultEC2APIQPS, config.DefaultEC2APIBurst, setupLog)
+	ec2Wrapper, err := api.NewEC2Wrapper(roleARN, setupLog)
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
 	}

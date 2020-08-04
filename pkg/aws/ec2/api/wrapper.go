@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -332,6 +333,7 @@ func prometheusRegister() {
 }
 
 type ec2Wrapper struct {
+	log                   logr.Logger
 	instanceServiceClient *ec2.EC2
 	userServiceClient     *ec2.EC2
 	accountID             string
@@ -339,14 +341,52 @@ type ec2Wrapper struct {
 
 // NewEC2Wrapper takes the roleARN that will be assumed to make all the EC2 API Calls, if no roleARN
 // is passed then the ec2 client will be initialized with the instance's service role account.
-func NewEC2Wrapper(roleARN string, qps int, burst int, log logr.Logger) (EC2Wrapper, error) {
+func NewEC2Wrapper(roleARN string, log logr.Logger) (EC2Wrapper, error) {
 	// Register the metrics
 	prometheusRegister()
 
-	ec2Wrapper := &ec2Wrapper{}
+	ec2Wrapper := &ec2Wrapper{log: log}
 
+	instanceSession, err := ec2Wrapper.getInstanceSession()
+	if err != nil {
+		return nil, err
+	}
+
+	// Role ARN is passed, assume the role ARN to make EC2 API Calls
+	if roleARN != "" {
+		// Create the instance service client with low QPS, it will be only used fro associate branch to trunk calls
+		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(config.InstanceServiceClientQPS,
+			config.InstanceServiceClientBurst, instanceSession)
+		if err != nil {
+			return nil, err
+		}
+		ec2Wrapper.instanceServiceClient = instanceServiceClient
+
+		// Create the user service client with higher QPS, this will be used to make rest of the EC2 API Calls
+		userServiceClient, err := ec2Wrapper.getClientUsingAssumedRole(*instanceSession.Config.Region, roleARN,
+			config.UserServiceClientQPS, config.UserServiceClientQPSBurst)
+		if err != nil {
+			return nil, err
+		}
+		ec2Wrapper.userServiceClient = userServiceClient
+	} else {
+		// Role ARN is not provided, assuming that instance service client is whitelisted for ENI branching and use
+		// the instance service client as the user service client with higher QPS.
+		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(config.UserServiceClientQPS,
+			config.UserServiceClientQPSBurst, instanceSession)
+		if err != nil {
+			return nil, err
+		}
+		ec2Wrapper.instanceServiceClient = instanceServiceClient
+		ec2Wrapper.userServiceClient = instanceServiceClient
+	}
+
+	return ec2Wrapper, nil
+}
+
+func (e *ec2Wrapper) getInstanceSession() (instanceSession *session.Session, err error) {
 	// Create a new session
-	instanceSession := session.Must(session.NewSession())
+	instanceSession = session.Must(session.NewSession())
 
 	// Get the region from the ec2 Metadata if the region is missing in the session config
 	ec2Metadata := ec2metadata.New(instanceSession)
@@ -355,11 +395,13 @@ func NewEC2Wrapper(roleARN string, qps int, burst int, log logr.Logger) (EC2Wrap
 		return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
 	}
 	instanceSession.Config.Region = aws.String(region)
+
 	instanceIdentity, err := ec2Metadata.GetInstanceIdentityDocument()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get the instance identity document %v", err)
 	}
-	ec2Wrapper.accountID = instanceIdentity.AccountID
+	// Set the Account ID
+	e.accountID = instanceIdentity.AccountID
 
 	provider := &ec2rolecreds.EC2RoleProvider{
 		Client: ec2Metadata,
@@ -367,69 +409,73 @@ func NewEC2Wrapper(roleARN string, qps int, burst int, log logr.Logger) (EC2Wrap
 
 	instanceSession.Config.Credentials = credentials.NewCredentials(provider)
 
-	ec2Wrapper.instanceServiceClient = ec2.New(instanceSession, aws.NewConfig().WithMaxRetries(MaxRetries).
-		WithRegion(*instanceSession.Config.Region))
+	return instanceSession, nil
+}
 
-	// Role ARN is passed, assume the role ARN to make EC2 API Calls
-	if roleARN != "" {
-		var providers []credentials.Provider
+func (e *ec2Wrapper) getInstanceServiceClient(qps int, burst int, instanceSession *session.Session) (*ec2.EC2, error) {
+	instanceClient, err := utils.NewRateLimitedClient(qps, burst)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v",
+			qps, burst, err)
+	}
+	return ec2.New(instanceSession, aws.NewConfig().WithMaxRetries(MaxRetries).
+		WithRegion(*instanceSession.Config.Region).WithHTTPClient(instanceClient)), nil
+}
 
-		userStsSession := session.Must(session.NewSession())
-		userStsSession.Config.Region = instanceSession.Config.Region
+func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN string, qps int, burst int) (*ec2.EC2, error) {
+	var providers []credentials.Provider
 
-		// Create a rate limited http client
-		client, err := utils.NewRateLimitedClient(qps, burst)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v", qps, burst, err)
-		}
-		log.Info("created rate limited http client", "qps", qps, "burst", burst)
+	userStsSession := session.Must(session.NewSession())
+	userStsSession.Config.Region = &instanceRegion
 
-		// Get the regional sts end point
-		regionalSTSEndpoint, err := endpoints.DefaultResolver().
-			EndpointFor("sts", aws.StringValue(userStsSession.Config.Region), endpoints.STSRegionalEndpointOption)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get the regional sts endoint for region %s: %v",
-				*userStsSession.Config.Region, err)
-		}
+	// Create a rate limited http client for the
+	client, err := utils.NewRateLimitedClient(qps, burst)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v", qps, burst, err)
+	}
+	e.log.Info("created rate limited http client", "qps", qps, "burst", burst)
 
-		// Add the regional sts end point
-		regionalProvider := &stscreds.AssumeRoleProvider{
+	// Get the regional sts end point
+	regionalSTSEndpoint, err := endpoints.DefaultResolver().
+		EndpointFor("sts", aws.StringValue(userStsSession.Config.Region), endpoints.STSRegionalEndpointOption)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get the regional sts endoint for region %s: %v",
+			*userStsSession.Config.Region, err)
+	}
+
+	// Add the regional sts end point
+	regionalProvider := &stscreds.AssumeRoleProvider{
+		Client: sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
+			WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
+		RoleARN:  roleARN,
+		Duration: time.Minute * 60,
+	}
+	providers = append(providers, regionalProvider)
+
+	// Get the global sts end point
+	globalSTSEndpoint, err := endpoints.DefaultResolver().
+		EndpointFor("sts", aws.StringValue(userStsSession.Config.Region))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get the global sts endoint for region %s: %v",
+			*userStsSession.Config.Region, err)
+	}
+
+	// If the regional STS endpoint is different than the global STS endpoint then add the global sts endpoint
+	if regionalSTSEndpoint.URL != globalSTSEndpoint.URL {
+		globalProvider := &stscreds.AssumeRoleProvider{
 			Client: sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
 				WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
 			RoleARN:  roleARN,
 			Duration: time.Minute * 60,
 		}
-		providers = append(providers, regionalProvider)
-
-		// Get the global sts end point
-		globalSTSEndpoint, err := endpoints.DefaultResolver().
-			EndpointFor("sts", aws.StringValue(userStsSession.Config.Region))
-		if err != nil {
-			return nil, fmt.Errorf("failed to get the global sts endoint for region %s: %v",
-				*userStsSession.Config.Region, err)
-		}
-
-		// If the regional STS endpoint is different than the global STS endpoint then add the global sts endpoint
-		if regionalSTSEndpoint.URL != globalSTSEndpoint.URL {
-			globalProvider := &stscreds.AssumeRoleProvider{
-				Client: sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
-					WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
-				RoleARN:  roleARN,
-				Duration: time.Minute * 60,
-			}
-			providers = append(providers, globalProvider)
-		}
-		log.Info("initialized the regional/global providers", "roleARN", roleARN)
-
-		userStsSession.Config.Credentials = credentials.NewChainCredentials(providers)
-		ec2Wrapper.userServiceClient = ec2.New(userStsSession, aws.NewConfig().WithHTTPClient(client))
-
-	} else {
-		// Role ARN is not provided, use the instance service account as the user service account
-		ec2Wrapper.userServiceClient = ec2Wrapper.instanceServiceClient
+		providers = append(providers, globalProvider)
 	}
+	e.log.Info("initialized the regional/global providers", "roleARN", roleARN)
 
-	return ec2Wrapper, nil
+	userStsSession.Config.Credentials = credentials.NewChainCredentials(providers)
+
+	return ec2.New(userStsSession, aws.NewConfig().WithHTTPClient(client)), nil
+
 }
 
 func timeSinceMs(start time.Time) float64 {
