@@ -92,14 +92,16 @@ func TestWarmResourceHandler_HandleCreate(t *testing.T) {
 	defer ctrl.Finish()
 
 	handler, mockK8sWrapper, mockProvider, mockPool := getMockWrapperAndProvider(ctrl)
+	podCopy := pod.DeepCopy()
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 	mockPool.EXPECT().AssignResource(uid).Return(ipAddress, true, nil)
 	mockK8sWrapper.EXPECT().AnnotatePod(pod.Namespace, pod.Name, resourceName, ipAddress).Return(nil)
+	mockK8sWrapper.EXPECT().BroadcastPodEvent(podCopy, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
+
 	mockPool.EXPECT().ReconcilePool().Return(job)
 	mockProvider.EXPECT().SubmitAsyncJob(job)
 
-	podCopy := pod.DeepCopy()
 	delete(podCopy.Annotations, config.ResourceNameIPAddress)
 
 	_, err := handler.HandleCreate(resourceName, 1, podCopy)

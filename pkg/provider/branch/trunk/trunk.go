@@ -151,7 +151,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	instanceID := t.instance.InstanceID()
 	log := t.log.WithValues("request", "initialize", "instance ID", instance)
 
-	nwInterfaces, err := t.ec2ApiHelper.GetNetworkInterfaceOfInstance(&instanceID)
+	nwInterfaces, err := t.ec2ApiHelper.GetInstanceNetworkInterface(&instanceID)
 	if err != nil {
 		trunkENIOperationsErrCount.WithLabelValues("describe_instance_nw_interface").Inc()
 		return err

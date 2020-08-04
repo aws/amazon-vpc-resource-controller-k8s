@@ -153,7 +153,7 @@ var (
 		Value: aws.String(strconv.Itoa(VlanId2)),
 	}, trunkIDTag}
 
-	instanceNwInterfaces = []*awsEc2.NetworkInterface{
+	instanceNwInterfaces = []*awsEc2.InstanceNetworkInterface{
 		{
 			InterfaceType:      aws.String("trunk"),
 			NetworkInterfaceId: &trunkId,
@@ -594,7 +594,7 @@ func TestTrunkENI_InitTrunk_TrunkNotExists(t *testing.T) {
 	freeIndex := int64(2)
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockEC2APIHelper.EXPECT().GetNetworkInterfaceOfInstance(&InstanceId).Return([]*awsEc2.NetworkInterface{}, nil)
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]*awsEc2.InstanceNetworkInterface{}, nil)
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(freeIndex, nil)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId)
 	mockEC2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&InstanceId, &SubnetId, nil, nil,
@@ -614,7 +614,7 @@ func TestTrunkENI_InitTrunk_GetTrunkError(t *testing.T) {
 	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockEC2APIHelper.EXPECT().GetNetworkInterfaceOfInstance(&InstanceId).Return(nil, MockError)
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(nil, MockError)
 
 	err := trunkENI.InitTrunk(mockInstance, []v1.Pod{*MockPod2})
 
@@ -629,7 +629,7 @@ func TestTrunkENI_InitTrunk_GetFreeIndexFail(t *testing.T) {
 	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockEC2APIHelper.EXPECT().GetNetworkInterfaceOfInstance(&InstanceId).Return([]*awsEc2.NetworkInterface{}, nil)
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]*awsEc2.InstanceNetworkInterface{}, nil)
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int64(0), MockError)
 
 	err := trunkENI.InitTrunk(mockInstance, []v1.Pod{*MockPod2})
@@ -645,7 +645,7 @@ func TestTrunkENI_InitTrunk_TrunkExists_WithBranches(t *testing.T) {
 	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockEC2APIHelper.EXPECT().GetNetworkInterfaceOfInstance(&InstanceId).Return(instanceNwInterfaces, nil)
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
 	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(branchInterfaces, nil)
 	err := trunkENI.InitTrunk(FakeInstance, []v1.Pod{*MockPod1, *MockPod2})
 	branchENIs, isPresent := trunkENI.uidToBranchENIMap[PodUID]
@@ -677,7 +677,7 @@ func TestTrunkENI_InitTrunk_TrunkExists_DanglingENIs(t *testing.T) {
 	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockEC2APIHelper.EXPECT().GetNetworkInterfaceOfInstance(&InstanceId).Return(instanceNwInterfaces, nil)
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
 	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(branchInterfaces, nil)
 
 	err := trunkENI.InitTrunk(FakeInstance, []v1.Pod{*MockPod2})

@@ -67,7 +67,7 @@ func NewENIManager(instance ec2.EC2Instance) *eniManager {
 // InitResources loads the list of ENIs and IPs associated with the instance
 func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, error) {
 
-	nwInterfaces, err := ec2APIHelper.GetNetworkInterfaceOfInstance(aws.String(e.instance.InstanceID()))
+	nwInterfaces, err := ec2APIHelper.GetInstanceNetworkInterface(aws.String(e.instance.InstanceID()))
 	if err != nil {
 		return nil, err
 	}

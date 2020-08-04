@@ -79,7 +79,7 @@ type EC2APIHelper interface {
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2.Subnet, error)
 	GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error)
-	GetNetworkInterfaceOfInstance(instanceId *string) ([]*ec2.NetworkInterface, error)
+	GetInstanceNetworkInterface(instanceId *string) ([]*ec2.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error)
 	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
@@ -198,36 +198,26 @@ func (h *ec2APIHelper) DeleteNetworkInterface(interfaceId *string) error {
 	return err
 }
 
-// GetNetworkInterfaceOfInstance returns all the network interface associated with an instance id
-func (h *ec2APIHelper) GetNetworkInterfaceOfInstance(instanceId *string) ([]*ec2.NetworkInterface, error) {
-	filters := []*ec2.Filter{{
-		Name:   aws.String("attachment.instance-id"),
-		Values: []*string{instanceId},
-	}}
-
-	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}
-	describeNetworkInterfaceOutput, err := h.ec2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
-
+// GetInstanceNetworkInterface returns all the network interface associated with an instance id
+func (h *ec2APIHelper) GetInstanceNetworkInterface(instanceId *string) ([]*ec2.InstanceNetworkInterface, error) {
+	instanceDetails, err := h.GetInstanceDetails(instanceId)
 	if err != nil {
 		return nil, err
 	}
 
-	if describeNetworkInterfaceOutput != nil && describeNetworkInterfaceOutput.NetworkInterfaces != nil {
-		return describeNetworkInterfaceOutput.NetworkInterfaces, nil
+	if instanceDetails != nil && instanceDetails.NetworkInterfaces != nil {
+		return instanceDetails.NetworkInterfaces, nil
 	}
 
-	return nil, fmt.Errorf("failed to find network interfaces for request %v",
-		*describeNetworkInterfacesInput)
+	return nil, fmt.Errorf("failed to find network interfaces for instance %s",
+		*instanceDetails)
 }
 
 // DescribeNetworkInterfaces returns the network interface details of the given network interface ids
 func (h *ec2APIHelper) DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error) {
-	filters := []*ec2.Filter{{
-		Name:   aws.String("network-interface-id"),
-		Values: nwInterfaceIds,
-	}}
-
-	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}
+	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: nwInterfaceIds,
+	}
 	describeNetworkInterfaceOutput, err := h.ec2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
 	if err != nil {
 		return nil, err
@@ -241,6 +231,7 @@ func (h *ec2APIHelper) DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*e
 		*describeNetworkInterfacesInput)
 }
 
+// TODO: Not used currently as the API is not publicly available with assumed role
 // DescribeTrunkInterfaceAssociation describes all the association of the given trunk interface id
 func (h *ec2APIHelper) DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error) {
 	describeTrunkInterfaceAssociationInput := &ec2.DescribeTrunkInterfaceAssociationsInput{

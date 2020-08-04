@@ -35,6 +35,7 @@ const (
 	RequeueAfterWhenWPEmpty         = time.Millisecond * 600
 	RequeueAfterWhenResourceCooling = time.Second * 20
 	ReasonResourceAllocationFailed  = "ResourceAllocationFailed"
+	ReasonResourceAllocated         = "ResourceAllocated"
 )
 
 type warmResourceHandler struct {
@@ -94,6 +95,9 @@ func (w *warmResourceHandler) HandleCreate(resourceName string, requestCount int
 			err = fmt.Errorf("failed to annotate %v, failed to free %v", err, errFree)
 		}
 	}
+
+	w.k8sWrapper.BroadcastPodEvent(pod, ReasonResourceAllocated, fmt.Sprintf("Allocated Resource %s: %s to the pod",
+		resourceName, resID), v1.EventTypeNormal)
 
 	w.log.Info("successfully allocated and annotated resource", "UID", string(pod.UID),
 		"namespace", pod.Namespace, "name", pod.Name, "resource id", resourceName)

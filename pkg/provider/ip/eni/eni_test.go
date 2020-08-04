@@ -60,17 +60,17 @@ var (
 	instanceType      = "t3.small"
 	t3SmallIPCapacity = vpc.Limits[instanceType].IPv4PerInterface
 
-	nwInterfaces = []*ec2.NetworkInterface{
+	nwInterfaces = []*ec2.InstanceNetworkInterface{
 		{
 			NetworkInterfaceId: &eniID1,
-			PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+			PrivateIpAddresses: []*ec2.InstancePrivateIpAddress{
 				{PrivateIpAddress: &ip1, Primary: aws.Bool(false)},
 				{PrivateIpAddress: &ip2, Primary: aws.Bool(false)},
 			},
 		},
 		{
 			NetworkInterfaceId: &eniID2,
-			PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+			PrivateIpAddresses: []*ec2.InstancePrivateIpAddress{
 				{PrivateIpAddress: &ip3, Primary: aws.Bool(false)},
 			},
 		},
@@ -129,7 +129,7 @@ func TestEni_InitResources(t *testing.T) {
 	mockInstance.EXPECT().InstanceID().Return(instanceID)
 	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(3)
 
-	mockEc2APIHelper.EXPECT().GetNetworkInterfaceOfInstance(&instanceID).Return(nwInterfaces, nil)
+	mockEc2APIHelper.EXPECT().GetInstanceNetworkInterface(&instanceID).Return(nwInterfaces, nil)
 
 	// Capacity is 4 and already present 2, so remaining capacity = 4-2=2
 	expectedENIDetails1 := createENIDetails(eniID1, 2)
@@ -157,7 +157,7 @@ func TestEni_InitResources_Error(t *testing.T) {
 
 	mockInstance.EXPECT().InstanceID().Return(instanceID)
 
-	mockEc2APIHelper.EXPECT().GetNetworkInterfaceOfInstance(&instanceID).Return(nwInterfaces, mockError)
+	mockEc2APIHelper.EXPECT().GetInstanceNetworkInterface(&instanceID).Return(nwInterfaces, mockError)
 
 	_, err := manager.InitResources(mockEc2APIHelper)
 

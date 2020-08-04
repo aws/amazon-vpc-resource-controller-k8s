@@ -105,24 +105,29 @@ var (
 
 	describeSubnetOutput = &ec2.DescribeSubnetsOutput{Subnets: []*ec2.Subnet{{SubnetId: &subnetId}}}
 
-	describeNetworkInterfaceInputUsingInstanceId = &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{{
-			Name:   aws.String("attachment.instance-id"),
-			Values: []*string{&instanceId},
-		}},
+	describeNetworkInterfaceInputUsingInstanceId = &ec2.DescribeInstancesInput{
+		InstanceIds: []*string{&instanceId},
 	}
 
-	describeNetworkInterfaceOutputUsingInstanceId = &ec2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*ec2.NetworkInterface{{
-			NetworkInterfaceId: &branchInterfaceId,
-			Status:             aws.String(ec2.AttachmentStatusDetached)}},
+	describeNetworkInterfaceOutputUsingInstanceId = &ec2.DescribeInstancesOutput{
+		Reservations: []*ec2.Reservation{
+			{
+				Instances: []*ec2.Instance{
+					{
+						NetworkInterfaces: []*ec2.InstanceNetworkInterface{
+							{
+								NetworkInterfaceId: &branchInterfaceId,
+								Status:             aws.String(ec2.AttachmentStatusDetached),
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	describeNetworkInterfaceInputUsingInterfaceId = &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{{
-			Name:   aws.String("network-interface-id"),
-			Values: []*string{&branchInterfaceId, &branchInterfaceId2},
-		}},
+		NetworkInterfaceIds: []*string{&branchInterfaceId, &branchInterfaceId2},
 	}
 
 	describeNetworkInterfaceOutputUsingInterfaceId = &ec2.DescribeNetworkInterfacesOutput{
@@ -133,10 +138,7 @@ var (
 	}
 
 	describeNetworkInterfaceInputUsingOneInterfaceId = &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{{
-			Name:   aws.String("network-interface-id"),
-			Values: []*string{&branchInterfaceId},
-		}},
+		NetworkInterfaceIds: []*string{&branchInterfaceId},
 	}
 
 	describeNetworkInterfaceOutputUsingOneInterfaceId = &ec2.DescribeNetworkInterfacesOutput{
@@ -259,10 +261,7 @@ var (
 	}
 
 	describeNetworkInterfaceInput = &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{{
-			Name:   aws.String("network-interface-id"),
-			Values: []*string{&eniID},
-		}},
+		NetworkInterfaceIds: []*string{&eniID},
 	}
 
 	describeNetworkInterfaceOutput = &ec2.DescribeNetworkInterfacesOutput{
@@ -554,10 +553,10 @@ func TestEc2APIHelper_GetNetworkInterfaceOfInstance(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingInstanceId).
+	mockWrapper.EXPECT().DescribeInstances(describeNetworkInterfaceInputUsingInstanceId).
 		Return(describeNetworkInterfaceOutputUsingInstanceId, nil)
 
-	nwInterfaces, err := ec2ApiHelper.GetNetworkInterfaceOfInstance(&instanceId)
+	nwInterfaces, err := ec2ApiHelper.GetInstanceNetworkInterface(&instanceId)
 	assert.NoError(t, err)
 	assert.Equal(t, branchInterfaceId, *nwInterfaces[0].NetworkInterfaceId)
 }
@@ -570,9 +569,9 @@ func TestEc2APIHelper_GetNetworkInterfaceOfInstance_Error(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingInstanceId).Return(nil, mockError)
+	mockWrapper.EXPECT().DescribeInstances(describeNetworkInterfaceInputUsingInstanceId).Return(nil, mockError)
 
-	_, err := ec2ApiHelper.GetNetworkInterfaceOfInstance(&instanceId)
+	_, err := ec2ApiHelper.GetInstanceNetworkInterface(&instanceId)
 	assert.Error(t, mockError, err)
 }
 
