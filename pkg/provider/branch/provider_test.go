@@ -296,6 +296,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockK8sWrapper.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	k8sHelper.EXPECT().GetPodSecurityGroups(MockPod1).Return(SecurityGroups, nil)
+	mockK8sWrapper.EXPECT().BroadcastPodEvent(MockPod1, ReasonSecurityGroupApplied, gomock.Any(), v1.EventTypeNormal)
 	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
 	mockK8sWrapper.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI, string(expectedAnnotation)).Return(nil)
 
@@ -423,6 +424,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 
 	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockK8sWrapper.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockK8sWrapper.EXPECT().BroadcastPodEvent(MockPod1, ReasonSecurityGroupApplied, gomock.Any(), v1.EventTypeNormal)
 	k8sHelper.EXPECT().GetPodSecurityGroups(MockPod1).Return(SecurityGroups, nil)
 	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
 	mockK8sWrapper.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)

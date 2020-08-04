@@ -21,13 +21,17 @@ import (
 	"strconv"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/prometheus/client_golang/prometheus"
+
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -85,6 +89,20 @@ var (
 			Help: "The number of requests that failed to get the pod directly from API Server",
 		},
 	)
+
+	broadcastPodEventCallCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "broadcast_pod_event_call_count",
+			Help: "The number of request made to broadcast pod event",
+		},
+	)
+
+	broadcastPodEventErrCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "broadcast_pod_event_err_count",
+			Help: "The number of errors encountered while broadcasting pod event",
+		},
+	)
 )
 
 func prometheusRegister() {
@@ -107,12 +125,14 @@ type K8sWrapper interface {
 	AnnotatePod(podNamespace string, podName string, key string, val string) error
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
 	GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error)
+	BroadcastPodEvent(pod *v1.Pod, reason string, message string, eventType string)
 }
 
 // k8sWrapper is the wrapper object with the client
 type k8sWrapper struct {
-	cacheClient client.Client
-	coreV1      corev1.CoreV1Interface
+	cacheClient   client.Client
+	coreV1        corev1.CoreV1Interface
+	eventRecorder record.EventRecorder
 }
 
 // NewK8sWrapper returns a new K8sWrapper
@@ -120,7 +140,12 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface) K8sWrapp
 	if !prometheusRegistered {
 		prometheusRegister()
 	}
-	return &k8sWrapper{cacheClient: client, coreV1: coreV1}
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartRecordingToSink(&corev1.EventSinkImpl{Interface: coreV1.Events("")})
+	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{
+		Component: config.ControllerName,
+	})
+	return &k8sWrapper{cacheClient: client, coreV1: coreV1, eventRecorder: recorder}
 }
 
 func (k *k8sWrapper) GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error) {
@@ -181,10 +206,9 @@ func (k *k8sWrapper) AnnotatePod(podNamespace string, podName string, key string
 
 	if err != nil {
 		annotatePodRequestErrCount.WithLabelValues(key).Inc()
-		return err
 	}
 
-	return nil
+	return err
 }
 
 // GetPod returns the pod object using the client cache
@@ -195,6 +219,10 @@ func (k *k8sWrapper) GetPod(namespace string, name string) (*v1.Pod, error) {
 	err := k.cacheClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, pod)
 	return pod, err
 
+}
+
+func (k *k8sWrapper) BroadcastPodEvent(pod *v1.Pod, reason string, message string, eventType string) {
+	k.eventRecorder.Event(pod, eventType, reason, message)
 }
 
 // AdvertiseCapacity advertises the resource capacity for the given resource
@@ -227,8 +255,7 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 
 	if err != nil {
 		advertiseResourceRequestErrCount.WithLabelValues(resourceName).Inc()
-		return err
 	}
 
-	return nil
+	return err
 }

@@ -47,6 +47,7 @@ type PodReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=core,resources=events,verbs=create
 
 // Reconcile reconciles the VPC Resources for the pod. Resources allocations are delegated to the respective handlers
 // based on the resource type
@@ -67,7 +68,7 @@ func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	}
 
-	logger := r.Log.WithValues("pod", req.NamespacedName, "node", pod.Spec.NodeName)
+	logger := r.Log.WithValues("UID", pod.UID, "pod", req.NamespacedName, "node", pod.Spec.NodeName)
 
 	node, managed := r.Manager.GetNode(pod.Spec.NodeName)
 	if !managed {

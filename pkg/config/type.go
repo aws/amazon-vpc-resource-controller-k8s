@@ -32,10 +32,8 @@ const (
 
 // K8s Pod Labels
 const (
-	// VPCManager is the node label to identify the manager of VPC Resources
-	VPCManagerLabel = "eks.amazonaws.com/vpc-resource-manager"
-	// VPCManagedBy if set enables the controller to manage the VPC Resources
-	VPCManagedBy = "controller"
+	// ControllerName is the name of the VPC Resource Controller
+	ControllerName = "vpc-resource-controller"
 	// HasTrunkAttachedLabel is the label denoting that the trunk ENI is attached to node or not
 	HasTrunkAttachedLabel = "vpc.amazonaws.com/has-trunk-attached"
 	// CustomNetworkingLabel is the label with the name of ENIConfig to be used by the node for custom networking

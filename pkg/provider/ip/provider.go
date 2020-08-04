@@ -144,7 +144,7 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 func (p *ipv4Provider) ProcessDeleteQueue(job *worker.WarmPoolJob) (ctrl.Result, error) {
 	resourceProviderAndPool, isPresent := p.getInstanceProviderAndPool(job.NodeName)
 	if !isPresent {
-		p.log.Info("forgetting the periodic check cool down period job", "node", job.NodeName)
+		p.log.Info("forgetting the delete queue processing job", "node", job.NodeName)
 		return ctrl.Result{}, nil
 	}
 	// TODO: For efficiency run only when required in next release

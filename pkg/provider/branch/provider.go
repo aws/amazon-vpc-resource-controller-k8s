@@ -35,6 +35,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	v1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
@@ -59,6 +60,9 @@ var (
 	operationCreateBranchENI            = "create_branch_eni"
 	operationCreateBranchENIAndAnnotate = "create_and_annotate_branch_eni"
 	operationInitTrunk                  = "init_trunk"
+
+	ReasonSecurityGroupApplied   = "SecurityGroupApplied"
+	ReasonBranchAllocationFailed = "BranchAllocationFailed"
 
 	reconcileRequeueRequest   = ctrl.Result{RequeueAfter: time.Minute * 30, Requeue: true}
 	deleteQueueRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
@@ -285,6 +289,15 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, err
 	}
 
+	if len(securityGroups) == 0 {
+		b.k8s.BroadcastPodEvent(pod, ReasonSecurityGroupApplied,
+			"Pod will get the instance security group as the pod didn't match any Security Group from "+
+				"SecurityGroupPolicy", v1.EventTypeWarning)
+	} else {
+		b.k8s.BroadcastPodEvent(pod, ReasonSecurityGroupApplied, fmt.Sprintf("Pod will get the following "+
+			"Security Groups %v", securityGroups), v1.EventTypeNormal)
+	}
+
 	log := b.log.WithValues("pod namespace", pod.Namespace, "pod name", pod.Name, "node name", pod.Spec.NodeName)
 
 	start := time.Now()
@@ -300,6 +313,8 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		if err == trunk.ErrCurrentlyAtMaxCapacity {
 			return ctrl.Result{RequeueAfter: config.CoolDownPeriod, Requeue: true}, nil
 		}
+		b.k8s.BroadcastPodEvent(pod, ReasonBranchAllocationFailed,
+			fmt.Sprintf("failed to allocate branch ENI to pod: %v", err), v1.EventTypeWarning)
 		return ctrl.Result{}, err
 	}
 

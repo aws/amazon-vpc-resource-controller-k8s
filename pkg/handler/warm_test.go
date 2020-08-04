@@ -18,13 +18,11 @@ package handler
 
 import (
 	"fmt"
-	"k8s.io/apimachinery/pkg/types"
 	"testing"
 
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_pool "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/pool"
 	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
-
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
@@ -34,6 +32,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	k8sctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
@@ -111,14 +110,15 @@ func TestWarmResourceHandler_PoolEmpty(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, _, mockProvider, mockPool := getMockWrapperAndProvider(ctrl)
+	handler, mockK8sWrapper, mockProvider, mockPool := getMockWrapperAndProvider(ctrl)
+	podCopy := pod.DeepCopy()
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 	mockPool.EXPECT().AssignResource(uid).Return("", true, pool.ErrWarmPoolEmpty)
+	mockK8sWrapper.EXPECT().BroadcastPodEvent(podCopy, ReasonResourceAllocationFailed, gomock.Any(), v1.EventTypeWarning)
 	mockPool.EXPECT().ReconcilePool().Return(job)
 	mockProvider.EXPECT().SubmitAsyncJob(job)
 
-	podCopy := pod.DeepCopy()
 	delete(podCopy.Annotations, config.ResourceNameIPAddress)
 
 	rslt, err := handler.HandleCreate(resourceName, 1, podCopy)

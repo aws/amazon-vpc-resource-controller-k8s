@@ -125,7 +125,8 @@ func (p *pool) AssignResource(requesterID string) (resourceID string, shouldReco
 	// Add the resource in the used resource key-value pair
 	p.usedResources[requesterID] = resourceID
 
-	p.log.Info("assigned resource", "resource id", resourceID, "requester id", requesterID)
+	p.log.V(1).Info("assigned resource",
+		"resource id", resourceID, "requester id", requesterID)
 
 	return resourceID, true, nil
 }
@@ -152,7 +153,8 @@ func (p *pool) FreeResource(requesterID string, resourceID string) (shouldReconc
 	}
 	p.coolDownQueue = append(p.coolDownQueue, resource)
 
-	p.log.Info("added the resource to cool down queue", "id", resourceID, "owner id", requesterID)
+	p.log.V(1).Info("added the resource to cool down queue",
+		"id", resourceID, "owner id", requesterID)
 
 	return true, nil
 }
@@ -203,7 +205,10 @@ func (p *pool) ProcessCoolDownQueue() (needFurtherProcessing bool) {
 		if time.Since(resource.deletionTimestamp) >= config.CoolDownPeriod {
 			// Add back to the cool down queue
 			p.warmResources = append(p.warmResources, resource.resourceID)
+			p.log.Info("moving the resource from delete to cool down queue",
+				"resource id", resource.resourceID, "deletion time", resource.deletionTimestamp)
 		} else {
+			// Remove the items from cool down queue that are processed and return
 			p.coolDownQueue = p.coolDownQueue[index:]
 			return true
 		}

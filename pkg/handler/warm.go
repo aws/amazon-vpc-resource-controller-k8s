@@ -34,6 +34,7 @@ import (
 const (
 	RequeueAfterWhenWPEmpty         = time.Millisecond * 600
 	RequeueAfterWhenResourceCooling = time.Second * 20
+	ReasonResourceAllocationFailed  = "ResourceAllocationFailed"
 )
 
 type warmResourceHandler struct {
@@ -72,9 +73,14 @@ func (w *warmResourceHandler) HandleCreate(resourceName string, requestCount int
 		// Reconcile the pool before retrying or returning an error
 		w.reconcilePool(shouldReconcile, resourceName, resourcePool)
 		if err == pool.ErrResourceAreBeingCooledDown {
+			w.k8sWrapper.BroadcastPodEvent(pod, ReasonResourceAllocationFailed,
+				fmt.Sprintf("Resource %s are being cooled down, will retry in %s", resourceName,
+					RequeueAfterWhenResourceCooling), v1.EventTypeWarning)
 			return ctrl.Result{Requeue: true, RequeueAfter: RequeueAfterWhenResourceCooling}, nil
-		} else if err == pool.ErrResourcesAreBeingCreated ||
-			err == pool.ErrWarmPoolEmpty {
+		} else if err == pool.ErrResourcesAreBeingCreated || err == pool.ErrWarmPoolEmpty {
+			w.k8sWrapper.BroadcastPodEvent(pod, ReasonResourceAllocationFailed,
+				fmt.Sprintf("Warm pool for resource %s is currently empty, will retry in %s", resourceName,
+					RequeueAfterWhenWPEmpty), v1.EventTypeWarning)
 			return ctrl.Result{Requeue: true, RequeueAfter: RequeueAfterWhenWPEmpty}, nil
 		} else {
 			return ctrl.Result{}, err
@@ -88,6 +94,9 @@ func (w *warmResourceHandler) HandleCreate(resourceName string, requestCount int
 			err = fmt.Errorf("failed to annotate %v, failed to free %v", err, errFree)
 		}
 	}
+
+	w.log.Info("successfully allocated and annotated resource", "UID", string(pod.UID),
+		"namespace", pod.Namespace, "name", pod.Name, "resource id", resourceName)
 
 	w.reconcilePool(shouldReconcile, resourceName, resourcePool)
 
@@ -122,8 +131,8 @@ func (w *warmResourceHandler) HandleDelete(resourceName string, pod *v1.Pod) (ct
 
 	w.reconcilePool(shouldReconcile, resourceName, resourcePool)
 
-	w.log.Info("successfully freed resource", "uid", string(pod.UID),
-		"resource id", resourceName)
+	w.log.Info("successfully freed resource", "UID", string(pod.UID), "namespace", pod.Namespace,
+		"name", pod.Name, "resource id", resourceName)
 
 	return ctrl.Result{}, nil
 }
