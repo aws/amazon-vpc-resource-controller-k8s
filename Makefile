@@ -1,8 +1,9 @@
 # Image URL to use all building/pushing image targets
-IMAGE_NAME=amazon/vpc-resource-controller
+IMAGE_NAME=eks/vpc-resource-controller
 REPO=$(AWS_ACCOUNT).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE_NAME)
-VERSION=$(shell git describe --dirty --tags --always)
+GIT_VERSION=$(shell git describe --dirty --tags --always)
 
+VERSION ?= $(GIT_VERSION)
 IMAGE ?= $(REPO):$(VERSION)
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:trivialVersions=true"
