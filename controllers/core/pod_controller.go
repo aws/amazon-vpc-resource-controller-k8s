@@ -156,7 +156,7 @@ func (r *PodReconciler) removeFromDeletedObjectStore(namespacedName string) *cor
 	pod, found := r.DeletePodQueue[namespacedName]
 	if !found {
 		// Should not happen
-		r.Log.Info("failed to find the pod in the delete queue %s", namespacedName)
+		r.Log.Info("failed to find the pod in the delete queue", "namespaced name", namespacedName)
 		return nil
 	}
 
