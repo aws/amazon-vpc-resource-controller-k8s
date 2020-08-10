@@ -61,11 +61,16 @@ var (
 	operationCreateBranchENIAndAnnotate = "create_and_annotate_branch_eni"
 	operationInitTrunk                  = "init_trunk"
 
-	ReasonSecurityGroupApplied   = "SecurityGroupApplied"
+	ReasonSecurityGroupRequested = "SecurityGroupRequested"
+	ReasonResourceAllocated      = "ResourceAllocated"
 	ReasonBranchAllocationFailed = "BranchAllocationFailed"
 
 	reconcileRequeueRequest   = ctrl.Result{RequeueAfter: time.Minute * 30, Requeue: true}
 	deleteQueueRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
+
+	// NodeDeleteRequeueRequestDelay represents the time after which the resources belonging to a node will be cleaned
+	// up after receiving the actual node delete event.
+	NodeDeleteRequeueRequestDelay = time.Minute * 5
 
 	prometheusRegistered = false
 )
@@ -158,20 +163,21 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	// TODO: For efficiency submit the process delete queue job only when the delete queue has items.
 	// Submit periodic jobs for the given node name
 	b.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
-	b.SubmitAsyncJob(worker.NewOnDemandReconcileJob(nodeName))
+	b.SubmitAsyncJob(worker.NewOnDemandReconcileNodeJob(nodeName))
 
 	b.log.Info("initialized the resource provider successfully")
 
 	return nil
 }
 
-// DeInitResources removes the trunk ENI from the cache. Network Interface are not deleted here.
+// DeInitResources adds a an asynchronous delete job to the worker which will execute after a certain period.
+// This is done because we receive the Node Delete Event First and the Pods are evicted after the node no longer exists
+// leading to all the pod events to be ignored since the node has been de initialized and hence leaking branch ENs.
 func (b *branchENIProvider) DeInitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
-	b.removeTrunkFromCache(nodeName)
-
-	b.log.Info("de-initialized resource provider successfully", "node name", nodeName)
-
+	b.log.Info("will clean up resources later to allow pods to be evicted first",
+		"node name", nodeName, "cleanup after", NodeDeleteRequeueRequestDelay)
+	b.workerPool.SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(nodeName), NodeDeleteRequeueRequestDelay)
 	return nil
 }
 
@@ -196,11 +202,28 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 		return b.DeleteBranchUsedByPods(onDemandJob.NodeName, onDemandJob.UID)
 	case worker.OperationProcessDeleteQueue:
 		return b.ProcessDeleteQueue(onDemandJob.NodeName)
-	case worker.OperationReconcile:
-		return b.Reconcile(onDemandJob.NodeName)
+	case worker.OperationReconcileNode:
+		return b.ReconcileNode(onDemandJob.NodeName)
+	case worker.OperationDeleteNode:
+		return b.DeleteNode(onDemandJob.NodeName)
 	}
 
 	return ctrl.Result{}, fmt.Errorf("unsupported operation type")
+}
+
+// DeleteNode deletes all the cached branch ENIs associated with the trunk and removes the trunk from the cache.
+func (b *branchENIProvider) DeleteNode(nodeName string) (ctrl.Result, error) {
+	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
+	if !isPresent {
+		return ctrl.Result{}, fmt.Errorf("failed to find node %s", nodeName)
+	}
+
+	trunkENI.DeleteAllBranchENIs()
+	b.removeTrunkFromCache(nodeName)
+
+	b.log.Info("de-initialized resource provider successfully", "node name", nodeName)
+
+	return ctrl.Result{}, nil
 }
 
 // GetResourceCapacity returns the resource capacity for the given instance.
@@ -221,7 +244,9 @@ func (b *branchENIProvider) UpdateResourceCapacity(instance ec2.EC2Instance) err
 	return nil
 }
 
-func (b *branchENIProvider) Reconcile(nodeName string) (ctrl.Result, error) {
+// ReconcileNode reconciles a nodes by getting the list of pods from K8s and comparing the result
+// with the internal cache.
+func (b *branchENIProvider) ReconcileNode(nodeName string) (ctrl.Result, error) {
 	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
 	log := b.log.WithValues("node", nodeName)
 	if !isPresent {
@@ -244,6 +269,7 @@ func (b *branchENIProvider) Reconcile(nodeName string) (ctrl.Result, error) {
 	return reconcileRequeueRequest, nil
 }
 
+// ProcessDeleteQueue removes cooled down ENIs associated with a trunk for a given node
 func (b *branchENIProvider) ProcessDeleteQueue(nodeName string) (ctrl.Result, error) {
 	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
 	log := b.log.WithValues("node", nodeName)
@@ -290,11 +316,11 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	}
 
 	if len(securityGroups) == 0 {
-		b.k8s.BroadcastPodEvent(pod, ReasonSecurityGroupApplied,
+		b.k8s.BroadcastPodEvent(pod, ReasonSecurityGroupRequested,
 			"Pod will get the instance security group as the pod didn't match any Security Group from "+
 				"SecurityGroupPolicy", v1.EventTypeWarning)
 	} else {
-		b.k8s.BroadcastPodEvent(pod, ReasonSecurityGroupApplied, fmt.Sprintf("Pod will get the following "+
+		b.k8s.BroadcastPodEvent(pod, ReasonSecurityGroupRequested, fmt.Sprintf("Pod will get the following "+
 			"Security Groups %v", securityGroups), v1.EventTypeNormal)
 	}
 
@@ -308,6 +334,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
 	}
 
+	// Get the list of branch ENIs that will be allocated to the pod object
 	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
 	if err != nil {
 		if err == trunk.ErrCurrentlyAtMaxCapacity {
@@ -329,6 +356,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, err
 	}
 
+	// Annotate the pod with the created resources
 	err = b.k8s.AnnotatePod(pod.Namespace, pod.Name, config.ResourceNamePodENI, string(jsonBytes))
 	if err != nil {
 		trunkENI.PushENIsToFrontOfDeleteQueue(branchENIs)
@@ -336,6 +364,10 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
 		return ctrl.Result{}, err
 	}
+
+	// Broadcast event to indicate the resource has been successfully created and annotated to the pod object
+	b.k8s.BroadcastPodEvent(pod, ReasonResourceAllocated,
+		fmt.Sprintf("Allocated %s to the pod", string(jsonBytes)), v1.EventTypeNormal)
 
 	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENIAndAnnotate, string(resourceCount)).
 		Observe(timeSinceMs(start))

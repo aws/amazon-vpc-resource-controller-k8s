@@ -692,6 +692,23 @@ func TestTrunkENI_InitTrunk_TrunkExists_DanglingENIs(t *testing.T) {
 		[]string{trunkENI.deleteQueue[0].ID, trunkENI.deleteQueue[1].ID})
 }
 
+// TestTrunkENI_DeleteAllBranchENIs tests all branch ENI associated with the trunk are deleted
+func TestTrunkENI_DeleteAllBranchENIs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.uidToBranchENIMap[PodUID] = branchENIs1
+	trunkENI.uidToBranchENIMap[PodUID2] = branchENIs2
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, branchENIs1[0])
+
+	// Since we added the same branch ENIs in the cool down queue and in the pod to eni map
+	mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil).Times(2)
+	mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
+
+	trunkENI.DeleteAllBranchENIs()
+}
+
 // TestTrunkENI_CreateAndAssociateBranchENIs test branch is created and associated with the trunk and valid eni details
 // are returned
 func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {

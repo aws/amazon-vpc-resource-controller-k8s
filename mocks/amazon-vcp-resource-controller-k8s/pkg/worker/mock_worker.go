@@ -8,6 +8,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
 	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
+	time "time"
 )
 
 // MockWorker is a mock of Worker interface
@@ -57,4 +58,16 @@ func (m *MockWorker) SubmitJob(arg0 interface{}) {
 func (mr *MockWorkerMockRecorder) SubmitJob(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitJob", reflect.TypeOf((*MockWorker)(nil).SubmitJob), arg0)
+}
+
+// SubmitJobAfter mocks base method
+func (m *MockWorker) SubmitJobAfter(arg0 interface{}, arg1 time.Duration) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SubmitJobAfter", arg0, arg1)
+}
+
+// SubmitJobAfter indicates an expected call of SubmitJobAfter
+func (mr *MockWorkerMockRecorder) SubmitJobAfter(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitJobAfter", reflect.TypeOf((*MockWorker)(nil).SubmitJobAfter), arg0, arg1)
 }

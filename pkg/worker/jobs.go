@@ -23,8 +23,8 @@ type Operations string
 
 const (
 	OperationProcessDeleteQueue Operations = "ProcessDeleteQueue"
-	// OperationReconcile represents a reconcile operation that reclaims dangling network interfaces
-	OperationReconcile Operations = "Reconcile"
+	// OperationReconcileNode represents a reconcile operation that reclaims dangling network interfaces using local cache
+	OperationReconcileNode Operations = "ReconcileNode"
 	// OperationCreate represents pods that are in created state
 	OperationCreate Operations = "Create"
 	// OperationDelete represents pods that have been deleted
@@ -33,6 +33,8 @@ const (
 	OperationDeleting Operations = "Deleting"
 	// OperationReconcileNotRequired represents job that don't need execution
 	OperationReconcileNotRequired Operations = "NoReconcile"
+	// OperationDeleteNode represents the job to delete the node
+	OperationDeleteNode Operations = "NodeDelete"
 )
 
 // OnDemandJob represents the job that will be executed by the respective worker
@@ -71,9 +73,9 @@ func NewOnDemandDeletedJob(nodeName string, uid types.UID) OnDemandJob {
 }
 
 // NewOnDemandReconcileJob returns a reconcile job
-func NewOnDemandReconcileJob(nodeName string) OnDemandJob {
+func NewOnDemandReconcileNodeJob(nodeName string) OnDemandJob {
 	return OnDemandJob{
-		Operation: OperationReconcile,
+		Operation: OperationReconcileNode,
 		NodeName:  nodeName,
 	}
 }
@@ -82,6 +84,14 @@ func NewOnDemandReconcileJob(nodeName string) OnDemandJob {
 func NewOnDemandProcessDeleteQueueJob(nodeName string) OnDemandJob {
 	return OnDemandJob{
 		Operation: OperationProcessDeleteQueue,
+		NodeName:  nodeName,
+	}
+}
+
+// NewOnDemandDeleteNodeJob returns a delete node job
+func NewOnDemandDeleteNodeJob(nodeName string) OnDemandJob {
+	return OnDemandJob{
+		Operation: OperationDeleteNode,
 		NodeName:  nodeName,
 	}
 }

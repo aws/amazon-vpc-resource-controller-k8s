@@ -50,8 +50,15 @@ const (
 
 // EC2 Tags
 const (
-	VLandIDTag    = "vpcresources.k8s.aws/vlan_id"
-	TrunkENIIDTag = "vpcresources.k8s.aws/trunk_eni_id"
+	ControllerTagPrefix = "vpcresources.k8s.aws/"
+	VLandIDTag          = ControllerTagPrefix + "vlan-id"
+	TrunkENIIDTag       = ControllerTagPrefix + "trunk-eni-id"
+
+	ClusterNameTagKeyFormat = "kubernetes.io/cluster/%s"
+	ClusterNameTagValue     = "owned"
+
+	NetworkInterfaceOwnerTagKey   = "eks:eni:owner"
+	NetworkInterfaceOwnerTagValue = "eks-vpc-resource-controller"
 )
 
 const (
@@ -62,6 +69,8 @@ const (
 var (
 	// CoolDownPeriod is the time to let kube-proxy propagates IP tables rules before assigning the resource back to new pod
 	CoolDownPeriod = time.Second * 30
+	// ENICleanUpInterval is the time interval between each dangling ENI clean up task
+	ENICleanUpInterval = time.Minute * 30
 )
 
 // ResourceConfig is the configuration for each resource type

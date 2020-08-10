@@ -32,6 +32,7 @@ import (
 )
 
 var (
+	clusterName = "cluster-name"
 	// instance id of EC2 worker node
 	instanceId   = "i-00000000000000000"
 	instanceType = "m5.xlarge"
@@ -80,6 +81,11 @@ var (
 		InterfaceAssociation: &ec2.TrunkInterfaceAssociation{AssociationId: &branchAssociationId},
 	}
 
+	defaultClusterNameTag = &ec2.Tag{
+		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
+		Value: aws.String(config.ClusterNameTagValue),
+	}
+
 	createNetworkInterfaceInput = &ec2.CreateNetworkInterfaceInput{
 		Description: &eniDescriptionWithPrefix,
 		Groups:      aws.StringSlice(securityGroups),
@@ -87,7 +93,7 @@ var (
 		TagSpecifications: []*ec2.TagSpecification{
 			{
 				ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),
-				Tags:         append(tags, defaultControllerTag),
+				Tags:         append(tags, defaultControllerTag, defaultClusterNameTag),
 			},
 		},
 	}
@@ -314,7 +320,8 @@ func getMockWrapper(ctrl *gomock.Controller) (EC2APIHelper, *mock_ec2.MockEC2Wra
 	}
 
 	mockWrapper := mock_ec2.NewMockEC2Wrapper(ctrl)
-	ec2ApiHelper := NewEC2APIHelper(mockWrapper)
+	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName)
+
 	return ec2ApiHelper, mockWrapper
 }
 

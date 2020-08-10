@@ -19,6 +19,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -63,6 +64,7 @@ var (
 type Worker interface {
 	StartWorkerPool(func(interface{}) (ctrl.Result, error)) error
 	SubmitJob(job interface{})
+	SubmitJobAfter(job interface{}, submitAfter time.Duration)
 }
 
 type worker struct {
@@ -119,6 +121,12 @@ func (w *worker) SetWorkerFunc(workerFunc func(interface{}) (ctrl.Result, error)
 // SubmitJob adds the job to the rate limited queue
 func (w *worker) SubmitJob(job interface{}) {
 	w.queue.Add(job)
+	jobsSubmittedCount.WithLabelValues(w.resourceName).Inc()
+}
+
+// SubmitJobAfter submits the job to the work queue after the given time period
+func (w *worker) SubmitJobAfter(job interface{}, submitAfter time.Duration) {
+	w.queue.AddAfter(job, submitAfter)
 	jobsSubmittedCount.WithLabelValues(w.resourceName).Inc()
 }
 

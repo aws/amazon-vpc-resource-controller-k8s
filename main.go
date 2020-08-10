@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"net/http"
 	_ "net/http"
 	_ "net/http/pprof"
@@ -80,6 +81,7 @@ func main() {
 	var roleARN string
 	var enableProfiling bool
 	var logLevel string
+	var clusterName string
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&roleARN, "role-arn", "", "Role ARN that will be assumed to make EC2 API calls "+
@@ -93,6 +95,7 @@ func main() {
 			"With dev mode logging, you will get Debug logs and more structured logging with extra details")
 	flag.BoolVar(&enableProfiling, "enable-profiling", false, "Enable runtime profiling for debugging"+
 		"purposes.")
+	flag.StringVar(&clusterName, "cluster-name", "", "The name of the k8s cluster")
 
 	flag.Parse()
 
@@ -109,6 +112,11 @@ func main() {
 		"GitCommit", version.GitCommit,
 		"BuildDate", version.BuildDate,
 	)
+
+	if clusterName == "" {
+		setupLog.Error(fmt.Errorf("cluster-name is a required parameter"), "unable to start the controller")
+		os.Exit(1)
+	}
 
 	// Profiler disabled by default, to enable set the enableProfiling argument
 	if enableProfiling {
@@ -169,7 +177,7 @@ func main() {
 		ctrl.Log.WithName("cache helper"))
 
 	// Get the resource providers and handlers
-	resourceHandlers, nodeManager := setUpResources(mgr, clientSet, cacheHelper, roleARN)
+	resourceHandlers, nodeManager := setUpResources(mgr, clientSet, cacheHelper, roleARN, clusterName)
 
 	if err = (&corecontroller.PodReconciler{
 		Client:         mgr.GetClient(),
@@ -218,7 +226,7 @@ func main() {
 
 // setUpResources sets up all resource providers and the node manager
 func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset,
-	cacheHelper webhookutils.K8sCacheHelper, roleARN string) ([]handler.Handler, node.Manager) {
+	cacheHelper webhookutils.K8sCacheHelper, roleARN string, clusterName string) ([]handler.Handler, node.Manager) {
 
 	var resourceProviders []provider.ResourceProvider
 
@@ -226,8 +234,10 @@ func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset,
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
 	}
+	eniCleaner := api.NewENICleaner(ec2Wrapper, clusterName, context.Background(), ctrl.Log.WithName("eni cleaner"))
+	manager.Add(eniCleaner)
 
-	ec2APIHelper := api.NewEC2APIHelper(ec2Wrapper)
+	ec2APIHelper := api.NewEC2APIHelper(ec2Wrapper, clusterName)
 	k8sWrapper := k8s.NewK8sWrapper(manager.GetClient(), clientSet.CoreV1())
 
 	// Load the default resource config

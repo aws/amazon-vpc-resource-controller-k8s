@@ -123,6 +123,9 @@ func (n *node) DeleteResources(resourceProviders []provider.ResourceProvider, _ 
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
+	// Mark the node as not ready to prevent processing for any further pod events
+	n.ready = false
+
 	var errDelete []error
 	for _, resourceProvider := range resourceProviders {
 		if resourceProvider.IsInstanceSupported(n.instance) {

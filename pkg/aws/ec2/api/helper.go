@@ -31,8 +31,6 @@ import (
 
 const (
 	CreateENIDescriptionPrefix = "aws-k8s-"
-	DefaultENITagKey           = "eks:eni:owner"
-	DefaultENITagVal           = "eks-vpc-resource-controller"
 )
 
 var (
@@ -59,16 +57,23 @@ var (
 		Cap:      time.Second * 5,
 	}
 	defaultControllerTag = &ec2.Tag{
-		Key:   aws.String(DefaultENITagKey),
-		Value: aws.String(DefaultENITagVal),
+		Key:   aws.String(config.NetworkInterfaceOwnerTagKey),
+		Value: aws.String(config.NetworkInterfaceOwnerTagValue),
 	}
+	clusterNameTag *ec2.Tag
 )
 
 type ec2APIHelper struct {
 	ec2Wrapper EC2Wrapper
 }
 
-func NewEC2APIHelper(ec2Wrapper EC2Wrapper) EC2APIHelper {
+func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
+	// Set the key and value of the cluster name tag which will be used to tag all the network interfaces created by
+	// the controller
+	clusterNameTag = &ec2.Tag{
+		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
+		Value: aws.String(config.ClusterNameTagValue),
+	}
 	return &ec2APIHelper{ec2Wrapper: ec2Wrapper}
 }
 
@@ -110,8 +115,9 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 		tags = []*ec2.Tag{}
 	}
 
-	// Append the default controller tag to scope down the permissions on network interfaces using IAM roles
-	tags = append(tags, defaultControllerTag)
+	// Append the default controller tag to scope down the permissions on network interfaces using IAM roles and add the
+	// k8s cluster name tag which will be used by the controller to clean up dangling ENIs
+	tags = append(tags, defaultControllerTag, clusterNameTag)
 	tagSpecifications := []*ec2.TagSpecification{
 		{
 			ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),

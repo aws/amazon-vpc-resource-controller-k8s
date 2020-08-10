@@ -51,9 +51,9 @@ func TestNewOnDemandDeletedJob(t *testing.T) {
 }
 
 func TestNewOnDemandReconcileJob(t *testing.T) {
-	onDemandJob := NewOnDemandReconcileJob(nodeName)
+	onDemandJob := NewOnDemandReconcileNodeJob(nodeName)
 
-	assert.Equal(t, OperationReconcile, onDemandJob.Operation)
+	assert.Equal(t, OperationReconcileNode, onDemandJob.Operation)
 	assert.Equal(t, nodeName, onDemandJob.NodeName)
 }
 

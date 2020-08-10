@@ -25,9 +25,11 @@ import (
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_trunk "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk"
 	mock_utils "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/utils"
+	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -90,6 +92,14 @@ func getProviderAndMockK8sWrapper(ctrl *gomock.Controller) (branchENIProvider, *
 		log:           log,
 		trunkENICache: make(map[string]trunk.TrunkENI),
 	}, mockK8sWrapper
+}
+
+func getProviderWithMockWorker(ctrl *gomock.Controller) (branchENIProvider, *mock_worker.MockWorker) {
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	return branchENIProvider{
+		log:        zap.New(zap.UseDevMode(true)).WithName("branch provider"),
+		workerPool: mockWorker,
+	}, mockWorker
 }
 
 func getProvider() branchENIProvider {
@@ -227,20 +237,15 @@ func TestBranchENIProvider_DeInitResources(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider := getProvider()
-	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider, mockWorker := getProviderWithMockWorker(ctrl)
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 
-	provider.trunkENICache[NodeName] = fakeTrunk
-
 	mockInstance.EXPECT().Name().Return(NodeName)
+	mockWorker.EXPECT().SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(NodeName), NodeDeleteRequeueRequestDelay)
 
 	err := provider.DeInitResource(mockInstance)
 
-	_, ok := provider.trunkENICache[NodeName]
-
 	assert.NoError(t, err)
-	assert.False(t, ok)
 }
 
 // TestBranchENIProvider_GetResourceCapacity tests that the correct capacity is returned for supported instance types
@@ -296,9 +301,11 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockK8sWrapper.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	k8sHelper.EXPECT().GetPodSecurityGroups(MockPod1).Return(SecurityGroups, nil)
-	mockK8sWrapper.EXPECT().BroadcastPodEvent(MockPod1, ReasonSecurityGroupApplied, gomock.Any(), v1.EventTypeNormal)
+	mockK8sWrapper.EXPECT().BroadcastPodEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
-	mockK8sWrapper.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI, string(expectedAnnotation)).Return(nil)
+	mockK8sWrapper.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI,
+		string(expectedAnnotation)).Return(nil)
+	mockK8sWrapper.EXPECT().BroadcastPodEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
@@ -424,7 +431,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 
 	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockK8sWrapper.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockK8sWrapper.EXPECT().BroadcastPodEvent(MockPod1, ReasonSecurityGroupApplied, gomock.Any(), v1.EventTypeNormal)
+	mockK8sWrapper.EXPECT().BroadcastPodEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 	k8sHelper.EXPECT().GetPodSecurityGroups(MockPod1).Return(SecurityGroups, nil)
 	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
 	mockK8sWrapper.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)
@@ -435,9 +442,9 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 	assert.Error(t, MockError, err)
 }
 
-// TestBranchENIProvider_Reconcile tests that the reconcile job returns no error and returns right results (with requeue after)
+// TestBranchENIProvider_ReconcileNode tests that the reconcile job returns no error and returns right results (with requeue after)
 // when the trunk ENI is present in cache
-func TestBranchENIProvider_Reconcile(t *testing.T) {
+func TestBranchENIProvider_ReconcileNode(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -451,17 +458,17 @@ func TestBranchENIProvider_Reconcile(t *testing.T) {
 
 	fakeTrunk1.EXPECT().Reconcile(list.Items)
 
-	result, err := provider.Reconcile(NodeName)
+	result, err := provider.ReconcileNode(NodeName)
 	assert.NoError(t, err)
 	assert.Equal(t, reconcileRequeueRequest, result)
 }
 
-// TestBranchENIProvider_Reconcile_TrunkENIDeleted tests that the reconcile job is removed once trunk eni is removed from
+// TestBranchENIProvider_ReconcileNode_TrunkENIDeleted tests that the reconcile job is removed once trunk eni is removed from
 // the cache
-func TestBranchENIProvider_Reconcile_TrunkENIDeleted(t *testing.T) {
+func TestBranchENIProvider_ReconcileNode_TrunkENIDeleted(t *testing.T) {
 	provider := getProvider()
 
-	result, err := provider.Reconcile(NodeName)
+	result, err := provider.ReconcileNode(NodeName)
 	assert.NoError(t, err)
 	assert.Equal(t, k8sCtrl.Result{}, result)
 }
