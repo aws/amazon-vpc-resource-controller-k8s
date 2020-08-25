@@ -141,20 +141,21 @@ func TestPodResourceInjector_Handle(t *testing.T) {
 }
 
 // TestPodResourceInjector_Windows_Handle tests webhook mutating requested Windows pod.
-func TestPodResourceInjector_Windows_Handle(t *testing.T) {
-	pod := NewWindowsPod("test", "test_namespace", true)
-	resp := getResponse(pod, handlerPa)
-	assert.True(t, resp.Allowed)
-
-	for _, p := range resp.Patches {
-		assert.True(t, p.Operation == "add")
-		assert.True(t, p.Path == "/spec/containers/0/resources/limits" ||
-			p.Path == "/spec/containers/0/resources/requests")
-
-		pv := p.Value.(map[string]interface{})
-		assert.True(t, pv[vpcresourceconfig.ResourceNameIPAddress] == resourceLimit)
-	}
-}
+// TODO: enable this test when we enable Windows support.
+//func TestPodResourceInjector_Windows_Handle(t *testing.T) {
+//	pod := NewWindowsPod("test", "test_namespace", true)
+//	resp := getResponse(pod, handlerPa)
+//	assert.True(t, resp.Allowed)
+//
+//	for _, p := range resp.Patches {
+//		assert.True(t, p.Operation == "add")
+//		assert.True(t, p.Path == "/spec/containers/0/resources/limits" ||
+//			p.Path == "/spec/containers/0/resources/requests")
+//
+//		pv := p.Value.(map[string]interface{})
+//		assert.True(t, pv[vpcresourceconfig.ResourceNameIPAddress] == resourceLimit)
+//	}
+//}
 
 // TestPodResourceInjector_WithoutSGP_Handle tests how Handle handles no SGP found in cache
 func TestPodResourceInjector_WithoutSGP_Handle(t *testing.T) {

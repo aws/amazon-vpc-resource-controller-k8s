@@ -56,12 +56,14 @@ func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Reques
 
 	// Attach private ip to Windows pod which is not running on Host Network.
 	// Attach ENI to non-Windows pod which is not running on Host Network.
-	if shouldInjectPrivateIP(pod) {
-		webhookLog.Info("Injecting resource to the first container of the pod",
-			"resource name", vpcresourceconfig.ResourceNameIPAddress, "resource count", resourceLimit)
-		pod.Spec.Containers[0].Resources.Limits[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
-		pod.Spec.Containers[0].Resources.Requests[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
-	} else if sgList, cacheErr := prj.CacheHelper.GetPodSecurityGroups(pod); cacheErr != nil {
+	// TODO: enable this check when we enable Windows support.
+	//if shouldInjectPrivateIP(pod) {
+	//	webhookLog.Info("Injecting resource to the first container of the pod",
+	//		"resource name", vpcresourceconfig.ResourceNameIPAddress, "resource count", resourceLimit)
+	//	pod.Spec.Containers[0].Resources.Limits[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
+	//	pod.Spec.Containers[0].Resources.Requests[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
+	//} else
+	if sgList, cacheErr := prj.CacheHelper.GetPodSecurityGroups(pod); cacheErr != nil {
 		webhookLog.Error(cacheErr, "Webhook client failed to Get or List objects from cache.")
 		return admission.Denied("Webhood encountered error to Get or List object from k8s cache.")
 	} else if len(sgList) > 0 {
