@@ -62,7 +62,7 @@ const (
 )
 
 const (
-	LeaderElectionKey       = "vpc-resource-controller"
+	LeaderElectionKey       = "cp-vpc-resource-controller"
 	LeaderElectionNamespace = "kube-system"
 )
 

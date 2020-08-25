@@ -232,7 +232,8 @@ func (m *manager) performPostUnlockOperation(nodeName string, postUnlockOperatio
 
 // isSelectedForManagement returns true if the node should be managed by the controller
 func (m *manager) isSelectedForManagement(v1node *v1.Node) bool {
-	return isWindowsNode(v1node) || canAttachTrunk(v1node)
+	//return isWindowsNode(v1node) || canAttachTrunk(v1node)
+	return canAttachTrunk(v1node)
 }
 
 // getNodeInstanceID returns the EC2 instance ID of a node

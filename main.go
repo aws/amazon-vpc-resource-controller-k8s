@@ -247,15 +247,15 @@ func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset,
 	onDemandProviders := getOnDemandResourceProviders(resourceConfig, k8sWrapper, ec2APIHelper, &resourceProviders, cacheHelper)
 	onDemandHandler := handler.NewOnDemandHandler(ctrl.Log.WithName("on demand handler"), onDemandProviders)
 
-	// Set up warm resource handlers
-	warmResourceProviders := getWarmResourceProviders(resourceConfig, k8sWrapper, ec2APIHelper, &resourceProviders)
-	warmResourceHandler := handler.NewWarmResourceHandler(ctrl.Log.WithName("warm resource handler"),
-		k8sWrapper, warmResourceProviders)
+	// Warm resource handler are not required as the Windows IP Address management is disabled on the master currently
+	//warmResourceProviders := getWarmResourceProviders(resourceConfig, k8sWrapper, ec2APIHelper, &resourceProviders)
+	//warmResourceHandler := handler.NewWarmResourceHandler(ctrl.Log.WithName("warm resource handler"),
+	//	k8sWrapper, warmResourceProviders)
 
 	// Set up the node manager
 	nodeManager := node.NewNodeManager(ctrl.Log.WithName("node manager"), resourceProviders, ec2APIHelper, k8sWrapper)
 
-	return []handler.Handler{onDemandHandler, warmResourceHandler}, nodeManager
+	return []handler.Handler{onDemandHandler}, nodeManager
 }
 
 // getOnDemandResourceProviders returns all the providers for resource type on demand
