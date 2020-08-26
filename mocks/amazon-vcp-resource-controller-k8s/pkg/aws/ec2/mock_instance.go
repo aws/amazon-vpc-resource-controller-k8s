@@ -144,16 +144,16 @@ func (mr *MockEC2InstanceMockRecorder) PrimaryNetworkInterfaceID() *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryNetworkInterfaceID", reflect.TypeOf((*MockEC2Instance)(nil).PrimaryNetworkInterfaceID))
 }
 
-// SetNewCustomNetworkingSubnetID mocks base method
-func (m *MockEC2Instance) SetNewCustomNetworkingSubnetID(arg0 string) {
+// SetNewCustomNetworkingSpec mocks base method
+func (m *MockEC2Instance) SetNewCustomNetworkingSpec(arg0 string, arg1 []string) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetNewCustomNetworkingSubnetID", arg0)
+	m.ctrl.Call(m, "SetNewCustomNetworkingSpec", arg0, arg1)
 }
 
-// SetNewCustomNetworkingSubnetID indicates an expected call of SetNewCustomNetworkingSubnetID
-func (mr *MockEC2InstanceMockRecorder) SetNewCustomNetworkingSubnetID(arg0 interface{}) *gomock.Call {
+// SetNewCustomNetworkingSpec indicates an expected call of SetNewCustomNetworkingSpec
+func (mr *MockEC2InstanceMockRecorder) SetNewCustomNetworkingSpec(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetNewCustomNetworkingSubnetID", reflect.TypeOf((*MockEC2Instance)(nil).SetNewCustomNetworkingSubnetID), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetNewCustomNetworkingSpec", reflect.TypeOf((*MockEC2Instance)(nil).SetNewCustomNetworkingSpec), arg0, arg1)
 }
 
 // SubnetCidrBlock mocks base method

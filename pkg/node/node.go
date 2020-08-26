@@ -47,7 +47,7 @@ type Node interface {
 	DeleteResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
 	UpdateResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
 
-	UpdateInstanceCustomSubnet(subnetID string)
+	UpdateCustomNetworkingSpecs(subnetID string, securityGroup []string)
 	IsReady() bool
 }
 
@@ -145,8 +145,8 @@ func (n *node) DeleteResources(resourceProviders []provider.ResourceProvider, _ 
 }
 
 // UpdateInstanceCustomSubnet updates current required custom subnet
-func (n *node) UpdateInstanceCustomSubnet(subnetID string) {
-	n.instance.SetNewCustomNetworkingSubnetID(subnetID)
+func (n *node) UpdateCustomNetworkingSpecs(subnetID string, securityGroup []string) {
+	n.instance.SetNewCustomNetworkingSpec(subnetID, securityGroup)
 }
 
 // IsReady returns true if all the providers have been initialized

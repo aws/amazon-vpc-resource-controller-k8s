@@ -594,10 +594,11 @@ func TestTrunkENI_InitTrunk_TrunkNotExists(t *testing.T) {
 	freeIndex := int64(2)
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	mockInstance.EXPECT().InstanceSecurityGroup().Return(SecurityGroups)
 	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]*awsEc2.InstanceNetworkInterface{}, nil)
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(freeIndex, nil)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId)
-	mockEC2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&InstanceId, &SubnetId, nil, nil,
+	mockEC2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&InstanceId, &SubnetId, SecurityGroups, nil,
 		&freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, 0).Return(trunkInterface, nil)
 
 	err := trunkENI.InitTrunk(mockInstance, []v1.Pod{*MockPod2})

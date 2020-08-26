@@ -41,10 +41,12 @@ type ec2Instance struct {
 	instanceSubnetID string
 	// instanceSubnetCidrBlock is the cidr block of the instance's subnet
 	instanceSubnetCidrBlock string
-	// currentSubnetID is the subnet id we are using now
+	// currentSubnetID can either point to the Subnet ID of the instance or subnet ID from the ENIConfig
 	currentSubnetID string
-	//currentSubnetCirdBlock is the cidr block we are using now
-	currentSubnetCirdBlock string
+	// currentSubnetCIDRBlock can either point to the Subnet CIDR block for instance subnet or subnet from ENIConfig
+	currentSubnetCIDRBlock string
+	// currentInstanceSecurityGroup can either point to the instance security group or the security group in ENIConfig
+	currentInstanceSecurityGroup []string
 	// subnetMask is the mask of the subnet CIDR block
 	subnetMask string
 	// deviceIndexes is the list of indexes used by the EC2 Instance
@@ -53,8 +55,10 @@ type ec2Instance struct {
 	instanceSecurityGroups []string
 	// primaryENIID is the ID of the primary network interface of the instance
 	primaryENIID string
-	// latest updated custom networking subnet
+	// newCustomNetworkingSubnetID is the SubnetID from the ENIConfig
 	newCustomNetworkingSubnetID string
+	// newCustomNetworkingSecurityGroup is the security group from the ENIConfig
+	newCustomNetworkingSecurityGroup []string
 }
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
@@ -71,7 +75,7 @@ type EC2Instance interface {
 	SubnetCidrBlock() string
 	PrimaryNetworkInterfaceID() string
 	InstanceSecurityGroup() []string
-	SetNewCustomNetworkingSubnetID(subnetID string)
+	SetNewCustomNetworkingSpec(subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 }
 
@@ -102,18 +106,6 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	}
 	i.instanceSubnetCidrBlock = *instanceSubnet.CidrBlock
 
-	if i.newCustomNetworkingSubnetID != "" {
-		customSubnet, err := ec2APIHelper.GetSubnet(&i.newCustomNetworkingSubnetID)
-		if err != nil {
-			return err
-		}
-		i.currentSubnetID = i.newCustomNetworkingSubnetID
-		i.currentSubnetCirdBlock = *customSubnet.CidrBlock
-	} else {
-		i.currentSubnetID = i.instanceSubnetID
-		i.currentSubnetCirdBlock = i.instanceSubnetCidrBlock
-	}
-
 	i.subnetMask = strings.Split(i.instanceSubnetCidrBlock, "/")[1]
 	i.instanceType = *instance.InstanceType
 	limits, ok := vpc.Limits[i.instanceType]
@@ -136,7 +128,7 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		}
 	}
 
-	return nil
+	return i.updateCurrentSubnetAndCidrBlock(ec2APIHelper)
 }
 
 // Os returns the os of the instance
@@ -162,7 +154,7 @@ func (i *ec2Instance) SubnetCidrBlock() string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
 
-	return i.currentSubnetCirdBlock
+	return i.currentSubnetCIDRBlock
 }
 
 // Name returns the name of the node
@@ -181,7 +173,10 @@ func (i *ec2Instance) PrimaryNetworkInterfaceID() string {
 
 // InstanceSecurityGroup returns the instance security group of the primary network interface
 func (i *ec2Instance) InstanceSecurityGroup() []string {
-	return i.instanceSecurityGroups
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.currentInstanceSecurityGroup
 }
 
 // GetHighestUnusedDeviceIndex assigns a free device index from the end of the list since IPAMD assigns indexes from
@@ -214,29 +209,46 @@ func (i *ec2Instance) SubnetMask() string {
 	return i.subnetMask
 }
 
-// SetNewCustomNetworkingSubnetID set custom subnet in instance
-func (i *ec2Instance) SetNewCustomNetworkingSubnetID(subnet string) {
+// SetNewCustomNetworkingSpec updates the subnet ID and subnet CIDR block for the instance
+func (i *ec2Instance) SetNewCustomNetworkingSpec(subnet string, securityGroups []string) {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
 	i.newCustomNetworkingSubnetID = subnet
+	i.newCustomNetworkingSecurityGroup = securityGroups
 }
 
-// UpdateCurrentSubnetAndCidrBlock updates subnet and CIDR block same time
-func (i *ec2Instance) UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error {
+// UpdateCurrentSubnetAndCidrBlock updates the subnet details under a write lock
+func (i *ec2Instance) UpdateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHelper) error {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
-	if i.newCustomNetworkingSubnetID == "" && i.currentSubnetID != i.instanceSubnetID {
-		i.currentSubnetID = i.instanceSubnetID
-		i.currentSubnetCirdBlock = i.instanceSubnetCidrBlock
-	} else if i.newCustomNetworkingSubnetID != "" && i.newCustomNetworkingSubnetID != i.currentSubnetID {
-		customSubnet, err := helper.GetSubnet(&i.newCustomNetworkingSubnetID)
-		if err != nil {
-			return err
+	return i.updateCurrentSubnetAndCidrBlock(ec2APIHelper)
+}
+
+// updateCurrentSubnetAndCidrBlock updates subnet details and security group if the node is
+// using custom networking
+func (i *ec2Instance) updateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHelper) error {
+	// Custom networking is being used on node, point the current subnet ID, CIDR block and
+	// instance security group to the one's present in the Custom networking spec
+	if i.newCustomNetworkingSubnetID != "" {
+		i.currentInstanceSecurityGroup = i.newCustomNetworkingSecurityGroup
+		// Only get the subnet CIDR block again if the subnet ID has changed
+		if i.newCustomNetworkingSubnetID != i.currentSubnetID {
+			customSubnet, err := ec2APIHelper.GetSubnet(&i.newCustomNetworkingSubnetID)
+			if err != nil {
+				return err
+			}
+			i.currentSubnetID = i.newCustomNetworkingSubnetID
+			i.currentSubnetCIDRBlock = *customSubnet.CidrBlock
 		}
-		i.currentSubnetID = i.newCustomNetworkingSubnetID
-		i.currentSubnetCirdBlock = *customSubnet.CidrBlock
+	} else {
+		// Custom networking in not being used, point to the instance security group and
+		// subnet details
+		i.currentSubnetID = i.instanceSubnetID
+		i.currentSubnetCIDRBlock = i.instanceSubnetCidrBlock
+		i.currentInstanceSecurityGroup = i.instanceSecurityGroups
 	}
+
 	return nil
 }

@@ -133,10 +133,18 @@ func TestEc2Instance_LoadDetails_SubnetPreLoaded(t *testing.T) {
 
 	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
 	customNWSubnetID := "custom-networking"
+	customNWSecurityGroups := []string{"sg-1"}
+	customNWSubnetCidr := "192.2.0.0/24"
+
+	// Set the instance subnet ID and CIDR block
 	ec2Instance.instanceSubnetID = subnetID
-	ec2Instance.instanceSubnetCidrBlock = "192.168.0.0/8"
+	ec2Instance.instanceSubnetCidrBlock = subnetCidrBlock
+
+	// Set the custom networking subnet ID and CIDR block
 	ec2Instance.newCustomNetworkingSubnetID = customNWSubnetID
-	customSubnet := &ec2.Subnet{CidrBlock: &subnetCidrBlock}
+	ec2Instance.newCustomNetworkingSecurityGroup = customNWSecurityGroups
+
+	customSubnet := &ec2.Subnet{CidrBlock: &customNWSubnetCidr}
 
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
 	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(subnet, nil)
@@ -144,9 +152,9 @@ func TestEc2Instance_LoadDetails_SubnetPreLoaded(t *testing.T) {
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NoError(t, err)
-	assert.True(t, ec2Instance.currentSubnetID == customNWSubnetID &&
-		ec2Instance.currentSubnetCirdBlock == *subnet.CidrBlock &&
-		ec2Instance.subnetMask == "16")
+	assert.Equal(t, customNWSubnetID, ec2Instance.currentSubnetID)
+	assert.Equal(t, customNWSecurityGroups, ec2Instance.currentInstanceSecurityGroup)
+	assert.Equal(t, customNWSubnetCidr, ec2Instance.currentSubnetCIDRBlock)
 }
 
 // TestEc2Instance_LoadDetails_ErrInstanceDetails tests that if error is returned in loading instance details then the

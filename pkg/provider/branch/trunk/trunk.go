@@ -176,7 +176,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		}
 
 		trunk, err := t.ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceID, aws.String(t.instance.SubnetID()),
-			nil, nil, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, 0)
+			t.instance.InstanceSecurityGroup(), nil, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, 0)
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("create_trunk_eni").Inc()
 			log.Error(err, "failed to create trunk interface")

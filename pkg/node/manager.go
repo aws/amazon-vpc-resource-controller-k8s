@@ -193,12 +193,12 @@ func (m *manager) updateSubnetIfUsingENIConfig(node Node, k8sNode *v1.Node) erro
 		if eniConfig.Spec.Subnet != "" {
 			m.Log.V(1).Info("node is using custom networking, updating the subnet", "node", k8sNode.Name,
 				"subnet", eniConfig.Spec.Subnet)
-			node.UpdateInstanceCustomSubnet(eniConfig.Spec.Subnet)
+			node.UpdateCustomNetworkingSpecs(eniConfig.Spec.Subnet, eniConfig.Spec.SecurityGroups)
 			return nil
 		}
 		return fmt.Errorf("failed to find subnet in eniconfig spec %s", eniConfigName)
 	} else {
-		node.UpdateInstanceCustomSubnet("")
+		node.UpdateCustomNetworkingSpecs("", nil)
 	}
 	return nil
 }
