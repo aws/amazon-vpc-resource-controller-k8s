@@ -18,7 +18,6 @@ package sgp
 
 import (
 	"context"
-
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 
 	. "github.com/onsi/ginkgo"
@@ -30,5 +29,18 @@ func CreateSecurityGroupPolicy(k8sClient client.Client, ctx context.Context,
 	securityGroupPolicy *v1beta1.SecurityGroupPolicy) {
 	By("creating the security group policy")
 	err := k8sClient.Create(ctx, securityGroupPolicy)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func UpdateSecurityGroupPolicy(k8sClient client.Client, ctx context.Context,
+	securityGroupPolicy *v1beta1.SecurityGroupPolicy, securityGroups []string) {
+	By("updating the security group policy")
+	updatedSgp := &v1beta1.SecurityGroupPolicy{}
+	_ = k8sClient.Get(ctx, client.ObjectKey{
+		Name:      securityGroupPolicy.Name,
+		Namespace: securityGroupPolicy.Namespace,
+	}, updatedSgp)
+	updatedSgp.Spec.SecurityGroups.Groups = securityGroups
+	err := k8sClient.Update(ctx, updatedSgp)
 	Expect(err).NotTo(HaveOccurred())
 }

@@ -23,12 +23,14 @@ import (
 	deploymentWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/deployment"
 	podWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/pod"
 	sgpWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	v12 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var _ = Describe("Branch ENI Pods", func() {
@@ -152,15 +154,153 @@ var _ = Describe("Branch ENI Pods", func() {
 			})
 		})
 
-		//Context("when a pod with more than one matching SGP is created", func() {q
-		//	It("should run with Branch ENI IP with the SG from all SGP", func() {
-		//	})
-		//})
+		Context("when a pod matches more than one SGPs", func() {
+			var (
+				securityGroups2      []string
+				securityGroupPolicy2 *v1beta1.SecurityGroupPolicy
+			)
+			BeforeEach(func() {
+				securityGroups2 = []string{securityGroupID2}
+			})
+			JustBeforeEach(func() {
+				securityGroupPolicy2, err = manifest.NewSGPBuilder().Name(utils.ResourceNamePrefix+"sgp2").
+					Namespace(namespace).
+					PodMatchLabel(sgpLabelKey, sgpLabelValue).
+					SecurityGroup(securityGroups2).Build()
+				Expect(err).NotTo(HaveOccurred())
+			})
 
-		//Context("when a pod with no matching SGP is created", func() {
-		//	It("should run with secondary IP", func() {
-		//	})
-		//})
+			JustAfterEach(func() {
+				By("deleting security group policy")
+				err = frameWork.K8sClient.Delete(ctx, securityGroupPolicy2)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			Context("when these SGPs have different security groups", func() {
+				It("should run with Branch ENI IP with all security groups from all SGPs", func() {
+					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy2)
+					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
+					verify.PodHasExpectedSG(pod, append(securityGroups, securityGroupID2))
+				})
+			})
+
+			Context("when these SGPs have duplicated security groups", func() {
+				BeforeEach(func() {
+					//sg1 = [securityGroupID1]
+					securityGroups2 = []string{securityGroupID1, securityGroupID1, securityGroupID2}
+				})
+
+				It("should run with Branch ENI IP with only one security group from all SGPs", func() {
+					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy2)
+					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
+					verify.PodHasExpectedSG(pod, []string{securityGroupID1, securityGroupID2})
+				})
+			})
+		})
+
+		Context("when a SGP has expression selector", func() {
+			var (
+				sgpExpressionKey   = "environment"
+				sgpExpressionValue = []string{"qa", "production"}
+			)
+			Context("when the SGP has only expression selector and a pod matches the expression", func() {
+				BeforeEach(func() {
+					podLabelKey = sgpExpressionKey
+					podLabelValue = sgpExpressionValue[0]
+				})
+
+				JustBeforeEach(func() {
+					securityGroupPolicy, err = manifest.NewSGPBuilder().
+						Namespace(namespace).
+						PodMatchExpression(sgpExpressionKey, metav1.LabelSelectorOpIn, sgpExpressionValue...).
+						SecurityGroup(securityGroups).Build()
+					Expect(err).NotTo(HaveOccurred())
+				})
+
+				It("should run with Branch ENI IP with the SG from the matched SGP", func() {
+					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
+					verify.PodHasExpectedSG(pod, securityGroups)
+				})
+			})
+
+			Context("when the SGP has label selector and expression selector", func() {
+				JustBeforeEach(func() {
+					securityGroupPolicy, err = manifest.NewSGPBuilder().
+						Namespace(namespace).
+						PodMatchExpression(sgpExpressionKey, metav1.LabelSelectorOpIn, sgpExpressionValue...).
+						PodMatchLabel(sgpLabelKey, sgpLabelValue).
+						SecurityGroup(securityGroups).Build()
+					Expect(err).NotTo(HaveOccurred())
+				})
+
+				Context("when the pod only matches label selector, not expression selector", func() {
+					It("should run without branch ENI annotation", func() {
+						sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+						pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
+						verify.PodHasNoBranchENIAnnotationInjected(pod)
+					})
+				})
+
+				Context("when the pod only matches expression selector, not label selector", func() {
+					BeforeEach(func() {
+						podLabelKey = sgpExpressionKey
+						podLabelValue = sgpExpressionValue[0]
+					})
+
+					It("should run without branch ENI annotation", func() {
+						sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+						pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
+						verify.PodHasNoBranchENIAnnotationInjected(pod)
+					})
+				})
+
+				Context("when the pod matches both label and expression selectors", func() {
+					JustBeforeEach(func() {
+						pod, err = manifest.NewDefaultPodBuilder().
+							Namespace(namespace).
+							Labels(map[string]string{podLabelKey: podLabelValue, sgpExpressionKey: sgpExpressionValue[0]}).
+							Build()
+						Expect(err).NotTo(HaveOccurred())
+					})
+
+					It("should run with branch ENI annotation", func() {
+						sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+						pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
+						verify.PodHasExpectedSG(pod, securityGroups)
+					})
+				})
+			})
+		})
+
+		Context("when adding new security group to a existing SGP", func() {
+			JustBeforeEach(func() {
+				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+			})
+
+			It("a new pod should run with all security groups", func() {
+				sgpWrapper.UpdateSecurityGroupPolicy(
+					frameWork.K8sClient, ctx, securityGroupPolicy, []string{securityGroupID1, securityGroupID2},
+				)
+				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
+				By("the pod has two sgs")
+				verify.PodHasExpectedSG(pod, []string{securityGroupID1, securityGroupID2})
+			})
+		})
+
+		Context("when a pod without matching SGP is created", func() {
+			BeforeEach(func() {
+				podLabelValue = "dev"
+			})
+
+			It("should run without branch ENI annotation", func() {
+				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
+				verify.PodHasNoBranchENIAnnotationInjected(pod)
+			})
+		})
 
 		Context("when only Service Account is used with SGP", func() {
 			var sa *v1.ServiceAccount
@@ -202,7 +342,7 @@ var _ = Describe("Branch ENI Pods", func() {
 				JustBeforeEach(func() {
 					securityGroupPolicy, err = manifest.NewSGPBuilder().
 						Namespace(namespace).
-						ServiceAccountMatchExpression(sgpLabelKey, v12.LabelSelectorOpIn, sgpLabelValue).
+						ServiceAccountMatchExpression(sgpLabelKey, metav1.LabelSelectorOpIn, sgpLabelValue).
 						SecurityGroup(securityGroups).Build()
 					Expect(err).NotTo(HaveOccurred())
 				})
@@ -227,7 +367,7 @@ var _ = Describe("Branch ENI Pods", func() {
 
 					securityGroupPolicy, err = manifest.NewSGPBuilder().
 						Namespace(namespace).
-						ServiceAccountMatchExpression(sgpLabelKey, v12.LabelSelectorOpIn, sgpLabelValue).
+						ServiceAccountMatchExpression(sgpLabelKey, metav1.LabelSelectorOpIn, sgpLabelValue).
 						ServiceAccountMatchLabel(matchExpressionLabelKey, matchExpressionLabelVal).
 						SecurityGroup(securityGroups).Build()
 					Expect(err).NotTo(HaveOccurred())

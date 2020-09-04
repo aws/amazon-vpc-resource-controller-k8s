@@ -19,6 +19,7 @@ package verify
 import (
 	"context"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
 
@@ -47,7 +48,8 @@ func (v *PodVerification) PodHasExpectedSG(pod *v1.Pod, expectedSecurityGroup []
 	By("getting the security group for the ENI from AWS EC2 ")
 	actualSG, err := v.frameWork.EC2Manager.GetENISecurityGroups(eniDetails[0].ID)
 	Expect(err).NotTo(HaveOccurred())
-	Expect(expectedSecurityGroup).To(Equal(actualSG))
+
+	Expect(expectedSecurityGroup).Should(ConsistOf(actualSG))
 
 	By("getting the same IP address as the branch ENI IP")
 	Expect(eniDetails[0].IPV4Addr).To(Equal(pod.Status.PodIP))
@@ -65,4 +67,11 @@ func (v *PodVerification) PodsHaveExpectedSG(namespace string, podLabelKey strin
 	for _, pod := range pods {
 		v.PodHasExpectedSG(&pod, expectedSecurityGroup)
 	}
+}
+
+
+func (v *PodVerification) PodHasNoBranchENIAnnotationInjected(pod *v1.Pod) {
+	By("getting the branch ENI from the pod's annotation")
+	_, hasNoAnnotation := pod.Annotations[config.ResourceNamePodENI]
+	Expect(hasNoAnnotation).To(BeFalse(), "Pod shouldn't have branch ENI annotations.")
 }

@@ -115,3 +115,18 @@ func (s *SGPBuilder) Build() (*v1beta1.SecurityGroupPolicy, error) {
 		},
 	}, nil
 }
+
+func (s *SGPBuilder) PodMatchExpression(key string, operator v1.LabelSelectorOperator, values ...string) *SGPBuilder {
+	if s.podSelector == nil {
+		s.podSelector = &v1.LabelSelector{}
+	}
+	if s.podSelector.MatchExpressions == nil {
+		s.podSelector.MatchExpressions = []v1.LabelSelectorRequirement{}
+	}
+	s.podSelector.MatchExpressions = append(s.podSelector.MatchExpressions, v1.LabelSelectorRequirement{
+		Key:      key,
+		Operator: operator,
+		Values:   values,
+	})
+	return s
+}
