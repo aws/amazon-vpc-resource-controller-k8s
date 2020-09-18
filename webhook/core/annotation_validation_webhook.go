@@ -4,14 +4,12 @@ import (
 	"context"
 	"net/http"
 
-	"k8s.io/apimachinery/pkg/types"
-
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 
 	"github.com/go-logr/logr"
 	"k8s.io/api/admission/v1beta1"
 	corev1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
@@ -19,9 +17,9 @@ import (
 
 // AnnotationValidator injects resources into Pods
 type AnnotationValidator struct {
-	Client  client.Client
-	decoder *admission.Decoder
-	Log     logr.Logger
+	K8sWrapper k8s.K8sWrapper
+	decoder    *admission.Decoder
+	Log        logr.Logger
 }
 
 const validUserInfo = "system:serviceaccount:kube-system:vpc-resource-controller"
@@ -52,9 +50,7 @@ func (av *AnnotationValidator) Handle(ctx context.Context, req admission.Request
 		} else if req.Operation == v1beta1.Update {
 			// Check if the pod-eni annotation has been changed
 			webhookLog.V(1).Info("Operation is update, checking that pod-eni annotation wasn't modified")
-			oldPod := &corev1.Pod{}
-			objectKey := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
-			err := av.Client.Get(ctx, objectKey, oldPod)
+			oldPod, err := av.K8sWrapper.GetPod(pod.Namespace, pod.Name)
 			if err != nil {
 				webhookLog.Error(err, "Failed to fetch pod in update request")
 				return admission.Denied("Validation failed. Trying to update annotation on a pod that can't be found")

@@ -26,25 +26,15 @@ import (
 	"os"
 	"time"
 
-	zapRaw "go.uber.org/zap"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
-
 	crdv1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
@@ -53,6 +43,21 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhook/core"
+
+	zapRaw "go.uber.org/zap"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+	"k8s.io/client-go/tools/cache"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -82,6 +87,7 @@ func main() {
 	var enableProfiling bool
 	var logLevel string
 	var clusterName string
+	var listPageLimit int
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&roleARN, "role-arn", "", "Role ARN that will be assumed to make EC2 API calls "+
@@ -96,6 +102,8 @@ func main() {
 	flag.BoolVar(&enableProfiling, "enable-profiling", false, "Enable runtime profiling for debugging"+
 		"purposes.")
 	flag.StringVar(&clusterName, "cluster-name", "", "The name of the k8s cluster")
+	flag.IntVar(&listPageLimit, "page-limit", 100, "The page size limiting the number of response"+
+		" for list operation to API Server")
 
 	flag.Parse()
 
@@ -146,17 +154,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// With kube-builder, we have to manually specify the fields on which the objects must be indexed, in order to
-	// list objects using the k8s cache with field selectors
-	err = mgr.GetFieldIndexer().IndexField(&corev1.Pod{}, "spec.nodeName", func(object runtime.Object) []string {
-		pod := object.(*corev1.Pod)
-		return []string{pod.Spec.NodeName}
-	})
-	if err != nil {
-		setupLog.Error(err, "failed to add index field", "spec.nodeName")
-		os.Exit(1)
-	}
-
 	clientSet, err := kubernetes.NewForConfig(kubeConfig)
 	if err != nil {
 		setupLog.Error(err, "failed to create client set")
@@ -176,20 +173,70 @@ func main() {
 		mgr.GetClient(),
 		ctrl.Log.WithName("cache helper"))
 
-	// Get the resource providers and handlers
-	resourceHandlers, nodeManager := setUpResources(mgr, clientSet, cacheHelper, roleARN, clusterName)
+	dataStore := cache.NewIndexer(pod.NSKeyIndexer, pod.NodeNameIndexer())
+	k8sWrapper := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), dataStore)
 
-	if err = (&corecontroller.PodReconciler{
-		Client:         mgr.GetClient(),
-		Log:            ctrl.Log.WithName("controllers").WithName("Pod"),
-		DeletePodQueue: make(map[string]*corev1.Pod),
-		Scheme:         mgr.GetScheme(),
-		Manager:        nodeManager,
-		Handlers:       resourceHandlers,
+	// Get the resource providers and handlers
+	resourceHandlers, nodeManager := setUpResources(mgr, k8sWrapper, cacheHelper, roleARN, clusterName)
+
+	createUpdateEventChannel := make(chan event.GenericEvent)
+	deleteEventChannel := make(chan event.GenericEvent)
+	customController := &custom.CustomController{
+		ClientSet:    clientSet,
+		PageLimit:    int64(listPageLimit),
+		Namespace:    metav1.NamespaceAll,
+		ResyncPeriod: syncPeriod,
+		DataStore:    dataStore,
+		Queue:        cache.NewDeltaFIFO(pod.NSKeyIndexer, dataStore),
+		Converter: &pod.PodConverter{
+			K8sResource:     "pods",
+			K8sResourceType: &corev1.Pod{},
+		},
+		SkipCacheDeletion:                 true,
+		CreateUpdateEventNotificationChan: createUpdateEventChannel,
+		DeleteEventNotificationChan:       deleteEventChannel,
+	}
+	// Only start the controller when the leader election is won
+	mgr.Add(manager.RunnableFunc(func(stop <-chan struct{}) error {
+		setupLog.Info("starting the controller")
+
+		stopChannel := make(chan struct{})
+		// Start the custom controller
+		customController.StartController(stopChannel)
+		// If the manager is stopped, signal the controller to stop as well.
+		<-stop
+		stopChannel <- struct{}{}
+
+		setupLog.Info("stopping the controller")
+
+		return nil
+	}))
+
+	podReconciler := &corecontroller.PodReconciler{
+		Log:       setupLog.WithName("pod reconciler"),
+		Handlers:  resourceHandlers,
+		Manager:   nodeManager,
+		DataStore: dataStore,
+	}
+	// The reason why we have to create two separate contorller is because we want to process the
+	// delete event when the pod is actually deleted and not when the pod's Deletion timestamp is set.
+	// With kube builder controller you only get the Request with the object namespace and not the
+	// entire event.
+	if err = (&corecontroller.CreateUpdateReconciler{
+		PodReconciler:            podReconciler,
+		CreateUpdateEventChannel: createUpdateEventChannel,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Pod")
+		setupLog.Error(err, "unable to create controller", "controller", "Pod Create/Update Event")
 		os.Exit(1)
 	}
+	if err = (&corecontroller.DeleteReconciler{
+		PodReconciler:      podReconciler,
+		DeleteEventChannel: deleteEventChannel,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Pod Delete Event")
+		os.Exit(1)
+	}
+
 	if err = (&corecontroller.NodeReconciler{
 		Client:  mgr.GetClient(),
 		Log:     ctrl.Log.WithName("controllers").WithName("Node"),
@@ -213,8 +260,8 @@ func main() {
 
 	// Validating webhook for pod.
 	webhookServer.Register("/validate-v1-pod", &webhook.Admission{Handler: &webhookcore.AnnotationValidator{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("webhook").WithName("Annotation Validator"),
+		K8sWrapper: k8sWrapper,
+		Log:        ctrl.Log.WithName("webhook").WithName("Annotation Validator"),
 	}})
 
 	setupLog.Info("starting manager")
@@ -225,7 +272,7 @@ func main() {
 }
 
 // setUpResources sets up all resource providers and the node manager
-func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset,
+func setUpResources(manager manager.Manager, k8sWrapper k8s.K8sWrapper,
 	cacheHelper webhookutils.K8sCacheHelper, roleARN string, clusterName string) ([]handler.Handler, node.Manager) {
 
 	var resourceProviders []provider.ResourceProvider
@@ -238,7 +285,6 @@ func setUpResources(manager manager.Manager, clientSet *kubernetes.Clientset,
 	manager.Add(eniCleaner)
 
 	ec2APIHelper := api.NewEC2APIHelper(ec2Wrapper, clusterName)
-	k8sWrapper := k8s.NewK8sWrapper(manager.GetClient(), clientSet.CoreV1())
 
 	// Load the default resource config
 	resourceConfig := config.LoadResourceConfig()
@@ -305,5 +351,4 @@ func getWarmResourceProviders(resourceConfig map[string]config.ResourceConfig, k
 	*providers = append(*providers, ipv4Provider)
 
 	return map[string]provider.ResourceProvider{ipV4Config.Name: ipv4Provider}
-
 }

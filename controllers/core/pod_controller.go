@@ -17,59 +17,83 @@ limitations under the License.
 package controllers
 
 import (
-	"context"
-	"sync"
 	"time"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
+	reqHandler "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 
 	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
-// PodReconciler reconciles a Pod object
 type PodReconciler struct {
-	client.Client
-	Log            logr.Logger
-	Scheme         *runtime.Scheme
-	Handlers       []handler.Handler
-	Manager        node.Manager
-	lock           sync.Mutex // guards the following items
-	DeletePodQueue map[string]*corev1.Pod
+	Log logr.Logger
+	// Handlers is the resource handler for handling supported request on specified in the
+	// container requests.
+	Handlers []reqHandler.Handler
+	// Manager manages all the nodes on the cluster
+	Manager node.Manager
+	// DataStore to get/remove stripped down pod object from the cache
+	DataStore cache.Store
 }
 
-// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;patch
-// +kubebuilder:rbac:groups=core,resources=events,verbs=create
+// CreateUpdateReconciler to handle create and update events on the pod objects
+type CreateUpdateReconciler struct {
+	PodReconciler            *PodReconciler
+	CreateUpdateEventChannel chan event.GenericEvent
+}
 
-// Reconcile reconciles the VPC Resources for the pod. Resources allocations are delegated to the respective handlers
-// based on the resource type
-func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	ctx := context.Background()
+// DeleteReconciler to handle the delete events on pod objects
+type DeleteReconciler struct {
+	PodReconciler      *PodReconciler
+	DeleteEventChannel chan event.GenericEvent
+}
 
-	pod := &corev1.Pod{}
-	var isDeleteEvent bool
-	if err := r.Client.Get(ctx, req.NamespacedName, pod); err != nil {
-		if errors.IsNotFound(err) {
-			// Pod is deleted and no longer available in cache, get the pod cached inside the delete event listener
-			pod = r.removeFromDeletedObjectStore(req.NamespacedName.String())
-			if pod == nil {
-				// If pod is not found in the delete queue too, ignore the event
-				return ctrl.Result{}, client.IgnoreNotFound(err)
-			}
-			isDeleteEvent = true
-		}
+// Reconcile handles create and update events
+func (r *CreateUpdateReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+	return r.PodReconciler.ProcessEvent(req, false)
+}
+
+// Reconcile handles delete events
+func (d *DeleteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+	return d.PodReconciler.ProcessEvent(req, true)
+}
+
+// ProcessEvent handles create/update event by querying the handler if it can process
+// container request and pass the pod to the handler if it is capable of handling the request.
+// The Delete event passes the pod object to supported handlers to clean up the resources and
+// remove the entry from the data store.
+func (r *PodReconciler) ProcessEvent(req ctrl.Request, isDeleteEvent bool) (ctrl.Result, error) {
+	obj, exists, err := r.DataStore.GetByKey(req.NamespacedName.String())
+	if err != nil {
+		r.Log.Error(err, "failed to retrieve the pod object",
+			"namespace name", req.NamespacedName.String())
+		return ctrl.Result{}, nil
+	}
+	if !exists {
+		r.Log.Info("pod doesn't exists in the cache anymore",
+			"namespace name", req.NamespacedName.String())
+		return ctrl.Result{}, nil
+	}
+	// convert to pod object
+	pod := obj.(*v1.Pod)
+
+	// If it's a delete event then after processing it should be removed from the data store
+	if isDeleteEvent {
+		defer r.DataStore.Delete(pod)
 	}
 
-	logger := r.Log.WithValues("UID", pod.UID, "pod", req.NamespacedName, "node", pod.Spec.NodeName)
+	logger := r.Log.WithValues("UID", pod.UID, "pod", req.NamespacedName,
+		"node", pod.Spec.NodeName)
 
+	// Verify the node is managed by the controller and the node is ready to handle
+	// incoming requests
 	node, managed := r.Manager.GetNode(pod.Spec.NodeName)
 	if !managed {
 		logger.V(1).Info("pod's node is not managed, skipping pod event")
@@ -79,10 +103,12 @@ func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{Requeue: true, RequeueAfter: time.Millisecond * 500}, nil
 	}
 
-	aggregateResources := r.getAggregateResources(pod)
+	// Get the aggregate level resource, vpc controller doesn't support allocating
+	// container level resources
+	aggregateResources := getAggregateResources(pod)
 
-	// For each resource, if a handler can allocate/de-allocate a resource then delegate the allocation/de-allocation
-	// task to the respective handler
+	// For each resource, if a handler can allocate/de-allocate a resource then delegate the
+	// allocation/de-allocation task to the respective handler
 	for resourceName, totalCount := range aggregateResources {
 		for _, resourceHandler := range r.Handlers {
 			if resourceHandler.CanHandle(resourceName) {
@@ -106,7 +132,7 @@ func (r *PodReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 }
 
 // getAggregateResources computes the aggregate resources across all containers for each resource type
-func (r *PodReconciler) getAggregateResources(pod *corev1.Pod) map[string]int64 {
+func getAggregateResources(pod *v1.Pod) map[string]int64 {
 	aggregateResources := make(map[string]int64)
 	for _, container := range pod.Spec.Containers {
 		for resourceName, request := range container.Resources.Requests {
@@ -120,53 +146,27 @@ func (r *PodReconciler) getAggregateResources(pod *corev1.Pod) map[string]int64 
 	return aggregateResources
 }
 
-// AddDeletedObjectToQueue adds the delete object to the data store by intercepting the delete event before it is
-// processed by the kube-builder watcher.
-func (r *PodReconciler) AddDeletedObjectToQueue(deleteEvent event.DeleteEvent) bool {
-	obj := deleteEvent.Object.DeepCopyObject()
-	pod, ok := obj.(*corev1.Pod)
-	if !ok {
-		r.Log.Info("not allowing object of non pod type", "kind", deleteEvent.Object.GetObjectKind())
-		return false
-	}
+// Ideally we should create single controller, but given that the Reconcile method doesn't provide
+// us the event type and since we want to capture the pod event after it has been removed from the
+// etcd (we can't use deletion timestamp) we are creating two different controllers to process add/
+// update and delete event separately.
 
-	namespacedName := types.NamespacedName{
-		Namespace: deleteEvent.Meta.GetNamespace(),
-		Name:      deleteEvent.Meta.GetName(),
+// SetupWithManager sets controller to listen on the create events and update events
+func (c *CreateUpdateReconciler) SetupWithManager(manager ctrl.Manager) error {
+	// Create and update event controller
+	createUpdateController, err := controller.New("pod", manager, controller.Options{Reconciler: c})
+	if err != nil {
+		return err
 	}
-	r.putToDeletedObjectStore(namespacedName.String(), pod)
-	return true
+	return createUpdateController.Watch(&source.Channel{Source: c.CreateUpdateEventChannel}, &handler.EnqueueRequestForObject{})
 }
 
-// pushToDeleteQueue puts the pod object into the map storing all the deleted objects that's queue item is not yet
-// processed
-func (r *PodReconciler) putToDeletedObjectStore(namespacedName string, pod *corev1.Pod) {
-	r.lock.Lock()
-	defer r.lock.Unlock()
-
-	r.DeletePodQueue[namespacedName] = pod
-}
-
-// removeFromDeleteObjectMap removes the pod object from the map and returns it, after calling this the deleted object
-// will be permanently forgotten
-func (r *PodReconciler) removeFromDeletedObjectStore(namespacedName string) *corev1.Pod {
-	r.lock.Lock()
-	defer r.lock.Unlock()
-
-	pod, found := r.DeletePodQueue[namespacedName]
-	if !found {
-		// Should not happen
-		r.Log.Info("failed to find the pod in the delete queue", "namespaced name", namespacedName)
-		return nil
+// SetupWithManager sets controller to listen on the delete events
+func (d *DeleteReconciler) SetupWithManager(manager ctrl.Manager) error {
+	// Delete event controller
+	deleteController, err := controller.New("pod", manager, controller.Options{Reconciler: d})
+	if err != nil {
+		return err
 	}
-
-	delete(r.DeletePodQueue, namespacedName)
-	return pod
-}
-
-func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Pod{}).WithEventFilter(predicate.Funcs{
-		DeleteFunc: r.AddDeletedObjectToQueue,
-	}).Complete(r)
+	return deleteController.Watch(&source.Channel{Source: d.DeleteEventChannel}, &handler.EnqueueRequestForObject{})
 }

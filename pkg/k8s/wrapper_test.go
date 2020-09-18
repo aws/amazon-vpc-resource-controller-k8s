@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	fakeClientSet "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	fakeClient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -79,8 +80,20 @@ func getMockK8sWrapperWithClient() (K8sWrapper, client.Client) {
 
 	client := fakeClient.NewFakeClientWithScheme(scheme, mockPod, mockNode)
 	clientSet := fakeClientSet.NewSimpleClientset(mockPod, mockNode)
+	indexer := map[string]cache.IndexFunc{}
+	indexer[NodeNameSpec] = func(obj interface{}) (strings []string, err error) {
+		return []string{obj.(*v1.Pod).Spec.NodeName}, nil
+	}
+	store := cache.NewIndexer(func(obj interface{}) (s string, err error) {
+		pod := obj.(*v1.Pod)
+		return types.NamespacedName{
+			Namespace: pod.Namespace,
+			Name:      pod.Name,
+		}.String(), nil
+	}, indexer)
+	store.Add(mockPod)
 
-	return NewK8sWrapper(client, clientSet.CoreV1()), client
+	return NewK8sWrapper(client, clientSet.CoreV1(), store), client
 }
 
 // TestK8sWrapper_AnnotatePod tests that annotate pod doesn't throw error on adding a new annotation to pod
@@ -99,18 +112,6 @@ func TestK8sWrapper_AnnotatePod(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, newAnnotationValue, updatedPod.Annotations[newAnnotation])
-}
-
-// TestNewK8sWrapper_Annotate_And_Get_Pod tests E2E  annotates a pod and gets it from wrapper to verify annotation exists
-func TestNewK8sWrapper_Annotate_And_Get_Pod(t *testing.T) {
-	wrapper, _ := getMockK8sWrapperWithClient()
-
-	err := wrapper.AnnotatePod(podNamespace, podName, newAnnotation, newAnnotationValue)
-	assert.NoError(t, err)
-
-	pod, err := wrapper.GetPod(podNamespace, podName)
-	assert.NoError(t, err)
-	assert.Equal(t, newAnnotationValue, pod.Annotations[newAnnotation])
 }
 
 // TestK8sWrapper_AnnotatePod_PodNotExists tests that annotate pod fails if the pod doesn't exist

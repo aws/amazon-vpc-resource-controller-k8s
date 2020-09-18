@@ -18,6 +18,7 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
@@ -27,10 +28,10 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,7 +39,7 @@ import (
 )
 
 const (
-	NodeNameSpec = "spec.nodeName"
+	NodeNameSpec = "nodeName"
 )
 
 var (
@@ -130,13 +131,16 @@ type K8sWrapper interface {
 
 // k8sWrapper is the wrapper object with the client
 type k8sWrapper struct {
+	// podDataStore to do get/list operation on pod objects
+	podDataStore cache.Indexer
+	// cacheClient for all get/list operation on non pod object types
 	cacheClient   client.Client
 	coreV1        corev1.CoreV1Interface
 	eventRecorder record.EventRecorder
 }
 
 // NewK8sWrapper returns a new K8sWrapper
-func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface) K8sWrapper {
+func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, podDataStore cache.Indexer) K8sWrapper {
 	if !prometheusRegistered {
 		prometheusRegister()
 	}
@@ -145,7 +149,8 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface) K8sWrapp
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{
 		Component: config.ControllerName,
 	})
-	return &k8sWrapper{cacheClient: client, coreV1: coreV1, eventRecorder: recorder}
+	return &k8sWrapper{cacheClient: client, coreV1: coreV1, eventRecorder: recorder,
+		podDataStore: podDataStore}
 }
 
 func (k *k8sWrapper) GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error) {
@@ -173,13 +178,15 @@ func (k *k8sWrapper) GetPodFromAPIServer(namespace string, name string) (*v1.Pod
 
 // ListPods lists the pod for a given node name by querying the API server cache
 func (k *k8sWrapper) ListPods(nodeName string) (*v1.PodList, error) {
-	ctx := context.Background()
-
+	items, err := k.podDataStore.ByIndex(NodeNameSpec, nodeName)
+	if err != nil {
+		return nil, err
+	}
 	podList := &v1.PodList{}
-	err := k.cacheClient.List(ctx, podList, &client.ListOptions{
-		FieldSelector: fields.OneTermEqualSelector(NodeNameSpec, nodeName)})
-
-	return podList, err
+	for _, item := range items {
+		podList.Items = append(podList.Items, *item.(*v1.Pod))
+	}
+	return podList, nil
 }
 
 // AnnotatePod annotates the pod with the provided key and value
@@ -187,15 +194,11 @@ func (k *k8sWrapper) AnnotatePod(podNamespace string, podName string, key string
 	annotatePodRequestCallCount.WithLabelValues(key).Inc()
 	ctx := context.Background()
 
-	request := types.NamespacedName{
-		Namespace: podNamespace,
-		Name:      podName,
-	}
-
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		// Get the latest copy of the pod from cache
-		pod := &v1.Pod{}
-		if err := k.cacheClient.Get(ctx, request, pod); err != nil {
+		var pod *v1.Pod
+		var err error
+		if pod, err = k.GetPod(podNamespace, podName); err != nil {
 			return err
 		}
 		newPod := pod.DeepCopy()
@@ -213,12 +216,18 @@ func (k *k8sWrapper) AnnotatePod(podNamespace string, podName string, key string
 
 // GetPod returns the pod object using the client cache
 func (k *k8sWrapper) GetPod(namespace string, name string) (*v1.Pod, error) {
-	ctx := context.Background()
-
-	pod := &v1.Pod{}
-	err := k.cacheClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, pod)
-	return pod, err
-
+	nsName := types.NamespacedName{
+		Namespace: namespace,
+		Name:      name,
+	}.String()
+	obj, exists, err := k.podDataStore.GetByKey(nsName)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, fmt.Errorf("failed to find pod %s", nsName)
+	}
+	return obj.(*v1.Pod), nil
 }
 
 func (k *k8sWrapper) BroadcastPodEvent(pod *v1.Pod, reason string, message string, eventType string) {
