@@ -64,6 +64,14 @@ func (n *node) UpdateResources(resourceProviders []provider.ResourceProvider, he
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
+	// It's possible to receive an update event on the node when the resource is still being
+	// initialized, in that scenario we should not advertise the capacity. Capacity should only
+	// be advertised when all the resources are initialized
+	if !n.ready {
+		n.log.Info("node is not initialized yet, will not advertise the capacity")
+		return nil
+	}
+
 	var errUpdates []error
 	for _, resourceProvider := range resourceProviders {
 		if resourceProvider.IsInstanceSupported(n.instance) {
@@ -107,11 +115,17 @@ func (n *node) InitResources(resourceProviders []provider.ResourceProvider, help
 		}
 	}
 
-	if errInit != nil && len(initializedProviders) > 0 {
+	if errInit != nil {
+		// de-init all the providers that were already initialized, we will retry initialization
+		// in next resync period
 		for _, resourceProvider := range initializedProviders {
 			errDeInit := resourceProvider.DeInitResource(n.instance)
 			n.log.Error(errDeInit, "failed to de initialize resource")
 		}
+		n.log.Error(errInit, "failed to init resource")
+		// Return ErrInitResources so that the manager removes the node from the
+		// cache allowing it to be retried in next sync period.
+		return ErrInitResources
 	}
 
 	n.ready = true

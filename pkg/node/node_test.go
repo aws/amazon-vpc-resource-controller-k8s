@@ -193,6 +193,7 @@ func TestNode_UpdateResources(t *testing.T) {
 	defer ctrl.Finish()
 
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
+	node.ready = true
 	mockProviders := getMockProviders(ctrl, 2)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
@@ -212,6 +213,7 @@ func TestNode_UpdateResources_SomeFail(t *testing.T) {
 	defer ctrl.Finish()
 
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
+	node.ready = true
 	mockProviders := getMockProviders(ctrl, 3)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
@@ -224,4 +226,19 @@ func TestNode_UpdateResources_SomeFail(t *testing.T) {
 
 	err := node.UpdateResources(convertMockTypeToProvider(mockProviders), mockHelper)
 	assert.NotNil(t, err)
+}
+
+// TestNode_UpdateResources_NodeNotReady tests that if the node is not ready then update on resources
+// is not invoked
+func TestNode_UpdateResources_NodeNotReady(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	node, _ := getNodeWithInstanceMock(ctrl)
+	node.ready = false
+	mockProviders := getMockProviders(ctrl, 3)
+	mockHelper := getMockEC2APIHelper(ctrl)
+
+	err := node.UpdateResources(convertMockTypeToProvider(mockProviders), mockHelper)
+	assert.Nil(t, err)
 }

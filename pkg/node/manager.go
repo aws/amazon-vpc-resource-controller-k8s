@@ -224,6 +224,7 @@ func (m *manager) performPostUnlockOperation(nodeName string, postUnlockOperatio
 
 	if err == ErrInitResources {
 		// Remove entry from the cache, so it's initialized again
+		log.Info("removing the node from cache as it failed to initialize")
 		delete(m.dataStore, nodeName)
 	}
 

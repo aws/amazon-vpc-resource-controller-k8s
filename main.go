@@ -45,6 +45,7 @@ import (
 	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhook/core"
 
 	zapRaw "go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -112,7 +113,13 @@ func main() {
 	if logLevel == "debug" {
 		logLvl = zapRaw.NewAtomicLevelAt(-1)
 	}
-	ctrl.SetLogger(zap.New(zap.UseDevMode(enableDevLogging), zap.Level(&logLvl)))
+	// Change from the default epoch time to human readable time format
+	encoderConfig := zapRaw.NewProductionEncoderConfig()
+	encoderConfig.TimeKey = "timestamp"
+	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	ctrl.SetLogger(zap.New(zap.UseDevMode(enableDevLogging), zap.Level(&logLvl),
+		zap.Encoder(zapcore.NewJSONEncoder(encoderConfig))))
 
 	// Variables injected with ldflags on building the binary
 	setupLog.Info("version",
