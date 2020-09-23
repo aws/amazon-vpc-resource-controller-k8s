@@ -69,7 +69,6 @@ func (v *PodVerification) PodsHaveExpectedSG(namespace string, podLabelKey strin
 	}
 }
 
-
 func (v *PodVerification) PodHasNoBranchENIAnnotationInjected(pod *v1.Pod) {
 	By("getting the branch ENI from the pod's annotation")
 	_, hasNoAnnotation := pod.Annotations[config.ResourceNamePodENI]
