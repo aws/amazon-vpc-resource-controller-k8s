@@ -23,6 +23,7 @@ type AnnotationValidator struct {
 }
 
 const validUserInfo = "system:serviceaccount:kube-system:vpc-resource-controller"
+const newValidUserInfo = "system:serviceaccount:kube-system:eks-vpc-resource-controller"
 
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch
 
@@ -43,7 +44,7 @@ func (av *AnnotationValidator) Handle(ctx context.Context, req admission.Request
 		webhookLog.V(1).Info("Got annotation:", config.ResourceNamePodENI, podEniJSON)
 		if req.Operation == v1beta1.Create {
 			// Check who is setting the annotation
-			if req.UserInfo.Username != validUserInfo {
+			if (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) {
 				webhookLog.Info("Denying annotation creation", "Username", req.UserInfo.Username)
 				return admission.Denied("Validation failed. Pod ENI not set by VPC Resource Controller")
 			}
@@ -57,13 +58,13 @@ func (av *AnnotationValidator) Handle(ctx context.Context, req admission.Request
 			}
 			if oldPodAnnotationValue, ok := oldPod.Annotations[config.ResourceNamePodENI]; ok {
 				// This is an update trying to change the pod annotation
-				if oldPodAnnotationValue != podEniJSON && req.UserInfo.Username != validUserInfo {
+				if oldPodAnnotationValue != podEniJSON && (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) {
 					webhookLog.Info("Denying annotation change", "Username", req.UserInfo.Username)
 					return admission.Denied("Validation failed. Pod ENI annotation changed outside of VPC Resource Controller")
 				}
 			} else {
 				// This is an update trying to add the pod annotation
-				if req.UserInfo.Username != validUserInfo {
+				if (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) {
 					webhookLog.Info("Denying adding annotation", "Username", req.UserInfo.Username)
 					return admission.Denied("Validation failed. Pod ENI annotation added outside of VPC Resource Controller")
 				}
