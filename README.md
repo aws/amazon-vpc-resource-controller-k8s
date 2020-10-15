@@ -1,46 +1,21 @@
 # amazon-vpc-resource-controller-k8s
 
-Controller for managing [Amazon AWS VPC](https://aws.amazon.com/vpc/) resources for [Kubernetes Pods](https://kubernetes.io/docs/concepts/workloads/pods/pod/) 
+Controller running on EKS Control Plane for managing Branch & Trunk Network Interface for [Kubernetes Pod](https://kubernetes.io/docs/concepts/workloads/pods/) using the [Security Group for Pod](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) feature. 
 
-## Installation
+## Usage
 
-Prerequisite steps
+The ENI Trunking API's are not yet publicly accessible. Attempting to run the controller on your worker node for enabling [Security Group for Pod](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) or use of aws-sdk-go from the internal directory for managing Trunk and Branch Network Interface will result in failure of the API calls. 
 
-- Create a repository in [ECR](https://console.aws.amazon.com/ecr/home) with the name ```amazon/amazon-k8s-cni```
-- Install [cert manager](https://cert-manager.io/docs/installation/kubernetes/) on your cluster
+Please follow the [guide](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) for enabling Security Group for Pods on your EKS Cluster. 
 
-To build the docker image.
-```
-make docker-build AWS_ACCOUNT=<account-id> AWS_REGION=<region-code>
-```
-To push the docker image.
-```
-make docker-push AWS_ACCOUNT=<account-id> AWS_REGION=<region-code>
-```
+## Limitation
 
-After pushing the docker image, to apply the yaml for the vpc-resource-controller and the vpc-admission-webhook on your cluster.
-```
-make deploy AWS_ACCOUNT=<account-id> AWS_REGION=<region-code>
-```
-To build, push and deploy in one command
-```
-make docker-build docker-push deploy AWS_ACCOUNT=<account-id> AWS_REGION=<region-code>
-```
- 
-## Requirements for managing pod-eni
+The controller uses the same name as the controller that manages IPv4 Address for [Windows Pods](https://docs.aws.amazon.com/eks/latest/userguide/windows-support.html) running on EKS Worker Nodes. However, currently the older controller still does IP Address Management for Windows Pods. We plan to deprecate the older controller soon and use this controller instead.
 
-In order to manage Branch ENI for pods, the account has to be Whitelisted for ENI Trunking/Branching.
+## License
 
-## Replacing aws-sdk-go (Internal only)
+This library is licensed under the Apache 2.0 License. 
 
-Workaround to copy the aws-sdk-go to internal package. This only needs to be done if we add a functionality in aws-sdk-go that is not already present in the internal package.
+## Contributing
 
-1. Unzip the staging file with private API calls to  ```private_sdk_dir```
-2. In go.mod, add ```replace github.com/aws/aws-sdk-go => private_sdk_dir```
-3. Run ```go mod vendor``` in project root.
-4. Copy vendor directory for aws-sdk-go to internal ```cp -r vendor/github.com/aws/aws-sdk-go internal```
-5. Copy go.mod ```cp private_sdk_dir/go.mod internal/aws-sdk-go```
-6. Clean up vendor directory ```rm -r vendor```
-7. Remove from go.mod ```replace github.com/aws/aws-sdk-go => private_sdk_dir```
-
-This reduces the size of the internal package from ~120 Mbs to ~5 Mbs, this method is error prone but considering it's not going to be repeated again and the APIs will be public soon we will use it for now.
+See [CONTRIBUTING.md](./CONTRIBUTING.md)
