@@ -1,6 +1,6 @@
 ---
 name: Enhancement Request
-about: Create a request to enahance an existing feature
+about: Create a request to enhance an existing feature
 title: ''
 labels: enhancement
 assignees: ''
@@ -16,6 +16,4 @@ Please only use this template for submitting enhancement requests -->
 
 **What would you like to be enhanced**:
 
-**Why is the change needed**:
-
-**What will bet the positive impact of this enhancement**:
+**Why is the change needed and what use case will it solve**:
