@@ -1,3 +1,4 @@
+alias mockgen='mockgen -copyright_file=copyright.txt'
 # package aws mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api/mock_ec2_wrapper.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api EC2Wrapper
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api/mock_ec2_apihelper.go  github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api EC2APIHelper
