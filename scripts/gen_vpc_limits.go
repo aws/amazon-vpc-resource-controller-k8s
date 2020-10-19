@@ -31,8 +31,8 @@ import (
 )
 
 var (
-	BranchENILimitsFile = "hack/StandaloneBranchLimits.cfg"
-	VPCLimitsFileName   = "pkg/aws/vpc/limits.go"
+	BranchENILimitsFile = "config/StandaloneBranchLimits.cfg"
+	VPCLimitsFileName   = "../pkg/aws/vpc/limits.go"
 )
 
 type VPCLimits struct {
