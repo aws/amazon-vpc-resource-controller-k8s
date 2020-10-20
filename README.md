@@ -1,5 +1,9 @@
 # amazon-vpc-resource-controller-k8s
 
+![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/aws/amazon-vpc-resource-controller-k8s)
+[![Go Report Card](https://goreportcard.com/badge/github.com/aws/amazon-vpc-resource-controller-k8s)](https://goreportcard.com/report/github.com/aws/amazon-vpc-resource-controller-k8s)
+![GitHub](https://img.shields.io/github/license/aws/amazon-vpc-resource-controller-k8s?style=flat)
+
 Controller running on EKS Control Plane for managing Branch & Trunk Network Interface for [Kubernetes Pod](https://kubernetes.io/docs/concepts/workloads/pods/) using the [Security Group for Pod](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) feature.
 
 This is a new open source project and we are actively working on enhancing the project by adding Continuous Integration, detailed documentation and new features to the controller itself. We would appreciate your feedback and suggestions to improve the project and your experience with EKS and Kubernetes. 
