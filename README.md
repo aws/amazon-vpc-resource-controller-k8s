@@ -14,6 +14,10 @@ The ENI Trunking APIs are not yet publicly accessible. Attempting to run the con
 
 Please follow the [guide](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) for enabling Security Group for Pods on your EKS Cluster. 
 
+## Security Group for Pods with PSP
+
+If you're using [PSP](https://kubernetes.io/docs/concepts/policy/pod-security-policy/) to restrict access to pod mutation, make sure to grant permission to eks-vpc-resource-controller and vpc-resource-controller(being deprecated) service accounts to annotate the pod spec. To grant access add these service accounts to eks:podsecuritypolicy:privileged ClusterRoleBinding.
+
 ## Windows VPC Resource Controller
 
 The controller uses the same name as the controller that manages IPv4 Address for [Windows Pods](https://docs.aws.amazon.com/eks/latest/userguide/windows-support.html) running on EKS Worker Nodes. However, currently the older controller still does IP Address Management for Windows Pods. We plan to deprecate the older controller soon and use this controller instead.
