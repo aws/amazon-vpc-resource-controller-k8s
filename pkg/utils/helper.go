@@ -17,6 +17,7 @@ import (
 	"context"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -62,7 +63,17 @@ func (kch *k8sCacheHelper) GetPodSecurityGroups(pod *corev1.Pod) ([]string, erro
 	// Build SGP list from cache.
 	ctx := context.Background()
 	sgpList := &vpcresourcesv1beta1.SecurityGroupPolicyList{}
+
 	if err := kch.Client.List(ctx, sgpList, &client.ListOptions{Namespace: pod.Namespace}); err != nil {
+		// If the CRD was removed intentionally or accidentally, we don't want to interrupt pods creation.
+		// GroupVersionResource or GroupKind not matched check.
+		if meta.IsNoMatchError(err) {
+			helperLog.Error(err,
+				"Webhook couldn't find SGP definition: "+
+					"GroupVersionResource or GroupKind didn't match. Will allow regular pods creation.")
+			return nil, nil
+		}
+		helperLog.Error(err, "Client Listing SGP failed in Webhook.")
 		return nil, err
 	}
 
