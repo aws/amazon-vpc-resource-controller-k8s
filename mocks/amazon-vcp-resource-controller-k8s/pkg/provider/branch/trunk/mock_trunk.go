@@ -116,15 +116,15 @@ func (mr *MockTrunkENIMockRecorder) PushBranchENIsToCoolDownQueue(arg0 interface
 }
 
 // PushENIsToFrontOfDeleteQueue mocks base method
-func (m *MockTrunkENI) PushENIsToFrontOfDeleteQueue(arg0 []*trunk.ENIDetails) {
+func (m *MockTrunkENI) PushENIsToFrontOfDeleteQueue(arg0 *v1.Pod, arg1 []*trunk.ENIDetails) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "PushENIsToFrontOfDeleteQueue", arg0)
+	m.ctrl.Call(m, "PushENIsToFrontOfDeleteQueue", arg0, arg1)
 }
 
 // PushENIsToFrontOfDeleteQueue indicates an expected call of PushENIsToFrontOfDeleteQueue
-func (mr *MockTrunkENIMockRecorder) PushENIsToFrontOfDeleteQueue(arg0 interface{}) *gomock.Call {
+func (mr *MockTrunkENIMockRecorder) PushENIsToFrontOfDeleteQueue(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PushENIsToFrontOfDeleteQueue", reflect.TypeOf((*MockTrunkENI)(nil).PushENIsToFrontOfDeleteQueue), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PushENIsToFrontOfDeleteQueue", reflect.TypeOf((*MockTrunkENI)(nil).PushENIsToFrontOfDeleteQueue), arg0, arg1)
 }
 
 // Reconcile mocks base method

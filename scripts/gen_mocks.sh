@@ -20,3 +20,5 @@ mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/node/mock_n
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/utils/mock_k8shelper.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils K8sCacheHelper
 # package pool mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/pool/mock_pool.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool Pool
+# package controller mocks
+mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/controllers/custom/custom_controller.go github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom Controller

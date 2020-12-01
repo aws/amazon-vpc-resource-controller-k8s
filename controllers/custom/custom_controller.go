@@ -16,6 +16,7 @@ package custom
 import (
 	"time"
 
+	"github.com/go-logr/logr"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +41,13 @@ type Converter interface {
 	ResourceType() runtime.Object
 }
 
+type Controller interface {
+	// StartController starts the controller. Will block the calling routine
+	StartController(dataStore cache.Indexer, stopChanel chan struct{})
+	// GetDataStore returns the data store once it has synced with the API Server
+	GetDataStore() cache.Indexer
+}
+
 type CustomController struct {
 	// ClientSet is the kubernetes client set
 	ClientSet *kubernetes.Clientset
@@ -54,8 +62,6 @@ type CustomController struct {
 	ResyncPeriod time.Duration
 	// RetryOnError weather item should be retried on error. Should remain false in usual use case
 	RetryOnError bool
-	// DataStore with the converted k8s object
-	DataStore cache.Store
 	// Queue is the Delta FIFO queue
 	Queue *cache.DeltaFIFO
 	// CreateUpdateEventNotificationChan channel will be notified for all create and update
@@ -71,12 +77,22 @@ type CustomController struct {
 	// event chanel. This is useful for kube builder controller which provides API with just the
 	// namespace + name without returning the entire object from the event
 	SkipCacheDeletion bool
+	// Log for custom controller
+	Log logr.Logger
+	// Controller is the K8s Controller
+	Controller cache.Controller
+	// dataStore with the converted k8s object. It should not be directly accessed and used with
+	// the exposed APIs
+	dataStore cache.Indexer
 }
 
 // StartController starts the custom controller by doing a list and watch on the specified k8s
 // resource. The controller would store the converted k8s object in the provided indexer. The
 // stop channel should be notified to stop the controller
-func (c *CustomController) StartController(stopChanel chan struct{}) {
+func (c *CustomController) StartController(dataStore cache.Indexer, stopChanel chan struct{}) {
+
+	c.dataStore = dataStore
+
 	config := &cache.Config{
 		Queue: c.Queue,
 		ListerWatcher: newListWatcher(c.ClientSet.CoreV1().RESTClient(),
@@ -94,12 +110,12 @@ func (c *CustomController) StartController(stopChanel chan struct{}) {
 				}
 				switch d.Type {
 				case cache.Sync, cache.Added, cache.Updated:
-					if _, exists, err := c.DataStore.Get(convertedObj); err == nil && exists {
-						if err := c.DataStore.Update(convertedObj); err != nil {
+					if _, exists, err := c.dataStore.Get(convertedObj); err == nil && exists {
+						if err := c.dataStore.Update(convertedObj); err != nil {
 							return err
 						}
 					} else {
-						if err := c.DataStore.Add(convertedObj); err != nil {
+						if err := c.dataStore.Add(convertedObj); err != nil {
 							return err
 						}
 					}
@@ -113,7 +129,7 @@ func (c *CustomController) StartController(stopChanel chan struct{}) {
 					// Prevent removing from cache on delete. The notified channel should take
 					// care of removing the entry.
 					if !c.SkipCacheDeletion {
-						if err := c.DataStore.Delete(convertedObj); err != nil {
+						if err := c.dataStore.Delete(convertedObj); err != nil {
 							return err
 						}
 					}
@@ -127,8 +143,21 @@ func (c *CustomController) StartController(stopChanel chan struct{}) {
 		},
 	}
 
+	c.Log.Info("starting custom controller")
 	defer close(stopChanel)
-	cache.New(config).Run(stopChanel)
+	c.Controller = cache.New(config)
+
+	// Run the controller
+	c.Controller.Run(stopChanel)
+}
+
+// GetDataStore returns the data store when it has successfully synced with API Server
+func (c *CustomController) GetDataStore() cache.Indexer {
+	for c.Controller == nil || (!c.Controller.HasSynced() && c.Controller.LastSyncResourceVersion() == "") {
+		c.Log.Info("waiting for controller to sync")
+		time.Sleep(time.Second * 5)
+	}
+	return c.dataStore
 }
 
 // newListWatcher returns a list watcher with a custom list function that converts the
