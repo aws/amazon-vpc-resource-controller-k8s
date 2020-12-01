@@ -52,7 +52,10 @@ func (c *PodConverter) ConvertList(originalList interface{}) (convertedList inte
 	// We need to set continue in order to allow the pagination to work on converted
 	// pod list object
 	strippedPodList := v1.PodList{
-		ListMeta: metaV1.ListMeta{Continue: podList.Continue},
+		ListMeta: metaV1.ListMeta{
+			Continue:        podList.Continue,
+			ResourceVersion: podList.ResourceVersion,
+		},
 	}
 	for _, pod := range podList.Items {
 		strippedPod := c.StripDownPod(&pod)
