@@ -1,5 +1,5 @@
 # Build the controller binary
-FROM golang:1.13 as builder
+FROM public.ecr.aws/bitnami/golang:1.13 as builder
 
 WORKDIR /workspace
 ENV GOPROXY direct
@@ -32,7 +32,7 @@ RUN GIT_VERSION=$(git describe --tags --dirty --always) && \
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM amazonlinux:2
+FROM public.ecr.aws/amazonlinux/amazonlinux:2
 RUN yum update -y && \
     yum clean all
 
