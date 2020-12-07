@@ -86,22 +86,35 @@ func main() {
 	var logLevel string
 	var clusterName string
 	var listPageLimit int
+	var leaderLeaseDurationSeconds int
+	var leaderLeaseRenewDeadline int
+	var leaderLeaseRetryPeriod int
 
-	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
-	flag.StringVar(&roleARN, "role-arn", "", "Role ARN that will be assumed to make EC2 API calls "+
-		"to perform operations on the user's VPC. This parameter is not required if running the controller on your worker node.")
-	flag.StringVar(&logLevel, "log-level", "info", "Set the controller log level - info(default), debug")
+	flag.StringVar(&metricsAddr, "metrics-addr", ":8080",
+		"The address the metric endpoint binds to.")
+	flag.StringVar(&roleARN, "role-arn", "",
+		"Role ARN that will be assumed to make EC2 API calls "+
+			"to perform operations on the user's VPC. This parameter is not required if running the "+
+			"controller on your worker node.")
+	flag.StringVar(&logLevel, "log-level", "info",
+		"Set the controller log level - info(default), debug")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.IntVar(&leaderLeaseDurationSeconds, "leader-lease-duration-seconds", 30,
+		"Leader lease duration in seconds")
+	flag.IntVar(&leaderLeaseRenewDeadline, "leader-lease-renew-deadline", 15,
+		"Leader lease renew deadline in seconds")
+	flag.IntVar(&leaderLeaseRetryPeriod, "leader-lease-retry-period", 5,
+		"Leader lease retry period")
 	flag.BoolVar(&enableDevLogging, "enable-dev-logging", false,
 		"Enable developer mode logging for the controller."+
 			"With dev mode logging, you will get Debug logs and more structured logging with extra details")
-	flag.BoolVar(&enableProfiling, "enable-profiling", false, "Enable runtime profiling for debugging"+
-		"purposes.")
+	flag.BoolVar(&enableProfiling, "enable-profiling", false,
+		"Enable runtime profiling for debugging purposes.")
 	flag.StringVar(&clusterName, "cluster-name", "", "The name of the k8s cluster")
-	flag.IntVar(&listPageLimit, "page-limit", 100, "The page size limiting the number of response"+
-		" for list operation to API Server")
+	flag.IntVar(&listPageLimit, "page-limit", 100,
+		"The page size limiting the number of response for list operation to API Server")
 
 	flag.Parse()
 
@@ -143,12 +156,25 @@ func main() {
 	// Set the API Server QPS and Burst
 	kubeConfig.QPS = config.DefaultAPIServerQPS
 	kubeConfig.Burst = config.DefaultAPIServerBurst
+
+	setupLog.Info("starting the controller with leadership setting",
+		"leader mode enabled", enableLeaderElection,
+		"lease duration(s)", leaderLeaseDurationSeconds, "renew deadline(s)",
+		leaderLeaseRenewDeadline, "retry period(s)", leaderLeaseRetryPeriod)
+
+	leaseDuration := time.Second * time.Duration(leaderLeaseDurationSeconds)
+	renewDeadline := time.Second * time.Duration(leaderLeaseRenewDeadline)
+	retryPeriod := time.Second * time.Duration(leaderLeaseRetryPeriod)
+
 	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
 		SyncPeriod:              &syncPeriod,
 		Scheme:                  scheme,
 		MetricsBindAddress:      metricsAddr,
 		Port:                    9443,
 		LeaderElection:          enableLeaderElection,
+		LeaseDuration:           &leaseDuration,
+		RenewDeadline:           &renewDeadline,
+		RetryPeriod:             &retryPeriod,
 		LeaderElectionID:        config.LeaderElectionKey,
 		LeaderElectionNamespace: config.LeaderElectionNamespace,
 		HealthProbeBindAddress:  ":61779", // the liveness endpoint is default to "/healthz"
@@ -177,28 +203,28 @@ func main() {
 		mgr.GetClient(),
 		ctrl.Log.WithName("cache helper"))
 
+	// Channels that will be notified for the create and delete events on pod object
+	podCreateUpdateEventChannel := make(chan event.GenericEvent)
+	podDeleteEventChannel := make(chan event.GenericEvent)
+
+	// Custom data store, it should not be accessed directly as the cache could be out of sync
+	// on startup. Must be accessed from the pod controller's data store instead
 	dataStore := cache.NewIndexer(pod.NSKeyIndexer, pod.NodeNameIndexer())
-	k8sWrapper := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), dataStore)
 
-	// Get the resource providers and handlers
-	resourceHandlers, nodeManager := setUpResources(mgr, k8sWrapper, cacheHelper, roleARN, clusterName)
-
-	createUpdateEventChannel := make(chan event.GenericEvent)
-	deleteEventChannel := make(chan event.GenericEvent)
-	customController := &custom.CustomController{
+	podController := &custom.CustomController{
 		ClientSet:    clientSet,
 		PageLimit:    int64(listPageLimit),
 		Namespace:    metav1.NamespaceAll,
 		ResyncPeriod: syncPeriod,
-		DataStore:    dataStore,
 		Queue:        cache.NewDeltaFIFO(pod.NSKeyIndexer, dataStore),
 		Converter: &pod.PodConverter{
 			K8sResource:     "pods",
 			K8sResourceType: &corev1.Pod{},
 		},
 		SkipCacheDeletion:                 true,
-		CreateUpdateEventNotificationChan: createUpdateEventChannel,
-		DeleteEventNotificationChan:       deleteEventChannel,
+		CreateUpdateEventNotificationChan: podCreateUpdateEventChannel,
+		DeleteEventNotificationChan:       podDeleteEventChannel,
+		Log:                               setupLog.WithName("pod custom controller"),
 	}
 	// Only start the controller when the leader election is won
 	mgr.Add(manager.RunnableFunc(func(stop <-chan struct{}) error {
@@ -206,7 +232,7 @@ func main() {
 
 		stopChannel := make(chan struct{})
 		// Start the custom controller
-		customController.StartController(stopChannel)
+		podController.StartController(dataStore, stopChannel)
 		// If the manager is stopped, signal the controller to stop as well.
 		<-stop
 		stopChannel <- struct{}{}
@@ -216,11 +242,15 @@ func main() {
 		return nil
 	}))
 
+	k8sWrapper := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), podController)
+	// Get the resource providers and handlers
+	resourceHandlers, nodeManager := setUpResources(mgr, k8sWrapper, cacheHelper, roleARN, clusterName)
+
 	podReconciler := &corecontroller.PodReconciler{
-		Log:       setupLog.WithName("pod reconciler"),
-		Handlers:  resourceHandlers,
-		Manager:   nodeManager,
-		DataStore: dataStore,
+		Log:           setupLog.WithName("pod reconciler"),
+		Handlers:      resourceHandlers,
+		Manager:       nodeManager,
+		PodController: podController,
 	}
 	// The reason why we have to create two separate contorller is because we want to process the
 	// delete event when the pod is actually deleted and not when the pod's Deletion timestamp is set.
@@ -228,14 +258,14 @@ func main() {
 	// entire event.
 	if err = (&corecontroller.CreateUpdateReconciler{
 		PodReconciler:            podReconciler,
-		CreateUpdateEventChannel: createUpdateEventChannel,
+		CreateUpdateEventChannel: podCreateUpdateEventChannel,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod Create/Update Event")
 		os.Exit(1)
 	}
 	if err = (&corecontroller.DeleteReconciler{
 		PodReconciler:      podReconciler,
-		DeleteEventChannel: deleteEventChannel,
+		DeleteEventChannel: podDeleteEventChannel,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod Delete Event")
 		os.Exit(1)

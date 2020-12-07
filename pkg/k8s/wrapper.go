@@ -19,6 +19,7 @@ import (
 	"strconv"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -28,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -129,7 +129,7 @@ type K8sWrapper interface {
 // k8sWrapper is the wrapper object with the client
 type k8sWrapper struct {
 	// podDataStore to do get/list operation on pod objects
-	podDataStore cache.Indexer
+	podController custom.Controller
 	// cacheClient for all get/list operation on non pod object types
 	cacheClient   client.Client
 	coreV1        corev1.CoreV1Interface
@@ -137,7 +137,8 @@ type k8sWrapper struct {
 }
 
 // NewK8sWrapper returns a new K8sWrapper
-func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, podDataStore cache.Indexer) K8sWrapper {
+func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface,
+	podController custom.Controller) K8sWrapper {
 	if !prometheusRegistered {
 		prometheusRegister()
 	}
@@ -147,7 +148,7 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, podDataS
 		Component: config.ControllerName,
 	})
 	return &k8sWrapper{cacheClient: client, coreV1: coreV1, eventRecorder: recorder,
-		podDataStore: podDataStore}
+		podController: podController}
 }
 
 func (k *k8sWrapper) GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error) {
@@ -175,7 +176,7 @@ func (k *k8sWrapper) GetPodFromAPIServer(namespace string, name string) (*v1.Pod
 
 // ListPods lists the pod for a given node name by querying the API server cache
 func (k *k8sWrapper) ListPods(nodeName string) (*v1.PodList, error) {
-	items, err := k.podDataStore.ByIndex(NodeNameSpec, nodeName)
+	items, err := k.podController.GetDataStore().ByIndex(NodeNameSpec, nodeName)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +218,7 @@ func (k *k8sWrapper) GetPod(namespace string, name string) (*v1.Pod, error) {
 		Namespace: namespace,
 		Name:      name,
 	}.String()
-	obj, exists, err := k.podDataStore.GetByKey(nsName)
+	obj, exists, err := k.podController.GetDataStore().GetByKey(nsName)
 	if err != nil {
 		return nil, err
 	}

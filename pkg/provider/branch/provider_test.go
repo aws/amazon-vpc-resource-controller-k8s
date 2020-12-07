@@ -432,7 +432,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 	k8sHelper.EXPECT().GetPodSecurityGroups(MockPod1).Return(SecurityGroups, nil)
 	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
 	mockK8sWrapper.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)
-	fakeTrunk.EXPECT().PushENIsToFrontOfDeleteQueue(EniDetails)
+	fakeTrunk.EXPECT().PushENIsToFrontOfDeleteQueue(MockPod1, EniDetails)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 

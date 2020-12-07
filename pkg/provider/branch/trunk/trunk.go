@@ -77,7 +77,7 @@ type TrunkENI interface {
 	// Reconcile compares the cache state with the list of pods to identify events that were missed and clean up the dangling interfaces
 	Reconcile(pods []v1.Pod) error
 	// PushENIsToFrontOfDeleteQueue pushes the eni network interfaces to the front of the delete queue
-	PushENIsToFrontOfDeleteQueue([]*ENIDetails)
+	PushENIsToFrontOfDeleteQueue(*v1.Pod, []*ENIDetails)
 	// DeleteAllBranchENIs deletes all the branch ENI associated with the trunk and also clears the cool down queue
 	DeleteAllBranchENIs()
 }
@@ -221,7 +221,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		t.uidToBranchENIMap[string(pod.UID)] = branchENIs
 	}
 
-	// Delete the pods that don't belong to any pod.
+	// Delete the branch ENI that don't belong to any pod.
 	for _, branchInterface := range associatedBranchInterfaces {
 		t.log.Info("pushing eni to delete queue as no pod owns it", "eni",
 			*branchInterface.NetworkInterfaceId)
@@ -347,7 +347,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 	if err != nil {
 		log.Error(err, "failed to create ENI, moving the ENI to delete list")
 		// Moving to delete list, because it has all the retrying logic in case of failure
-		t.PushENIsToFrontOfDeleteQueue(newENIs)
+		t.PushENIsToFrontOfDeleteQueue(nil, newENIs)
 		return nil, err
 	}
 
@@ -421,14 +421,14 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 					continue
 				}
 				t.log.Error(err, "failed to delete eni, will retry", "eni", eni)
-				t.PushENIsToFrontOfDeleteQueue([]*ENIDetails{eni})
+				t.PushENIsToFrontOfDeleteQueue(nil, []*ENIDetails{eni})
 				continue
 			}
 			t.log.V(1).Info("deleted eni successfully", "eni", eni, "deletion time", time.Now(),
 				"pushed to queue time", eni.deletionTimeStamp)
 		} else {
 			// Since the current item is not cooled down so the items added after it would not be cooled down either
-			t.PushENIsToFrontOfDeleteQueue([]*ENIDetails{eni})
+			t.PushENIsToFrontOfDeleteQueue(nil, []*ENIDetails{eni})
 			return
 		}
 	}
@@ -514,9 +514,17 @@ func (t *trunkENI) pushENIToDeleteQueue(eni *ENIDetails) {
 }
 
 // pushENIsToFrontOfDeleteQueue pushes the ENI list to the front of the delete queue
-func (t *trunkENI) PushENIsToFrontOfDeleteQueue(eniList []*ENIDetails) {
+func (t *trunkENI) PushENIsToFrontOfDeleteQueue(pod *v1.Pod, eniList []*ENIDetails) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
+
+	if pod != nil {
+		t.log.Info("pushing ENIs to delete queue and removing pod from cache",
+			"uid", pod.UID, "ENIs", eniList)
+		delete(t.uidToBranchENIMap, string(pod.UID))
+	} else {
+		t.log.Info("pushing ENIs to delete queue", "ENIs", eniList)
+	}
 
 	t.deleteQueue = append(eniList, t.deleteQueue...)
 }

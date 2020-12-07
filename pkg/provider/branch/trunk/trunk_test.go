@@ -317,10 +317,24 @@ func TestTrunkENI_pushENIsToFrontOfDeleteQueue(t *testing.T) {
 	trunkENI := getMockTrunk()
 
 	trunkENI.pushENIToDeleteQueue(EniDetails1)
-	trunkENI.PushENIsToFrontOfDeleteQueue([]*ENIDetails{EniDetails2})
+	trunkENI.PushENIsToFrontOfDeleteQueue(nil, []*ENIDetails{EniDetails2})
 
 	assert.Equal(t, EniDetails2, trunkENI.deleteQueue[0])
 	assert.Equal(t, EniDetails1, trunkENI.deleteQueue[1])
+}
+
+// TestTrunkENI_pushENIsToFrontOfDeleteQueue_RemovePodFromCache tests pod is removed from cache and ENI
+// are added to delete queue
+func TestTrunkENI_pushENIsToFrontOfDeleteQueue_RemovePodFromCache(t *testing.T) {
+	trunkENI := getMockTrunk()
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails2}
+
+	trunkENI.pushENIToDeleteQueue(EniDetails1)
+	trunkENI.PushENIsToFrontOfDeleteQueue(MockPod1, []*ENIDetails{EniDetails2})
+
+	assert.Equal(t, EniDetails2, trunkENI.deleteQueue[0])
+	assert.Equal(t, EniDetails1, trunkENI.deleteQueue[1])
+	assert.NotContains(t, PodUID, trunkENI.uidToBranchENIMap)
 }
 
 // TestTrunkENI_popENIFromDeleteQueue tests if the queue has ENIs it must be removed from the queue on pop operation

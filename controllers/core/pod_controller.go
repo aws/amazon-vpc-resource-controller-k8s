@@ -16,12 +16,12 @@ package controllers
 import (
 	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
 	reqHandler "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -36,8 +36,8 @@ type PodReconciler struct {
 	Handlers []reqHandler.Handler
 	// Manager manages all the nodes on the cluster
 	Manager node.Manager
-	// DataStore to get/remove stripped down pod object from the cache
-	DataStore cache.Store
+	// PodController to get the cached data store
+	PodController custom.Controller
 }
 
 // CreateUpdateReconciler to handle create and update events on the pod objects
@@ -67,7 +67,7 @@ func (d *DeleteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 // The Delete event passes the pod object to supported handlers to clean up the resources and
 // remove the entry from the data store.
 func (r *PodReconciler) ProcessEvent(req ctrl.Request, isDeleteEvent bool) (ctrl.Result, error) {
-	obj, exists, err := r.DataStore.GetByKey(req.NamespacedName.String())
+	obj, exists, err := r.PodController.GetDataStore().GetByKey(req.NamespacedName.String())
 	if err != nil {
 		r.Log.Error(err, "failed to retrieve the pod object",
 			"namespace name", req.NamespacedName.String())
@@ -83,7 +83,7 @@ func (r *PodReconciler) ProcessEvent(req ctrl.Request, isDeleteEvent bool) (ctrl
 
 	// If it's a delete event then after processing it should be removed from the data store
 	if isDeleteEvent {
-		defer r.DataStore.Delete(pod)
+		defer r.PodController.GetDataStore().Delete(pod)
 	}
 
 	logger := r.Log.WithValues("UID", pod.UID, "pod", req.NamespacedName,
@@ -151,7 +151,7 @@ func getAggregateResources(pod *v1.Pod) map[string]int64 {
 // SetupWithManager sets controller to listen on the create events and update events
 func (c *CreateUpdateReconciler) SetupWithManager(manager ctrl.Manager) error {
 	// Create and update event controller
-	createUpdateController, err := controller.New("pod", manager, controller.Options{Reconciler: c})
+	createUpdateController, err := controller.New("pod-create", manager, controller.Options{Reconciler: c})
 	if err != nil {
 		return err
 	}
@@ -161,7 +161,7 @@ func (c *CreateUpdateReconciler) SetupWithManager(manager ctrl.Manager) error {
 // SetupWithManager sets controller to listen on the delete events
 func (d *DeleteReconciler) SetupWithManager(manager ctrl.Manager) error {
 	// Delete event controller
-	deleteController, err := controller.New("pod", manager, controller.Options{Reconciler: d})
+	deleteController, err := controller.New("pod-delete", manager, controller.Options{Reconciler: d})
 	if err != nil {
 		return err
 	}

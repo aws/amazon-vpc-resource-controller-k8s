@@ -140,6 +140,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	podList, err := b.k8s.ListPods(nodeName)
 	if err != nil {
 		log.Error(err, "failed to get list of pod on node")
+		return err
 	}
 
 	err = trunkENI.InitTrunk(instance, podList.Items)
@@ -347,7 +348,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 
 	jsonBytes, err := json.Marshal(branchENIs)
 	if err != nil {
-		trunkENI.PushENIsToFrontOfDeleteQueue(branchENIs)
+		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
 		b.log.Info("pushed the ENIs to the delete queue as failed to unmarshal ENI details", "ENI/s", branchENIs)
 		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
 		return ctrl.Result{}, err
@@ -356,7 +357,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	// Annotate the pod with the created resources
 	err = b.k8s.AnnotatePod(pod.Namespace, pod.Name, config.ResourceNamePodENI, string(jsonBytes))
 	if err != nil {
-		trunkENI.PushENIsToFrontOfDeleteQueue(branchENIs)
+		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
 		b.log.Info("pushed the ENIs to the delete queue as failed to annotate the pod", "ENI/s", branchENIs)
 		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
 		return ctrl.Result{}, err
