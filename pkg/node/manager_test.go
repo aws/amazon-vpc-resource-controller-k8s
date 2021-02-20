@@ -334,7 +334,7 @@ func Test_performPostUnlockOperation_intiFails(t *testing.T) {
 	assert.True(t, managed)
 
 	postUnlockFunc := func(provider []provider.ResourceProvider, helper api.EC2APIHelper) error {
-		return ErrInitResources
+		return &ErrInitResources{}
 	}
 
 	err = manager.performPostUnlockOperation(v1Node.Name, postUnlockFunc)

@@ -118,7 +118,7 @@ func TestNode_InitResources_LoadInstanceDetails_Error(t *testing.T) {
 	mockInstance.EXPECT().LoadDetails(mockHelper).Return(mockError)
 
 	err := node.InitResources(convertMockTypeToProvider(mockProviders), mockHelper)
-	assert.Error(t, mockError, err)
+	assert.Error(t, &ErrInitResources{Err: mockError}, err)
 }
 
 // TestNode_InitResources_SecondProviderInitFails tests when one of the resource provider fails to initialize
