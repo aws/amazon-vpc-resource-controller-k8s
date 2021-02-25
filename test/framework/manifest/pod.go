@@ -29,6 +29,7 @@ type PodBuilder struct {
 	os                     string
 	labels                 map[string]string
 	terminationGracePeriod int
+	restartPolicy          v1.RestartPolicy
 }
 
 func (p *PodBuilder) Build() (*v1.Pod, error) {
@@ -43,6 +44,7 @@ func (p *PodBuilder) Build() (*v1.Pod, error) {
 			Containers:                    []v1.Container{p.container},
 			NodeSelector:                  map[string]string{"kubernetes.io/os": p.os},
 			TerminationGracePeriodSeconds: aws.Int64(int64(p.terminationGracePeriod)),
+			RestartPolicy:                 p.restartPolicy,
 		},
 	}, nil
 }
@@ -51,10 +53,21 @@ func NewDefaultPodBuilder() *PodBuilder {
 	return &PodBuilder{
 		namespace:              "default",
 		name:                   utils.ResourceNamePrefix + "pod",
-		container:              BusyBoxContainer,
+		container:              NewBusyBoxContainerBuilder().Build(),
 		os:                     "linux",
 		labels:                 map[string]string{},
 		terminationGracePeriod: 0,
+		restartPolicy:          v1.RestartPolicyNever,
+	}
+}
+
+func NewWindowsPodBuilder() *PodBuilder {
+	return &PodBuilder{
+		namespace:              "windows-test",
+		name:                   "windows-pod",
+		os:                     "windows",
+		terminationGracePeriod: 0,
+		restartPolicy:          v1.RestartPolicyNever,
 	}
 }
 
@@ -75,6 +88,11 @@ func (p *PodBuilder) Container(container v1.Container) *PodBuilder {
 
 func (p *PodBuilder) OS(os string) *PodBuilder {
 	p.os = os
+	return p
+}
+
+func (p *PodBuilder) RestartPolicy(policy v1.RestartPolicy) *PodBuilder {
+	p.restartPolicy = policy
 	return p
 }
 

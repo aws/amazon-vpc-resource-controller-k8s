@@ -21,6 +21,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -28,6 +29,7 @@ import (
 type Manager interface {
 	CreateAndWaitUntilDeploymentReady(ctx context.Context, dp *appsv1.Deployment) (*appsv1.Deployment, error)
 	DeleteAndWaitUntilDeploymentDeleted(ctx context.Context, dp *appsv1.Deployment) error
+	ScaleDeploymentAndWaitTillReady(ctx context.Context, namespace string, name string, replicas int32) error
 }
 
 func NewManager(k8sClient client.Client) Manager {
@@ -74,6 +76,33 @@ func (m *defaultManager) DeleteAndWaitUntilDeploymentDeleted(ctx context.Context
 				return true, nil
 			}
 			return false, err
+		}
+		return false, nil
+	}, ctx.Done())
+}
+
+func (m *defaultManager) ScaleDeploymentAndWaitTillReady(ctx context.Context, namespace string, name string, replicas int32) error {
+	deployment := &appsv1.Deployment{}
+	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
+	err := m.k8sClient.Get(ctx, namespacedName, deployment)
+	if err != nil {
+		return err
+	}
+	deploymentCopy := deployment.DeepCopy()
+	deploymentCopy.Spec.Replicas = &replicas
+
+	err = m.k8sClient.Patch(ctx, deploymentCopy, client.MergeFrom(deployment))
+	if err != nil {
+		return err
+	}
+
+	return wait.PollImmediateUntil(utils.PollIntervalShort, func() (bool, error) {
+		if err := m.k8sClient.Get(ctx, namespacedName, deploymentCopy); err != nil {
+			return false, err
+		}
+		if deploymentCopy.Status.AvailableReplicas == replicas &&
+			deploymentCopy.Status.ObservedGeneration >= deployment.Generation {
+			return true, nil
 		}
 		return false, nil
 	}, ctx.Done())

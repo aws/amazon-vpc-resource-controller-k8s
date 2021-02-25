@@ -15,6 +15,7 @@ package verify
 
 import (
 	"context"
+	"strings"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
@@ -70,4 +71,23 @@ func (v *PodVerification) PodHasNoBranchENIAnnotationInjected(pod *v1.Pod) {
 	By("getting the branch ENI from the pod's annotation")
 	_, hasNoAnnotation := pod.Annotations[config.ResourceNamePodENI]
 	Expect(hasNoAnnotation).To(BeFalse(), "Pod shouldn't have branch ENI annotations.")
+}
+
+func (v *PodVerification) WindowsPodsHaveExpectedIPv4Address(namespace string,
+	podLabelKey string, podLabelVal string) {
+
+	pods, err := v.frameWork.PodManager.GetPodsWithLabel(v.ctx, namespace, podLabelKey, podLabelVal)
+	Expect(err).ToNot(HaveOccurred())
+
+	for _, pod := range pods {
+		v.WindowsPodHaveExpectedIPv4Address(&pod)
+	}
+}
+
+func (v *PodVerification) WindowsPodHaveExpectedIPv4Address(pod *v1.Pod) {
+	By("matching the IPv4 from annotation to the pod IP")
+	ipAddWithCidr, found := pod.Annotations["vpc.amazonaws.com/PrivateIPv4Address"]
+	Expect(found).To(BeTrue())
+	// Remove the CIDR and compare pod IP with the IP annotated from VPC Controller
+	Expect(pod.Status.PodIP).To(Equal(strings.Split(ipAddWithCidr, "/")[0]))
 }
