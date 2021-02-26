@@ -32,6 +32,7 @@ import (
 
 type Manager interface {
 	CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod) (*v1.Pod, error)
+	CreateAndWaitTillPodIsCompleted(context context.Context, pod *v1.Pod) (*v1.Pod, error)
 	DeleteAndWaitTillPodIsDeleted(context context.Context, pod *v1.Pod) error
 	GetENIDetailsFromPodAnnotation(podAnnotation map[string]string) ([]*trunk.ENIDetails, error)
 	GetPodsWithLabel(context context.Context, namespace string, labelKey string, labelValue string) ([]v1.Pod, error)
@@ -60,6 +61,32 @@ func (d *defaultManager) CreateAndWaitTillPodIsRunning(context context.Context, 
 			return true, err
 		}
 		return isPodReady(updatedPod), nil
+	}, context.Done())
+
+	return updatedPod, err
+}
+
+func (d *defaultManager) CreateAndWaitTillPodIsCompleted(context context.Context, pod *v1.Pod) (*v1.Pod, error) {
+	err := d.k8sClient.Create(context, pod)
+	if err != nil {
+		return nil, err
+	}
+	// Allow the cache to sync, without the interval cache may be stale and return an error
+	time.Sleep(utils.PollIntervalShort)
+
+	updatedPod := &v1.Pod{}
+	err = wait.PollImmediateUntil(utils.PollIntervalShort, func() (done bool, err error) {
+		err = d.k8sClient.Get(context, utils.NamespacedName(pod), updatedPod)
+		if err != nil {
+			return true, err
+		}
+		if isPodCompleted(updatedPod) {
+			return true, nil
+		}
+		if isPodFailed(updatedPod) {
+			return true, fmt.Errorf("pod failed to start")
+		}
+		return false, nil
 	}, context.Done())
 
 	return updatedPod, err
@@ -111,4 +138,12 @@ func isPodReady(pod *v1.Pod) bool {
 		}
 	}
 	return false
+}
+
+func isPodCompleted(pod *v1.Pod) bool {
+	return pod.Status.Phase == v1.PodSucceeded
+}
+
+func isPodFailed(pod *v1.Pod) bool {
+	return pod.Status.Phase == v1.PodFailed
 }

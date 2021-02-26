@@ -38,7 +38,17 @@ func NewDefaultDeploymentBuilder() *DeploymentBuilder {
 		name:                   utils.ResourceNamePrefix + "deployment",
 		replicas:               10,
 		os:                     "linux",
-		container:              BusyBoxContainer,
+		container:              NewBusyBoxContainerBuilder().Build(),
+		labels:                 map[string]string{},
+		terminationGracePeriod: 0,
+	}
+}
+
+func NewWindowsDeploymentBuilder() *DeploymentBuilder {
+	return &DeploymentBuilder{
+		namespace:              "windows-test",
+		name:                   "windows-deployment",
+		os:                     "windows",
 		labels:                 map[string]string{},
 		terminationGracePeriod: 0,
 	}

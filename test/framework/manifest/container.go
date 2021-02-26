@@ -13,22 +13,69 @@
 
 package manifest
 
-import v1 "k8s.io/api/core/v1"
-
-var (
-	BusyBoxContainer = v1.Container{
-		Name:            "busybox",
-		Image:           "busybox",
-		Command:         []string{"sleep", "3600"},
-		ImagePullPolicy: "IfNotPresent",
-	}
-
-	WindowsContainer = v1.Container{
-		Name:  "windows-server-iis",
-		Image: "mcr.microsoft.com/windows/servercore:1809",
-		Ports: []v1.ContainerPort{{
-			Name:          "http",
-			ContainerPort: 80,
-		}},
-	}
+import (
+	v1 "k8s.io/api/core/v1"
 )
+
+type Container struct {
+	name            string
+	image           string
+	imagePullPolicy v1.PullPolicy
+	command         []string
+	args            []string
+}
+
+func NewBusyBoxContainerBuilder() *Container {
+	return &Container{
+		name:            "busybox",
+		image:           "busybox",
+		imagePullPolicy: v1.PullIfNotPresent,
+		command:         []string{"sleep", "3600"},
+		args:            []string{},
+	}
+}
+
+func NewWindowsContainerBuilder() *Container {
+	return &Container{
+		name:            "windows-container",
+		image:           "mcr.microsoft.com/windows/servercore:ltsc2019",
+		imagePullPolicy: v1.PullIfNotPresent,
+		command:         []string{"powershell.exe"},
+		args:            []string{"Start-Sleep -s 3600"},
+	}
+}
+
+func (w *Container) Name(name string) *Container {
+	w.name = name
+	return w
+}
+
+func (w *Container) Image(image string) *Container {
+	w.image = image
+	return w
+}
+
+func (w *Container) ImagePullPolicy(policy v1.PullPolicy) *Container {
+	w.imagePullPolicy = policy
+	return w
+}
+
+func (w *Container) Command(cmd []string) *Container {
+	w.command = cmd
+	return w
+}
+
+func (w *Container) Args(arg []string) *Container {
+	w.args = arg
+	return w
+}
+
+func (w *Container) Build() v1.Container {
+	return v1.Container{
+		Name:            w.name,
+		Image:           w.image,
+		Command:         w.command,
+		Args:            w.args,
+		ImagePullPolicy: w.imagePullPolicy,
+	}
+}

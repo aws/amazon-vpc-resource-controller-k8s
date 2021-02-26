@@ -14,14 +14,15 @@
 package framework
 
 import (
+	eniConfig "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	sgp "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	ec2Manager "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/deployment"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/jobs"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/namespace"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/pod"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/service"
 	sgpManager "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
-
-	eniConfig "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -43,6 +44,8 @@ type Framework struct {
 	EC2Manager        ec2Manager.Manager
 	NSManager         namespace.Manager
 	SGPManager        sgpManager.Manager
+	SVCManager        service.Manager
+	JobManager        jobs.Manager
 }
 
 func New(options Options) *Framework {
@@ -89,5 +92,7 @@ func New(options Options) *Framework {
 		EC2Manager:        ec2Manager.NewManager(ec2, options.AWSVPCID),
 		NSManager:         namespace.NewManager(k8sClient),
 		SGPManager:        sgpManager.NewManager(k8sClient),
+		SVCManager:        service.NewManager(k8sClient),
+		JobManager:        jobs.NewManager(k8sClient),
 	}
 }
