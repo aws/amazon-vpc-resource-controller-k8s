@@ -94,12 +94,19 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	if err != nil {
 		return err
 	}
+	if instance == nil {
+		return fmt.Errorf("failed to find instance %s details from EC2 API", i.instanceID)
+	}
 
 	// Set instance subnet and cidr during node initialization
 	i.instanceSubnetID = *instance.SubnetId
 	instanceSubnet, err := ec2APIHelper.GetSubnet(&i.instanceSubnetID)
 	if err != nil {
 		return err
+	}
+	if instanceSubnet == nil {
+		return fmt.Errorf("failed to find subnet %s for instance %s",
+			i.instanceSubnetID, i.instanceID)
 	}
 	i.instanceSubnetCidrBlock = *instanceSubnet.CidrBlock
 
@@ -235,6 +242,9 @@ func (i *ec2Instance) updateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHel
 			customSubnet, err := ec2APIHelper.GetSubnet(&i.newCustomNetworkingSubnetID)
 			if err != nil {
 				return err
+			}
+			if customSubnet == nil {
+				return fmt.Errorf("failed to find subnet %s", i.newCustomNetworkingSubnetID)
 			}
 			i.currentSubnetID = i.newCustomNetworkingSubnetID
 			i.currentSubnetCIDRBlock = *customSubnet.CidrBlock

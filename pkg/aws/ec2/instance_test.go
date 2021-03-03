@@ -122,6 +122,35 @@ func TestEc2Instance_LoadDetails(t *testing.T) {
 	assert.Equal(t, primaryInterfaceID, ec2Instance.PrimaryNetworkInterfaceID())
 }
 
+// TestEc2Instance_LoadDetails_InstanceDetailsIsNull tests error is returned if the instance details
+// response from EC2 API is null
+func TestEc2Instance_LoadDetails_InstanceDetailsIsNull(t *testing.T)  {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+
+	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nil, nil)
+
+	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
+	assert.NotNil(t, err)
+}
+
+// TestEc2Instance_LoadDetails_InstanceSubnetIsNull tests error is returned if the instance subnet
+// response from EC2 API is null
+func TestEc2Instance_LoadDetails_InstanceSubnetIsNull(t *testing.T)  {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+
+	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(nil, nil)
+
+	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
+	assert.NotNil(t, err)
+}
+
 // TestEc2Instance_LoadDetails_SubnetPreLoaded if the subnet is already loaded it's not set to the value of the instance's
 // subnet
 func TestEc2Instance_LoadDetails_SubnetPreLoaded(t *testing.T) {
