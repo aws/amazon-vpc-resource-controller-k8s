@@ -19,7 +19,6 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 
@@ -139,7 +138,7 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 
 	createOutput, err := h.ec2Wrapper.CreateNetworkInterface(createInput)
 	if err != nil {
-		return nil, errors.Wrap(err, "eni wrapper: unable to create network interface")
+		return nil, err
 	}
 	if createOutput == nil ||
 		createOutput.NetworkInterface == nil ||

@@ -71,12 +71,12 @@ func (w *warmResourceHandler) HandleCreate(resourceName string, requestCount int
 		// Reconcile the pool before retrying or returning an error
 		w.reconcilePool(shouldReconcile, resourceName, resourcePool)
 		if err == pool.ErrResourceAreBeingCooledDown {
-			w.k8sWrapper.BroadcastPodEvent(pod, ReasonResourceAllocationFailed,
+			w.k8sWrapper.BroadcastEvent(pod, ReasonResourceAllocationFailed,
 				fmt.Sprintf("Resource %s are being cooled down, will retry in %s", resourceName,
 					RequeueAfterWhenResourceCooling), v1.EventTypeWarning)
 			return ctrl.Result{Requeue: true, RequeueAfter: RequeueAfterWhenResourceCooling}, nil
 		} else if err == pool.ErrResourcesAreBeingCreated || err == pool.ErrWarmPoolEmpty {
-			w.k8sWrapper.BroadcastPodEvent(pod, ReasonResourceAllocationFailed,
+			w.k8sWrapper.BroadcastEvent(pod, ReasonResourceAllocationFailed,
 				fmt.Sprintf("Warm pool for resource %s is currently empty, will retry in %s", resourceName,
 					RequeueAfterWhenWPEmpty), v1.EventTypeWarning)
 			return ctrl.Result{Requeue: true, RequeueAfter: RequeueAfterWhenWPEmpty}, nil
@@ -93,7 +93,7 @@ func (w *warmResourceHandler) HandleCreate(resourceName string, requestCount int
 		}
 	}
 
-	w.k8sWrapper.BroadcastPodEvent(pod, ReasonResourceAllocated, fmt.Sprintf("Allocated Resource %s: %s to the pod",
+	w.k8sWrapper.BroadcastEvent(pod, ReasonResourceAllocated, fmt.Sprintf("Allocated Resource %s: %s to the pod",
 		resourceName, resID), v1.EventTypeNormal)
 
 	w.log.Info("successfully allocated and annotated resource", "UID", string(pod.UID),

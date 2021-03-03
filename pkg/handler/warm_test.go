@@ -94,7 +94,7 @@ func TestWarmResourceHandler_HandleCreate(t *testing.T) {
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 	mockPool.EXPECT().AssignResource(uid).Return(ipAddress, true, nil)
 	mockK8sWrapper.EXPECT().AnnotatePod(pod.Namespace, pod.Name, resourceName, ipAddress).Return(nil)
-	mockK8sWrapper.EXPECT().BroadcastPodEvent(podCopy, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
+	mockK8sWrapper.EXPECT().BroadcastEvent(podCopy, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
 
 	mockPool.EXPECT().ReconcilePool().Return(job)
 	mockProvider.EXPECT().SubmitAsyncJob(job)
@@ -114,7 +114,7 @@ func TestWarmResourceHandler_PoolEmpty(t *testing.T) {
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 	mockPool.EXPECT().AssignResource(uid).Return("", true, pool.ErrWarmPoolEmpty)
-	mockK8sWrapper.EXPECT().BroadcastPodEvent(podCopy, ReasonResourceAllocationFailed, gomock.Any(), v1.EventTypeWarning)
+	mockK8sWrapper.EXPECT().BroadcastEvent(podCopy, ReasonResourceAllocationFailed, gomock.Any(), v1.EventTypeWarning)
 	mockPool.EXPECT().ReconcilePool().Return(job)
 	mockProvider.EXPECT().SubmitAsyncJob(job)
 

@@ -21,6 +21,7 @@ import (
 	v1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
+	runtime "k8s.io/apimachinery/pkg/runtime"
 	reflect "reflect"
 )
 
@@ -75,16 +76,16 @@ func (mr *MockK8sWrapperMockRecorder) AnnotatePod(arg0, arg1, arg2, arg3 interfa
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AnnotatePod", reflect.TypeOf((*MockK8sWrapper)(nil).AnnotatePod), arg0, arg1, arg2, arg3)
 }
 
-// BroadcastPodEvent mocks base method
-func (m *MockK8sWrapper) BroadcastPodEvent(arg0 *v1.Pod, arg1, arg2, arg3 string) {
+// BroadcastEvent mocks base method
+func (m *MockK8sWrapper) BroadcastEvent(arg0 runtime.Object, arg1, arg2, arg3 string) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "BroadcastPodEvent", arg0, arg1, arg2, arg3)
+	m.ctrl.Call(m, "BroadcastEvent", arg0, arg1, arg2, arg3)
 }
 
-// BroadcastPodEvent indicates an expected call of BroadcastPodEvent
-func (mr *MockK8sWrapperMockRecorder) BroadcastPodEvent(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+// BroadcastEvent indicates an expected call of BroadcastEvent
+func (mr *MockK8sWrapperMockRecorder) BroadcastEvent(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BroadcastPodEvent", reflect.TypeOf((*MockK8sWrapper)(nil).BroadcastPodEvent), arg0, arg1, arg2, arg3)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BroadcastEvent", reflect.TypeOf((*MockK8sWrapper)(nil).BroadcastEvent), arg0, arg1, arg2, arg3)
 }
 
 // GetENIConfig mocks base method
@@ -100,6 +101,21 @@ func (m *MockK8sWrapper) GetENIConfig(arg0 string) (*v1alpha1.ENIConfig, error) 
 func (mr *MockK8sWrapperMockRecorder) GetENIConfig(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetENIConfig", reflect.TypeOf((*MockK8sWrapper)(nil).GetENIConfig), arg0)
+}
+
+// GetNode mocks base method
+func (m *MockK8sWrapper) GetNode(arg0 string) (*v1.Node, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNode", arg0)
+	ret0, _ := ret[0].(*v1.Node)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetNode indicates an expected call of GetNode
+func (mr *MockK8sWrapperMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNode", reflect.TypeOf((*MockK8sWrapper)(nil).GetNode), arg0)
 }
 
 // GetPod mocks base method

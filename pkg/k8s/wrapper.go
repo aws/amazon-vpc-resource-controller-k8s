@@ -26,6 +26,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -118,12 +119,13 @@ func prometheusRegister() {
 // K8sWrapper represents an interface with all the common operations on K8s objects
 type K8sWrapper interface {
 	GetPod(namespace string, name string) (*v1.Pod, error)
+	GetNode(nodeName string) (*v1.Node, error)
 	ListPods(nodeName string) (*v1.PodList, error)
 	GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error)
 	AnnotatePod(podNamespace string, podName string, key string, val string) error
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
 	GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error)
-	BroadcastPodEvent(pod *v1.Pod, reason string, message string, eventType string)
+	BroadcastEvent(obj runtime.Object, reason string, message string, eventType string)
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -228,8 +230,16 @@ func (k *k8sWrapper) GetPod(namespace string, name string) (*v1.Pod, error) {
 	return obj.(*v1.Pod), nil
 }
 
-func (k *k8sWrapper) BroadcastPodEvent(pod *v1.Pod, reason string, message string, eventType string) {
-	k.eventRecorder.Event(pod, eventType, reason, message)
+func (k *k8sWrapper) GetNode(nodeName string) (*v1.Node, error) {
+	node := &v1.Node{}
+	err := k.cacheClient.Get(context.Background(), types.NamespacedName{
+		Name: nodeName,
+	}, node)
+	return node, err
+}
+
+func (k *k8sWrapper) BroadcastEvent(object runtime.Object, reason string, message string, eventType string) {
+	k.eventRecorder.Event(object, eventType, reason, message)
 }
 
 // AdvertiseCapacity advertises the resource capacity for the given resource

@@ -30,6 +30,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
@@ -58,9 +59,12 @@ var (
 	operationCreateBranchENIAndAnnotate = "create_and_annotate_branch_eni"
 	operationInitTrunk                  = "init_trunk"
 
-	ReasonSecurityGroupRequested = "SecurityGroupRequested"
-	ReasonResourceAllocated      = "ResourceAllocated"
-	ReasonBranchAllocationFailed = "BranchAllocationFailed"
+	ReasonSecurityGroupRequested    = "SecurityGroupRequested"
+	ReasonResourceAllocated         = "ResourceAllocated"
+	ReasonBranchAllocationFailed    = "BranchAllocationFailed"
+	ReasonBranchENIAnnotationFailed = "BranchENIAnnotationFailed"
+
+	ReasonTrunkENICreationFailed = "TrunkENICreationFailed"
 
 	reconcileRequeueRequest   = ctrl.Result{RequeueAfter: time.Minute * 30, Requeue: true}
 	deleteQueueRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
@@ -145,6 +149,23 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 
 	err = trunkENI.InitTrunk(instance, podList.Items)
 	if err != nil {
+		// If it's an AWS Error, get the exit code without the error message to avoid
+		// broadcasting multiple different messaged events
+		if awsErr, ok := err.(awserr.Error); ok {
+			node, errGetNode := b.k8s.GetNode(instance.Name())
+			if errGetNode != nil {
+				return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, err)
+			}
+			var eventMessage = fmt.Sprintf("Failed to create trunk interface: " +
+				"Error Code: %s", awsErr.Code())
+			if awsErr.Code() == "UnauthorizedOperation" {
+				// Append resolution to the event message for users for common error
+				eventMessage = fmt.Sprintf("%s: %s", eventMessage,
+					"Please verify the cluster IAM role has AmazonEKSVPCResourceController policy")
+			}
+			b.k8s.BroadcastEvent(node, ReasonTrunkENICreationFailed, eventMessage, v1.EventTypeWarning)
+		}
+
 		log.Error(err, "failed to init resource")
 		branchProviderOperationsErrCount.WithLabelValues("init").Inc()
 		return err
@@ -314,11 +335,11 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	}
 
 	if len(securityGroups) == 0 {
-		b.k8s.BroadcastPodEvent(pod, ReasonSecurityGroupRequested,
+		b.k8s.BroadcastEvent(pod, ReasonSecurityGroupRequested,
 			"Pod will get the instance security group as the pod didn't match any Security Group from "+
 				"SecurityGroupPolicy", v1.EventTypeWarning)
 	} else {
-		b.k8s.BroadcastPodEvent(pod, ReasonSecurityGroupRequested, fmt.Sprintf("Pod will get the following "+
+		b.k8s.BroadcastEvent(pod, ReasonSecurityGroupRequested, fmt.Sprintf("Pod will get the following "+
 			"Security Groups %v", securityGroups), v1.EventTypeNormal)
 	}
 
@@ -338,7 +359,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		if err == trunk.ErrCurrentlyAtMaxCapacity {
 			return ctrl.Result{RequeueAfter: config.CoolDownPeriod, Requeue: true}, nil
 		}
-		b.k8s.BroadcastPodEvent(pod, ReasonBranchAllocationFailed,
+		b.k8s.BroadcastEvent(pod, ReasonBranchAllocationFailed,
 			fmt.Sprintf("failed to allocate branch ENI to pod: %v", err), v1.EventTypeWarning)
 		return ctrl.Result{}, err
 	}
@@ -359,12 +380,14 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	if err != nil {
 		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
 		b.log.Info("pushed the ENIs to the delete queue as failed to annotate the pod", "ENI/s", branchENIs)
+		b.k8s.BroadcastEvent(pod, ReasonBranchENIAnnotationFailed,
+			fmt.Sprintf("failed to annotate pod with branch ENI details: %v", err), v1.EventTypeWarning)
 		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
 		return ctrl.Result{}, err
 	}
 
 	// Broadcast event to indicate the resource has been successfully created and annotated to the pod object
-	b.k8s.BroadcastPodEvent(pod, ReasonResourceAllocated,
+	b.k8s.BroadcastEvent(pod, ReasonResourceAllocated,
 		fmt.Sprintf("Allocated %s to the pod", string(jsonBytes)), v1.EventTypeNormal)
 
 	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENIAndAnnotate, string(resourceCount)).
