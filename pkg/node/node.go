@@ -35,9 +35,16 @@ type node struct {
 	instance ec2.EC2Instance
 }
 
-var (
-	ErrInitResources = fmt.Errorf("failed to initalize resources")
-)
+// ErrInitResources to wrap error messages for all errors encountered
+// during node initialization so the node can be de-registered on failure
+type ErrInitResources struct {
+	Message string
+	Err     error
+}
+
+func (e *ErrInitResources) Error() string {
+	return fmt.Sprintf("%s: %v", e.Message, e.Err)
+}
 
 type Node interface {
 	InitResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
@@ -95,8 +102,10 @@ func (n *node) InitResources(resourceProviders []provider.ResourceProvider, help
 
 	err := n.instance.LoadDetails(helper)
 	if err != nil {
-		n.log.Error(err, "failed to load instance details")
-		return err
+		return &ErrInitResources{
+			Message: "failed to load instance details",
+			Err:     err,
+		}
 	}
 
 	var initializedProviders []provider.ResourceProvider
@@ -122,7 +131,10 @@ func (n *node) InitResources(resourceProviders []provider.ResourceProvider, help
 		n.log.Error(errInit, "failed to init resource")
 		// Return ErrInitResources so that the manager removes the node from the
 		// cache allowing it to be retried in next sync period.
-		return ErrInitResources
+		return &ErrInitResources{
+			Message: "failed to init resources",
+			Err:     errInit,
+		}
 	}
 
 	n.ready = true
