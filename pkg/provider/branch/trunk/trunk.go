@@ -158,6 +158,12 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 
 	// Get trunk network interface
 	for _, nwInterface := range nwInterfaces {
+		// It's possible to get an empty network interface response if the instnace
+		// is being deleted.
+		if nwInterface == nil || nwInterface.InterfaceType == nil {
+			return fmt.Errorf("received an empty network interface response "+
+				"from EC2 %+v", nwInterface)
+		}
 		if *nwInterface.InterfaceType == "trunk" {
 			t.trunkENIId = *nwInterface.NetworkInterfaceId
 		}

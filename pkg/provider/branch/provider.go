@@ -156,7 +156,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 			if errGetNode != nil {
 				return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, err)
 			}
-			var eventMessage = fmt.Sprintf("Failed to create trunk interface: " +
+			var eventMessage = fmt.Sprintf("Failed to create trunk interface: "+
 				"Error Code: %s", awsErr.Code())
 			if awsErr.Code() == "UnauthorizedOperation" {
 				// Append resolution to the event message for users for common error
