@@ -618,6 +618,23 @@ func TestTrunkENI_InitTrunk_TrunkNotExists(t *testing.T) {
 	assert.Equal(t, trunkId, trunkENI.trunkENIId)
 }
 
+// TestTrunkENI_InitTrunk_ErrWhen_EmptyNWInterfaceResponse tests error is returned if an network
+// interface without an interface type is returned
+func TestTrunkENI_InitTrunk_ErrWhen_EmptyNWInterfaceResponse(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+
+	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(
+		[]*awsEc2.InstanceNetworkInterface{{InterfaceType: nil}}, nil)
+
+	err := trunkENI.InitTrunk(mockInstance, []v1.Pod{*MockPod2})
+
+	assert.NotNil(t, err)
+}
+
 // TestTrunkENI_InitTrunk_GetTrunkError tests that error is returned if the get trunk call fails
 func TestTrunkENI_InitTrunk_GetTrunkError(t *testing.T) {
 	ctrl := gomock.NewController(t)

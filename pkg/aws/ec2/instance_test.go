@@ -124,7 +124,7 @@ func TestEc2Instance_LoadDetails(t *testing.T) {
 
 // TestEc2Instance_LoadDetails_InstanceDetailsIsNull tests error is returned if the instance details
 // response from EC2 API is null
-func TestEc2Instance_LoadDetails_InstanceDetailsIsNull(t *testing.T)  {
+func TestEc2Instance_LoadDetails_InstanceDetailsIsNull(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -136,9 +136,23 @@ func TestEc2Instance_LoadDetails_InstanceDetailsIsNull(t *testing.T)  {
 	assert.NotNil(t, err)
 }
 
-// TestEc2Instance_LoadDetails_InstanceSubnetIsNull tests error is returned if the instance subnet
+// TestEc2Instance_LoadDetails_InstanceDetails_SubnetID_IsNull tests error is returned if the instance
+// is not details null but the subnet is nil
+func TestEc2Instance_LoadDetails_InstanceDetails_SubnetID_IsNull(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+
+	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(&ec2.Instance{}, nil)
+
+	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
+	assert.NotNil(t, err)
+}
+
+// TestEc2Instance_LoadDetails_InstanceSubnet_IsNull tests error is returned if the instance subnet
 // response from EC2 API is null
-func TestEc2Instance_LoadDetails_InstanceSubnetIsNull(t *testing.T)  {
+func TestEc2Instance_LoadDetails_InstanceSubnet_IsNull(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -146,6 +160,21 @@ func TestEc2Instance_LoadDetails_InstanceSubnetIsNull(t *testing.T)  {
 
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
 	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(nil, nil)
+
+	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
+	assert.NotNil(t, err)
+}
+
+// TestEc2Instance_LoadDetails_InstanceSubnet_CidrBlock_IsNull tests error is returned if the instance
+// subnet CIDR Block from GetSubnet response from EC2 API is null
+func TestEc2Instance_LoadDetails_InstanceSubnet_CidrBlock_IsNull(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+
+	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&ec2.Subnet{}, nil)
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NotNil(t, err)
