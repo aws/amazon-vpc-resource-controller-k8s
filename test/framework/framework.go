@@ -81,8 +81,10 @@ func New(options Options) *Framework {
 		StatusClient: realClient,
 	}
 
-	ec2 := ec2.New(session.Must(session.NewSession()), aws.NewConfig().
-		WithRegion(options.AWSRegion))
+	sess := session.Must(session.NewSession(&aws.Config{
+		Region: aws.String(options.AWSRegion),
+	}))
+	ec2 := ec2.New(sess, &aws.Config{Region: aws.String(options.AWSRegion)})
 
 	return &Framework{
 		K8sClient:         k8sClient,

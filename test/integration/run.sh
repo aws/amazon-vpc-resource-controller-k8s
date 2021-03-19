@@ -6,7 +6,12 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 echo "Running VPC Resource Controller integration test with the following variables
 KUBE CONFIG: $KUBE_CONFIG_PATH
 CLUSTER_NAME: $CLUSTER_NAME
-REGION: $REGION"
+REGION: $REGION
+OS_OVERRIDE: $OS_OVERRIDE"
+
+if [[ -z "${OS_OVERRIDE}" ]]; then
+  OS_OVERRIDE=linux
+fi
 
 CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
 
@@ -28,7 +33,7 @@ kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=true
 #Start the test
 echo "Starting the ginkgo test suite" 
 
-(cd $SCRIPT_DIR/perpodsg && CGO_ENABLED=0 GOOS=linux ginkgo -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+(cd $SCRIPT_DIR/perpodsg && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
 
 #Tear down local resources
 echo "Detaching the IAM Policy from Cluster Service Role"
