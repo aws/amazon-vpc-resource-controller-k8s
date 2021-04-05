@@ -77,4 +77,3 @@ func (s *defaultManager) DeleteService(ctx context.Context, service *v1.Service)
 
 	return nil
 }
-

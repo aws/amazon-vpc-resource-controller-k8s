@@ -15,10 +15,10 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 
 	"github.com/go-logr/logr"
 	"k8s.io/api/admission/v1beta1"
@@ -30,9 +30,8 @@ import (
 
 // AnnotationValidator injects resources into Pods
 type AnnotationValidator struct {
-	K8sWrapper k8s.K8sWrapper
-	decoder    *admission.Decoder
-	Log        logr.Logger
+	decoder *admission.Decoder
+	Log     logr.Logger
 }
 
 const validUserInfo = "system:serviceaccount:kube-system:vpc-resource-controller"
@@ -40,59 +39,71 @@ const newValidUserInfo = "system:serviceaccount:kube-system:eks-vpc-resource-con
 
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch
 
-func (av *AnnotationValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
-	pod := &corev1.Pod{}
-	err := av.decoder.Decode(req, pod)
-	if err != nil {
-		return admission.Errored(http.StatusBadRequest, err)
-	}
-	webhookLog := av.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
+func (a *AnnotationValidator) Handle(_ context.Context, req admission.Request) admission.Response {
+	var response admission.Response
 
-	// Ignore pod that is scheduled on host network.
-	if pod.Spec.HostNetwork {
-		return admission.Allowed("Pod using host network will not have a pod ENI")
+	a.Log.V(1).Info("annotation validating webhook request",
+		"request", req)
+
+	switch req.Operation {
+	case v1beta1.Create:
+		response = a.handleCreate(req)
+	case v1beta1.Update:
+		response = a.handleUpdate(req)
+	default:
+		response = admission.Allowed("")
 	}
 
-	if podEniJSON, ok := pod.Annotations[config.ResourceNamePodENI]; ok {
-		webhookLog.V(1).Info("Got annotation:", config.ResourceNamePodENI, podEniJSON)
-		if req.Operation == v1beta1.Create {
-			// Check who is setting the annotation
-			if (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) {
-				webhookLog.Info("Denying annotation creation", "Username", req.UserInfo.Username)
-				return admission.Denied("Validation failed. Pod ENI not set by VPC Resource Controller")
-			}
-		} else if req.Operation == v1beta1.Update {
-			// Check if the pod-eni annotation has been changed
-			webhookLog.V(1).Info("Operation is update, checking that pod-eni annotation wasn't modified")
-			oldPod, err := av.K8sWrapper.GetPod(pod.Namespace, pod.Name)
-			if err != nil {
-				webhookLog.Error(err, "Failed to fetch pod in update request")
-				return admission.Denied("Validation failed. Trying to update annotation on a pod that can't be found")
-			}
-			if oldPodAnnotationValue, ok := oldPod.Annotations[config.ResourceNamePodENI]; ok {
-				// This is an update trying to change the pod annotation
-				if oldPodAnnotationValue != podEniJSON && (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) {
-					webhookLog.Info("Denying annotation change", "Username", req.UserInfo.Username)
-					return admission.Denied("Validation failed. Pod ENI annotation changed outside of VPC Resource Controller")
-				}
-			} else {
-				// This is an update trying to add the pod annotation
-				if (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) {
-					webhookLog.Info("Denying adding annotation", "Username", req.UserInfo.Username)
-					return admission.Denied("Validation failed. Pod ENI annotation added outside of VPC Resource Controller")
-				}
-			}
-		}
-	}
-	webhookLog.V(1).Info("Validating pod finished.")
-	return admission.Allowed("Validation succeeded")
+	a.Log.V(1).Info("annotation validating webhook response",
+		"response", response)
+
+	return response
 }
 
-// PodResourceInjector implements admission.DecoderInjector.
-// A decoder will be automatically injected.
+func (a *AnnotationValidator) handleCreate(req admission.Request) admission.Response {
+	pod := &corev1.Pod{}
+	if err := a.decoder.DecodeRaw(req.Object, pod); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+	// The annotation is added by vpc-resource-controller which will come as an update event
+	// so we should block all request on create event
+	if val, ok := pod.Annotations[config.ResourceNamePodENI]; ok {
+		a.Log.Info("blocking request", "event", "create",
+			"annotation key", config.ResourceNamePodENI, "annotation value", val)
+		return admission.Denied(
+			fmt.Sprintf("pod cannot be created with %s annotation", config.ResourceNamePodENI))
+	}
+	return admission.Allowed("")
+}
+
+func (a *AnnotationValidator) handleUpdate(req admission.Request) admission.Response {
+	pod := &corev1.Pod{}
+	if err := a.decoder.DecodeRaw(req.Object, pod); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+	oldPod := &corev1.Pod{}
+	if err := a.decoder.DecodeRaw(req.OldObject, oldPod); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+	logger := a.Log.WithValues("name", pod.Name, "namespace", pod.Namespace, "uid", pod.UID)
+
+	// This will block any update on the specific annotation from non vpc resource controller
+	// service accounts
+	if pod.Annotations[config.ResourceNamePodENI] !=
+		oldPod.Annotations[config.ResourceNamePodENI] {
+		if (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) {
+			logger.Info("denying annotation", "username", req.UserInfo.Username,
+				"annotation key", config.ResourceNamePodENI)
+			return admission.Denied("annotation is not set by vpc-resource-controller")
+		}
+		return admission.Allowed("")
+	}
+
+	return admission.Allowed("")
+}
 
 // InjectDecoder injects the decoder.
-func (av *AnnotationValidator) InjectDecoder(d *admission.Decoder) error {
-	av.decoder = d
+func (a *AnnotationValidator) InjectDecoder(d *admission.Decoder) error {
+	a.decoder = d
 	return nil
 }

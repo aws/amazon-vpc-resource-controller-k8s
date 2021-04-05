@@ -327,7 +327,7 @@ var _ = Describe("Windows Integration Test", func() {
 					"kube-system", "vpc-resource-controller", 0)
 
 				By("scaling the vpc controller deployment to 1")
-				frameWork.DeploymentManager.ScaleDeploymentAndWaitTillReady(ctx, "" +
+				frameWork.DeploymentManager.ScaleDeploymentAndWaitTillReady(ctx, ""+
 					"kube-system", "vpc-resource-controller", 1)
 
 				// If the IP is re-assigned to some other pod the container will be stuck

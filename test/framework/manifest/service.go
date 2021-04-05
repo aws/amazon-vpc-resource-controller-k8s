@@ -31,8 +31,8 @@ type ServiceBuilder struct {
 
 func NewHTTPService() *ServiceBuilder {
 	return &ServiceBuilder{
-		port:        80,
-		protocol:    v1.ProtocolTCP,
+		port:     80,
+		protocol: v1.ProtocolTCP,
 		selector: map[string]string{},
 	}
 }

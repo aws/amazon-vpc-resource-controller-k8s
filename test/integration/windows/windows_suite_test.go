@@ -28,9 +28,9 @@ import (
 
 var (
 	frameWork *framework.Framework
-	verify *verifier.PodVerification
-	ctx context.Context
-	err error
+	verify    *verifier.PodVerification
+	ctx       context.Context
+	err       error
 )
 
 func TestWindowsVPCResourceController(t *testing.T) {
