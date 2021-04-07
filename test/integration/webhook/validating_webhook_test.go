@@ -14,46 +14,72 @@
 package webhook
 
 import (
+	"time"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("when updating security group annotation from unauthorized user", func() {
-	It("should fail on updating the annotation", func() {
-		newPod := pod.DeepCopy()
-		newPod.Annotations[config.ResourceNamePodENI] = "updated-annotation"
+var _ = Describe("when doing pod operations from non vpc-resource-controller user", func() {
+	Context("when updating annotations", func() {
+		It("should fail on updating pod sgp annotation", func() {
+			newPod := pod.DeepCopy()
+			newPod.Annotations[config.ResourceNamePodENI] = "updated-annotation"
 
-		err := frameWork.PodManager.PatchPod(ctx, pod, newPod)
-		Expect(err).To(HaveOccurred())
+			err := frameWork.PodManager.PatchPod(ctx, pod, newPod)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should fail on deleting the pod sgp annotation", func() {
+			newPod := pod.DeepCopy()
+			delete(newPod.Annotations, config.ResourceNamePodENI)
+
+			err := frameWork.PodManager.PatchPod(ctx, pod, newPod)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should not fail when modifying other annotations", func() {
+			newPod := pod.DeepCopy()
+			newPod.Annotations["some-other-annotation"] = "new-annotation"
+
+			err := frameWork.PodManager.PatchPod(ctx, pod, newPod)
+			Expect(err).ToNot(HaveOccurred())
+		})
 	})
 
-	It("should fail on deleting the annotation", func() {
-		newPod := pod.DeepCopy()
-		delete(newPod.Annotations, config.ResourceNamePodENI)
+	Context("when creating new pod", func() {
+		It("should fail on creating pod with sgp annotation", func() {
+			newPod, err := manifest.NewDefaultPodBuilder().
+				Annotations(map[string]string{config.ResourceNamePodENI: "new-annotation"}).
+				Namespace(namespace).
+				Name("new-pod").
+				Build()
+			Expect(err).ToNot(HaveOccurred())
 
-		err := frameWork.PodManager.PatchPod(ctx, pod, newPod)
-		Expect(err).To(HaveOccurred())
-	})
+			_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, newPod)
+			Expect(err).To(HaveOccurred())
+		})
 
-	It("should go through when modifying other annotations", func() {
-		newPod := pod.DeepCopy()
-		newPod.Annotations["some-other-annotation"] = "new-annotation"
+		It("should not fail on creating new pod without sgp annotation", func() {
+			newPod, err := manifest.NewDefaultPodBuilder().
+				Annotations(map[string]string{"some-other-annotation": "new-annotation"}).
+				Namespace(namespace).
+				Name("new-pod").
+				Build()
+			Expect(err).ToNot(HaveOccurred())
 
-		err := frameWork.PodManager.PatchPod(ctx, pod, newPod)
-		Expect(err).ToNot(HaveOccurred())
-	})
+			_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, newPod)
+			Expect(err).ToNot(HaveOccurred())
 
-	It("should fail on creating new pod with annotation", func() {
-		pod, err = manifest.NewDefaultPodBuilder().
-			Annotations(map[string]string{config.ResourceNamePodENI: "new-annotation"}).
-			Namespace(namespace).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
+			// Allow the cache to sync
+			time.Sleep(utils.PollIntervalShort)
 
-		_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, pod)
-		Expect(err).To(HaveOccurred())
+			err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, newPod)
+			Expect(err).ToNot(HaveOccurred())
+		})
 	})
 })
