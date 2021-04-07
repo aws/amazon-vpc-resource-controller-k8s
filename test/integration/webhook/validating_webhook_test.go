@@ -38,6 +38,14 @@ var _ = Describe("when updating security group annotation from unauthorized user
 		Expect(err).To(HaveOccurred())
 	})
 
+	It("should go through when modifying other annotations", func() {
+		newPod := pod.DeepCopy()
+		newPod.Annotations["some-other-annotation"] = "new-annotation"
+
+		err := frameWork.PodManager.PatchPod(ctx, pod, newPod)
+		Expect(err).ToNot(HaveOccurred())
+	})
+
 	It("should fail on creating new pod with annotation", func() {
 		pod, err = manifest.NewDefaultPodBuilder().
 			Annotations(map[string]string{config.ResourceNamePodENI: "new-annotation"}).
