@@ -36,6 +36,7 @@ type Manager interface {
 	DeleteAndWaitTillPodIsDeleted(context context.Context, pod *v1.Pod) error
 	GetENIDetailsFromPodAnnotation(podAnnotation map[string]string) ([]*trunk.ENIDetails, error)
 	GetPodsWithLabel(context context.Context, namespace string, labelKey string, labelValue string) ([]v1.Pod, error)
+	PatchPod(context context.Context, oldPod *v1.Pod, newPod *v1.Pod) error
 }
 
 type defaultManager struct {
@@ -129,6 +130,10 @@ func (d *defaultManager) GetENIDetailsFromPodAnnotation(podAnnotation map[string
 	json.Unmarshal([]byte(branchDetails), &eniDetails)
 
 	return eniDetails, nil
+}
+
+func (d *defaultManager) PatchPod(context context.Context, oldPod *v1.Pod, newPod *v1.Pod) error {
+	return d.k8sClient.Patch(context, newPod, client.MergeFrom(oldPod))
 }
 
 func isPodReady(pod *v1.Pod) bool {

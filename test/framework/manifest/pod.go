@@ -28,6 +28,7 @@ type PodBuilder struct {
 	container              v1.Container
 	os                     string
 	labels                 map[string]string
+	annotations            map[string]string
 	terminationGracePeriod int
 	restartPolicy          v1.RestartPolicy
 }
@@ -35,9 +36,10 @@ type PodBuilder struct {
 func (p *PodBuilder) Build() (*v1.Pod, error) {
 	return &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      p.name,
-			Namespace: p.namespace,
-			Labels:    p.labels,
+			Name:        p.name,
+			Namespace:   p.namespace,
+			Labels:      p.labels,
+			Annotations: p.annotations,
 		},
 		Spec: v1.PodSpec{
 			ServiceAccountName:            p.serviceAccountName,
@@ -56,6 +58,7 @@ func NewDefaultPodBuilder() *PodBuilder {
 		container:              NewBusyBoxContainerBuilder().Build(),
 		os:                     "linux",
 		labels:                 map[string]string{},
+		annotations:            map[string]string{},
 		terminationGracePeriod: 0,
 		restartPolicy:          v1.RestartPolicyNever,
 	}
@@ -98,6 +101,11 @@ func (p *PodBuilder) RestartPolicy(policy v1.RestartPolicy) *PodBuilder {
 
 func (p *PodBuilder) Labels(labels map[string]string) *PodBuilder {
 	p.labels = labels
+	return p
+}
+
+func (p *PodBuilder) Annotations(annotations map[string]string) *PodBuilder {
+	p.annotations = annotations
 	return p
 }
 

@@ -294,8 +294,7 @@ func main() {
 
 	// Validating webhook for pod.
 	webhookServer.Register("/validate-v1-pod", &webhook.Admission{Handler: &webhookcore.AnnotationValidator{
-		K8sWrapper: k8sWrapper,
-		Log:        ctrl.Log.WithName("webhook").WithName("Annotation Validator"),
+		Log: ctrl.Log.WithName("webhook").WithName("Annotation Validator"),
 	}})
 
 	setupLog.Info("starting manager")
