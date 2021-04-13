@@ -89,6 +89,45 @@ func getPodResourceInjectorWithoutSGP() *PodResourceInjector {
 	return pa
 }
 
+func getFargatePodResourceInjectorWithSGP() *PodResourceInjector {
+	testScheme := runtime.NewScheme()
+	clientgoscheme.AddToScheme(testScheme)
+	vpcresourcesv1beta1.AddToScheme(testScheme)
+	testClient := fake.NewFakeClientWithScheme(
+		testScheme,
+		NewFargatePod(name, saName, namespace),
+		NewServiceAccount(saName, namespace),
+		NewSecurityGroupPolicy(name, namespace, []string{"sg-00001"}),
+	)
+	decoder, _ := admission.NewDecoder(testScheme)
+	pa := &PodResourceInjector{
+		Client:      testClient,
+		decoder:     decoder,
+		CacheHelper: webhookutils.NewK8sCacheHelper(testClient, logger),
+		Log:         logger,
+	}
+	return pa
+}
+
+func getFargatePodResourceInjectorWithoutSGP() *PodResourceInjector {
+	testScheme := runtime.NewScheme()
+	clientgoscheme.AddToScheme(testScheme)
+	vpcresourcesv1beta1.AddToScheme(testScheme)
+	testClient := fake.NewFakeClientWithScheme(
+		testScheme,
+		NewFargatePod(name, saName, namespace),
+		NewServiceAccount(saName, namespace),
+	)
+	decoder, _ := admission.NewDecoder(testScheme)
+	pa := &PodResourceInjector{
+		Client:      testClient,
+		decoder:     decoder,
+		CacheHelper: webhookutils.NewK8sCacheHelper(testClient, logger),
+		Log:         logger,
+	}
+	return pa
+}
+
 // TestInjectPrivateIP tests if pod can be injected with private IP.
 func TestInjectPrivateIP(t *testing.T) {
 	pod := NewWindowsPod("test", "test_namespace", true)
@@ -150,6 +189,56 @@ func TestPodResourceInjector_Handle(t *testing.T) {
 
 		pv := p.Value.(map[string]interface{})
 		assert.True(t, pv[vpcresourceconfig.ResourceNamePodENI] == resourceLimit)
+	}
+}
+
+// TestFargatePodResourceInjector_Handle test webhook annotating fargate pod with sg list.
+func TestFargatePodResourceInjector_Handle(t *testing.T) {
+	pod := NewFargatePod("test", "test_sa", "test_namespace")
+	assert.True(t, pod.ObjectMeta.Labels[fargatePodLabel] == "test_fp")
+	injector := getFargatePodResourceInjectorWithSGP()
+	resp := getResponse(pod, injector)
+	assert.True(t, resp.Allowed)
+	for _, p := range resp.Patches {
+		assert.True(t, p.Operation == "add")
+
+		pv := p.Value.(map[string]interface{})
+		assert.True(t, pv[fargatePodSgAnnotKey] == "sg-00001")
+	}
+}
+
+// TestFargatePodResourceInjectorWithoutSGP_WithAnnotPodSpec_Handle test webhook overriding fargate pod annotation with sg list.
+func TestFargatePodResourceInjectorWithoutSGP_WithAnnotPodSpec_Handle(t *testing.T) {
+	pod := NewFargatePod("test", "test_sa", "test_namespace")
+	annotMap := pod.ObjectMeta.Annotations
+	if annotMap == nil {
+		annotMap = make(map[string]string)
+	}
+	annotMap[fargatePodSgAnnotKey] = "sg-123"
+	annotMap["test"] = "test"
+	pod.ObjectMeta.Annotations = annotMap
+	assert.True(t, pod.ObjectMeta.Labels[fargatePodLabel] == "test_fp")
+	injector := getFargatePodResourceInjectorWithoutSGP()
+	resp := getResponse(pod, injector)
+	assert.True(t, resp.Allowed)
+	for _, p := range resp.Patches {
+		assert.True(t, p.Operation == "remove")
+		assert.True(t, p.Path == "/metadata/annotations/fargate.amazonaws.com~1pod-sg")
+	}
+}
+
+// TestNonFargatePodResourceInjector_Handle test webhook not annotating non-fargate pod with sg list.
+func TestNonFargatePodResourceInjector_Handle(t *testing.T) {
+	pod := NewPod("test", "test_sa", "test_namespace")
+	assert.False(t, pod.ObjectMeta.Labels[fargatePodLabel] == "test_fp")
+	injector := getFargatePodResourceInjectorWithSGP()
+	resp := getResponse(pod, injector)
+	assert.True(t, resp.Allowed)
+	for _, p := range resp.Patches {
+		assert.True(t, p.Operation == "add")
+		pv := p.Value.(map[string]interface{})
+		_, exist := pv[fargatePodSgAnnotKey]
+		assert.False(t, exist)
 	}
 }
 
@@ -227,6 +316,42 @@ func NewPod(name string, sa string, namespace string) *corev1.Pod {
 				"role":        "db",
 				"environment": "qa",
 				"app":         "test_app",
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Resources: corev1.ResourceRequirements{},
+				},
+			},
+			ServiceAccountName: sa,
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{
+				{
+					Type:   corev1.PodReady,
+					Status: corev1.ConditionTrue,
+				},
+			},
+		},
+	}
+	return pod
+}
+
+func NewFargatePod(name string, sa string, namespace string) *corev1.Pod {
+	pod := &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+			Labels: map[string]string{
+				"role":                              "db",
+				"environment":                       "qa",
+				"app":                               "test_app",
+				fargatePodLabel:                     "test_fp",
 			},
 		},
 		Spec: corev1.PodSpec{

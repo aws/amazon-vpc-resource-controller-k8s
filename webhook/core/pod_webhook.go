@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +30,8 @@ import (
 )
 
 const resourceLimit = "1"
+const fargatePodSgAnnotKey = "fargate.amazonaws.com/pod-sg"
+const fargatePodLabel = "eks.amazonaws.com/fargate-profile"
 
 // +kubebuilder:webhook:path=/mutate-v1-pod,mutating=true,failurePolicy=ignore,groups="",resources=pods,verbs=create,versions=v1,name=mpod.vpc.k8s.aws
 
@@ -76,14 +79,42 @@ func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Reques
 	//	pod.Spec.Containers[0].Resources.Limits[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
 	//	pod.Spec.Containers[0].Resources.Requests[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
 	//} else
+
+	isFargatePod := false
+	if _, ok := pod.ObjectMeta.Labels[fargatePodLabel]; ok {
+		isFargatePod = true
+	}
+	annotationMap := pod.ObjectMeta.Annotations
+	if annotationMap == nil {
+		annotationMap = make(map[string]string)
+	}
+
 	if sgList, cacheErr := prj.CacheHelper.GetPodSecurityGroups(pod); cacheErr != nil {
 		webhookLog.Error(cacheErr, "Webhook client failed to Get or List objects from cache.")
 		return admission.Denied("Webhood encountered error to Get or List object from k8s cache.")
-	} else if len(sgList) > 0 {
+	} else if len(sgList) > 0 && !isFargatePod {
 		webhookLog.Info("Injecting resource to the first container of the pod",
 			"resource name", vpcresourceconfig.ResourceNamePodENI, "resource count", resourceLimit)
 		pod.Spec.Containers[0].Resources.Limits[vpcresourceconfig.ResourceNamePodENI] = resource.MustParse(resourceLimit)
 		pod.Spec.Containers[0].Resources.Requests[vpcresourceconfig.ResourceNamePodENI] = resource.MustParse(resourceLimit)
+	} else if len(sgList) > 0 && isFargatePod {
+		// add pod-sg annotation if there is any matching security group in defined SGP (CRD)
+		annotationMap[fargatePodSgAnnotKey] = strings.Join(sgList, ",")
+		pod.ObjectMeta.Annotations = annotationMap
+		webhookLog.Info("Annotating fargate pod with security groups defined in CRD",
+			"Pod Security Group Annotation", annotationMap)
+	} else if len(sgList) == 0 && isFargatePod{
+		// Mutating Webhook catches the CREATE event when pod-sg annotation is added before this component
+		// Mutating Webhook will override pod-sg annotation if it is added before mutating webhook
+		// Annotation Validation Webhook catches the UPDATE event where pod-sg annotation is modified by any resource
+		if _, ok := pod.Annotations[fargatePodSgAnnotKey]; ok {
+			delete(annotationMap,fargatePodSgAnnotKey)
+			pod.ObjectMeta.Annotations = annotationMap
+			webhookLog.Info("Overriding pod-sg annotation added outside of mutating webhook",
+				"Pod Security Group Annotation", annotationMap)
+		} else {
+			return admission.Allowed("Fargate pod will not be annotated with security group.")
+		}
 	} else {
 		return admission.Allowed("Pod will not be injected with resources limits.")
 	}

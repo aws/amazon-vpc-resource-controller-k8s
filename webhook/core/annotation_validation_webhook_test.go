@@ -82,6 +82,20 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 	podWithDifferentAnnotationRaw, err := json.Marshal(podWithDifferentAnnotation)
 	assert.NoError(t, err)
 
+	fargatePodWithoutAnnotation := basePod.DeepCopy()
+	fargatePodWithoutAnnotationRaw, err := json.Marshal(fargatePodWithoutAnnotation)
+	assert.NoError(t, err)
+
+	fargatePodWithAnnotation := basePod.DeepCopy()
+	fargatePodWithAnnotation.Annotations[fargatePodSgAnnotKey] = "sg-123"
+	fargatePodWithAnnotationRaw, err := json.Marshal(fargatePodWithAnnotation)
+	assert.NoError(t, err)
+
+	fargatePodWithDifferentAnnotation := basePod.DeepCopy()
+	fargatePodWithDifferentAnnotation.Annotations[fargatePodSgAnnotKey] = "sg-456"
+	fargatePodWithDifferentAnnotationRaw, err := json.Marshal(fargatePodWithDifferentAnnotation)
+	assert.NoError(t, err)
+
 	test := []struct {
 		name string
 		req  admission.Request
@@ -240,6 +254,78 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 					OldObject: runtime.RawExtension{
 						Raw:    podWithAnnotationRaw,
 						Object: podWithAnnotation,
+					},
+				},
+			},
+			want: admission.Response{
+				AdmissionResponse: v1beta1.AdmissionResponse{
+					Allowed: false,
+					Result: &metav1.Status{
+						Code: http.StatusForbidden,
+					},
+				},
+			},
+		},
+		{
+			name: "[update] fargate pod-sg annotation added during UPDATE event, deny request",
+			req: admission.Request{
+				AdmissionRequest: v1beta1.AdmissionRequest{
+					Operation: v1beta1.Update,
+					Object: runtime.RawExtension{
+						Raw:    fargatePodWithAnnotationRaw,
+						Object: fargatePodWithAnnotation,
+					},
+					OldObject: runtime.RawExtension{
+						Raw:    fargatePodWithoutAnnotationRaw,
+						Object: fargatePodWithoutAnnotation,
+					},
+				},
+			},
+			want: admission.Response{
+				AdmissionResponse: v1beta1.AdmissionResponse{
+					Allowed: false,
+					Result: &metav1.Status{
+						Code: http.StatusForbidden,
+					},
+				},
+			},
+		},
+		{
+			name: "[update] fargate pod-sg annotation updated during UPDATE event, deny request",
+			req: admission.Request{
+				AdmissionRequest: v1beta1.AdmissionRequest{
+					Operation: v1beta1.Update,
+					Object: runtime.RawExtension{
+						Raw:    fargatePodWithDifferentAnnotationRaw,
+						Object: fargatePodWithDifferentAnnotation,
+					},
+					OldObject: runtime.RawExtension{
+						Raw:    fargatePodWithAnnotationRaw,
+						Object: fargatePodWithAnnotation,
+					},
+				},
+			},
+			want: admission.Response{
+				AdmissionResponse: v1beta1.AdmissionResponse{
+					Allowed: false,
+					Result: &metav1.Status{
+						Code: http.StatusForbidden,
+					},
+				},
+			},
+		},
+		{
+			name: "[update] fargate pod-sg annotation deleted during UPDATE event, deny request",
+			req: admission.Request{
+				AdmissionRequest: v1beta1.AdmissionRequest{
+					Operation: v1beta1.Update,
+					Object: runtime.RawExtension{
+						Raw:    fargatePodWithoutAnnotationRaw,
+						Object: fargatePodWithoutAnnotation,
+					},
+					OldObject: runtime.RawExtension{
+						Raw:    fargatePodWithAnnotationRaw,
+						Object: fargatePodWithAnnotation,
 					},
 				},
 			},

@@ -99,6 +99,13 @@ func (a *AnnotationValidator) handleUpdate(req admission.Request) admission.Resp
 		return admission.Allowed("")
 	}
 
+	if pod.Annotations[fargatePodSgAnnotKey] !=
+		oldPod.Annotations[fargatePodSgAnnotKey] {
+		logger.Info("denying annotation", "username", req.UserInfo.Username,
+			"annotation key", fargatePodSgAnnotKey)
+		return admission.Denied("annotation is not set by mutating webhook")
+	}
+
 	return admission.Allowed("")
 }
 
