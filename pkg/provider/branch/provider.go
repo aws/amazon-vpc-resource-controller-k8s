@@ -16,6 +16,7 @@ package branch
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -364,7 +365,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, err
 	}
 
-	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENI, string(resourceCount)).
+	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENI, strconv.Itoa(resourceCount)).
 		Observe(timeSinceMs(start))
 
 	jsonBytes, err := json.Marshal(branchENIs)
@@ -390,7 +391,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	b.k8s.BroadcastEvent(pod, ReasonResourceAllocated,
 		fmt.Sprintf("Allocated %s to the pod", string(jsonBytes)), v1.EventTypeNormal)
 
-	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENIAndAnnotate, string(resourceCount)).
+	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENIAndAnnotate, strconv.Itoa(resourceCount)).
 		Observe(timeSinceMs(start))
 
 	log.Info("created and annotated branch interface/s successfully", "branches", branchENIs)

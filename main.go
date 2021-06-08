@@ -39,7 +39,7 @@ import (
 	webhookutils "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
-	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhook/core"
+	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhooks/core"
 
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"

@@ -348,10 +348,10 @@ func NewFargatePod(name string, sa string, namespace string) *corev1.Pod {
 			Namespace: namespace,
 			Name:      name,
 			Labels: map[string]string{
-				"role":                              "db",
-				"environment":                       "qa",
-				"app":                               "test_app",
-				fargatePodLabel:                     "test_fp",
+				"role":          "db",
+				"environment":   "qa",
+				"app":           "test_app",
+				fargatePodLabel: "test_fp",
 			},
 		},
 		Spec: corev1.PodSpec{

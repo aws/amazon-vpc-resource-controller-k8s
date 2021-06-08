@@ -87,6 +87,10 @@ else
 CONTROLLER_GEN=$(shell which controller-gen)
 endif
 
+# If more than 1 files need formatting then error out
+check-format:
+	@exit $(shell gofmt -l . | grep -v internal | wc -l)
+
 check-env:
 	@:$(call check_var, AWS_ACCOUNT, AWS account ID for publishing docker images)
 	@:$(call check_var, AWS_REGION, AWS region for publishing docker images)
