@@ -103,12 +103,12 @@ func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Reques
 		pod.ObjectMeta.Annotations = annotationMap
 		webhookLog.Info("Annotating fargate pod with security groups defined in CRD",
 			"Pod Security Group Annotation", annotationMap)
-	} else if len(sgList) == 0 && isFargatePod{
+	} else if len(sgList) == 0 && isFargatePod {
 		// Mutating Webhook catches the CREATE event when pod-sg annotation is added before this component
 		// Mutating Webhook will override pod-sg annotation if it is added before mutating webhook
 		// Annotation Validation Webhook catches the UPDATE event where pod-sg annotation is modified by any resource
 		if _, ok := pod.Annotations[fargatePodSgAnnotKey]; ok {
-			delete(annotationMap,fargatePodSgAnnotKey)
+			delete(annotationMap, fargatePodSgAnnotKey)
 			pod.ObjectMeta.Annotations = annotationMap
 			webhookLog.Info("Overriding pod-sg annotation added outside of mutating webhook",
 				"Pod Security Group Annotation", annotationMap)
