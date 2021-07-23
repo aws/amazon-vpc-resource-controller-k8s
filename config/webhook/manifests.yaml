@@ -1,53 +1,51 @@
 
 ---
-apiVersion: admissionregistration.k8s.io/v1beta1
+apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  creationTimestamp: null
-  name: mutating-webhook-configuration
+  name: vpc-resource-mutating-webhook
 webhooks:
-- clientConfig:
-    caBundle: Cg==
-    service:
-      name: webhook-service
-      namespace: system
-      path: /mutate-v1-pod
-  failurePolicy: Ignore
-  name: mpod.vpc.k8s.aws
-  timeoutSeconds: 5
-  rules:
-  - apiGroups:
-    - ""
-    apiVersions:
-    - v1
-    operations:
-    - CREATE
-    resources:
-    - pods
-
+  - clientConfig:
+      caBundle: CA_BUNDLE
+      url: "https://127.0.0.1:9443/mutate-v1-pod"
+    failurePolicy: Ignore
+    name: mpod.vpc.k8s.aws
+    timeoutSeconds: 5
+    reinvocationPolicy: IfNeeded
+    admissionReviewVersions: ["v1beta1"]
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups:
+          - ""
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+        resources:
+          - pods
+    sideEffects: None
 ---
-apiVersion: admissionregistration.k8s.io/v1beta1
+apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
-  creationTimestamp: null
-  name: validating-webhook-configuration
+  name: vpc-resource-validating-webhook
 webhooks:
-- clientConfig:
-    caBundle: Cg==
-    service:
-      name: webhook-service
-      namespace: system
-      path: /validate-v1-pod
-  failurePolicy: Ignore
-  name: vpod.vpc.k8s.aws
-  timeoutSeconds: 5
-  rules:
-  - apiGroups:
-    - ""
-    apiVersions:
-    - v1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - pods
+  - clientConfig:
+      caBundle: CA_BUNDLE
+      url: "https://127.0.0.1:9443/validate-v1-pod"
+    failurePolicy: Ignore
+    name: vpod.vpc.k8s.aws
+    timeoutSeconds: 5
+    admissionReviewVersions: ["v1beta1"]
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups:
+          - ""
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - pods
+    sideEffects: None
