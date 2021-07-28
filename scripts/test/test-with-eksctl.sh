@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+
+# Builds and installs the controlller on EKS DataPlane. This is for
+# testing purposes only and it will not work for accounts that are
+# not allowlisted for ENI Trunking feature.
+
+set -eo pipefail
+
+USAGE=$(cat << 'EOM'
+Usage: test-with-eksctl.sh -n [cluster-name] -r [user-role-arn]
+
+Builds and installs the controlller on EKS DataPlane. This is for
+testing purposes only and it will not work for accounts that are
+not allowlisted for ENI Trunking feature.
+
+ Required: [Only one of the flag must be set]
+ -n   name of the existing EKS cluster
+ Optional:
+ -i   IAM role ARN that will be assumed by the controller to manage trunk/branch ENI
+ -s   Suffix that will be added to each resource. This is useful when
+      running in CI Setup to prevent parallel runs from modifying resources.
+ -r   AWS Region where the controller image will be hosted. Defaults to us-west-2
+EOM
+)
+
+SCRIPTS_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
+TEMPLATE_DIR=$SCRIPTS_DIR/template/rbac
+
+source "$SCRIPTS_DIR/lib/common.sh"
+
+while getopts "n:i:r:s:" o; do
+  case "${o}" in
+    n) # Name of the EKS Cluster
+      CLUSTER_NAME=${OPTARG}
+      ;;
+    i) # Role ARN that will be assumed by the VPC Resource Controller
+      VPC_RC_ROLE_ARN=${OPTARG}
+      ;;
+    r) # Region where ECR image will be hosted
+      AWS_REGION=${OPTARG}
+      ;;
+    s) # Resource Suffix attached to AWS Resource Names
+      RESOURCE_SUFFIX=${OPTARG}
+      ;;
+    *)
+      echoerr "${USAGE}"
+      exit 1
+      ;;
+  esac
+done
+shift $((OPTIND-1))
+
+if [[ -z "$CLUSTER_NAME" ]]; then
+ echoerr "${USAGE}\n\nmissing: -n is a required flag\n"
+ exit 1
+fi
+
+if [[ -z "$AWS_REGION" ]]; then
+  AWS_REGION="us-west-2"
+  echo "no regions defined, will fallback to default region $AWS_REGION"
+fi
+
+source "$SCRIPTS_DIR/lib/aws.sh"
+source "$SCRIPTS_DIR/lib/k8s.sh"
+source "$SCRIPTS_DIR/lib/config.sh"
+
+check_is_installed aws
+check_is_installed docker
+check_is_installed ginkgo
+check_is_installed eksctl
+check_is_installed kubectl
+check_is_installed kustomize
+
+CLUSTER_NAME=$(add_suffix "$CLUSTER_NAME")
+AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity | jq .Account -r)}"
+
+# If Role name is not provided, use the default role name
+if [[ -z "$VPC_RC_ROLE_ARN" ]]; then
+  VPC_RC_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/$VPC_RC_ROLE_NAME"
+fi
+
+ECR_URL=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+ECR_REPOSITORY=amazon/vpc-resource-controller
+ECR_IMAGE_TAG=$(add_suffix "test")
+
+IMAGE=$ECR_URL/$ECR_REPOSITORY:$ECR_IMAGE_TAG
+
+function build_and_push_image() {
+  echo "building and pushing controller image to ECR"
+  IMAGE=$IMAGE AWS_ACCOUNT=$AWS_ACCOUNT_ID AWS_REGION=$AWS_REGION make docker-build
+  IMAGE=$IMAGE AWS_ACCOUNT=$AWS_ACCOUNT_ID AWS_REGION=$AWS_REGION make docker-push
+}
+
+function install_controller() {
+  echo "installing amazon-vpc-resource-controller-k8s"
+  IMAGE=$IMAGE \
+  AWS_ACCOUNT=$AWS_ACCOUNT_ID \
+  AWS_REGION=$AWS_REGION \
+  CLUSTER_NAME=$CLUSTER_NAME \
+  USER_ROLE_ARN=$VPC_RC_ROLE_ARN \
+  make deploy
+
+  check_deployment_rollout vpc-resource-controller kube-system 2m
+}
+
+function disable_eks_controller() {
+  echo "disabling the default amazon-vpc-resource-controller-k8s controller"
+
+  # Delete Mutating Webhook Configuration
+  kubectl delete mutatingwebhookconfigurations.admissionregistration.k8s.io vpc-resource-mutating-webhook
+  # Delete the Validating Webhook Configuration
+  kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io vpc-resource-validating-webhook
+
+  # Remove the patch/update permission on ConfigMap from the EKS VPC RC Leader election Role
+  kubectl patch roles -n kube-system vpc-resource-controller-leader-election-role \
+  --patch "$(cat "$TEMPLATE_DIR/cp-vpc-leader-election-role-patch.yaml")"
+}
+
+function run_sgp_integration_test() {
+  echo "running Security Group for Pods integration tests"
+  KUBE_CONFIG_PATH=~/.kube/config \
+  CLUSTER_NAME=$CLUSTER_NAME \
+  REGION=$AWS_REGION \
+  sh test/integration/run.sh
+}
+
+function verify_controller_has_lease() {
+  # Get the name of the VPC Resource Controller Pod
+  local controller_pod_name="$(kubectl get pods -n kube-system -l app=vpc-resource-controller \
+  --no-headers -o custom-columns=":metadata.name")"
+
+  # Wait till the new controller has acquired the leader lease
+  i=0
+  while :
+  do
+    local lease_holder="$(kubectl get configmap -n kube-system cp-vpc-resource-controller -o json \
+    | jq '.metadata.annotations."control-plane.alpha.kubernetes.io/leader"' --raw-output \
+    | jq .holderIdentity --raw-output)"
+
+    if [[ $lease_holder == $controller_pod_name* ]]; then
+      echo "new controller has the lease: $lease_holder"
+      break
+    elif [[ i -ge 20 ]]; then
+      echo "new controller failed to accquire leader lease in $i attempts"
+      exit 1
+    else
+      echo "new controller doesn't have the leader lease yet, will retry"
+      sleep 10
+      i=$((i+1))
+    fi
+  done
+
+  # Get the lease transition count at the time the new controller acquired lease
+  LEADER_TRANSITION_BEFORE_TEST=$(get_leader_lease_transistion_count)
+}
+
+function verify_leader_lease_didnt_change() {
+  # Get the leader lease transition count after running all integration tests
+  LEADER_TRANSITION_AFTER_TEST=$(get_leader_lease_transistion_count)
+
+  # If the leader lease count increased between the time when the test was running, then
+  # we will assume the tests failed as it could mean either the controller failed to hold
+  # the lease or it restarted during test execution which should not happen ideally
+  if [[ $LEADER_TRANSITION_BEFORE_TEST != "$LEADER_TRANSITION_AFTER_TEST" ]]; then
+    echo "leader transitioned during the tests, the new controller failed to keep the leader lease"
+    exit 1
+  fi
+}
+
+# Get the number of times the leader lease transition between different owners
+function get_leader_lease_transistion_count() {
+  kubectl get configmap -n kube-system cp-vpc-resource-controller -o json \
+  | jq '.metadata.annotations."control-plane.alpha.kubernetes.io/leader"' --raw-output \
+  | jq .leaderTransitions
+}
+
+function output_logs() {
+  kubectl logs -n kube-system -l app=vpc-resource-controller --tail -1
+}
+
+function clean_up() {
+  echo "cleaning up..."
+  delete_ecr_image "$ECR_REPOSITORY" "$ECR_IMAGE_TAG"
+  output_logs
+}
+
+# Delete the IAM Policies, Roles and the EKS Cluster
+trap 'clean_up' EXIT
+
+# Install Cert Manager which is used for generating the
+# certificates for the Webhooks
+sh "$SCRIPTS_DIR/install-cert-manager.sh"
+
+# Login to ECR to push the controller image
+ecr_login "$AWS_REGION" "$ECR_URL"
+
+# Create the repository but don't delete it as it can hold
+# test images from other GitHub runs
+create_repository "$ECR_REPOSITORY"
+
+# Push the image to ECR
+build_and_push_image
+
+# Install the CRD and the Controller on the Data Plane
+install_controller
+
+# Disable the Controller on EKS Control Plane
+disable_eks_controller
+
+# Verify the Controller on Data Plane has the leader lease
+verify_controller_has_lease
+
+# Run Ginko Test for Security Group for Pods
+run_sgp_integration_test
+
+# Verify the leader lease didn't transition during the execution of test cases
+verify_leader_lease_didnt_change

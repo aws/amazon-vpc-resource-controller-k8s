@@ -1,0 +1,25 @@
+# The patch doesn't have policies to patch/update the leader lease, thereby disabling the
+#  EKS controller to take the leader lease while the test runs
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - create
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resourceNames:
+      - cp-vpc-resource-controller
+    resources:
+      - configmaps
+    verbs:
+      - get
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
