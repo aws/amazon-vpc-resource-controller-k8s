@@ -19,7 +19,7 @@ COPY main.go main.go
 COPY apis/ apis/
 COPY pkg/ pkg/
 COPY controllers/ controllers/
-COPY webhook/ webhook/
+COPY webhooks/ webhooks/
 
 # Version package for passing the ldflags
 ENV VERSION_PKG=github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version
