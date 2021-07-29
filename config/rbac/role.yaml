@@ -12,6 +12,17 @@ rules:
   - events
   verbs:
   - create
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - patch
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -27,15 +38,6 @@ rules:
   verbs:
   - get
   - patch
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - patch
-  - watch
 - apiGroups:
   - ""
   resources:

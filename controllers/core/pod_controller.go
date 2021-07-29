@@ -40,6 +40,9 @@ type PodReconciler struct {
 	PodController custom.Controller
 }
 
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;update;patch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;patch;watch
+
 // CreateUpdateReconciler to handle create and update events on the pod objects
 type CreateUpdateReconciler struct {
 	PodReconciler            *PodReconciler

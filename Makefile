@@ -38,9 +38,9 @@ uninstall: manifests
 	kustomize build config/crd | kubectl delete -f -
 
 # Deploy controller in the configured Kubernetes cluster in ~/.kube/config
-deploy: check-env manifests
+deploy: check-deployment-env check-env manifests
 	cd config/controller && kustomize edit set image controller=${IMAGE}
-	kustomize build config/default | kubectl apply -f -
+	kustomize build config/default | sed "s|CLUSTER_NAME|${CLUSTER_NAME}|g;s|USER_ROLE_ARN|${USER_ROLE_ARN}|g" | kubectl apply -f -
 
 undeploy: check-env
 	cd config/controller && kustomize edit set image controller=${IMAGE}
@@ -94,6 +94,10 @@ check-format:
 check-env:
 	@:$(call check_var, AWS_ACCOUNT, AWS account ID for publishing docker images)
 	@:$(call check_var, AWS_REGION, AWS region for publishing docker images)
+
+check-deployment-env:
+	@:$(call check_var, CLUSTER_NAME, Cluster name where the controller is deployed)
+	@:$(call check_var, USER_ROLE_ARN, User Role ARN which is assumed to manage Trunk/Branch ENI for users)
 
 check_var = \
     $(strip $(foreach 1,$1, \

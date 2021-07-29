@@ -29,16 +29,18 @@ spec:
       - command:
         - /controller
         args:
-        - --enable-leader-election
+          - --cluster-name=CLUSTER_NAME
+          - --role-arn=USER_ROLE_ARN
+          - --enable-leader-election
         image: controller:latest
         name: controller
         resources:
           limits:
-            cpu: 100m
-            memory: 300Mi
+            cpu: 0.5
+            memory: 1Gi
           requests:
-            cpu: 100m
-            memory: 200Mi
+            cpu: 0.3
+            memory: 400Mi
         livenessProbe:
           failureThreshold: 2
           httpGet:
