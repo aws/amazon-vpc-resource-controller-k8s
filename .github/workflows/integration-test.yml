@@ -4,7 +4,7 @@ on:
     branches:
       - master
   pull_request:
-    types: [labeled, unlabeled, opened, synchronize, reopened]
+    types: [unlabeled, opened, synchronize, reopened]
     branches:
       - master
 jobs:
@@ -28,8 +28,7 @@ jobs:
       K8S_VERSION: 1.19
     if: | # Run test only when testing-disabled removed or it's push to a branch
       github.event_name == 'push' ||
-      ((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
-      !contains(github.event.pull_request.labels.*.name, 'test-disabled'))
+      (github.event.action == 'unlabeled' && !contains(github.event.pull_request.labels.*.name, 'test-disabled'))
     steps:
       - name: clean work dir from previous runs
         run: |
