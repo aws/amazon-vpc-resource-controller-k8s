@@ -1,0 +1,76 @@
+name: integration-test
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    types: [unlabeled, opened, synchronize, reopened]
+    branches:
+      - master
+jobs:
+  labeler:
+    if: | # Add/Re-Add testing-disabled anytime there's a commit or PR is opened
+      github.event.action == 'opened' ||
+      github.event.action == 'synchronize' ||
+      github.event.action == 'reopened'
+    permissions:
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@v3
+        with:
+          repo-token: "${{ secrets.GITHUB_TOKEN }}"
+  integration-test:
+    name: integration-test
+    runs-on: self-hosted
+    env:
+      CLUSTER_NAME: vpc-rc-ci-test
+      K8S_VERSION: 1.19
+    if: | # Run test only when testing-disabled removed or it's push to a branch
+      github.event_name == 'push' ||
+      (github.event.action == 'unlabeled' && !contains(github.event.pull_request.labels.*.name, 'test-disabled'))
+    steps:
+      - name: clean work dir from previous runs
+        run: |
+          rm -rf *
+      - name: setup go 1.14
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.14
+        id: go
+      - name: setup environment
+        run: |
+          source ~/.bashrc
+      - name: checkout code
+        uses: actions/checkout@v2
+      - name: clean docker images
+        run: docker image prune -f
+      - name: create EKS Cluster
+        run: |
+          ./scripts/test/create-cluster.sh \
+            -n $CLUSTER_NAME \
+            -v $K8S_VERSION \
+            -s $GITHUB_RUN_NUMBER
+      - name: create IAM Roles
+        run: |
+          ./scripts/test/iam-resources.sh \
+            -n $CLUSTER_NAME \
+            -s $GITHUB_RUN_NUMBER \
+            -o "create"
+      - name: run integration tests
+        run: |
+          ./scripts/test/test-with-eksctl.sh \
+            -n $CLUSTER_NAME \
+            -s $GITHUB_RUN_NUMBER
+      - name: delete IAM Roles
+        if: always()
+        run: |
+          ./scripts/test/iam-resources.sh \
+            -n $CLUSTER_NAME \
+            -s $GITHUB_RUN_NUMBER \
+            -o "delete"
+      - name: delete EKS Cluster
+        id: deleteCluster
+        if: always()
+        run: |
+          ./scripts/test/delete-cluster.sh
