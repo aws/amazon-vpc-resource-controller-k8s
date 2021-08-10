@@ -82,7 +82,8 @@ create_iam_resources() {
   # Policy document that allows VPC RC Instance Role to assume the Role
   # to manage Trunk/Branch Interfaces on user's behalf
   local policy_document="$WORKSPACE/aws-trust-policy.json"
-  sed "s|AWS_ROLE_ARN|$INSTANCE_ROLE_ARN|g" \
+  sed "s|AWS_ROLE_ARN|$INSTANCE_ROLE_ARN|g;
+  s/AWS_ACCOUNT_ID/$AWS_ACCOUNT_ID/g" \
   "$TEMPLATE_DIR/aws-trust-relationship.json" > "$policy_document"
   create_role "$VPC_RC_ROLE_NAME" "$policy_document"
 
