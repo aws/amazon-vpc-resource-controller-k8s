@@ -16,19 +16,19 @@ package controllers
 import (
 	"testing"
 
-	mock_controller "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/controllers/custom"
-	mock_handler "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
+	mockhandler "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
+	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
-	"github.com/stretchr/testify/assert"
-	"k8s.io/client-go/tools/cache"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -44,7 +44,7 @@ var (
 		Namespace: mockPodNS,
 		Name:      mockPodName,
 	}
-	mockReq = reconcile.Request{NamespacedName: n}
+	mockReq = custom.Request{NamespacedName: n}
 
 	mockPod = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},
@@ -83,28 +83,25 @@ var (
 )
 
 // getPodReconcilerAndMockHandler returns PodReconciler and mockHandler used to setup the pod reconciler
-func getPodReconcilerAndMockHandler(ctrl *gomock.Controller, mockPod *v1.Pod) (*PodReconciler, *mock_handler.MockHandler,
-	*mock_node.MockManager, *mock_node.MockNode, *mock_controller.MockController) {
+func getPodReconcilerAndMocks(ctrl *gomock.Controller, mockPod *v1.Pod) (*PodReconciler, *mockhandler.MockHandler,
+	*mock_node.MockManager, *mock_node.MockNode, *mock_resource.MockResourceManager) {
 
-	mockHandler := mock_handler.NewMockHandler(ctrl)
-	mockManager := mock_node.NewMockManager(ctrl)
+	mockHandler := mockhandler.NewMockHandler(ctrl)
+	mockNodeManager := mock_node.NewMockManager(ctrl)
+	mockResourceManager := mock_resource.NewMockResourceManager(ctrl)
 	mockNode := mock_node.NewMockNode(ctrl)
-	mockController := mock_controller.NewMockController(ctrl)
+
+	converter := pod.PodConverter{}
+	mockIndexer := cache.NewIndexer(converter.Indexer, pod.NodeNameIndexer())
+	mockIndexer.Add(mockPod)
+
 	podReconciler := &PodReconciler{
-		PodController: mockController,
-		Manager:       mockManager,
-		Log:           zap.New(zap.UseDevMode(true)).WithName("on demand handler"),
-		Handlers:      []handler.Handler{mockHandler},
+		NodeManager:     mockNodeManager,
+		Log:             zap.New(zap.UseDevMode(true)).WithName("on demand handler"),
+		ResourceManager: mockResourceManager,
+		DataStore:       mockIndexer,
 	}
-	return podReconciler, mockHandler, mockManager, mockNode, mockController
-}
-
-// getFakeDataStore returns the fake data store with mock pod
-func getFakeDataStore() cache.Store {
-	mockDataStore := cache.NewStore(pod.NSKeyIndexer)
-	mockDataStore.Add(mockPod)
-
-	return mockDataStore
+	return podReconciler, mockHandler, mockNodeManager, mockNode, mockResourceManager
 }
 
 // TestPodReconciler_Reconcile_Create test that the resource handler is invoked for supported resource type in case of
@@ -113,16 +110,16 @@ func TestPodReconciler_Reconcile_Create(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	reconciler, mockHandler, mockManager, mockNode, mockController := getPodReconcilerAndMockHandler(ctrl, mockPod)
+	reconciler, mockHandler, mockManager, mockNode, mockResourceManager :=
+		getPodReconcilerAndMocks(ctrl, mockPod)
 
 	mockManager.EXPECT().GetNode(mockNodeName).Return(mockNode, true)
 	mockNode.EXPECT().IsReady().Return(true)
-	mockHandler.EXPECT().CanHandle(mockResourceName).Return(true)
-	mockHandler.EXPECT().HandleCreate(mockResourceName, 3, gomock.Any()).Return(reconcile.Result{}, nil)
-	mockHandler.EXPECT().CanHandle(mockUnsupportedResourceName).Return(false)
-	mockController.EXPECT().GetDataStore().Return(getFakeDataStore())
+	mockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mockHandler, true)
+	mockHandler.EXPECT().HandleCreate(3, gomock.Any()).Return(reconcile.Result{}, nil)
+	mockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
 
-	_, err := reconciler.ProcessEvent(mockReq, false)
+	_, err := reconciler.Reconcile(mockReq)
 	assert.NoError(t, err)
 }
 
@@ -132,20 +129,20 @@ func TestPodReconciler_Reconcile_Delete(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	reconciler, mockHandler, mockManager, mockNode, mockController := getPodReconcilerAndMockHandler(ctrl, mockPod)
+	reconciler, mockHandler, mockManager, mockNode, mockResourceManager :=
+		getPodReconcilerAndMocks(ctrl, mockPod)
 
 	mockManager.EXPECT().GetNode(mockNodeName).Return(mockNode, true)
 	mockNode.EXPECT().IsReady().Return(true)
-	mockHandler.EXPECT().CanHandle(mockResourceName).Return(true)
-	mockHandler.EXPECT().HandleDelete(mockResourceName, mockPod).Return(reconcile.Result{}, nil)
-	mockHandler.EXPECT().CanHandle(mockUnsupportedResourceName).Return(false)
-	mockController.EXPECT().GetDataStore().Return(getFakeDataStore()).AnyTimes()
 
-	req := reconcile.Request{NamespacedName: types.NamespacedName{
-		Namespace: mockPod.Namespace,
-		Name:      mockPod.Name,
-	}}
-	_, err := reconciler.ProcessEvent(req, true)
+	mockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mockHandler, true)
+	mockHandler.EXPECT().HandleDelete(mockPod).Return(reconcile.Result{}, nil)
+	mockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
+
+	delReq := custom.Request{
+		DeletedObject: mockPod,
+	}
+	_, err := reconciler.Reconcile(delReq)
 	assert.NoError(t, err)
 }
 
@@ -154,12 +151,11 @@ func TestPodReconciler_Reconcile_NonManaged(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	reconciler, _, mockManager, _, mockController := getPodReconcilerAndMockHandler(ctrl, mockPod)
+	reconciler, _, mockManager, _, _ := getPodReconcilerAndMocks(ctrl, mockPod)
 
 	mockManager.EXPECT().GetNode(mockNodeName).Return(nil, false)
-	mockController.EXPECT().GetDataStore().Return(getFakeDataStore())
 
-	_, err := reconciler.ProcessEvent(mockReq, false)
+	_, err := reconciler.Reconcile(mockReq)
 	assert.NoError(t, err)
 }
 
@@ -168,12 +164,11 @@ func TestPodReconciler_Reconcile_NodeNotReady(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	reconciler, _, mockManager, mockNode, mockController := getPodReconcilerAndMockHandler(ctrl, mockPod)
+	reconciler, _, mockManager, mockNode, _ := getPodReconcilerAndMocks(ctrl, mockPod)
 
 	mockManager.EXPECT().GetNode(mockNodeName).Return(mockNode, true)
 	mockNode.EXPECT().IsReady().Return(false)
-	mockController.EXPECT().GetDataStore().Return(getFakeDataStore())
 
-	_, err := reconciler.ProcessEvent(mockReq, false)
+	_, err := reconciler.Reconcile(mockReq)
 	assert.NoError(t, err)
 }

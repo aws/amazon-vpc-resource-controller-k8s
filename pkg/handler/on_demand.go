@@ -14,8 +14,6 @@
 package handler
 
 import (
-	"fmt"
-
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
@@ -25,53 +23,42 @@ import (
 )
 
 type onDemandResourceHandler struct {
-	providers map[string]provider.ResourceProvider
-	Log       logr.Logger
+	resourceProvider provider.ResourceProvider
+	resourceName     string
+	Log              logr.Logger
+}
+
+func (h *onDemandResourceHandler) GetProvider() provider.ResourceProvider {
+	return h.resourceProvider
 }
 
 // NewOnDemandHandler returns a new on demand handler with all the workers that can handle particular resource types
-func NewOnDemandHandler(log logr.Logger, ondDemandProviders map[string]provider.ResourceProvider) Handler {
+func NewOnDemandHandler(log logr.Logger, resourceName string,
+	ondDemandProvider provider.ResourceProvider) Handler {
 	return &onDemandResourceHandler{
-		providers: ondDemandProviders,
-		Log:       log,
+		resourceProvider: ondDemandProvider,
+		resourceName:     resourceName,
+		Log:              log,
 	}
-}
-
-// CanHandle returns true if the resource can be handled by the on demand handler
-func (h *onDemandResourceHandler) CanHandle(resourceName string) bool {
-	_, canHandle := h.providers[resourceName]
-	return canHandle
 }
 
 // HandleCreate provides the resource to the on demand resource by passing the Create Job to the respective Worker
-func (h *onDemandResourceHandler) HandleCreate(resourceName string, requestCount int, pod *v1.Pod) (ctrl.Result, error) {
-	resourceProvider, isPresent := h.providers[resourceName]
-
-	if !isPresent {
-		return ctrl.Result{}, fmt.Errorf("cannot handle resource %s, check canHandle before submitting jobs", resourceName)
-	}
-
+func (h *onDemandResourceHandler) HandleCreate(requestCount int, pod *v1.Pod) (ctrl.Result, error) {
 	job := worker.NewOnDemandCreateJob(pod.Namespace, pod.Name, requestCount)
-	resourceProvider.SubmitAsyncJob(job)
+	h.resourceProvider.SubmitAsyncJob(job)
 
 	return ctrl.Result{}, nil
 }
 
 // HandleDelete reclaims the on demand resource by passing the Delete Job to the respective Worker
-func (h *onDemandResourceHandler) HandleDelete(resourceName string, pod *v1.Pod) (ctrl.Result, error) {
-	resourceProvider, isPresent := h.providers[resourceName]
-
-	if !isPresent {
-		return ctrl.Result{}, fmt.Errorf("cannot handle resource %s, check canHandle before submitting jobs", resourceName)
-	}
-
-	if _, ok := pod.Annotations[resourceName]; !ok {
+func (h *onDemandResourceHandler) HandleDelete(pod *v1.Pod) (ctrl.Result, error) {
+	if _, ok := pod.Annotations[h.resourceName]; !ok {
 		// Ignore the pod as it was not allocated the resource
 		return ctrl.Result{}, nil
 	}
 
 	deleteJob := worker.NewOnDemandDeletedJob(pod.Spec.NodeName, pod.UID)
-	resourceProvider.SubmitAsyncJob(deleteJob)
+	h.resourceProvider.SubmitAsyncJob(deleteJob)
 
 	return ctrl.Result{}, nil
 }

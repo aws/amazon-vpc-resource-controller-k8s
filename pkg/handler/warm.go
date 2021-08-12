@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
@@ -36,32 +36,34 @@ const (
 )
 
 type warmResourceHandler struct {
-	lock              sync.Mutex
-	log               logr.Logger
-	k8sWrapper        k8s.K8sWrapper
-	resourceProviders map[string]provider.ResourceProvider
+	lock             sync.Mutex
+	log              logr.Logger
+	APIWrapper       api.Wrapper
+	resourceProvider provider.ResourceProvider
+	resourceName     string
 }
 
-func NewWarmResourceHandler(log logr.Logger, k8sWrapper k8s.K8sWrapper,
-	resourceProviders map[string]provider.ResourceProvider) Handler {
+func NewWarmResourceHandler(log logr.Logger, wrapper api.Wrapper,
+	resourceName string, resourceProviders provider.ResourceProvider) Handler {
+
 	return &warmResourceHandler{
-		log:               log,
-		k8sWrapper:        k8sWrapper,
-		resourceProviders: resourceProviders,
+		log:              log,
+		APIWrapper:       wrapper,
+		resourceProvider: resourceProviders,
+		resourceName:     resourceName,
 	}
 }
 
-func (w *warmResourceHandler) CanHandle(resourceName string) bool {
-	_, ok := w.resourceProviders[resourceName]
-	return ok
+func (w *warmResourceHandler) GetProvider() provider.ResourceProvider {
+	return w.resourceProvider
 }
 
-func (w *warmResourceHandler) HandleCreate(resourceName string, requestCount int, pod *v1.Pod) (ctrl.Result, error) {
-	resourcePool, err := w.getResourcePool(resourceName, pod.Spec.NodeName)
+func (w *warmResourceHandler) HandleCreate(_ int, pod *v1.Pod) (ctrl.Result, error) {
+	resourcePool, err := w.getResourcePool(pod.Spec.NodeName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if _, present := pod.Annotations[resourceName]; present {
+	if _, present := pod.Annotations[w.resourceName]; present {
 		// Pod has already been allocated the resource, skip the event
 		return ctrl.Result{}, nil
 	}
@@ -69,15 +71,15 @@ func (w *warmResourceHandler) HandleCreate(resourceName string, requestCount int
 	resID, shouldReconcile, err := resourcePool.AssignResource(string(pod.UID))
 	if err != nil {
 		// Reconcile the pool before retrying or returning an error
-		w.reconcilePool(shouldReconcile, resourceName, resourcePool)
+		w.reconcilePool(shouldReconcile, resourcePool)
 		if err == pool.ErrResourceAreBeingCooledDown {
-			w.k8sWrapper.BroadcastEvent(pod, ReasonResourceAllocationFailed,
-				fmt.Sprintf("Resource %s are being cooled down, will retry in %s", resourceName,
+			w.APIWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocationFailed,
+				fmt.Sprintf("Resource %s are being cooled down, will retry in %s", w.resourceName,
 					RequeueAfterWhenResourceCooling), v1.EventTypeWarning)
 			return ctrl.Result{Requeue: true, RequeueAfter: RequeueAfterWhenResourceCooling}, nil
 		} else if err == pool.ErrResourcesAreBeingCreated || err == pool.ErrWarmPoolEmpty {
-			w.k8sWrapper.BroadcastEvent(pod, ReasonResourceAllocationFailed,
-				fmt.Sprintf("Warm pool for resource %s is currently empty, will retry in %s", resourceName,
+			w.APIWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocationFailed,
+				fmt.Sprintf("Warm pool for resource %s is currently empty, will retry in %s", w.resourceName,
 					RequeueAfterWhenWPEmpty), v1.EventTypeWarning)
 			return ctrl.Result{Requeue: true, RequeueAfter: RequeueAfterWhenWPEmpty}, nil
 		} else {
@@ -85,7 +87,7 @@ func (w *warmResourceHandler) HandleCreate(resourceName string, requestCount int
 		}
 	}
 
-	err = w.k8sWrapper.AnnotatePod(pod.Namespace, pod.Name, resourceName, resID)
+	err = w.APIWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, w.resourceName, resID)
 	if err != nil {
 		_, errFree := resourcePool.FreeResource(string(pod.UID), resID)
 		if errFree != nil {
@@ -93,33 +95,33 @@ func (w *warmResourceHandler) HandleCreate(resourceName string, requestCount int
 		}
 	}
 
-	w.k8sWrapper.BroadcastEvent(pod, ReasonResourceAllocated, fmt.Sprintf("Allocated Resource %s: %s to the pod",
-		resourceName, resID), v1.EventTypeNormal)
+	w.APIWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocated, fmt.Sprintf("Allocated Resource %s: %s to the pod",
+		w.resourceName, resID), v1.EventTypeNormal)
 
 	w.log.Info("successfully allocated and annotated resource", "UID", string(pod.UID),
-		"namespace", pod.Namespace, "name", pod.Name, "resource id", resourceName)
+		"namespace", pod.Namespace, "name", pod.Name, "resource id", w.resourceName)
 
-	w.reconcilePool(shouldReconcile, resourceName, resourcePool)
+	w.reconcilePool(shouldReconcile, resourcePool)
 
 	return ctrl.Result{}, err
 }
 
-func (w *warmResourceHandler) reconcilePool(shouldReconcile bool, resourceName string, resourcePool pool.Pool) {
+func (w *warmResourceHandler) reconcilePool(shouldReconcile bool, resourcePool pool.Pool) {
 	if shouldReconcile {
 		job := resourcePool.ReconcilePool()
 		if job.Operations != worker.Operations("") {
-			w.resourceProviders[resourceName].SubmitAsyncJob(job)
+			w.resourceProvider.SubmitAsyncJob(job)
 		}
 	}
 }
 
 // HandleDelete deletes the resource used by the pod
-func (w *warmResourceHandler) HandleDelete(resourceName string, pod *v1.Pod) (ctrl.Result, error) {
-	resourcePool, err := w.getResourcePool(resourceName, pod.Spec.NodeName)
+func (w *warmResourceHandler) HandleDelete(pod *v1.Pod) (ctrl.Result, error) {
+	resourcePool, err := w.getResourcePool(pod.Spec.NodeName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	resource, present := pod.Annotations[resourceName]
+	resource, present := pod.Annotations[w.resourceName]
 	if !present {
 		// Resource was not allocated to the pod
 		return ctrl.Result{}, nil
@@ -130,24 +132,20 @@ func (w *warmResourceHandler) HandleDelete(resourceName string, pod *v1.Pod) (ct
 		return ctrl.Result{}, err
 	}
 
-	w.reconcilePool(shouldReconcile, resourceName, resourcePool)
+	w.reconcilePool(shouldReconcile, resourcePool)
 
 	w.log.Info("successfully freed resource", "UID", string(pod.UID), "namespace", pod.Namespace,
-		"name", pod.Name, "resource id", resourceName)
+		"name", pod.Name, "resource id", w.resourceName)
 
 	return ctrl.Result{}, nil
 }
 
 // getResourcePool returns the resource pool for the given resource name and node name
-func (w *warmResourceHandler) getResourcePool(resourceName string, nodeName string) (pool.Pool, error) {
-	resourceProvider, ok := w.resourceProviders[resourceName]
-	if !ok {
-		return nil, fmt.Errorf("failed to find the requested resource, call canHandle before sending request")
-	}
-	resourcePool, found := resourceProvider.GetPool(nodeName)
+func (w *warmResourceHandler) getResourcePool(nodeName string) (pool.Pool, error) {
+	resourcePool, found := w.resourceProvider.GetPool(nodeName)
 	if !found {
-		return nil, fmt.Errorf("failed to find the resource pool %s  for node %s",
-			resourceName, nodeName)
+		return nil, fmt.Errorf("failed to find the resource pool %s for node %s",
+			w.resourceName, nodeName)
 	}
 
 	return resourcePool, nil

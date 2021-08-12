@@ -18,11 +18,12 @@ import (
 	"testing"
 
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	mock_pod "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
 	mock_pool "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/pool"
 	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/golang/mock/gomock"
@@ -63,23 +64,13 @@ var (
 )
 
 // TestWarmResourceHandler_CanHandle tests if resource provider is present than the handler returns true
-func TestWarmResourceHandler_CanHandle(t *testing.T) {
+func TestWarmResourceHandler_GetProvider(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, _, _, _ := getMockWrapperAndProvider(ctrl)
+	handler, _, _, mockProvider, _ := getHandlerAndMocks(ctrl)
 
-	assert.True(t, handler.CanHandle(resourceName))
-}
-
-// TestWarmResourceHandler_CanHandle_Not tests if resource provider is not present than the handler returns false
-func TestWarmResourceHandler_CanHandle_Not(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	handler, _, _, _ := getMockWrapperAndProvider(ctrl)
-
-	assert.False(t, handler.CanHandle(resourceName+"not-supported"))
+	assert.Equal(t, mockProvider, handler.GetProvider())
 }
 
 // TestWarmResourceHandler_HandleCreate tests create assigns a resource and annotates the pod and then reconciles a pool
@@ -88,12 +79,12 @@ func TestWarmResourceHandler_HandleCreate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, mockK8sWrapper, mockProvider, mockPool := getMockWrapperAndProvider(ctrl)
+	handler, mockK8sWrapper, mockPodAPI, mockProvider, mockPool := getHandlerAndMocks(ctrl)
 	podCopy := pod.DeepCopy()
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 	mockPool.EXPECT().AssignResource(uid).Return(ipAddress, true, nil)
-	mockK8sWrapper.EXPECT().AnnotatePod(pod.Namespace, pod.Name, resourceName, ipAddress).Return(nil)
+	mockPodAPI.EXPECT().AnnotatePod(pod.Namespace, pod.Name, resourceName, ipAddress).Return(nil)
 	mockK8sWrapper.EXPECT().BroadcastEvent(podCopy, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
 
 	mockPool.EXPECT().ReconcilePool().Return(job)
@@ -101,7 +92,7 @@ func TestWarmResourceHandler_HandleCreate(t *testing.T) {
 
 	delete(podCopy.Annotations, config.ResourceNameIPAddress)
 
-	_, err := handler.HandleCreate(resourceName, 1, podCopy)
+	_, err := handler.HandleCreate(1, podCopy)
 	assert.NoError(t, err)
 }
 
@@ -109,7 +100,7 @@ func TestWarmResourceHandler_PoolEmpty(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, mockK8sWrapper, mockProvider, mockPool := getMockWrapperAndProvider(ctrl)
+	handler, mockK8sWrapper, _, mockProvider, mockPool := getHandlerAndMocks(ctrl)
 	podCopy := pod.DeepCopy()
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
@@ -120,7 +111,7 @@ func TestWarmResourceHandler_PoolEmpty(t *testing.T) {
 
 	delete(podCopy.Annotations, config.ResourceNameIPAddress)
 
-	rslt, err := handler.HandleCreate(resourceName, 1, podCopy)
+	rslt, err := handler.HandleCreate(1, podCopy)
 	assert.NoError(t, err)
 	assert.Equal(t, k8sctrl.Result{
 		Requeue:      true,
@@ -134,11 +125,11 @@ func TestWarmResourceHandler_HandleCreate_AlreadyAnnotated(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, _, mockProvider, mockPool := getMockWrapperAndProvider(ctrl)
+	handler, _, _, mockProvider, mockPool := getHandlerAndMocks(ctrl)
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 
-	_, err := handler.HandleCreate(resourceName, 1, pod)
+	_, err := handler.HandleCreate(1, pod)
 	assert.NoError(t, err)
 }
 
@@ -147,12 +138,12 @@ func TestWarmResourceHandler_HandleDelete(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, _, mockProvider, mockPool := getMockWrapperAndProvider(ctrl)
+	handler, _, _, mockProvider, mockPool := getHandlerAndMocks(ctrl)
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 	mockPool.EXPECT().FreeResource(uid, ipAddress).Return(false, nil)
 
-	_, err := handler.HandleDelete(resourceName, pod)
+	_, err := handler.HandleDelete(pod)
 	assert.NoError(t, err)
 }
 
@@ -161,14 +152,14 @@ func TestWarmResourceHandler_HandleDelete_ReconcileAfter(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, _, mockProvider, mockPool := getMockWrapperAndProvider(ctrl)
+	handler, _, _, mockProvider, mockPool := getHandlerAndMocks(ctrl)
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 	mockPool.EXPECT().FreeResource(uid, ipAddress).Return(true, nil)
 	mockPool.EXPECT().ReconcilePool().Return(job)
 	mockProvider.EXPECT().SubmitAsyncJob(job)
 
-	_, err := handler.HandleDelete(resourceName, pod)
+	_, err := handler.HandleDelete(pod)
 	assert.NoError(t, err)
 }
 
@@ -177,14 +168,14 @@ func TestWarmResourceHandler_HandleDelete_ResourceNotExist(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, _, mockProvider, mockPool := getMockWrapperAndProvider(ctrl)
+	handler, _, _, mockProvider, mockPool := getHandlerAndMocks(ctrl)
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 
 	podCopy := pod.DeepCopy()
 	delete(podCopy.Annotations, config.ResourceNameIPAddress)
 
-	_, err := handler.HandleDelete(resourceName, podCopy)
+	_, err := handler.HandleDelete(podCopy)
 	assert.NoError(t, err)
 }
 
@@ -193,11 +184,11 @@ func TestWarmResourceHandler_HandleDelete_Error(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, _, mockProvider, _ := getMockWrapperAndProvider(ctrl)
+	handler, _, _, mockProvider, _ := getHandlerAndMocks(ctrl)
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(nil, false)
 
-	_, err := handler.HandleDelete(resourceName, pod)
+	_, err := handler.HandleDelete(pod)
 	assert.NotNil(t, err)
 }
 
@@ -206,11 +197,11 @@ func TestWarmResourceHandler_getResourcePool(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, _, mockProvider, mockPool := getMockWrapperAndProvider(ctrl)
+	handler, _, _, mockProvider, mockPool := getHandlerAndMocks(ctrl)
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 
-	resourcePool, err := handler.getResourcePool(resourceName, nodeName)
+	resourcePool, err := handler.getResourcePool(nodeName)
 
 	assert.NoError(t, err)
 	assert.Equal(t, mockPool, resourcePool)
@@ -221,27 +212,32 @@ func TestWarmResourceHandler_getResourcePool_PoolNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	handler, _, mockProvider, _ := getMockWrapperAndProvider(ctrl)
+	handler, _, _, mockProvider, _ := getHandlerAndMocks(ctrl)
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(nil, false)
 
-	_, err := handler.getResourcePool(resourceName, nodeName)
+	_, err := handler.getResourcePool(nodeName)
 
 	assert.NotNil(t, err)
 }
 
-func getMockWrapperAndProvider(ctrl *gomock.Controller) (*warmResourceHandler, *mock_k8s.MockK8sWrapper,
-	*mock_provider.MockResourceProvider, *mock_pool.MockPool) {
+func getHandlerAndMocks(ctrl *gomock.Controller) (*warmResourceHandler, *mock_k8s.MockK8sWrapper,
+	*mock_pod.MockPodClientAPIWrapper, *mock_provider.MockResourceProvider, *mock_pool.MockPool) {
 
 	mockWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
 	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
 	mockPool := mock_pool.NewMockPool(ctrl)
+	mockPodAPI := mock_pod.NewMockPodClientAPIWrapper(ctrl)
 
 	handler := &warmResourceHandler{
-		log:               zap.New(zap.UseDevMode(true)).WithName("warm handler"),
-		k8sWrapper:        mockWrapper,
-		resourceProviders: map[string]provider.ResourceProvider{resourceName: mockProvider},
+		log: zap.New(zap.UseDevMode(true)).WithName("warm handler"),
+		APIWrapper: api.Wrapper{
+			K8sAPI: mockWrapper,
+			PodAPI: mockPodAPI,
+		},
+		resourceName:     resourceName,
+		resourceProvider: mockProvider,
 	}
 
-	return handler, mockWrapper, mockProvider, mockPool
+	return handler, mockWrapper, mockPodAPI, mockProvider, mockPool
 }

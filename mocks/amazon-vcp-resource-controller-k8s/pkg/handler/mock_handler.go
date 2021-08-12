@@ -18,6 +18,7 @@
 package mock_handler
 
 import (
+	provider "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
 	reflect "reflect"
@@ -47,46 +48,46 @@ func (m *MockHandler) EXPECT() *MockHandlerMockRecorder {
 	return m.recorder
 }
 
-// CanHandle mocks base method
-func (m *MockHandler) CanHandle(arg0 string) bool {
+// GetProvider mocks base method
+func (m *MockHandler) GetProvider() provider.ResourceProvider {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CanHandle", arg0)
-	ret0, _ := ret[0].(bool)
+	ret := m.ctrl.Call(m, "GetProvider")
+	ret0, _ := ret[0].(provider.ResourceProvider)
 	return ret0
 }
 
-// CanHandle indicates an expected call of CanHandle
-func (mr *MockHandlerMockRecorder) CanHandle(arg0 interface{}) *gomock.Call {
+// GetProvider indicates an expected call of GetProvider
+func (mr *MockHandlerMockRecorder) GetProvider() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CanHandle", reflect.TypeOf((*MockHandler)(nil).CanHandle), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProvider", reflect.TypeOf((*MockHandler)(nil).GetProvider))
 }
 
 // HandleCreate mocks base method
-func (m *MockHandler) HandleCreate(arg0 string, arg1 int, arg2 *v1.Pod) (reconcile.Result, error) {
+func (m *MockHandler) HandleCreate(arg0 int, arg1 *v1.Pod) (reconcile.Result, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HandleCreate", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "HandleCreate", arg0, arg1)
 	ret0, _ := ret[0].(reconcile.Result)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // HandleCreate indicates an expected call of HandleCreate
-func (mr *MockHandlerMockRecorder) HandleCreate(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockHandlerMockRecorder) HandleCreate(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleCreate", reflect.TypeOf((*MockHandler)(nil).HandleCreate), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleCreate", reflect.TypeOf((*MockHandler)(nil).HandleCreate), arg0, arg1)
 }
 
 // HandleDelete mocks base method
-func (m *MockHandler) HandleDelete(arg0 string, arg1 *v1.Pod) (reconcile.Result, error) {
+func (m *MockHandler) HandleDelete(arg0 *v1.Pod) (reconcile.Result, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HandleDelete", arg0, arg1)
+	ret := m.ctrl.Call(m, "HandleDelete", arg0)
 	ret0, _ := ret[0].(reconcile.Result)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // HandleDelete indicates an expected call of HandleDelete
-func (mr *MockHandlerMockRecorder) HandleDelete(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockHandlerMockRecorder) HandleDelete(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleDelete", reflect.TypeOf((*MockHandler)(nil).HandleDelete), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleDelete", reflect.TypeOf((*MockHandler)(nil).HandleDelete), arg0)
 }

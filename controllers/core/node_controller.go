@@ -15,7 +15,7 @@ package controllers
 
 import (
 	"context"
-
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 
 	"github.com/go-logr/logr"
@@ -32,15 +32,18 @@ const MaxConcurrentReconciles = 3
 // NodeReconciler reconciles a Node object
 type NodeReconciler struct {
 	client.Client
-	Log     logr.Logger
-	Scheme  *runtime.Scheme
-	Manager node.Manager
+	Log        logr.Logger
+	Scheme     *runtime.Scheme
+	Manager    node.Manager
+	Conditions condition.Conditions
 }
 
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=nodes/status,verbs=get;patch
 
 func (r *NodeReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+	r.Conditions.WaitTillPodDataStoreSynced()
+
 	ctx := context.Background()
 	node := &corev1.Node{}
 

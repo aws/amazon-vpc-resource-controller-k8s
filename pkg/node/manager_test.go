@@ -17,6 +17,14 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	resource2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
+
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -24,13 +32,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
-	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
-	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 )
 
 var (
@@ -79,16 +80,18 @@ func getMockManagerWithK8sWrapper(ctrl *gomock.Controller) (manager, *mock_k8s.M
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
 	mockeEC2APIHelper := mock_api.NewMockEC2APIHelper(ctrl)
 	return manager{
-		dataStore:    make(map[string]Node),
-		Log:          zap.New(zap.UseDevMode(true)).WithName("node manager"),
-		k8sWrapper:   mockK8sWrapper,
+		dataStore: make(map[string]Node),
+		Log:       zap.New(zap.UseDevMode(true)).WithName("node manager"),
+		wrapper: api.Wrapper{
+			K8sAPI: mockK8sWrapper,
+		},
 		ec2APIHelper: mockeEC2APIHelper,
 	}, mockK8sWrapper, mockeEC2APIHelper
 }
 
 // Test_GetNewManager tests if new node manager is not nil
 func Test_GetNewManager(t *testing.T) {
-	manager := NewNodeManager(nil, nil, nil, nil)
+	manager := NewNodeManager(nil, nil, api.Wrapper{})
 	assert.NotNil(t, manager)
 }
 
@@ -315,7 +318,7 @@ func Test_isSelectedForManagement(t *testing.T) {
 func Test_performPostUnlockOperation(t *testing.T) {
 	manager := getMockManager()
 
-	postUnlockFunc := func(provider []provider.ResourceProvider, helper api.EC2APIHelper) error {
+	postUnlockFunc := func(manager resource2.ResourceManager, helper ec2API.EC2APIHelper) error {
 		return nil
 	}
 
@@ -333,7 +336,7 @@ func Test_performPostUnlockOperation_intiFails(t *testing.T) {
 	_, managed := manager.GetNode(v1Node.Name)
 	assert.True(t, managed)
 
-	postUnlockFunc := func(provider []provider.ResourceProvider, helper api.EC2APIHelper) error {
+	postUnlockFunc := func(resourceManager resource2.ResourceManager, helper ec2API.EC2APIHelper) error {
 		return &ErrInitResources{}
 	}
 

@@ -20,6 +20,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 
 	"github.com/go-logr/logr"
 )
@@ -47,9 +48,9 @@ func (e *ErrInitResources) Error() string {
 }
 
 type Node interface {
-	InitResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
-	DeleteResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
-	UpdateResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error
+	InitResources(resourceManager resource.ResourceManager, helper api.EC2APIHelper) error
+	DeleteResources(resourceManager resource.ResourceManager, helper api.EC2APIHelper) error
+	UpdateResources(resourceManager resource.ResourceManager, helper api.EC2APIHelper) error
 
 	UpdateCustomNetworkingSpecs(subnetID string, securityGroup []string)
 	IsReady() bool
@@ -64,7 +65,7 @@ func NewNode(log logr.Logger, nodeName string, instanceId string, os string) Nod
 }
 
 // UpdateNode refreshes the capacity if it's reset to 0
-func (n *node) UpdateResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error {
+func (n *node) UpdateResources(resourceManager resource.ResourceManager, helper api.EC2APIHelper) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
@@ -77,7 +78,8 @@ func (n *node) UpdateResources(resourceProviders []provider.ResourceProvider, he
 	}
 
 	var errUpdates []error
-	for _, resourceProvider := range resourceProviders {
+	for _, handler := range resourceManager.GetResourceHandlers() {
+		resourceProvider := handler.GetProvider()
 		if resourceProvider.IsInstanceSupported(n.instance) {
 			err := resourceProvider.UpdateResourceCapacity(n.instance)
 			if err != nil {
@@ -90,13 +92,16 @@ func (n *node) UpdateResources(resourceProviders []provider.ResourceProvider, he
 		return fmt.Errorf("failed to update one or more resources %v", errUpdates)
 	}
 
-	n.instance.UpdateCurrentSubnetAndCidrBlock(helper)
+	err := n.instance.UpdateCurrentSubnetAndCidrBlock(helper)
+	if err != nil {
+		n.log.Error(err, "failed to update cidr block", "instance", n.instance.Name())
+	}
 
 	return nil
 }
 
 // InitResources initializes the resource pool and provider of all supported resources
-func (n *node) InitResources(resourceProviders []provider.ResourceProvider, helper api.EC2APIHelper) error {
+func (n *node) InitResources(resourceManager resource.ResourceManager, helper api.EC2APIHelper) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
@@ -110,7 +115,8 @@ func (n *node) InitResources(resourceProviders []provider.ResourceProvider, help
 
 	var initializedProviders []provider.ResourceProvider
 	var errInit error
-	for _, resourceProvider := range resourceProviders {
+	for _, handler := range resourceManager.GetResourceHandlers() {
+		resourceProvider := handler.GetProvider()
 		// Check if the instance is supported and then initialize the provider
 		if resourceProvider.IsInstanceSupported(n.instance) {
 			errInit = resourceProvider.InitResource(n.instance)
@@ -142,7 +148,7 @@ func (n *node) InitResources(resourceProviders []provider.ResourceProvider, help
 }
 
 // DeleteResources performs clean up of all the resource pools and provider of the nodes
-func (n *node) DeleteResources(resourceProviders []provider.ResourceProvider, _ api.EC2APIHelper) error {
+func (n *node) DeleteResources(resourceManager resource.ResourceManager, _ api.EC2APIHelper) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
@@ -150,7 +156,8 @@ func (n *node) DeleteResources(resourceProviders []provider.ResourceProvider, _ 
 	n.ready = false
 
 	var errDelete []error
-	for _, resourceProvider := range resourceProviders {
+	for _, handler := range resourceManager.GetResourceHandlers() {
+		resourceProvider := handler.GetProvider()
 		if resourceProvider.IsInstanceSupported(n.instance) {
 			err := resourceProvider.DeInitResource(n.instance)
 			if err != nil {

@@ -17,11 +17,10 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
@@ -34,12 +33,10 @@ import (
 type ipv4Provider struct {
 	// log is the logger initialized with ip provider details
 	log logr.Logger
-	// ec2APIHelper to make ec2 API calls for IPv4 management
-	ec2APIHelper api.EC2APIHelper
+	// apiWrapper wraps all clients used by the controller
+	apiWrapper api.Wrapper
 	// workerPool with worker routine to execute asynchronous job on the ip provider
 	workerPool worker.Worker
-	// k8sWrapper to list the pods on node initialization
-	k8sWrapper k8s.K8sWrapper
 	// config is the warm pool configuration for the resource IPv4
 	config *config.WarmPoolConfig
 	// lock to allow multiple routines to access the cache concurrently
@@ -54,15 +51,14 @@ type ResourceProviderAndPool struct {
 	resourcePool pool.Pool
 }
 
-func NewIPv4Provider(log logr.Logger, config *config.WarmPoolConfig, ec2APIHelper api.EC2APIHelper,
-	workerPool worker.Worker, k8sWrapper k8s.K8sWrapper) provider.ResourceProvider {
+func NewIPv4Provider(log logr.Logger, apiWrapper api.Wrapper,
+	workerPool worker.Worker, resourceConfig config.ResourceConfig) provider.ResourceProvider {
 	return &ipv4Provider{
 		instanceProviderAndPool: make(map[string]ResourceProviderAndPool),
-		config:                  config,
+		config:                  resourceConfig.WarmPoolConfig,
 		log:                     log,
-		ec2APIHelper:            ec2APIHelper,
+		apiWrapper:              apiWrapper,
 		workerPool:              workerPool,
-		k8sWrapper:              k8sWrapper,
 	}
 }
 
@@ -70,12 +66,12 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 
 	eniManager := eni.NewENIManager(instance)
-	presentIPs, err := eniManager.InitResources(p.ec2APIHelper)
+	presentIPs, err := eniManager.InitResources(p.apiWrapper.EC2API)
 	if err != nil {
 		return err
 	}
 
-	pods, err := p.k8sWrapper.ListPods(nodeName)
+	pods, err := p.apiWrapper.PodAPI.ListPods(nodeName)
 	if err != nil {
 		return err
 	}
@@ -128,7 +124,7 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 
 	capacity := getCapacity(instanceType, os)
 
-	err := p.k8sWrapper.AdvertiseCapacityIfNotSet(instance.Name(), config.ResourceNameIPAddress, capacity)
+	err := p.apiWrapper.K8sAPI.AdvertiseCapacityIfNotSet(instance.Name(), config.ResourceNameIPAddress, capacity)
 	if err != nil {
 		return err
 	}
@@ -191,7 +187,7 @@ func (p *ipv4Provider) CreatePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 		return
 	}
 	didSucceed := true
-	ips, err := instanceResource.eniManager.CreateIPV4Address(job.ResourceCount, p.ec2APIHelper, p.log)
+	ips, err := instanceResource.eniManager.CreateIPV4Address(job.ResourceCount, p.apiWrapper.EC2API, p.log)
 	if err != nil {
 		p.log.Error(err, "failed to create all/some of the IPv4 addresses", "created ips", ips)
 		didSucceed = false
@@ -208,7 +204,7 @@ func (p *ipv4Provider) DeletePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 		return
 	}
 	didSucceed := true
-	failedIPs, err := instanceResource.eniManager.DeleteIPV4Address(job.Resources, p.ec2APIHelper, p.log)
+	failedIPs, err := instanceResource.eniManager.DeleteIPV4Address(job.Resources, p.apiWrapper.EC2API, p.log)
 	if err != nil {
 		p.log.Error(err, "failed to delete all/some of the IPv4 addresses", "failed ips", failedIPs)
 		didSucceed = false
