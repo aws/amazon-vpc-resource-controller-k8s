@@ -23,7 +23,7 @@ type condition struct {
 	log                logr.Logger
 }
 
-const CheckDataStoreSyncedInterval  = time.Second * 10
+const CheckDataStoreSyncedInterval = time.Second * 10
 
 type Conditions interface {
 	// WaitTillPodDataStoreSynced waits till the Pod Data Store has synced
