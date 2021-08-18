@@ -4,7 +4,7 @@ on:
     branches:
       - master
   pull_request_target:
-    types: [unlabeled, opened, synchronize, reopened]
+    types: [opened, synchronize, reopened]
     branches:
       - master
 
