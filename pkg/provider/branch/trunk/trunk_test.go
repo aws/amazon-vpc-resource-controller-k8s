@@ -170,13 +170,6 @@ var (
 		},
 	}
 
-	trunkAssociationsBranch1Only = []*awsEc2.TrunkInterfaceAssociation{
-		{
-			BranchInterfaceId: &EniDetails1.ID,
-			VlanId:            aws.Int64(int64(EniDetails1.VlanID)),
-		},
-	}
-
 	trunkAssociationsBranch1And2 = []*awsEc2.TrunkInterfaceAssociation{
 		{
 			BranchInterfaceId: &EniDetails1.ID,

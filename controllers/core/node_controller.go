@@ -15,8 +15,9 @@ package controllers
 
 import (
 	"context"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
+	nodeManager "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -34,7 +35,7 @@ type NodeReconciler struct {
 	client.Client
 	Log        logr.Logger
 	Scheme     *runtime.Scheme
-	Manager    node.Manager
+	Manager    nodeManager.Manager
 	Conditions condition.Conditions
 }
 

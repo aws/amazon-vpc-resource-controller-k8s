@@ -24,7 +24,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 
-	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -33,9 +32,6 @@ import (
 var (
 	nodeName  = "node-name"
 	mockError = fmt.Errorf("mock error")
-
-	cidrBlock  = "0.0.0.0/24"
-	mockSubnet = &ec2.Subnet{CidrBlock: &cidrBlock}
 )
 
 func getMocks(ctrl *gomock.Controller, count int) (*mock_resource.MockResourceManager,

@@ -14,7 +14,6 @@
 package handler
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
@@ -43,8 +42,6 @@ var (
 	podName      = "pod-1"
 	podNamespace = "pod-ns"
 	ipAddress    = "192.168.1.1"
-
-	mockError = fmt.Errorf("mock")
 
 	pod = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},

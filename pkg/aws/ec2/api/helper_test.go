@@ -156,10 +156,6 @@ var (
 		},
 	}
 
-	describeTrunkInterfaceInput = &ec2.DescribeNetworkInterfacesInput{
-		NetworkInterfaceIds: []*string{aws.String(trunkInterfaceId)},
-	}
-
 	branchTag1 = []*ec2.Tag{{
 		Key:   aws.String("tag-key-1"),
 		Value: aws.String("tag-val-1"),

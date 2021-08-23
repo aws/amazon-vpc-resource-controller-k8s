@@ -15,7 +15,6 @@ package handler
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
@@ -36,7 +35,6 @@ const (
 )
 
 type warmResourceHandler struct {
-	lock             sync.Mutex
 	log              logr.Logger
 	APIWrapper       api.Wrapper
 	resourceProvider provider.ResourceProvider

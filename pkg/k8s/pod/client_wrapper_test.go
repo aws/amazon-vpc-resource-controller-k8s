@@ -17,8 +17,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -51,8 +49,7 @@ var (
 		Status: v1.PodStatus{},
 	}
 
-	nodeName         = "node-name"
-	mockResourceName = config.ResourceNamePodENI
+	nodeName = "node-name"
 
 	existingResource         = "extended-resource"
 	existingResourceQuantity = int64(5)

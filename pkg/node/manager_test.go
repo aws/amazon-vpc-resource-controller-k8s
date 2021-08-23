@@ -25,7 +25,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	resource2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 
-	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
@@ -35,14 +34,10 @@ import (
 )
 
 var (
-	instanceID     = "i-01234567890abcdef"
-	providerId     = "aws:///us-west-2c/" + instanceID
-	eniConfigName  = "eni-config-name"
-	subnetID       = "subnet-id"
-	customSubnetID = "custom-subnet-id"
-
-	subnetCidrBlock = "192.168.0.0/16"
-	subnet          = &ec2.Subnet{CidrBlock: &subnetCidrBlock}
+	instanceID    = "i-01234567890abcdef"
+	providerId    = "aws:///us-west-2c/" + instanceID
+	eniConfigName = "eni-config-name"
+	subnetID      = "subnet-id"
 
 	eniConfig = &v1alpha1.ENIConfig{
 		Spec: v1alpha1.ENIConfigSpec{

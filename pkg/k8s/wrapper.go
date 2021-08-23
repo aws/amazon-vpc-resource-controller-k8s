@@ -51,20 +51,6 @@ var (
 		},
 		[]string{"resource_name"},
 	)
-
-	broadcastPodEventCallCount = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "broadcast_pod_event_call_count",
-			Help: "The number of request made to broadcast pod event",
-		},
-	)
-
-	broadcastPodEventErrCount = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "broadcast_pod_event_err_count",
-			Help: "The number of errors encountered while broadcasting pod event",
-		},
-	)
 )
 
 func prometheusRegister() {

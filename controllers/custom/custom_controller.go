@@ -69,8 +69,8 @@ type Options struct {
 // in this repository. There are two reasons why we are using a wrapper over the low level
 // controllers instead of using controllers from controller-runtime.
 // 1. We don't want to cache the entire Pod Object because of Memory constraints.
-//    We need specific details from metadata and Pod Spec. To do this we intercept the request
-//    at List and Watch and optimize it before it's stored in cache.
+//    We need specific details from metadata and Pod Spec. To do this we intercept
+//    the request at List; and watch, optimize it before it's stored in cache.
 //    Long term plan is to use MetaData only cache or disable Pod caching altogether
 // 2. We want the Deleted Object when Pod is Terminating. Pod Networking should only be deleted
 //    once the Pod has deleted or all containers have exited.
@@ -213,6 +213,8 @@ func (c *CustomController) processNextWorkItem() bool {
 	// period.
 	defer c.workQueue.Done(obj)
 
+	// The item from the workqueue will be forgotten in the handler, when
+	// it's successfully processed.
 	return c.reconcileHandler(obj)
 }
 

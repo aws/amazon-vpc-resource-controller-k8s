@@ -125,6 +125,9 @@ func getAggregateResources(pod *v1.Pod) map[string]int64 {
 	return aggregateResources
 }
 
+// SetupWithManager adds the custom Pod controller's runnable to the mangers
+// list of runnable. After Manager acquire the lease the pod controller runnable
+// will be started and the Pod events will be sent to Reconcile function
 func (r *PodReconciler) SetupWithManager(manager ctrl.Manager,
 	clientSet *kubernetes.Clientset, pageLimit int, syncPeriod time.Duration) error {
 

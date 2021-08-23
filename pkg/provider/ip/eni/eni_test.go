@@ -20,8 +20,6 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
-
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
@@ -48,14 +46,12 @@ var (
 	ip4         = "192.168.2.0"
 	ip4WithMask = ip4 + "/" + subnetMask
 	ip5         = "192.168.2.1"
-	ip5WithMask = ip5 + "/" + subnetMask
 	ip6         = "192.168.2.2"
 	ip6WithMask = ip6 + "/" + subnetMask
 
 	mockError = fmt.Errorf("mock-error")
 
-	instanceType      = "t3.small"
-	t3SmallIPCapacity = vpc.Limits[instanceType].IPv4PerInterface
+	instanceType = "t3.small"
 
 	nwInterfaces = []*ec2.InstanceNetworkInterface{
 		{
