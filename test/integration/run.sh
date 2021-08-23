@@ -13,7 +13,13 @@ if [[ -z "${OS_OVERRIDE}" ]]; then
   OS_OVERRIDE=linux
 fi
 
-CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
+GET_CLUSTER_INFO_CMD="aws eks describe-cluster --name $CLUSTER_NAME --region $REGION"
+
+if [[ -z "${ENDPOINT}" ]]; then
+  CLUSTER_INFO=$($GET_CLUSTER_INFO_CMD)
+else
+  CLUSTER_INFO=$($GET_CLUSTER_INFO_CMD --endpoint $ENDPOINT)
+fi
 
 VPC_ID=$(echo $CLUSTER_INFO | jq -r '.cluster.resourcesVpcConfig.vpcId')
 SERVICE_ROLE_ARN=$(echo $CLUSTER_INFO | jq -r '.cluster.roleArn')
