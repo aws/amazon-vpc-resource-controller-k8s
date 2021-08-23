@@ -17,8 +17,9 @@ import (
 	"context"
 	"testing"
 
-	mock_controller "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/controllers/custom"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
@@ -53,13 +54,13 @@ var (
 
 // getMockK8sWrapper returns the mock wrapper interface
 func getMockK8sWrapperWithClient(ctrl *gomock.Controller) (K8sWrapper, client.Client,
-	*mock_controller.MockController) {
+	*mock_custom.MockController) {
 	scheme := runtime.NewScheme()
 	_ = v1.AddToScheme(scheme)
 
 	client := fakeClient.NewFakeClientWithScheme(scheme, mockNode)
 	clientSet := fakeClientSet.NewSimpleClientset(mockNode)
-	mockController := mock_controller.NewMockController(ctrl)
+	mockController := mock_custom.NewMockController(ctrl)
 
 	return NewK8sWrapper(client, clientSet.CoreV1()), client, mockController
 }

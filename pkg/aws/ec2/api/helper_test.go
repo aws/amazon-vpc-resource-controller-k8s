@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -292,7 +292,7 @@ var (
 )
 
 // getMockWrapper returns the Mock EC2Wrapper along with the EC2APIHelper with mock EC2Wrapper set up
-func getMockWrapper(ctrl *gomock.Controller) (EC2APIHelper, *mock_ec2.MockEC2Wrapper) {
+func getMockWrapper(ctrl *gomock.Controller) (EC2APIHelper, *mock_api.MockEC2Wrapper) {
 
 	defaultBackOff = wait.Backoff{
 		Duration: time.Millisecond,
@@ -316,7 +316,7 @@ func getMockWrapper(ctrl *gomock.Controller) (EC2APIHelper, *mock_ec2.MockEC2Wra
 		Cap:      time.Second * 2,
 	}
 
-	mockWrapper := mock_ec2.NewMockEC2Wrapper(ctrl)
+	mockWrapper := mock_api.NewMockEC2Wrapper(ctrl)
 	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName)
 
 	return ec2ApiHelper, mockWrapper
