@@ -18,7 +18,6 @@
 package mock_handler
 
 import (
-	provider "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
 	reflect "reflect"
@@ -46,20 +45,6 @@ func NewMockHandler(ctrl *gomock.Controller) *MockHandler {
 // EXPECT returns an object that allows the caller to indicate expected use
 func (m *MockHandler) EXPECT() *MockHandlerMockRecorder {
 	return m.recorder
-}
-
-// GetProvider mocks base method
-func (m *MockHandler) GetProvider() provider.ResourceProvider {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetProvider")
-	ret0, _ := ret[0].(provider.ResourceProvider)
-	return ret0
-}
-
-// GetProvider indicates an expected call of GetProvider
-func (mr *MockHandlerMockRecorder) GetProvider() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProvider", reflect.TypeOf((*MockHandler)(nil).GetProvider))
 }
 
 // HandleCreate mocks base method

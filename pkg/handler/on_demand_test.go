@@ -89,17 +89,6 @@ func Test_NewOnDemandHandler(t *testing.T) {
 	assert.NotNil(t, handler)
 }
 
-// Test_GetProvider tests if handler returns the provider for the resource
-func Test_GetProvider(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	handler, mockProvider := getHandlerWithMock(ctrl)
-	provider := handler.GetProvider()
-
-	assert.Equal(t, provider, mockProvider)
-}
-
 // Test_HandleCreate tests the create job is submitted to the respective worker on create operation
 func Test_HandleCreate(t *testing.T) {
 	ctrl := gomock.NewController(t)

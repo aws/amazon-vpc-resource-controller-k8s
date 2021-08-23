@@ -78,8 +78,7 @@ func (n *node) UpdateResources(resourceManager resource.ResourceManager, helper 
 	}
 
 	var errUpdates []error
-	for _, handler := range resourceManager.GetResourceHandlers() {
-		resourceProvider := handler.GetProvider()
+	for _, resourceProvider := range resourceManager.GetResourceProviders() {
 		if resourceProvider.IsInstanceSupported(n.instance) {
 			err := resourceProvider.UpdateResourceCapacity(n.instance)
 			if err != nil {
@@ -115,8 +114,7 @@ func (n *node) InitResources(resourceManager resource.ResourceManager, helper ap
 
 	var initializedProviders []provider.ResourceProvider
 	var errInit error
-	for _, handler := range resourceManager.GetResourceHandlers() {
-		resourceProvider := handler.GetProvider()
+	for _, resourceProvider := range resourceManager.GetResourceProviders() {
 		// Check if the instance is supported and then initialize the provider
 		if resourceProvider.IsInstanceSupported(n.instance) {
 			errInit = resourceProvider.InitResource(n.instance)
@@ -156,8 +154,7 @@ func (n *node) DeleteResources(resourceManager resource.ResourceManager, _ api.E
 	n.ready = false
 
 	var errDelete []error
-	for _, handler := range resourceManager.GetResourceHandlers() {
-		resourceProvider := handler.GetProvider()
+	for _, resourceProvider := range resourceManager.GetResourceProviders() {
 		if resourceProvider.IsInstanceSupported(n.instance) {
 			err := resourceProvider.DeInitResource(n.instance)
 			if err != nil {

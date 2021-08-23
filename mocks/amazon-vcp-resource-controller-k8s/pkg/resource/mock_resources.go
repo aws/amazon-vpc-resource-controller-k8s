@@ -19,6 +19,7 @@ package mock_resource
 
 import (
 	handler "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
+	provider "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
 )
@@ -73,4 +74,18 @@ func (m *MockResourceManager) GetResourceHandlers() []handler.Handler {
 func (mr *MockResourceManagerMockRecorder) GetResourceHandlers() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetResourceHandlers", reflect.TypeOf((*MockResourceManager)(nil).GetResourceHandlers))
+}
+
+// GetResourceProviders mocks base method
+func (m *MockResourceManager) GetResourceProviders() []provider.ResourceProvider {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetResourceProviders")
+	ret0, _ := ret[0].([]provider.ResourceProvider)
+	return ret0
+}
+
+// GetResourceProviders indicates an expected call of GetResourceProviders
+func (mr *MockResourceManagerMockRecorder) GetResourceProviders() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetResourceProviders", reflect.TypeOf((*MockResourceManager)(nil).GetResourceProviders))
 }

@@ -63,16 +63,6 @@ var (
 	job = worker.NewWarmPoolCreateJob(nodeName, 1)
 )
 
-// TestWarmResourceHandler_CanHandle tests if resource provider is present than the handler returns true
-func TestWarmResourceHandler_GetProvider(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	handler, _, _, mockProvider, _ := getHandlerAndMocks(ctrl)
-
-	assert.Equal(t, mockProvider, handler.GetProvider())
-}
-
 // TestWarmResourceHandler_HandleCreate tests create assigns a resource and annotates the pod and then reconciles a pool
 // and submits the job to the resource provider
 func TestWarmResourceHandler_HandleCreate(t *testing.T) {

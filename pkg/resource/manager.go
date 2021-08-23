@@ -29,11 +29,13 @@ import (
 )
 
 type Manager struct {
-	handlers map[string]handler.Handler
+	handlers  map[string]handler.Handler
+	providers []provider.ResourceProvider
 }
 
 type ResourceManager interface {
 	GetResourceHandlers() []handler.Handler
+	GetResourceProviders() []provider.ResourceProvider
 	GetResourceHandler(resourceName string) (handler.Handler, bool)
 }
 
@@ -42,6 +44,8 @@ func NewResourceManager(resourceNames []string, wrapper api.Wrapper) (ResourceMa
 	resourceConfig := config.LoadResourceConfig()
 	// Resource Handler supported by the controller
 	resourceHandlers := make(map[string]handler.Handler)
+
+	var resourceProviders []provider.ResourceProvider
 
 	// For each supported resource, initialize the resource provider and handler
 	for _, resourceName := range resourceNames {
@@ -83,13 +87,15 @@ func NewResourceManager(resourceNames []string, wrapper api.Wrapper) (ResourceMa
 		}
 
 		resourceHandlers[resourceName] = resourceHandler
+		resourceProviders = append(resourceProviders, resourceProvider)
 
 		ctrl.Log.Info("successfully initialized resource handler and provider",
 			"resource name", resourceName)
 	}
 
 	return &Manager{
-		handlers: resourceHandlers,
+		handlers:  resourceHandlers,
+		providers: resourceProviders,
 	}, nil
 }
 
@@ -99,6 +105,10 @@ func (m *Manager) GetResourceHandlers() []handler.Handler {
 		handlers = append(handlers, handler)
 	}
 	return handlers
+}
+
+func (m *Manager) GetResourceProviders() []provider.ResourceProvider {
+	return m.providers
 }
 
 func (m *Manager) GetResourceHandler(resourceName string) (handler.Handler, bool) {

@@ -54,10 +54,6 @@ func NewWarmResourceHandler(log logr.Logger, wrapper api.Wrapper,
 	}
 }
 
-func (w *warmResourceHandler) GetProvider() provider.ResourceProvider {
-	return w.resourceProvider
-}
-
 func (w *warmResourceHandler) HandleCreate(_ int, pod *v1.Pod) (ctrl.Result, error) {
 	resourcePool, err := w.getResourcePool(pod.Spec.NodeName)
 	if err != nil {

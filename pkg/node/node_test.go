@@ -17,18 +17,17 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
+
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
 )
 
 var (
@@ -39,17 +38,15 @@ var (
 	mockSubnet = &ec2.Subnet{CidrBlock: &cidrBlock}
 )
 
-func getMockResourceManagerProvidersAndHandlers(ctrl *gomock.Controller, count int) (*mock_resource.MockResourceManager,
-	[]*mock_provider.MockResourceProvider, []*mock_handler.MockHandler) {
+func getMocks(ctrl *gomock.Controller, count int) (*mock_resource.MockResourceManager,
+	[]*mock_provider.MockResourceProvider) {
 
 	mockResourceManager := mock_resource.NewMockResourceManager(ctrl)
-	var mockHandlers []*mock_handler.MockHandler
 	var mockProviders []*mock_provider.MockResourceProvider
 	for i := 0; i < count; i++ {
-		mockHandlers = append(mockHandlers, mock_handler.NewMockHandler(ctrl))
 		mockProviders = append(mockProviders, mock_provider.NewMockResourceProvider(ctrl))
 	}
-	return mockResourceManager, mockProviders, mockHandlers
+	return mockResourceManager, mockProviders
 }
 
 func getMockEC2APIHelper(ctrl *gomock.Controller) *mock_api.MockEC2APIHelper {
@@ -71,12 +68,12 @@ func TestNewNode(t *testing.T) {
 	assert.False(t, node.IsReady())
 }
 
-func convertMockToHandlerSlice(mockHandlers []*mock_handler.MockHandler) []handler.Handler {
-	var handlers []handler.Handler
-	for _, mockHandler := range mockHandlers {
-		handlers = append(handlers, mockHandler)
+func convertMockTypeToProviderSlice(mockProviders []*mock_provider.MockResourceProvider) []provider.ResourceProvider {
+	var providers []provider.ResourceProvider
+	for _, provider := range mockProviders {
+		providers = append(providers, provider)
 	}
-	return handlers
+	return providers
 }
 
 // TestNode_InitResources tests the instance details is loaded and the node is initialized without error
@@ -85,12 +82,11 @@ func TestNode_InitResources(t *testing.T) {
 	defer ctrl.Finish()
 
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
-	mockResourceManager, mockProviders, mockHandlers := getMockResourceManagerProvidersAndHandlers(ctrl, 1)
+	mockResourceManager, mockProviders := getMocks(ctrl, 1)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
 	mockInstance.EXPECT().LoadDetails(mockHelper).Return(nil)
-	mockResourceManager.EXPECT().GetResourceHandlers().Return(convertMockToHandlerSlice(mockHandlers))
-	mockHandlers[0].EXPECT().GetProvider().Return(mockProviders[0])
+	mockResourceManager.EXPECT().GetResourceProviders().Return(convertMockTypeToProviderSlice(mockProviders))
 
 	mockProviders[0].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[0].EXPECT().InitResource(mockInstance).Return(nil)
@@ -105,12 +101,11 @@ func TestNode_InitResources_InstanceNotSupported(t *testing.T) {
 	defer ctrl.Finish()
 
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
-	mockResourceManager, mockProviders, mockHandlers := getMockResourceManagerProvidersAndHandlers(ctrl, 1)
+	mockResourceManager, mockProviders := getMocks(ctrl, 1)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
 	mockInstance.EXPECT().LoadDetails(mockHelper).Return(nil)
-	mockResourceManager.EXPECT().GetResourceHandlers().Return(convertMockToHandlerSlice(mockHandlers))
-	mockHandlers[0].EXPECT().GetProvider().Return(mockProviders[0])
+	mockResourceManager.EXPECT().GetResourceProviders().Return(convertMockTypeToProviderSlice(mockProviders))
 	mockProviders[0].EXPECT().IsInstanceSupported(mockInstance).Return(false)
 
 	err := node.InitResources(mockResourceManager, mockHelper)
@@ -124,7 +119,7 @@ func TestNode_InitResources_LoadInstanceDetails_Error(t *testing.T) {
 	defer ctrl.Finish()
 
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
-	mockResourceManager, _, _ := getMockResourceManagerProvidersAndHandlers(ctrl, 1)
+	mockResourceManager, _ := getMocks(ctrl, 1)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
 	mockInstance.EXPECT().LoadDetails(mockHelper).Return(mockError)
@@ -139,19 +134,17 @@ func TestNode_InitResources_SecondProviderInitFails(t *testing.T) {
 	defer ctrl.Finish()
 
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
-	mockResourceManager, mockProviders, mockHandlers := getMockResourceManagerProvidersAndHandlers(ctrl, 2)
+	mockResourceManager, mockProviders := getMocks(ctrl, 2)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
 	mockInstance.EXPECT().LoadDetails(mockHelper).Return(nil)
 
-	mockResourceManager.EXPECT().GetResourceHandlers().Return(convertMockToHandlerSlice(mockHandlers))
+	mockResourceManager.EXPECT().GetResourceProviders().Return(convertMockTypeToProviderSlice(mockProviders))
 
 	// Second provider throws an error
-	mockHandlers[0].EXPECT().GetProvider().Return(mockProviders[0])
 	mockProviders[0].EXPECT().InitResource(mockInstance).Return(nil)
 	mockProviders[0].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 
-	mockHandlers[1].EXPECT().GetProvider().Return(mockProviders[1])
 	mockProviders[1].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[1].EXPECT().InitResource(mockInstance).Return(mockError)
 
@@ -168,16 +161,14 @@ func TestNode_DeleteResources(t *testing.T) {
 	defer ctrl.Finish()
 
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
-	mockResourceManager, mockProviders, mockHandlers := getMockResourceManagerProvidersAndHandlers(ctrl, 2)
+	mockResourceManager, mockProviders := getMocks(ctrl, 2)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
-	mockResourceManager.EXPECT().GetResourceHandlers().Return(convertMockToHandlerSlice(mockHandlers))
+	mockResourceManager.EXPECT().GetResourceProviders().Return(convertMockTypeToProviderSlice(mockProviders))
 
-	mockHandlers[0].EXPECT().GetProvider().Return(mockProviders[0])
 	mockProviders[0].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[0].EXPECT().DeInitResource(mockInstance).Return(nil)
 
-	mockHandlers[1].EXPECT().GetProvider().Return(mockProviders[1])
 	mockProviders[1].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[1].EXPECT().DeInitResource(mockInstance).Return(nil)
 
@@ -191,20 +182,17 @@ func TestNode_DeleteResources_SomeFail(t *testing.T) {
 	defer ctrl.Finish()
 
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
-	mockResourceManager, mockProviders, mockHandlers := getMockResourceManagerProvidersAndHandlers(ctrl, 3)
+	mockResourceManager, mockProviders := getMocks(ctrl, 3)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
-	mockResourceManager.EXPECT().GetResourceHandlers().Return(convertMockToHandlerSlice(mockHandlers))
+	mockResourceManager.EXPECT().GetResourceProviders().Return(convertMockTypeToProviderSlice(mockProviders))
 
-	mockHandlers[0].EXPECT().GetProvider().Return(mockProviders[0])
 	mockProviders[0].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[0].EXPECT().DeInitResource(mockInstance).Return(nil)
 
-	mockHandlers[1].EXPECT().GetProvider().Return(mockProviders[1])
 	mockProviders[1].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[1].EXPECT().DeInitResource(mockInstance).Return(mockError)
 
-	mockHandlers[2].EXPECT().GetProvider().Return(mockProviders[2])
 	mockProviders[2].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[2].EXPECT().DeInitResource(mockInstance).Return(nil)
 
@@ -219,18 +207,16 @@ func TestNode_UpdateResources(t *testing.T) {
 
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
 	node.ready = true
-	mockResourceManager, mockProviders, mockHandlers := getMockResourceManagerProvidersAndHandlers(ctrl, 2)
+	mockResourceManager, mockProviders := getMocks(ctrl, 2)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
 	mockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mockHelper).Return(nil)
 
-	mockResourceManager.EXPECT().GetResourceHandlers().Return(convertMockToHandlerSlice(mockHandlers))
+	mockResourceManager.EXPECT().GetResourceProviders().Return(convertMockTypeToProviderSlice(mockProviders))
 
-	mockHandlers[0].EXPECT().GetProvider().Return(mockProviders[0])
 	mockProviders[0].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[0].EXPECT().UpdateResourceCapacity(mockInstance).Return(nil)
 
-	mockHandlers[1].EXPECT().GetProvider().Return(mockProviders[1])
 	mockProviders[1].EXPECT().IsInstanceSupported(mockInstance).Return(false)
 
 	err := node.UpdateResources(mockResourceManager, mockHelper)
@@ -244,20 +230,17 @@ func TestNode_UpdateResources_SomeFail(t *testing.T) {
 
 	node, mockInstance := getNodeWithInstanceMock(ctrl)
 	node.ready = true
-	mockResourceManager, mockProviders, mockHandlers := getMockResourceManagerProvidersAndHandlers(ctrl, 3)
+	mockResourceManager, mockProviders := getMocks(ctrl, 3)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
-	mockResourceManager.EXPECT().GetResourceHandlers().Return(convertMockToHandlerSlice(mockHandlers))
+	mockResourceManager.EXPECT().GetResourceProviders().Return(convertMockTypeToProviderSlice(mockProviders))
 
-	mockHandlers[0].EXPECT().GetProvider().Return(mockProviders[0])
 	mockProviders[0].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[0].EXPECT().UpdateResourceCapacity(mockInstance).Return(nil)
 
-	mockHandlers[1].EXPECT().GetProvider().Return(mockProviders[1])
 	mockProviders[1].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[1].EXPECT().UpdateResourceCapacity(mockInstance).Return(mockError)
 
-	mockHandlers[2].EXPECT().GetProvider().Return(mockProviders[2])
 	mockProviders[2].EXPECT().IsInstanceSupported(mockInstance).Return(true)
 	mockProviders[2].EXPECT().UpdateResourceCapacity(mockInstance).Return(nil)
 
@@ -273,7 +256,7 @@ func TestNode_UpdateResources_NodeNotReady(t *testing.T) {
 
 	node, _ := getNodeWithInstanceMock(ctrl)
 	node.ready = false
-	mockResourceManager, _, _ := getMockResourceManagerProvidersAndHandlers(ctrl, 3)
+	mockResourceManager, _ := getMocks(ctrl, 3)
 	mockHelper := getMockEC2APIHelper(ctrl)
 
 	err := node.UpdateResources(mockResourceManager, mockHelper)

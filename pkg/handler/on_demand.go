@@ -28,10 +28,6 @@ type onDemandResourceHandler struct {
 	Log              logr.Logger
 }
 
-func (h *onDemandResourceHandler) GetProvider() provider.ResourceProvider {
-	return h.resourceProvider
-}
-
 // NewOnDemandHandler returns a new on demand handler with all the workers that can handle particular resource types
 func NewOnDemandHandler(log logr.Logger, resourceName string,
 	ondDemandProvider provider.ResourceProvider) Handler {
