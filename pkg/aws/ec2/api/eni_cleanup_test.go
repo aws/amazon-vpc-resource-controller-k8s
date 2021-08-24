@@ -19,7 +19,7 @@ import (
 	"reflect"
 	"testing"
 
-	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -70,9 +70,9 @@ var (
 func getMockENICleaner(ctrl *gomock.Controller) (*ENICleaner, *mock_api.MockEC2Wrapper) {
 	mockEC2Wrapper := mock_api.NewMockEC2Wrapper(ctrl)
 	return &ENICleaner{
-		ec2Wrapper:        mockEC2Wrapper,
+		EC2Wrapper:        mockEC2Wrapper,
 		availableENIs:     map[string]struct{}{},
-		log:               zap.New(zap.UseDevMode(true)),
+		Log:               zap.New(zap.UseDevMode(true)),
 		clusterNameTagKey: mockClusterNameTagKey,
 		ctx:               context.Background(),
 	}, mockEC2Wrapper

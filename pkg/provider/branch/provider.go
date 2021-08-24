@@ -20,15 +20,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -86,31 +84,25 @@ var (
 type branchENIProvider struct {
 	// log is the logger initialized with branch eni provider value
 	log logr.Logger
-	// k8s client to perform operations on pod object
-	k8s k8s.K8sWrapper
-	// ec2APIHelper is the helper to make EC2 API calls
-	ec2APIHelper api.EC2APIHelper
 	// lock to prevent concurrent writes to the trunk eni map
 	lock sync.RWMutex
 	// trunkENICache is the map of node name to the trunk ENI
 	trunkENICache map[string]trunk.TrunkENI
 	// workerPool is the worker pool and queue for submitting async job
 	workerPool worker.Worker
-	// k8sHelper provides api for getting security group to be used by the pod
-	k8sHelper utils.K8sCacheHelper
+	// apiWrapper
+	apiWrapper api.Wrapper
 }
 
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
-func NewBranchENIProvider(logger logr.Logger, k8sWrapper k8s.K8sWrapper,
-	helper api.EC2APIHelper, worker worker.Worker, k8sHelper utils.K8sCacheHelper) provider.ResourceProvider {
+func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
+	worker worker.Worker, _ config.ResourceConfig) provider.ResourceProvider {
 	prometheusRegister()
 	trunk.PrometheusRegister()
 
 	return &branchENIProvider{
-		k8sHelper:     k8sHelper,
+		apiWrapper:    wrapper,
 		log:           logger,
-		k8s:           k8sWrapper,
-		ec2APIHelper:  helper,
 		workerPool:    worker,
 		trunkENICache: make(map[string]trunk.TrunkENI),
 	}
@@ -137,12 +129,12 @@ func timeSinceMs(start time.Time) float64 {
 func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 	log := b.log.WithValues("node name", nodeName)
-	trunkENI := trunk.NewTrunkENI(log, instance, b.ec2APIHelper)
+	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API)
 
 	// Initialize the Trunk ENI
 	start := time.Now()
 
-	podList, err := b.k8s.ListPods(nodeName)
+	podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
 	if err != nil {
 		log.Error(err, "failed to get list of pod on node")
 		return err
@@ -153,7 +145,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		// If it's an AWS Error, get the exit code without the error message to avoid
 		// broadcasting multiple different messaged events
 		if awsErr, ok := err.(awserr.Error); ok {
-			node, errGetNode := b.k8s.GetNode(instance.Name())
+			node, errGetNode := b.apiWrapper.K8sAPI.GetNode(instance.Name())
 			if errGetNode != nil {
 				return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, err)
 			}
@@ -164,7 +156,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 				eventMessage = fmt.Sprintf("%s: %s", eventMessage,
 					"Please verify the cluster IAM role has AmazonEKSVPCResourceController policy")
 			}
-			b.k8s.BroadcastEvent(node, ReasonTrunkENICreationFailed, eventMessage, v1.EventTypeWarning)
+			b.apiWrapper.K8sAPI.BroadcastEvent(node, ReasonTrunkENICreationFailed, eventMessage, v1.EventTypeWarning)
 		}
 
 		log.Error(err, "failed to init resource")
@@ -253,7 +245,7 @@ func (b *branchENIProvider) UpdateResourceCapacity(instance ec2.EC2Instance) err
 	capacity := vpc.Limits[instanceType].BranchInterface
 
 	if capacity != 0 {
-		err := b.k8s.AdvertiseCapacityIfNotSet(instanceName, config.ResourceNamePodENI, capacity)
+		err := b.apiWrapper.K8sAPI.AdvertiseCapacityIfNotSet(instanceName, config.ResourceNamePodENI, capacity)
 		if err != nil {
 			branchProviderOperationsErrCount.WithLabelValues("advertise_capacity").Inc()
 			return err
@@ -273,7 +265,7 @@ func (b *branchENIProvider) ReconcileNode(nodeName string) (ctrl.Result, error) 
 		log.Info("stopping the reconcile job")
 		return ctrl.Result{}, nil
 	}
-	podList, err := b.k8s.ListPods(nodeName)
+	podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
 	if err != nil {
 		log.Error(err, "failed fo list pod")
 		return reconcileRequeueRequest, nil
@@ -305,7 +297,7 @@ func (b *branchENIProvider) ProcessDeleteQueue(nodeName string) (ctrl.Result, er
 // any locking as long as caller guarantees this function is not called concurrently for same pods.
 func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podName string, resourceCount int) (ctrl.Result, error) {
 	// Get the pod from cache
-	pod, err := b.k8s.GetPod(podNamespace, podName)
+	pod, err := b.apiWrapper.PodAPI.GetPod(podNamespace, podName)
 	if err != nil {
 		branchProviderOperationsErrCount.WithLabelValues("create_get_pod").Inc()
 		return ctrl.Result{}, err
@@ -317,7 +309,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	}
 
 	// Get the pod object again directly from API Server as the cache can be stale
-	pod, err = b.k8s.GetPodFromAPIServer(podNamespace, podName)
+	pod, err = b.apiWrapper.PodAPI.GetPodFromAPIServer(podNamespace, podName)
 	if err != nil {
 		branchProviderOperationsErrCount.WithLabelValues("get_pod_api_server").Inc()
 		return ctrl.Result{}, err
@@ -330,17 +322,17 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, nil
 	}
 
-	securityGroups, err := b.k8sHelper.GetPodSecurityGroups(pod)
+	securityGroups, err := b.apiWrapper.SGPAPI.GetMatchingSecurityGroupForPods(pod)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	if len(securityGroups) == 0 {
-		b.k8s.BroadcastEvent(pod, ReasonSecurityGroupRequested,
+		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonSecurityGroupRequested,
 			"Pod will get the instance security group as the pod didn't match any Security Group from "+
 				"SecurityGroupPolicy", v1.EventTypeWarning)
 	} else {
-		b.k8s.BroadcastEvent(pod, ReasonSecurityGroupRequested, fmt.Sprintf("Pod will get the following "+
+		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonSecurityGroupRequested, fmt.Sprintf("Pod will get the following "+
 			"Security Groups %v", securityGroups), v1.EventTypeNormal)
 	}
 
@@ -360,7 +352,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		if err == trunk.ErrCurrentlyAtMaxCapacity {
 			return ctrl.Result{RequeueAfter: config.CoolDownPeriod, Requeue: true}, nil
 		}
-		b.k8s.BroadcastEvent(pod, ReasonBranchAllocationFailed,
+		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
 			fmt.Sprintf("failed to allocate branch ENI to pod: %v", err), v1.EventTypeWarning)
 		return ctrl.Result{}, err
 	}
@@ -377,18 +369,18 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	}
 
 	// Annotate the pod with the created resources
-	err = b.k8s.AnnotatePod(pod.Namespace, pod.Name, config.ResourceNamePodENI, string(jsonBytes))
+	err = b.apiWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, config.ResourceNamePodENI, string(jsonBytes))
 	if err != nil {
 		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
 		b.log.Info("pushed the ENIs to the delete queue as failed to annotate the pod", "ENI/s", branchENIs)
-		b.k8s.BroadcastEvent(pod, ReasonBranchENIAnnotationFailed,
+		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchENIAnnotationFailed,
 			fmt.Sprintf("failed to annotate pod with branch ENI details: %v", err), v1.EventTypeWarning)
 		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
 		return ctrl.Result{}, err
 	}
 
 	// Broadcast event to indicate the resource has been successfully created and annotated to the pod object
-	b.k8s.BroadcastEvent(pod, ReasonResourceAllocated,
+	b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocated,
 		fmt.Sprintf("Allocated %s to the pod", string(jsonBytes)), v1.EventTypeNormal)
 
 	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENIAndAnnotate, strconv.Itoa(resourceCount)).

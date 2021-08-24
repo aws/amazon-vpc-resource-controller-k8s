@@ -20,10 +20,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
@@ -36,12 +36,12 @@ type manager struct {
 	lock sync.RWMutex
 	// dataStore is the in memory data store of all the managed nodes in the cluster
 	dataStore map[string]Node
-	// resourceProviders is the list of resource providers
-	resourceProviders []provider.ResourceProvider
+	// resourceManager provides the resource provider for all supported resources
+	resourceManager resource.ResourceManager
 	// ec2APIHelper is the helper function to get instance details from EC2 API
-	ec2APIHelper api.EC2APIHelper
-	// k8sWrapper is the wrapper to get k8s object
-	k8sWrapper k8s.K8sWrapper
+	ec2APIHelper ec2API.EC2APIHelper
+	// wrapper around the clients for all APIs used by controller
+	wrapper api.Wrapper
 }
 
 type Manager interface {
@@ -51,13 +51,13 @@ type Manager interface {
 }
 
 // NewNodeManager returns a new node manager
-func NewNodeManager(logger logr.Logger, provider []provider.ResourceProvider, ec2APIHelper api.EC2APIHelper, k8sWrapper k8s.K8sWrapper) Manager {
+func NewNodeManager(logger logr.Logger,
+	resourceManager resource.ResourceManager, wrapper api.Wrapper) Manager {
 	return &manager{
-		resourceProviders: provider,
-		Log:               logger,
-		dataStore:         make(map[string]Node),
-		ec2APIHelper:      ec2APIHelper,
-		k8sWrapper:        k8sWrapper,
+		resourceManager: resourceManager,
+		Log:             logger,
+		dataStore:       make(map[string]Node),
+		wrapper:         wrapper,
 	}
 }
 
@@ -101,7 +101,7 @@ func (m *manager) DeleteNode(nodeName string) error {
 
 // addOrUpdateNode adds eligible nodes to the cache. If the node was previously managed and
 // is not eligible for management currently, the node is removed
-func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func([]provider.ResourceProvider, api.EC2APIHelper) error, err error) {
+func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func(resource.ResourceManager, ec2API.EC2APIHelper) error, err error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -157,7 +157,7 @@ func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func([]p
 }
 
 // deleteNode deletes the nodes from the node manager cache
-func (m *manager) deleteNode(nodeName string) (postUnlockOperation func([]provider.ResourceProvider, api.EC2APIHelper) error, err error) {
+func (m *manager) deleteNode(nodeName string) (postUnlockOperation func(resource.ResourceManager, ec2API.EC2APIHelper) error, err error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -183,7 +183,7 @@ func (m *manager) deleteNode(nodeName string) (postUnlockOperation func([]provid
 func (m *manager) updateSubnetIfUsingENIConfig(node Node, k8sNode *v1.Node) error {
 	eniConfigName, isPresent := k8sNode.Labels[config.CustomNetworkingLabel]
 	if isPresent {
-		eniConfig, err := m.k8sWrapper.GetENIConfig(eniConfigName)
+		eniConfig, err := m.wrapper.K8sAPI.GetENIConfig(eniConfigName)
 		if err != nil {
 			return fmt.Errorf("failed to find the ENIConfig %s: %v", eniConfigName, err)
 		}
@@ -201,13 +201,13 @@ func (m *manager) updateSubnetIfUsingENIConfig(node Node, k8sNode *v1.Node) erro
 }
 
 // performPostUnlockOperation performs the operation on a node without taking the node manager lock
-func (m *manager) performPostUnlockOperation(nodeName string, postUnlockOperation func([]provider.ResourceProvider, api.EC2APIHelper) error) error {
+func (m *manager) performPostUnlockOperation(nodeName string, postUnlockOperation func(resource.ResourceManager, ec2API.EC2APIHelper) error) error {
 	log := m.Log.WithValues("node", nodeName)
 	if postUnlockOperation == nil {
 		return nil
 	}
 
-	err := postUnlockOperation(m.resourceProviders, m.ec2APIHelper)
+	err := postUnlockOperation(m.resourceManager, m.wrapper.EC2API)
 	operationName := runtime.FuncForPC(reflect.ValueOf(postUnlockOperation).Pointer()).Name()
 	if err == nil {
 		log.V(1).Info("successfully performed node operation", "operation", operationName)

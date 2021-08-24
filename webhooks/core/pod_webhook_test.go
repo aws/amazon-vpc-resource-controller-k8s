@@ -62,10 +62,10 @@ func getPodResourceInjector() *PodResourceInjector {
 	)
 	decoder, _ := admission.NewDecoder(testScheme)
 	pa := &PodResourceInjector{
-		Client:      testClient,
-		decoder:     decoder,
-		CacheHelper: webhookutils.NewK8sCacheHelper(testClient, logger),
-		Log:         logger,
+		Client:  testClient,
+		decoder: decoder,
+		SGPAPI:  webhookutils.NewSecurityGroupForPodsAPI(testClient, logger),
+		Log:     logger,
 	}
 	return pa
 }
@@ -81,10 +81,10 @@ func getPodResourceInjectorWithoutSGP() *PodResourceInjector {
 	)
 	decoder, _ := admission.NewDecoder(testScheme)
 	pa := &PodResourceInjector{
-		Client:      testClient,
-		decoder:     decoder,
-		CacheHelper: webhookutils.NewK8sCacheHelper(testClient, logger),
-		Log:         logger,
+		Client:  testClient,
+		decoder: decoder,
+		SGPAPI:  webhookutils.NewSecurityGroupForPodsAPI(testClient, logger),
+		Log:     logger,
 	}
 	return pa
 }
@@ -101,10 +101,10 @@ func getFargatePodResourceInjectorWithSGP() *PodResourceInjector {
 	)
 	decoder, _ := admission.NewDecoder(testScheme)
 	pa := &PodResourceInjector{
-		Client:      testClient,
-		decoder:     decoder,
-		CacheHelper: webhookutils.NewK8sCacheHelper(testClient, logger),
-		Log:         logger,
+		Client:  testClient,
+		decoder: decoder,
+		SGPAPI:  webhookutils.NewSecurityGroupForPodsAPI(testClient, logger),
+		Log:     logger,
 	}
 	return pa
 }
@@ -120,10 +120,10 @@ func getFargatePodResourceInjectorWithoutSGP() *PodResourceInjector {
 	)
 	decoder, _ := admission.NewDecoder(testScheme)
 	pa := &PodResourceInjector{
-		Client:      testClient,
-		decoder:     decoder,
-		CacheHelper: webhookutils.NewK8sCacheHelper(testClient, logger),
-		Log:         logger,
+		Client:  testClient,
+		decoder: decoder,
+		SGPAPI:  webhookutils.NewSecurityGroupForPodsAPI(testClient, logger),
+		Log:     logger,
 	}
 	return pa
 }

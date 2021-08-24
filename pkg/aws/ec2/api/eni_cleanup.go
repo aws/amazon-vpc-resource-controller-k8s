@@ -23,31 +23,31 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/go-logr/logr"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 type ENICleaner struct {
-	ec2Wrapper        EC2Wrapper
+	EC2Wrapper  EC2Wrapper
+	ClusterName string
+	Log         logr.Logger
+
 	availableENIs     map[string]struct{}
 	shutdown          bool
 	clusterNameTagKey string
 	ctx               context.Context
-	log               logr.Logger
 }
 
-// NewENICleaner returns the ENICleaner
-func NewENICleaner(ec2wrapper EC2Wrapper, clusterName string, ctx context.Context, log logr.Logger) *ENICleaner {
-	return &ENICleaner{
-		ec2Wrapper:        ec2wrapper,
-		availableENIs:     make(map[string]struct{}),
-		clusterNameTagKey: fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName),
-		log:               log,
-		ctx:               ctx,
-	}
+func (e *ENICleaner) SetupWithManager(mgr ctrl.Manager) error {
+	e.clusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
+	e.availableENIs = make(map[string]struct{})
+	e.ctx = context.TODO()
+
+	return mgr.Add(e)
 }
 
 // StartENICleaner starts the ENI Cleaner routine that cleans up dangling ENIs created by the controller
 func (e *ENICleaner) Start(stop <-chan struct{}) error {
-	e.log.Info("starting eni clean up routine")
+	e.Log.Info("starting eni clean up routine")
 	// Start routine to listen for shut down signal, on receiving the signal it set shutdown to true
 	go func() {
 		<-stop
@@ -96,9 +96,9 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 	availableENIs := make(map[string]struct{})
 
 	for {
-		describeNetworkInterfaceOp, err := e.ec2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfaceIp)
+		describeNetworkInterfaceOp, err := e.EC2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfaceIp)
 		if err != nil {
-			e.log.Error(err, "failed to describe network interfaces, will retry")
+			e.Log.Error(err, "failed to describe network interfaces, will retry")
 			return
 		}
 
@@ -106,21 +106,21 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 			if _, exists := e.availableENIs[*networkInterface.NetworkInterfaceId]; exists {
 				// The ENI in available state has been sitting for at least the eni clean up interval and it should
 				// be removed
-				_, err := e.ec2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 					NetworkInterfaceId: networkInterface.NetworkInterfaceId,
 				})
 				if err != nil {
 					// Log and continue, if the ENI is still present it will be cleaned up in next 2 cycles
-					e.log.Error(err, "failed to delete the dangling network interface",
+					e.Log.Error(err, "failed to delete the dangling network interface",
 						"id", *networkInterface.NetworkInterfaceId)
 					continue
 				}
-				e.log.Info("deleted dangling ENI successfully",
+				e.Log.Info("deleted dangling ENI successfully",
 					"eni id", networkInterface.NetworkInterfaceId)
 			} else {
 				// Seeing the ENI for the first time, add it to the new list of available network interfaces
 				availableENIs[*networkInterface.NetworkInterfaceId] = struct{}{}
-				e.log.V(1).Info("adding eni to to the map of available ENIs, will be removed if present in "+
+				e.Log.V(1).Info("adding eni to to the map of available ENIs, will be removed if present in "+
 					"next run too", "id", *networkInterface.NetworkInterfaceId)
 			}
 		}

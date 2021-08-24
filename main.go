@@ -14,7 +14,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -26,35 +25,29 @@ import (
 	crdv1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip"
-	webhookutils "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhooks/core"
 
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	// +kubebuilder:scaffold:imports
 )
@@ -198,84 +191,71 @@ func main() {
 		os.Exit(1)
 	}
 
-	// creating a cache helper to handle security groups.
-	cacheHelper := webhookutils.NewK8sCacheHelper(
+	ec2Wrapper, err := ec2API.NewEC2Wrapper(roleARN, setupLog)
+	if err != nil {
+		setupLog.Error(err, "unable to create ec2 wrapper")
+	}
+	ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName)
+
+	sgpAPI := utils.NewSecurityGroupForPodsAPI(
 		mgr.GetClient(),
-		ctrl.Log.WithName("cache helper"))
+		ctrl.Log.WithName("sgp api"))
 
-	// Channels that will be notified for the create and delete events on pod object
-	podCreateUpdateEventChannel := make(chan event.GenericEvent)
-	podDeleteEventChannel := make(chan event.GenericEvent)
+	// Custom data store, with optimized Pod Object. The data store must be
+	// accessed only after the Pod Reconciler has started
+	podConverter := pod.PodConverter{}
+	dataStore := cache.NewIndexer(podConverter.Indexer, pod.NodeNameIndexer())
 
-	// Custom data store, it should not be accessed directly as the cache could be out of sync
-	// on startup. Must be accessed from the pod controller's data store instead
-	dataStore := cache.NewIndexer(pod.NSKeyIndexer, pod.NodeNameIndexer())
-
-	podController := &custom.CustomController{
-		ClientSet:    clientSet,
-		PageLimit:    int64(listPageLimit),
-		Namespace:    metav1.NamespaceAll,
-		ResyncPeriod: syncPeriod,
-		Queue:        cache.NewDeltaFIFO(pod.NSKeyIndexer, dataStore),
-		Converter: &pod.PodConverter{
-			K8sResource:     "pods",
-			K8sResourceType: &corev1.Pod{},
-		},
-		SkipCacheDeletion:                 true,
-		CreateUpdateEventNotificationChan: podCreateUpdateEventChannel,
-		DeleteEventNotificationChan:       podDeleteEventChannel,
-		Log:                               setupLog.WithName("pod custom controller"),
+	apiWrapper := api.Wrapper{
+		EC2API: ec2APIHelper,
+		K8sAPI: k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1()),
+		PodAPI: pod.NewPodAPIWrapper(dataStore, mgr.GetClient(), clientSet.CoreV1()),
+		SGPAPI: sgpAPI,
 	}
-	// Only start the controller when the leader election is won
-	mgr.Add(manager.RunnableFunc(func(stop <-chan struct{}) error {
-		setupLog.Info("starting the controller")
 
-		stopChannel := make(chan struct{})
-		// Start the custom controller
-		podController.StartController(dataStore, stopChannel)
-		// If the manager is stopped, signal the controller to stop as well.
-		<-stop
-		stopChannel <- struct{}{}
-
-		setupLog.Info("stopping the controller")
-
-		return nil
-	}))
-
-	k8sWrapper := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), podController)
-	// Get the resource providers and handlers
-	resourceHandlers, nodeManager := setUpResources(mgr, k8sWrapper, cacheHelper, roleARN, clusterName)
-
-	podReconciler := &corecontroller.PodReconciler{
-		Log:           setupLog.WithName("pod reconciler"),
-		Handlers:      resourceHandlers,
-		Manager:       nodeManager,
-		PodController: podController,
-	}
-	// The reason why we have to create two separate contorller is because we want to process the
-	// delete event when the pod is actually deleted and not when the pod's Deletion timestamp is set.
-	// With kube builder controller you only get the Request with the object namespace and not the
-	// entire event.
-	if err = (&corecontroller.CreateUpdateReconciler{
-		PodReconciler:            podReconciler,
-		CreateUpdateEventChannel: podCreateUpdateEventChannel,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Pod Create/Update Event")
+	supportedResources := []string{config.ResourceNamePodENI}
+	resourceManager, err := resource.NewResourceManager(supportedResources, apiWrapper)
+	if err != nil {
+		ctrl.Log.Error(err, "failed to init resources", "resources", supportedResources)
 		os.Exit(1)
 	}
-	if err = (&corecontroller.DeleteReconciler{
-		PodReconciler:      podReconciler,
-		DeleteEventChannel: podDeleteEventChannel,
+
+	nodeManager := node.
+		NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager, apiWrapper)
+
+	// hasPodDataStoreSynced is set to true when the custom controller has synced
+	var hasPodDataStoreSynced = new(bool)
+	controllerConditions := condition.NewControllerConditions(hasPodDataStoreSynced,
+		ctrl.Log.WithName("controller conditions"))
+
+	// IMPORTANT: The Pod Reconciler must be the first controller to Run. The controller
+	// will not allow any other controller to run till the cache has synced.
+	if err = (&corecontroller.PodReconciler{
+		Log:             ctrl.Log.WithName("controllers").WithName("Pod Reconciler"),
+		ResourceManager: resourceManager,
+		NodeManager:     nodeManager,
+		DataStore:       dataStore,
+		DataStoreSynced: hasPodDataStoreSynced,
+	}).SetupWithManager(mgr, clientSet, listPageLimit, syncPeriod); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "pod")
+		os.Exit(1)
+	}
+
+	if err = (&ec2API.ENICleaner{
+		EC2Wrapper:  ec2Wrapper,
+		ClusterName: clusterName,
+		Log:         ctrl.Log.WithName("eni cleaner"),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Pod Delete Event")
+		setupLog.Error(err, "unable to start eni cleaner")
 		os.Exit(1)
 	}
 
 	if err = (&corecontroller.NodeReconciler{
-		Client:  mgr.GetClient(),
-		Log:     ctrl.Log.WithName("controllers").WithName("Node"),
-		Scheme:  mgr.GetScheme(),
-		Manager: nodeManager,
+		Client:     mgr.GetClient(),
+		Log:        ctrl.Log.WithName("controllers").WithName("Node"),
+		Scheme:     mgr.GetScheme(),
+		Manager:    nodeManager,
+		Conditions: controllerConditions,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
 		os.Exit(1)
@@ -287,9 +267,9 @@ func main() {
 
 	setupLog.Info("registering webhooks to the webhook server")
 	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{Handler: &webhookcore.PodResourceInjector{
-		Client:      mgr.GetClient(),
-		CacheHelper: cacheHelper,
-		Log:         ctrl.Log.WithName("webhook").WithName("Pod Mutating"),
+		Client: mgr.GetClient(),
+		SGPAPI: sgpAPI,
+		Log:    ctrl.Log.WithName("webhook").WithName("Pod Mutating"),
 	}})
 
 	// Validating webhook for pod.
@@ -302,86 +282,4 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
-}
-
-// setUpResources sets up all resource providers and the node manager
-func setUpResources(manager manager.Manager, k8sWrapper k8s.K8sWrapper,
-	cacheHelper webhookutils.K8sCacheHelper, roleARN string, clusterName string) ([]handler.Handler, node.Manager) {
-
-	var resourceProviders []provider.ResourceProvider
-
-	ec2Wrapper, err := api.NewEC2Wrapper(roleARN, setupLog)
-	if err != nil {
-		setupLog.Error(err, "unable to create ec2 wrapper")
-	}
-	eniCleaner := api.NewENICleaner(ec2Wrapper, clusterName, context.Background(), ctrl.Log.WithName("eni cleaner"))
-	manager.Add(eniCleaner)
-
-	ec2APIHelper := api.NewEC2APIHelper(ec2Wrapper, clusterName)
-
-	// Load the default resource config
-	resourceConfig := config.LoadResourceConfig()
-
-	// Set up on demand handlers
-	onDemandProviders := getOnDemandResourceProviders(resourceConfig, k8sWrapper, ec2APIHelper, &resourceProviders, cacheHelper)
-	onDemandHandler := handler.NewOnDemandHandler(ctrl.Log.WithName("on demand handler"), onDemandProviders)
-
-	// Warm resource handler are not required as the Windows IP Address management is disabled on the master currently
-	//warmResourceProviders := getWarmResourceProviders(resourceConfig, k8sWrapper, ec2APIHelper, &resourceProviders)
-	//warmResourceHandler := handler.NewWarmResourceHandler(ctrl.Log.WithName("warm resource handler"),
-	//	k8sWrapper, warmResourceProviders)
-
-	// Set up the node manager
-	nodeManager := node.NewNodeManager(ctrl.Log.WithName("node manager"), resourceProviders, ec2APIHelper, k8sWrapper)
-
-	return []handler.Handler{onDemandHandler}, nodeManager
-}
-
-// getOnDemandResourceProviders returns all the providers for resource type on demand
-func getOnDemandResourceProviders(resourceConfig map[string]config.ResourceConfig, k8sWrapper k8s.K8sWrapper,
-	ec2APIHelper api.EC2APIHelper, providers *[]provider.ResourceProvider,
-	cacheHelper webhookutils.K8sCacheHelper) map[string]provider.ResourceProvider {
-
-	// Load Branch ENI Config
-	branchConfig := resourceConfig[config.ResourceNamePodENI]
-
-	// Create the branch provider and worker pool
-	branchWorker := worker.NewDefaultWorkerPool(branchConfig.Name, branchConfig.WorkerCount,
-		config.WorkQueueDefaultMaxRetries, ctrl.Log.WithName("branch eni worker"), context.Background())
-	branchProvider := branch.NewBranchENIProvider(ctrl.Log.WithName("branch eni provider"),
-		k8sWrapper, ec2APIHelper, branchWorker, cacheHelper)
-
-	// Start the branch worker to accept new jobs on the give function
-	err := branchWorker.StartWorkerPool(branchProvider.ProcessAsyncJob)
-	if err != nil {
-		setupLog.Error(err, "unable to start the branch ENI worker")
-		os.Exit(1)
-	}
-
-	// Add provider to the list of providers
-	*providers = append(*providers, branchProvider)
-
-	return map[string]provider.ResourceProvider{branchConfig.Name: branchProvider}
-}
-
-// getWarmResourceProviders returns all the warm resource providers
-func getWarmResourceProviders(resourceConfig map[string]config.ResourceConfig, k8sWrapper k8s.K8sWrapper,
-	ec2APIHelper api.EC2APIHelper, providers *[]provider.ResourceProvider) map[string]provider.ResourceProvider {
-
-	ipV4Config := resourceConfig[config.ResourceNameIPAddress]
-
-	ipv4Worker := worker.NewDefaultWorkerPool(ipV4Config.Name, ipV4Config.WorkerCount,
-		config.WorkQueueDefaultMaxRetries, ctrl.Log.WithName("secondary ipv4 worker"), context.Background())
-	ipv4Provider := ip.NewIPv4Provider(ctrl.Log.WithName("secondary ipv4 provider"),
-		ipV4Config.WarmPoolConfig, ec2APIHelper, ipv4Worker, k8sWrapper)
-
-	err := ipv4Worker.StartWorkerPool(ipv4Provider.ProcessAsyncJob)
-	if err != nil {
-		setupLog.Error(err, "unable to start the ipv4 worker")
-		os.Exit(1)
-	}
-
-	*providers = append(*providers, ipv4Provider)
-
-	return map[string]provider.ResourceProvider{ipV4Config.Name: ipv4Provider}
 }
