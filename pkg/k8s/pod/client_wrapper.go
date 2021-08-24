@@ -71,6 +71,7 @@ type PodClientAPIWrapper interface {
 	ListPods(nodeName string) (*v1.PodList, error)
 	AnnotatePod(podNamespace string, podName string, key string, val string) error
 	GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error)
+	GetRunningPodsOnNode(nodeName string) ([]v1.Pod, error)
 }
 
 type podClientAPIWrapper struct {
@@ -108,6 +109,24 @@ func NewPodAPIWrapper(dataStore cache.Indexer, client client.Client,
 		client:    client,
 		coreV1:    coreV1,
 	}
+}
+
+func (p *podClientAPIWrapper) GetRunningPodsOnNode(nodeName string) ([]v1.Pod, error) {
+	allPodList, err := p.ListPods(nodeName)
+	if err != nil {
+		return nil, err
+	}
+
+	var runningPods []v1.Pod
+	for _, pod := range allPodList.Items {
+		if pod.Status.Phase == v1.PodSucceeded || pod.Status.Phase == v1.PodFailed {
+			// Since we only want the running Pods we will skip adding
+			// the failed/succeeded Pods to the returned list
+			continue
+		}
+		runningPods = append(runningPods, pod)
+	}
+	return runningPods, nil
 }
 
 // ListPods lists the pod for a given node name by querying the API server cache

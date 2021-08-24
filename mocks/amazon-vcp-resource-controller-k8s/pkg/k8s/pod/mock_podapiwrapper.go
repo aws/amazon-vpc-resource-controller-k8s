@@ -90,6 +90,21 @@ func (mr *MockPodClientAPIWrapperMockRecorder) GetPodFromAPIServer(arg0, arg1 in
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPodFromAPIServer", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).GetPodFromAPIServer), arg0, arg1)
 }
 
+// GetRunningPodsOnNode mocks base method
+func (m *MockPodClientAPIWrapper) GetRunningPodsOnNode(arg0 string) ([]v1.Pod, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetRunningPodsOnNode", arg0)
+	ret0, _ := ret[0].([]v1.Pod)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetRunningPodsOnNode indicates an expected call of GetRunningPodsOnNode
+func (mr *MockPodClientAPIWrapperMockRecorder) GetRunningPodsOnNode(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRunningPodsOnNode", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).GetRunningPodsOnNode), arg0)
+}
+
 // ListPods mocks base method
 func (m *MockPodClientAPIWrapper) ListPods(arg0 string) (*v1.PodList, error) {
 	m.ctrl.T.Helper()

@@ -106,6 +106,9 @@ func (c *PodConverter) StripDownPod(pod *v1.Pod) *v1.Pod {
 			ServiceAccountName: pod.Spec.ServiceAccountName,
 			NodeName:           pod.Spec.NodeName,
 		},
+		Status: v1.PodStatus{
+			Phase: pod.Status.Phase,
+		},
 	}
 }
 

@@ -134,13 +134,13 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	// Initialize the Trunk ENI
 	start := time.Now()
 
-	podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
+	podList, err := b.apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
 	if err != nil {
 		log.Error(err, "failed to get list of pod on node")
 		return err
 	}
 
-	err = trunkENI.InitTrunk(instance, podList.Items)
+	err = trunkENI.InitTrunk(instance, podList)
 	if err != nil {
 		// If it's an AWS Error, get the exit code without the error message to avoid
 		// broadcasting multiple different messaged events
@@ -404,7 +404,10 @@ func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) 
 
 	err := trunkENI.PushBranchENIsToCoolDownQueue(UID)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to delte branch eni used by the pod %s", UID)
+		// Don't return an error, we don't want to requeue the job
+		log.Info("failed to delete branch ENI, pod networking could have been removed if "+
+			"pod succeeded/failed earlier", "uid", UID, "error", err)
+		return ctrl.Result{}, nil
 	}
 
 	log.V(1).Info("deleted branch interface/s used by the pod")

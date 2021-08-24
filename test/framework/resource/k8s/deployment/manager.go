@@ -19,6 +19,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
+	"github.com/aws/aws-sdk-go/aws"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -38,6 +39,39 @@ func NewManager(k8sClient client.Client) Manager {
 
 type defaultManager struct {
 	k8sClient client.Client
+}
+
+func (m *defaultManager) ScaleDeployment(ctx context.Context, name string, namespace string, replicas int) error {
+	var deployment *appsv1.Deployment
+	err := m.k8sClient.Get(ctx, types.NamespacedName{
+		Namespace: namespace,
+		Name:      name,
+	}, deployment)
+	if err != nil {
+		return err
+	}
+
+	scaledDeployment := deployment.DeepCopy()
+	scaledDeployment.Spec.Replicas = aws.Int32(int32(replicas))
+
+	err = m.k8sClient.Patch(ctx, scaledDeployment, client.MergeFrom(deployment))
+	if err != nil {
+		return err
+	}
+
+	observedDP := &appsv1.Deployment{}
+	return wait.PollImmediateUntil(utils.PollIntervalShort, func() (bool, error) {
+		if err := m.k8sClient.Get(ctx, utils.NamespacedName(scaledDeployment), observedDP); err != nil {
+			return false, err
+		}
+		if observedDP.Status.UpdatedReplicas == (*scaledDeployment.Spec.Replicas) &&
+			observedDP.Status.Replicas == (*scaledDeployment.Spec.Replicas) &&
+			observedDP.Status.AvailableReplicas == (*scaledDeployment.Spec.Replicas) &&
+			observedDP.Status.ObservedGeneration >= scaledDeployment.Generation {
+			return true, nil
+		}
+		return false, nil
+	}, ctx.Done())
 }
 
 func (m *defaultManager) CreateAndWaitUntilDeploymentReady(ctx context.Context, dp *appsv1.Deployment) (*appsv1.Deployment, error) {

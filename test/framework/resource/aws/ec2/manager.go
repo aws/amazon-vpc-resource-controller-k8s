@@ -15,6 +15,7 @@ package ec2
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
@@ -26,8 +27,11 @@ import (
 
 type Manager interface {
 	CreateSecurityGroup(groupName string) (string, error)
-	AuthorizeSecurityGroupIngress(securityGroupID string, port int) error
-	AuthorizeSecurityGroupEgress(securityGroupID string, port int) error
+	GetInstanceDetails(instanceID string) (*ec2.Instance, error)
+	GetSecurityGroupID(securityGroupName string) (string, error)
+	AuthorizeSecurityGroupIngress(securityGroupID string, port int, protocol string) error
+	RevokeSecurityGroupIngress(securityGroupID string, port int, protocol string) error
+	AuthorizeSecurityGroupEgress(securityGroupID string, port int, protocol string) error
 	DeleteSecurityGroup(securityGroupID string) error
 	GetENISecurityGroups(eniID string) ([]string, error)
 	WaitTillTheENIIsDeleted(ctx context.Context, eniID string) error
@@ -55,24 +59,66 @@ func (d *defaultManager) CreateSecurityGroup(groupName string) (string, error) {
 	return *createSecurityGroupOutput.GroupId, err
 }
 
-func (d *defaultManager) AuthorizeSecurityGroupIngress(securityGroupID string, port int) error {
+func (d *defaultManager) GetInstanceDetails(instanceID string) (*ec2.Instance, error) {
+	describeInstanceOutput, err := d.ec2Client.DescribeInstances(&ec2.DescribeInstancesInput{
+		InstanceIds: aws.StringSlice([]string{instanceID}),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if describeInstanceOutput == nil || describeInstanceOutput.Reservations == nil ||
+		len(describeInstanceOutput.Reservations) == 0 ||
+		len(describeInstanceOutput.Reservations[0].Instances) == 0 {
+		return nil, fmt.Errorf("couldn't find the instnace %s", instanceID)
+	}
+	return describeInstanceOutput.Reservations[0].Instances[0], nil
+}
+
+func (d *defaultManager) AuthorizeSecurityGroupIngress(securityGroupID string, port int,
+	protocol string) error {
+
 	_, err := d.ec2Client.AuthorizeSecurityGroupIngress(&ec2.AuthorizeSecurityGroupIngressInput{
-		CidrIp:     aws.String("0.0.0.0/0"),
-		GroupId:    &securityGroupID,
-		IpProtocol: aws.String("tcp"),
-		FromPort:   aws.Int64(int64(port)),
-		ToPort:     aws.Int64(int64(port)),
+		GroupId: &securityGroupID,
+		IpPermissions: []*ec2.IpPermission{
+			{
+				FromPort:   aws.Int64(int64(port)),
+				IpProtocol: aws.String(protocol),
+				IpRanges:   []*ec2.IpRange{{CidrIp: aws.String("0.0.0.0/0")}},
+				ToPort:     aws.Int64(int64(port)),
+			},
+		},
 	})
 	return err
 }
 
-func (d *defaultManager) AuthorizeSecurityGroupEgress(securityGroupID string, port int) error {
+func (d *defaultManager) AuthorizeSecurityGroupEgress(securityGroupID string, port int,
+	protocol string) error {
 	_, err := d.ec2Client.AuthorizeSecurityGroupEgress(&ec2.AuthorizeSecurityGroupEgressInput{
-		CidrIp:     aws.String("0.0.0.0/0"),
-		GroupId:    &securityGroupID,
-		IpProtocol: aws.String("tcp"),
-		FromPort:   aws.Int64(int64(port)),
-		ToPort:     aws.Int64(int64(port)),
+		GroupId: &securityGroupID,
+		IpPermissions: []*ec2.IpPermission{
+			{
+				FromPort:   aws.Int64(int64(port)),
+				IpProtocol: aws.String(protocol),
+				IpRanges:   []*ec2.IpRange{{CidrIp: aws.String("0.0.0.0/0")}},
+				ToPort:     aws.Int64(int64(port)),
+			},
+		},
+	})
+	return err
+}
+
+func (d *defaultManager) RevokeSecurityGroupIngress(securityGroupID string, port int,
+	protocol string) error {
+	_, err := d.ec2Client.RevokeSecurityGroupIngress(&ec2.RevokeSecurityGroupIngressInput{
+		GroupId: aws.String(securityGroupID),
+		IpPermissions: []*ec2.IpPermission{
+			{
+				FromPort:   aws.Int64(int64(port)),
+				IpProtocol: aws.String(protocol),
+				IpRanges:   []*ec2.IpRange{{CidrIp: aws.String("0.0.0.0/0")}},
+				ToPort:     aws.Int64(int64(port)),
+			},
+		},
 	})
 	return err
 }
@@ -98,6 +144,30 @@ func (d *defaultManager) GetENISecurityGroups(eniID string) ([]string, error) {
 	}
 
 	return securityGroups, nil
+}
+
+func (d *defaultManager) GetSecurityGroupID(securityGroupName string) (string, error) {
+	securityGroupOutput, err := d.ec2Client.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("vpc-id"),
+				Values: aws.StringSlice([]string{d.vpcID}),
+			},
+			{
+				Name:   aws.String("group-name"),
+				Values: aws.StringSlice([]string{securityGroupName}),
+			},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if securityGroupOutput == nil || securityGroupOutput.SecurityGroups == nil ||
+		len(securityGroupOutput.SecurityGroups) == 0 {
+		return "", fmt.Errorf("failed to find security group ID %s", securityGroupOutput)
+	}
+
+	return *securityGroupOutput.SecurityGroups[0].GroupId, nil
 }
 
 func (d *defaultManager) WaitTillTheENIIsDeleted(ctx context.Context, eniID string) error {

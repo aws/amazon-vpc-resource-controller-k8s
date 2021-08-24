@@ -291,7 +291,7 @@ func Test_isWindowsNode_Linux(t *testing.T) {
 
 // Test_getNodeInstanceID test if the correct node id is retrieved from the provider id
 func Test_getNodeInstanceID(t *testing.T) {
-	id := getNodeInstanceID(v1Node)
+	id := GetNodeInstanceID(v1Node)
 	assert.Equal(t, instanceID, id)
 }
 

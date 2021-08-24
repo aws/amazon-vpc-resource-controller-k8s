@@ -73,6 +73,8 @@ check_is_installed kustomize
 
 CLUSTER_NAME=$(add_suffix "$CLUSTER_NAME")
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity | jq .Account -r)}"
+VPC_ID=$(aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION | jq -r '.cluster.resourcesVpcConfig.vpcId')
+KUBE_CONFIG_PATH=~/.kube/config
 
 # If Role name is not provided, use the default role name
 if [[ -z "$VPC_RC_ROLE_ARN" ]]; then
@@ -116,17 +118,38 @@ function disable_eks_controller() {
   --patch "$(cat "$TEMPLATE_DIR/cp-vpc-leader-election-role-patch.yaml")"
 }
 
-function run_sgp_integration_test() {
+function set_pod_eni_flag_on_ipamd() {
+  local flag=$1
+  echo "Setting Pod ENI on aws-node/ipamd to $flag"
+  kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=$flag
+}
+
+function run_inegration_test() {
   echo "running Security Group for Pods integration tests"
-  KUBE_CONFIG_PATH=~/.kube/config \
-  CLUSTER_NAME=$CLUSTER_NAME \
-  REGION=$AWS_REGION \
-  sh test/integration/run.sh
+
+  local additional_gingko_params=$1
+
+  (cd test/integration/perpodsg && \
+  CGO_ENABLED=0 ginkgo $additional_gingko_params \
+  -v -timeout 20m -- \
+  -cluster-kubeconfig=$KUBE_CONFIG_PATH \
+  -cluster-name=$CLUSTER_NAME \
+  --aws-region=$AWS_REGION \
+  --aws-vpc-id $VPC_ID)
+
+  (cd test/integration/webhook && \
+  CGO_ENABLED=0 ginkgo $additional_gingko_params -v -timeout 10m -- \
+  -cluster-kubeconfig=$KUBE_CONFIG_PATH \
+  -cluster-name=$CLUSTER_NAME \
+  --aws-region=$AWS_REGION \
+  --aws-vpc-id $VPC_ID)
+
+  # Add Windows Tests once feature enabled
 }
 
 function verify_controller_has_lease() {
   # Get the name of the VPC Resource Controller Pod
-  local controller_pod_name="$(kubectl get pods -n kube-system -l app=vpc-resource-controller \
+  local controller_pod_names="$(kubectl get pods -n kube-system -l app=vpc-resource-controller \
   --no-headers -o custom-columns=":metadata.name")"
 
   # Wait till the new controller has acquired the leader lease
@@ -137,10 +160,14 @@ function verify_controller_has_lease() {
     | jq '.metadata.annotations."control-plane.alpha.kubernetes.io/leader"' --raw-output \
     | jq .holderIdentity --raw-output)"
 
-    if [[ $lease_holder == $controller_pod_name* ]]; then
-      echo "new controller has the lease: $lease_holder"
-      break
-    elif [[ i -ge 20 ]]; then
+    for controller_pod_name in $controller_pod_names
+    do
+       if [[ $lease_holder == $controller_pod_name* ]]; then
+          echo "one of the new controller has the lease: $lease_holder"
+          break 2
+       fi
+    done
+    if  [[ i -ge 20 ]]; then
       echo "new controller failed to accquire leader lease in $i attempts"
       exit 1
     else
@@ -191,6 +218,11 @@ trap 'clean_up' EXIT
 # certificates for the Webhooks
 sh "$SCRIPTS_DIR/install-cert-manager.sh"
 
+# Enables the SGP feature on IPAMD, which lables the node
+# with a fetaure flag used by controller to start managing
+# the node for ENI Trunking/Branching
+set_pod_eni_flag_on_ipamd "true"
+
 # Login to ECR to push the controller image
 ecr_login "$AWS_REGION" "$ECR_URL"
 
@@ -210,8 +242,17 @@ disable_eks_controller
 # Verify the Controller on Data Plane has the leader lease
 verify_controller_has_lease
 
-# Run Ginko Test for Security Group for Pods
-run_sgp_integration_test
+# Run Ginko Test for Security Group for Pods and skip all the local tests as
+# they require restarts and it will lead to leader lease being switched and the
+# next validation step failing
+run_inegration_test "--skip=LOCAL"
 
 # Verify the leader lease didn't transition during the execution of test cases
 verify_leader_lease_didnt_change
+
+# Run Local Ginko Test that require multiple restarts of controller for negative
+# scenarios testing
+run_inegration_test "--focus=LOCAL"
+
+# Revert back to initial state after the test
+set_pod_eni_flag_on_ipamd "false"

@@ -15,6 +15,7 @@ package verify
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -38,33 +39,74 @@ func NewPodVerification(framework *framework.Framework, ctx context.Context) *Po
 	}
 }
 
-func (v *PodVerification) PodHasExpectedSG(pod *v1.Pod, expectedSecurityGroup []string) []*trunk.ENIDetails {
+func (v *PodVerification) verifyPodIPEqualsENIIP(pod v1.Pod) {
 	By("getting the branch ENI from the pod's annotation")
 	eniDetails, err := v.frameWork.PodManager.GetENIDetailsFromPodAnnotation(pod.Annotations)
 	Expect(err).NotTo(HaveOccurred())
 
-	By("getting the security group for the ENI from AWS EC2 ")
-	actualSG, err := v.frameWork.EC2Manager.GetENISecurityGroups(eniDetails[0].ID)
+	By(fmt.Sprintf("Verifying for ENI ID: %s ENI IP: %s Pod Name: %s/%s Pod's IP: %s",
+		eniDetails[0].ID, eniDetails[0].IPV4Addr, pod.Namespace, pod.Name, pod.Status.PodIP))
+
+	Expect(eniDetails[0].IPV4Addr).To(Equal(pod.Status.PodIP))
+}
+
+func (v *PodVerification) VerifyNetworkingOfPodUsingENI(pod v1.Pod, expectedSecurityGroup []string) []*trunk.ENIDetails {
+	v.verifyPodIPEqualsENIIP(pod)
+
+	eniDetails, err := v.frameWork.PodManager.GetENIDetailsFromPodAnnotation(pod.Annotations)
 	Expect(err).NotTo(HaveOccurred())
 
+	By("getting the security group for the ENI from AWS EC2")
+	actualSG, err := v.frameWork.EC2Manager.GetENISecurityGroups(eniDetails[0].ID)
+	Expect(err).NotTo(HaveOccurred())
 	Expect(expectedSecurityGroup).Should(ConsistOf(actualSG))
-
-	By("getting the same IP address as the branch ENI IP")
-	Expect(eniDetails[0].IPV4Addr).To(Equal(pod.Status.PodIP))
 
 	return eniDetails
 }
 
-func (v *PodVerification) PodsHaveExpectedSG(namespace string, podLabelKey string, podLabelVal string,
-	expectedSecurityGroup []string) {
+func (v *PodVerification) VerifyNetworkingOfAllPodUsingENI(namespace string, podLabelKey string,
+	podLabelVal string, expectedSecurityGroup []string) {
 
 	By("getting the pod belonging to the deployment")
 	pods, err := v.frameWork.PodManager.GetPodsWithLabel(v.ctx, namespace, podLabelKey, podLabelVal)
 	Expect(err).ToNot(HaveOccurred())
 
-	for _, pod := range pods {
-		v.PodHasExpectedSG(&pod, expectedSecurityGroup)
+	if len(pods) == 0 {
+		panic(fmt.Errorf("failed to find any pod with label %s:%s in ns %s",
+			podLabelKey, podLabelVal, namespace))
 	}
+
+	for _, pod := range pods {
+		v.VerifyNetworkingOfPodUsingENI(pod, expectedSecurityGroup)
+	}
+}
+
+func (v *PodVerification) VerifyPodENIDeletedForAllPods(namespace string,
+	podLabelKey string, podLabelVal string) {
+
+	By("getting the pod belonging to the deployment")
+	pods, err := v.frameWork.PodManager.GetPodsWithLabel(v.ctx, namespace, podLabelKey, podLabelVal)
+	Expect(err).ToNot(HaveOccurred())
+
+	if len(pods) == 0 {
+		panic(fmt.Errorf("failed to find any pod with label %s:%s in ns %s",
+			podLabelKey, podLabelVal, namespace))
+	}
+
+	for _, pod := range pods {
+		v.VerifyPodENIDeleted(pod)
+	}
+}
+
+func (v *PodVerification) VerifyPodENIDeleted(pod v1.Pod) {
+	v.verifyPodIPEqualsENIIP(pod)
+
+	eniDetails, err := v.frameWork.PodManager.GetENIDetailsFromPodAnnotation(pod.Annotations)
+	Expect(err).NotTo(HaveOccurred())
+
+	By("verifying the ENI is deleted")
+	_, err = v.frameWork.EC2Manager.GetENISecurityGroups(eniDetails[0].ID)
+	Expect(err).To(HaveOccurred())
 }
 
 func (v *PodVerification) PodHasNoBranchENIAnnotationInjected(pod *v1.Pod) {
