@@ -219,12 +219,12 @@ function redirect_vpc_controller_logs() {
   while ps -p $BASHPID > /dev/null
   do
     kubectl logs -n kube-system -l app=vpc-resource-controller \
-    --tail -1 -f > $CONTROLLER_LOG_FILE || echo "existing controller killed, will retry"
+    --tail -1 -f >> $CONTROLLER_LOG_FILE || echo "LOG COLLECTOR:existing controller killed, will retry"
     # Allow for the new controller to come up
     sleep 10
   done
 
-  echo "log redirection process exiting"
+  echo "LOG COLLECTOR: exiting the process"
 }
 
 # Delete the IAM Policies, Roles and the EKS Cluster
