@@ -25,6 +25,7 @@ EOM
 
 SCRIPTS_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
 TEMPLATE_DIR=$SCRIPTS_DIR/template/rbac
+BASHPID=$$
 
 source "$SCRIPTS_DIR/lib/common.sh"
 
@@ -75,6 +76,7 @@ CLUSTER_NAME=$(add_suffix "$CLUSTER_NAME")
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity | jq .Account -r)}"
 VPC_ID=$(aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION | jq -r '.cluster.resourcesVpcConfig.vpcId')
 KUBE_CONFIG_PATH=~/.kube/config
+CONTROLLER_LOG_FILE=/tmp/$CLUSTER_NAME.logs
 
 # If Role name is not provided, use the default role name
 if [[ -z "$VPC_RC_ROLE_ARN" ]]; then
@@ -202,13 +204,27 @@ function get_leader_lease_transistion_count() {
 }
 
 function output_logs() {
-  kubectl logs -n kube-system -l app=vpc-resource-controller --tail -1
+  cat $CONTROLLER_LOG_FILE
 }
 
 function clean_up() {
   echo "cleaning up..."
   delete_ecr_image "$ECR_REPOSITORY" "$ECR_IMAGE_TAG"
   output_logs
+}
+
+function redirect_vpc_controller_logs() {
+  # Till the time the bash process keeps running, keep on redirecting the logs to the file
+  # The parent process will log the output of the file on exit
+  while ps -p $BASHPID > /dev/null
+  do
+    kubectl logs -n kube-system -l app=vpc-resource-controller \
+    --tail -1 -f > $CONTROLLER_LOG_FILE || echo "existing controller killed, will retry"
+    # Allow for the new controller to come up
+    sleep 10
+  done
+
+  echo "log redirection process exiting"
 }
 
 # Delete the IAM Policies, Roles and the EKS Cluster
@@ -235,6 +251,11 @@ build_and_push_image
 
 # Install the CRD and the Controller on the Data Plane
 install_controller
+
+# Start redirecting the logs to the log file which will be outputted at
+# when the script exits. This log should be run in background and exit
+# when the bash script exits
+redirect_vpc_controller_logs &
 
 # Disable the Controller on EKS Control Plane
 disable_eks_controller
