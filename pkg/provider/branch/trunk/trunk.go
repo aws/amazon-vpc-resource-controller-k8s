@@ -71,7 +71,7 @@ type TrunkENI interface {
 	// CreateAndAssociateBranchENIs creates and associate branch interface/s to trunk interface
 	CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int) ([]*ENIDetails, error)
 	// PushBranchENIsToCoolDownQueue pushes the branch interface belonging to the pod to the cool down queue
-	PushBranchENIsToCoolDownQueue(UID string) error
+	PushBranchENIsToCoolDownQueue(UID string)
 	// DeleteCooledDownENIs deletes the interfaces that have been sitting in the queue for cool down period
 	DeleteCooledDownENIs()
 	// Reconcile compares the cache state with the list of pods to identify events that were missed and clean up the dangling interfaces
@@ -390,15 +390,17 @@ func (t *trunkENI) DeleteAllBranchENIs() {
 }
 
 // DeleteBranchNetworkInterface deletes the branch network interface and returns an error in case of failure to delete
-func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) error {
+func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 	// Lock is required as Reconciler is also performing operation concurrently
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
 	branchENIs, isPresent := t.uidToBranchENIMap[UID]
 	if !isPresent {
+		t.log.Info("failed to find Branch ENI in cache, it could have been released if pod" +
+			"succeeded/failed before being deleted", "uid", UID)
 		trunkENIOperationsErrCount.WithLabelValues("get_branch_from_cache").Inc()
-		return fmt.Errorf("failed to find branch ENI in cache for pod %s", UID)
+		return
 	}
 
 	for _, eni := range branchENIs {
@@ -410,8 +412,6 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) error {
 
 	t.log.Info("moved branch network interfaces to delete queue", "interface/s",
 		branchENIs, "uid", UID)
-
-	return nil
 }
 
 func (t *trunkENI) DeleteCooledDownENIs() {

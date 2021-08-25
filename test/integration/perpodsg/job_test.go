@@ -103,7 +103,9 @@ var _ = Describe("Security Group Per Pod", func() {
 
 			serverContainer := manifest.NewBusyBoxContainerBuilder().
 				Image("nginx").
-				AddContainerPort(serverPort).
+				AddContainerPort(v1.ContainerPort{
+					ContainerPort: int32(serverPort),
+				}).
 				Command(nil).
 				Build()
 

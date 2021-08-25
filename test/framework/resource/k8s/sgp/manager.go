@@ -43,7 +43,7 @@ func (d *defaultManager) DeleteAndWaitTillSecurityGroupIsDeleted(ctx context.Con
 	}
 
 	observedSgp := &v1beta1.SecurityGroupPolicy{}
-	return wait.PollImmediateUntil(utils.PollIntervalShort, func() (done bool, err error) {
+	return wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
 		err = d.k8sClient.Get(ctx, utils.NamespacedName(sgp), observedSgp)
 		if errors.IsNotFound(err) {
 			return true, nil

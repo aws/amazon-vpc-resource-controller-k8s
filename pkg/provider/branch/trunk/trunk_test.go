@@ -548,10 +548,9 @@ func TestTrunkENI_PushBranchENIsToCoolDownQueue(t *testing.T) {
 
 	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails1, EniDetails2}
 
-	err := trunkENI.PushBranchENIsToCoolDownQueue(PodUID)
+	trunkENI.PushBranchENIsToCoolDownQueue(PodUID)
 	_, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 
-	assert.NoError(t, err)
 	assert.Equal(t, 2, len(trunkENI.deleteQueue))
 	assert.Equal(t, EniDetails1, trunkENI.deleteQueue[0])
 	assert.Equal(t, EniDetails2, trunkENI.deleteQueue[1])

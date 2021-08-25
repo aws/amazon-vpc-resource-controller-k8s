@@ -62,7 +62,7 @@ func (d *defaultManager) WaitTillControllerHasLeaderLease(ctx context.Context) (
 	}
 
 	var leaderPodName string
-	err = wait.PollImmediateUntil(utils.PollIntervalMedium, func() (done bool, err error) {
+	err = wait.PollUntil(utils.PollIntervalMedium, func() (done bool, err error) {
 		err = d.k8sClient.Get(ctx, types.NamespacedName{
 			Namespace: Namespace,
 			Name:      LeaderLeaseMapName,

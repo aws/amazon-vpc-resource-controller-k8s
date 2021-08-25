@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
@@ -50,11 +49,8 @@ func (m *defaultManager) CreateJobAndWaitForJobToRun(ctx context.Context,
 		return nil, err
 	}
 
-	// Wait till the cache is refreshed
-	time.Sleep(utils.PollIntervalShort)
-
 	observedJob := &batchV1.Job{}
-	return observedJob, wait.PollImmediateUntil(utils.PollIntervalShort, func() (bool, error) {
+	return observedJob, wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
 		podList := &v1.PodList{}
 		err = m.k8sClient.List(ctx, podList, &client.ListOptions{
 			LabelSelector: labels.SelectorFromSet(jobs.Spec.Template.Labels),
@@ -89,11 +85,8 @@ func (m *defaultManager) CreateAndWaitForJobToComplete(ctx context.Context,
 		return nil, err
 	}
 
-	// Wait till the cache is refreshed
-	time.Sleep(utils.PollIntervalShort)
-
 	observedJob := &batchV1.Job{}
-	return observedJob, wait.PollImmediateUntil(utils.PollIntervalShort, func() (bool, error) {
+	return observedJob, wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(jobs), observedJob); err != nil {
 			return false, err
 		}
@@ -112,7 +105,8 @@ func (m *defaultManager) DeleteAndWaitTillJobIsDeleted(ctx context.Context, job 
 		return err
 	}
 	observedJob := &batchV1.Job{}
-	err = wait.PollImmediateUntil(utils.PollIntervalShort, func() (bool, error) {
+
+	err = wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(job), observedJob); err != nil {
 			if errors.IsNotFound(err) {
 				return true, nil

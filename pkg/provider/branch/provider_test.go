@@ -209,7 +209,7 @@ func TestBranchENIProvider_DeleteBranchUsedByPods(t *testing.T) {
 	provider.trunkENICache[NodeName] = fakeTrunk1
 	provider.trunkENICache[NodeName+"2"] = fakeTrunk2
 
-	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1).Return(nil)
+	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1)
 
 	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
 
@@ -230,11 +230,11 @@ func TestBranchENIProvider_DeleteBranchUsedByPods_PodNotFound(t *testing.T) {
 	provider.trunkENICache[NodeName] = fakeTrunk1
 	provider.trunkENICache[NodeName+"2"] = fakeTrunk2
 
-	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1).Return(MockError)
+	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1)
 
 	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
 
-	assert.Error(t, MockError, err)
+	assert.Nil(t, err)
 }
 
 // TestBranchENIProvider_DeInitResources verifies that resources is removed from cache after calling de init workflow

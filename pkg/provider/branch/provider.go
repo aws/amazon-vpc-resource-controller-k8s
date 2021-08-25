@@ -395,24 +395,14 @@ func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) 
 	b.lock.RLock()
 	defer b.lock.RUnlock()
 
-	log := b.log.WithValues("node", nodeName, "uid", UID)
-
 	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
 	if !isPresent {
 		return ctrl.Result{}, fmt.Errorf("failed to find trunk ENI on the node %s", nodeName)
 	}
 
-	err := trunkENI.PushBranchENIsToCoolDownQueue(UID)
-	if err != nil {
-		// Don't return an error, we don't want to requeue the job
-		log.Info("failed to delete branch ENI, pod networking could have been removed if "+
-			"pod succeeded/failed earlier", "uid", UID, "error", err)
-		return ctrl.Result{}, nil
-	}
+	trunkENI.PushBranchENIsToCoolDownQueue(UID)
 
-	log.V(1).Info("deleted branch interface/s used by the pod")
-
-	return ctrl.Result{}, err
+	return ctrl.Result{}, nil
 }
 
 // addTrunkToCache adds the trunk eni to cache, if the trunk already exists an error is thrown

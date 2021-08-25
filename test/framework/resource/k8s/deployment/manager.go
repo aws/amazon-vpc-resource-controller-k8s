@@ -15,8 +15,6 @@ package deployment
 
 import (
 	"context"
-	"time"
-
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -42,7 +40,7 @@ type defaultManager struct {
 }
 
 func (m *defaultManager) ScaleDeployment(ctx context.Context, name string, namespace string, replicas int) error {
-	var deployment *appsv1.Deployment
+	deployment := &appsv1.Deployment{}
 	err := m.k8sClient.Get(ctx, types.NamespacedName{
 		Namespace: namespace,
 		Name:      name,
@@ -60,7 +58,7 @@ func (m *defaultManager) ScaleDeployment(ctx context.Context, name string, names
 	}
 
 	observedDP := &appsv1.Deployment{}
-	return wait.PollImmediateUntil(utils.PollIntervalShort, func() (bool, error) {
+	return wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(scaledDeployment), observedDP); err != nil {
 			return false, err
 		}
@@ -80,11 +78,8 @@ func (m *defaultManager) CreateAndWaitUntilDeploymentReady(ctx context.Context, 
 		return nil, err
 	}
 
-	// Wait till the cache is refreshed
-	time.Sleep(utils.PollIntervalShort)
-
 	observedDP := &appsv1.Deployment{}
-	return observedDP, wait.PollImmediateUntil(utils.PollIntervalShort, func() (bool, error) {
+	return observedDP, wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(dp), observedDP); err != nil {
 			return false, err
 		}
@@ -104,7 +99,8 @@ func (m *defaultManager) DeleteAndWaitUntilDeploymentDeleted(ctx context.Context
 		return err
 	}
 	observedDP := &appsv1.Deployment{}
-	return wait.PollImmediateUntil(utils.PollIntervalShort, func() (bool, error) {
+
+	return wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(dp), observedDP); err != nil {
 			if errors.IsNotFound(err) {
 				return true, nil
@@ -130,7 +126,7 @@ func (m *defaultManager) ScaleDeploymentAndWaitTillReady(ctx context.Context, na
 		return err
 	}
 
-	return wait.PollImmediateUntil(utils.PollIntervalShort, func() (bool, error) {
+	return wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
 		if err := m.k8sClient.Get(ctx, namespacedName, deploymentCopy); err != nil {
 			return false, err
 		}

@@ -112,7 +112,7 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 		}
 		logger.V(1).Info("handled resource without error",
 			"resource", resourceName, "is delete event", isDeleteEvent,
-			"has completed pod", hasPodCompleted)
+			"has pod completed", hasPodCompleted)
 	}
 
 	return ctrl.Result{}, nil

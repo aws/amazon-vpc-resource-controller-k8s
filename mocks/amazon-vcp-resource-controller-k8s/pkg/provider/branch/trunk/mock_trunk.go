@@ -102,11 +102,9 @@ func (mr *MockTrunkENIMockRecorder) InitTrunk(arg0, arg1 interface{}) *gomock.Ca
 }
 
 // PushBranchENIsToCoolDownQueue mocks base method
-func (m *MockTrunkENI) PushBranchENIsToCoolDownQueue(arg0 string) error {
+func (m *MockTrunkENI) PushBranchENIsToCoolDownQueue(arg0 string) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PushBranchENIsToCoolDownQueue", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
+	m.ctrl.Call(m, "PushBranchENIsToCoolDownQueue", arg0)
 }
 
 // PushBranchENIsToCoolDownQueue indicates an expected call of PushBranchENIsToCoolDownQueue

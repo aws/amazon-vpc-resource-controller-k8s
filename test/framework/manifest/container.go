@@ -23,7 +23,7 @@ type Container struct {
 	imagePullPolicy v1.PullPolicy
 	command         []string
 	args            []string
-	containerPort   []v1.ContainerPort
+	containerPorts  []v1.ContainerPort
 }
 
 func NewBusyBoxContainerBuilder() *Container {
@@ -71,10 +71,8 @@ func (w *Container) Args(arg []string) *Container {
 	return w
 }
 
-func (w *Container) AddContainerPort(containerPort int) *Container {
-	w.containerPort = append(w.containerPort, v1.ContainerPort{
-		ContainerPort: int32(containerPort),
-	})
+func (w *Container) AddContainerPort(containerPort v1.ContainerPort) *Container {
+	w.containerPorts = append(w.containerPorts, containerPort)
 	return w
 }
 
@@ -85,6 +83,6 @@ func (w *Container) Build() v1.Container {
 		Command:         w.command,
 		Args:            w.args,
 		ImagePullPolicy: w.imagePullPolicy,
-		Ports:           w.containerPort,
+		Ports:           w.containerPorts,
 	}
 }
