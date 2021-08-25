@@ -17,10 +17,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -66,6 +68,13 @@ func (v *PodVerification) VerifyNetworkingOfPodUsingENI(pod v1.Pod, expectedSecu
 
 func (v *PodVerification) VerifyNetworkingOfAllPodUsingENI(namespace string, podLabelKey string,
 	podLabelVal string, expectedSecurityGroup []string) {
+
+	// Allow for cache to sync, seen in the past that when deployment becomes ready,
+	// on listing the Pod for that deployment from cache, they have missing IP Address.
+	// Secondly, also observer ENIs queried immediately after creations return an error
+	// given the API is eventually consistent. This is a hacky solution for now that tackles
+	// both the issues.
+	time.Sleep(utils.PollIntervalMedium)
 
 	By("getting the pod belonging to the deployment")
 	pods, err := v.frameWork.PodManager.GetPodsWithLabel(v.ctx, namespace, podLabelKey, podLabelVal)
