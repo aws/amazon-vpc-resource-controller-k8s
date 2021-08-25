@@ -102,6 +102,7 @@ var _ = Describe("Security Group Per Pod", func() {
 			sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, sgp)
 
 			serverContainer := manifest.NewBusyBoxContainerBuilder().
+				Name("sgp-server").
 				Image("nginx").
 				AddContainerPort(v1.ContainerPort{
 					ContainerPort: int32(serverPort),
