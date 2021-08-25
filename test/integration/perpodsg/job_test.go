@@ -109,12 +109,14 @@ var _ = Describe("Security Group Per Pod", func() {
 				Command(nil).
 				Build()
 
+			// Need the TerminationGracePeriod because of the following issue in IPAMD
+			// https://github.com/aws/amazon-vpc-cni-k8s/issues/1313#issuecomment-901818609
 			serverPod, err = manifest.NewDefaultPodBuilder().
 				Namespace(namespace).
 				Name("sgp-server").
 				Container(serverContainer).
 				Labels(map[string]string{serverPodLabelKey: serverPodLabelVal}).
-				TerminationGracePeriod(15).
+				TerminationGracePeriod(30).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -137,7 +139,7 @@ var _ = Describe("Security Group Per Pod", func() {
 						Command([]string{"/bin/sh"}).
 						Args([]string{"-c",
 							fmt.Sprintf(
-								"set -e; curl --fail --max-time 5 --retry 3 %s; sleep %d;",
+								"set -e; curl --fail --max-time 7 --retry 3 %s; sleep %d;",
 								serverPod.Status.PodIP, jobSleepSeconds)}).
 						Build()
 
@@ -151,7 +153,7 @@ var _ = Describe("Security Group Per Pod", func() {
 						Container(jobContainer).
 						PodLabels(jobPodLabelKey, jobPodLabelVal).
 						ForNode(testNode.Name).
-						TerminationGracePeriod(10).
+						TerminationGracePeriod(30).
 						Build()
 					jobList = append(jobList, job)
 				}
@@ -195,7 +197,7 @@ var _ = Describe("Security Group Per Pod", func() {
 
 			Context("when jobs are currently running", func() {
 				BeforeEach(func() {
-					jobSleepSeconds = 100
+					jobSleepSeconds = 200
 				})
 
 				It("job networking should not be removed", func() {
