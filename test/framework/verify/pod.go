@@ -69,11 +69,11 @@ func (v *PodVerification) VerifyNetworkingOfPodUsingENI(pod v1.Pod, expectedSecu
 func (v *PodVerification) VerifyNetworkingOfAllPodUsingENI(namespace string, podLabelKey string,
 	podLabelVal string, expectedSecurityGroup []string) {
 
-	// Allow for cache to sync, seen in the past that when deployment becomes ready,
-	// on listing the Pod for that deployment from cache, they have missing IP Address.
-	// Secondly, also observer ENIs queried immediately after creations return an error
-	// given the API is eventually consistent. This is a hacky solution for now that tackles
-	// both the issues.
+	// Observed two failure modes in the past without the sleep. In first failure mode,
+	// when the deployment becomes ready, the list operation to get deployment Pods from
+	// the cache returns Pod with stale data (Missing IP Address). In second failure mode,
+	// a query to get a newly created ENI fails because EC2 API is eventually consistent.
+	// This is a hacky solution which tackles both the issues for now.
 	time.Sleep(utils.PollIntervalMedium)
 
 	By("getting the pod belonging to the deployment")
