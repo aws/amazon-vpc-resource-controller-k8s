@@ -18,7 +18,6 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	_ "net/http"
 	_ "net/http/pprof"
 	"os"
 	"time"
@@ -128,8 +127,14 @@ func main() {
 	encoderConfig.TimeKey = "timestamp"
 	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 
+	// Setting up log file
+	logFile, err := os.OpenFile("/var/log/vpc-resource-controller.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		os.Exit(1)
+	}
+
 	ctrl.SetLogger(zap.New(zap.UseDevMode(enableDevLogging), zap.Level(&logLvl),
-		zap.Encoder(zapcore.NewJSONEncoder(encoderConfig))))
+		zap.Encoder(zapcore.NewJSONEncoder(encoderConfig)), zap.WriteTo(logFile)))
 
 	// Variables injected with ldflags on building the binary
 	setupLog.Info("version",
