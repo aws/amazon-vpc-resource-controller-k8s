@@ -124,6 +124,8 @@ function set_pod_eni_flag_on_ipamd() {
   local flag=$1
   echo "Setting Pod ENI on aws-node/ipamd to $flag"
   kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=$flag
+
+  kubectl rollout status daemonset aws-node -n kube-system
 }
 
 function run_inegration_test() {
@@ -230,14 +232,12 @@ function redirect_vpc_controller_logs() {
 # Delete the IAM Policies, Roles and the EKS Cluster
 trap 'clean_up' EXIT
 
+# Install the stable version of VPC CNI
+sh "$SCRIPTS_DIR/install-vpc-cni.sh" "v1.7.10"
+
 # Install Cert Manager which is used for generating the
 # certificates for the Webhooks
 sh "$SCRIPTS_DIR/install-cert-manager.sh"
-
-# Enables the SGP feature on IPAMD, which lables the node
-# with a fetaure flag used by controller to start managing
-# the node for ENI Trunking/Branching
-set_pod_eni_flag_on_ipamd "true"
 
 # Login to ECR to push the controller image
 ecr_login "$AWS_REGION" "$ECR_URL"
@@ -262,6 +262,11 @@ disable_eks_controller
 
 # Verify the Controller on Data Plane has the leader lease
 verify_controller_has_lease
+
+# Enables the SGP feature on IPAMD, which lables the node
+# with a fetaure flag used by controller to start managing
+# the node for ENI Trunking/Branching
+set_pod_eni_flag_on_ipamd "true"
 
 # Run Ginko Test for Security Group for Pods and skip all the local tests as
 # they require restarts and it will lead to leader lease being switched and the

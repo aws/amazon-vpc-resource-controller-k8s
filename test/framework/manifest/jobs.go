@@ -50,7 +50,7 @@ func NewLinuxJob() *JobBuilder {
 		os:                     "linux",
 		restartPolicy:          v1.RestartPolicyNever,
 		labels:                 map[string]string{},
-		terminationGracePeriod: 0,
+		terminationGracePeriod: 10,
 	}
 }
 
