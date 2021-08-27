@@ -18,7 +18,6 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	_ "net/http"
 	_ "net/http/pprof"
 	"os"
 	"time"
@@ -40,6 +39,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhooks/core"
+	"github.com/go-logr/zapr"
 
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -53,7 +53,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	// +kubebuilder:scaffold:imports
@@ -89,6 +88,7 @@ func main() {
 	var leaderLeaseDurationSeconds int
 	var leaderLeaseRenewDeadline int
 	var leaderLeaseRetryPeriod int
+	var outputPath string
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080",
 		"The address the metric endpoint binds to.")
@@ -115,6 +115,7 @@ func main() {
 	flag.StringVar(&clusterName, "cluster-name", "", "The name of the k8s cluster")
 	flag.IntVar(&listPageLimit, "page-limit", 100,
 		"The page size limiting the number of response for list operation to API Server")
+	flag.StringVar(&outputPath, "log-file", "stderr", "The path to redirect controller logs")
 
 	flag.Parse()
 
@@ -123,13 +124,25 @@ func main() {
 	if logLevel == "debug" {
 		logLvl = zapRaw.NewAtomicLevelAt(-1)
 	}
-	// Change from the default epoch time to human readable time format
-	encoderConfig := zapRaw.NewProductionEncoderConfig()
-	encoderConfig.TimeKey = "timestamp"
-	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 
-	ctrl.SetLogger(zap.New(zap.UseDevMode(enableDevLogging), zap.Level(&logLvl),
-		zap.Encoder(zapcore.NewJSONEncoder(encoderConfig))))
+	// Set up log file
+	cfg := zapRaw.NewProductionConfig()
+	cfg.OutputPaths = []string{
+		outputPath,
+	}
+	cfg.Level = logLvl
+	// Change from the default epoch time to human readable time format
+	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	cfg.EncoderConfig.TimeKey = "timestamp"
+	cfg.Development = enableDevLogging
+
+	logger, err := cfg.Build()
+	if err != nil {
+		fmt.Println("Unable to set up logger, cannot start the controller:", err)
+		os.Exit(1)
+	}
+
+	ctrl.SetLogger(zapr.NewLogger(logger))
 
 	// Variables injected with ldflags on building the binary
 	setupLog.Info("version",
