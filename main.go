@@ -115,7 +115,7 @@ func main() {
 	flag.StringVar(&clusterName, "cluster-name", "", "The name of the k8s cluster")
 	flag.IntVar(&listPageLimit, "page-limit", 100,
 		"The page size limiting the number of response for list operation to API Server")
-	flag.StringVar(&outputPath, "output-path", "stderr", "The output path to redirect controller logs")
+	flag.StringVar(&outputPath, "log-file", "stderr", "The path to redirect controller logs")
 
 	flag.Parse()
 
@@ -138,6 +138,7 @@ func main() {
 
 	logger, err := cfg.Build()
 	if err != nil {
+		fmt.Println("Unable to set up logger, cannot start the controller:", err)
 		os.Exit(1)
 	}
 
