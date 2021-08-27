@@ -11,21 +11,18 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package sgp
+package node
 
 import (
 	"context"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
-
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/util/wait"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type Manager interface {
-	DeleteAndWaitTillSecurityGroupIsDeleted(ctx context.Context, sgp *v1beta1.SecurityGroupPolicy) error
+	GetNodesWithOS(os string) (*v1.NodeList, error)
 }
 
 type defaultManager struct {
@@ -36,18 +33,10 @@ func NewManager(k8sClient client.Client) Manager {
 	return &defaultManager{k8sClient: k8sClient}
 }
 
-func (d *defaultManager) DeleteAndWaitTillSecurityGroupIsDeleted(ctx context.Context, sgp *v1beta1.SecurityGroupPolicy) error {
-	err := d.k8sClient.Delete(ctx, sgp)
-	if err != nil {
-		return err
-	}
-
-	observedSgp := &v1beta1.SecurityGroupPolicy{}
-	return wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
-		err = d.k8sClient.Get(ctx, utils.NamespacedName(sgp), observedSgp)
-		if errors.IsNotFound(err) {
-			return true, nil
-		}
-		return false, err
-	}, ctx.Done())
+func (d *defaultManager) GetNodesWithOS(os string) (*v1.NodeList, error) {
+	nodeList := &v1.NodeList{}
+	err := d.k8sClient.List(context.TODO(), nodeList, &client.ListOptions{
+		LabelSelector: labels.SelectorFromSet(map[string]string{"kubernetes.io/os": os}),
+	})
+	return nodeList, err
 }

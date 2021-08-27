@@ -71,14 +71,14 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	pods, err := p.apiWrapper.PodAPI.ListPods(nodeName)
+	pods, err := p.apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
 	if err != nil {
 		return err
 	}
 
 	podToResourceMap := map[string]string{}
 	usedIPSet := map[string]struct{}{}
-	for _, pod := range pods.Items {
+	for _, pod := range pods {
 		annotation, present := pod.Annotations[config.ResourceNameIPAddress]
 		if !present {
 			continue

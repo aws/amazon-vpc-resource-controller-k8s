@@ -14,7 +14,6 @@
 package resource
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
@@ -54,5 +53,5 @@ func Test_NewResourceManager(t *testing.T) {
 	assert.True(t, ok)
 
 	handlers := manger.GetResourceHandlers()
-	assert.True(t, reflect.DeepEqual(handlers, []handler.Handler{podENIHandler, ipAddressHandler}))
+	assert.ElementsMatch(t, handlers, []handler.Handler{podENIHandler, ipAddressHandler})
 }

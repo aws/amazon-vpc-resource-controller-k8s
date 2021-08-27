@@ -47,6 +47,8 @@ type PodReconciler struct {
 // if the resource is supported by the controller.
 func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 	var isDeleteEvent bool
+	var hasPodCompleted bool
+
 	var pod *v1.Pod
 
 	if request.DeletedObject != nil {
@@ -67,6 +69,11 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 		// convert to pod object
 		pod = obj.(*v1.Pod)
 	}
+
+	// If Pod is Completed, the networking for the Pod should be removed
+	// given the container will not be restarted again
+	hasPodCompleted = pod.Status.Phase == v1.PodSucceeded ||
+		pod.Status.Phase == v1.PodFailed
 
 	logger := r.Log.WithValues("UID", pod.UID, "pod", request.NamespacedName,
 		"node", pod.Spec.NodeName)
@@ -95,7 +102,7 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 
 		var err error
 		var result ctrl.Result
-		if isDeleteEvent {
+		if isDeleteEvent || hasPodCompleted {
 			result, err = resourceHandler.HandleDelete(pod)
 		} else {
 			result, err = resourceHandler.HandleCreate(int(totalCount), pod)
@@ -104,7 +111,8 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 			return result, err
 		}
 		logger.V(1).Info("handled resource without error",
-			"resource", resourceName, "is delete event", isDeleteEvent)
+			"resource", resourceName, "is delete event", isDeleteEvent,
+			"has pod completed", hasPodCompleted)
 	}
 
 	return ctrl.Result{}, nil
@@ -125,7 +133,7 @@ func getAggregateResources(pod *v1.Pod) map[string]int64 {
 	return aggregateResources
 }
 
-// SetupWithManager adds the custom Pod controller's runnable to the mangers
+// SetupWithManager adds the custom Pod controller's runnable to the manager's
 // list of runnable. After Manager acquire the lease the pod controller runnable
 // will be started and the Pod events will be sent to Reconcile function
 func (r *PodReconciler) SetupWithManager(manager ctrl.Manager,

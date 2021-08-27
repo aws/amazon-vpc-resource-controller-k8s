@@ -15,8 +15,6 @@ package service
 
 import (
 	"context"
-	"time"
-
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
 	v1 "k8s.io/api/core/v1"
@@ -57,11 +55,8 @@ func (s *defaultManager) CreateService(ctx context.Context, service *v1.Service)
 		return nil, err
 	}
 
-	// Wait till the cache is refreshed
-	time.Sleep(utils.PollIntervalShort)
-
 	observedService := &v1.Service{}
-	return observedService, wait.PollImmediateUntil(utils.PollIntervalShort, func() (bool, error) {
+	return observedService, wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
 		if err := s.k8sClient.Get(ctx, utils.NamespacedName(service), observedService); err != nil {
 			return false, err
 		}

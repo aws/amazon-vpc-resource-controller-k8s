@@ -55,7 +55,7 @@ func (m *defaultManager) DeleteAndWaitTillNamespaceDeleted(ctx context.Context, 
 	}
 
 	observedNamespace := &v1.Namespace{}
-	return wait.PollImmediateUntil(utils.PollIntervalShort, func() (done bool, err error) {
+	return wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
 		err = m.k8sClient.Get(ctx, utils.NamespacedName(namespaceObj), observedNamespace)
 		if errors.IsNotFound(err) {
 			return true, nil

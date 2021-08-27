@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	podName      = "name"
+	podName      = "running-pod"
 	podNamespace = "namespace"
 
 	oldAnnotation = "old-annotation-key"
@@ -38,16 +38,17 @@ var (
 	newAnnotation      = "new-annotation"
 	newAnnotationValue = "new-annotation-val"
 
-	mockPod = &v1.Pod{
+	podTemplate = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        podName,
 			Namespace:   podNamespace,
 			Annotations: map[string]string{oldAnnotation: oldAnnotation},
 		},
 		Spec:   v1.PodSpec{NodeName: mockNode.Name},
 		Status: v1.PodStatus{},
 	}
+
+	failedPod, completedPod, runningPod *v1.Pod
 
 	nodeName = "node-name"
 
@@ -72,8 +73,22 @@ func getMockPodAPIWithClient() (PodClientAPIWrapper, client.Client) {
 	scheme := runtime.NewScheme()
 	_ = v1.AddToScheme(scheme)
 
-	client := fakeClient.NewFakeClientWithScheme(scheme, mockPod, mockNode)
-	clientSet := fakeClientSet.NewSimpleClientset(mockPod)
+	runningPod = podTemplate.DeepCopy()
+	runningPod.Name = podName
+	runningPod.Status.Phase = v1.PodRunning
+
+	completedPod = podTemplate.DeepCopy()
+	completedPod.Name = "completed-pod"
+	completedPod.Status.Phase = v1.PodSucceeded
+
+	failedPod = podTemplate.DeepCopy()
+	failedPod.Name = "failed-pod"
+	failedPod.Status.Phase = v1.PodFailed
+
+	mockObjects := []runtime.Object{failedPod, completedPod, runningPod}
+
+	client := fakeClient.NewFakeClientWithScheme(scheme, mockObjects...)
+	clientSet := fakeClientSet.NewSimpleClientset(mockObjects...)
 	ds := getFakeDataStore()
 
 	return NewPodAPIWrapper(ds, client, clientSet.CoreV1()), client
@@ -91,7 +106,9 @@ func getFakeDataStore() cache.Indexer {
 			Name:      pod.Name,
 		}.String(), nil
 	}, indexer)
-	store.Add(mockPod)
+	store.Add(runningPod)
+	store.Add(completedPod)
+	store.Add(failedPod)
 	return store
 }
 
@@ -102,7 +119,16 @@ func TestPodAPI_GetPodFromAPIServer(t *testing.T) {
 	pod, err := podAPI.GetPodFromAPIServer(podNamespace, podName)
 
 	assert.NoError(t, err)
-	assert.Equal(t, mockPod, pod)
+	assert.Equal(t, runningPod, pod)
+}
+
+func TestPodAPI_GetRunningPodsOnNode(t *testing.T) {
+	podAPI, _ := getMockPodAPIWithClient()
+
+	podList, err := podAPI.GetRunningPodsOnNode(nodeName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, podList[0], *runningPod)
 }
 
 // TestPodPAI_GetPodFromAPIServer_NoError tests that error is returned when the pod doesn't exist
@@ -122,8 +148,7 @@ func TestPodAPI_ListPods(t *testing.T) {
 	podList, err := podAPI.ListPods(nodeName)
 
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(podList.Items))
-	assert.Equal(t, mockPod.UID, podList.Items[0].UID)
+	assert.ElementsMatch(t, podList.Items, []v1.Pod{*runningPod, *completedPod, *failedPod})
 }
 
 // TestPodAPI_AnnotatePod tests that annotate pod doesn't throw error on adding a new annotation to pod
@@ -155,8 +180,7 @@ func TestPodAPI_AnnotatePod_PodNotExists(t *testing.T) {
 // TestPodAPI_GetPod gets the pod object form the wrapper api
 func TestPodAPI_GetPod(t *testing.T) {
 	podAPI, _ := getMockPodAPIWithClient()
-	testPod := mockPod.DeepCopy()
-
+	testPod := runningPod.DeepCopy()
 	pod, err := podAPI.GetPod(podNamespace, podName)
 	assert.NoError(t, err)
 	assert.Equal(t, testPod.ObjectMeta, pod.ObjectMeta)

@@ -17,8 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
-
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
@@ -52,11 +50,9 @@ func (d *defaultManager) CreateAndWaitTillPodIsRunning(context context.Context, 
 	if err != nil {
 		return nil, err
 	}
-	// Allow the cache to sync, without the interval cache may be stale and return an error
-	time.Sleep(utils.PollIntervalShort)
 
 	updatedPod := &v1.Pod{}
-	err = wait.PollImmediateUntil(utils.PollIntervalShort, func() (done bool, err error) {
+	err = wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
 		err = d.k8sClient.Get(context, utils.NamespacedName(pod), updatedPod)
 		if err != nil {
 			return true, err
@@ -72,11 +68,9 @@ func (d *defaultManager) CreateAndWaitTillPodIsCompleted(context context.Context
 	if err != nil {
 		return nil, err
 	}
-	// Allow the cache to sync, without the interval cache may be stale and return an error
-	time.Sleep(utils.PollIntervalShort)
 
 	updatedPod := &v1.Pod{}
-	err = wait.PollImmediateUntil(utils.PollIntervalShort, func() (done bool, err error) {
+	err = wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
 		err = d.k8sClient.Get(context, utils.NamespacedName(pod), updatedPod)
 		if err != nil {
 			return true, err
@@ -112,7 +106,7 @@ func (d *defaultManager) DeleteAndWaitTillPodIsDeleted(context context.Context, 
 	}
 
 	observedPod := &v1.Pod{}
-	return wait.PollImmediateUntil(utils.PollIntervalShort, func() (done bool, err error) {
+	return wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
 		err = d.k8sClient.Get(context, utils.NamespacedName(pod), observedPod)
 		if errors.IsNotFound(err) {
 			return true, nil

@@ -21,10 +21,8 @@ import (
 	podWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/pod"
 	sgpWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
-
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -94,8 +92,10 @@ var _ = Describe("Branch ENI Pods", func() {
 		Context("when the deployment is created", func() {
 			It("should have all the pods running", func() {
 				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
-				deploymentWrapper.CreateAndWaitForDeploymentToStart(frameWork.DeploymentManager, ctx, deployment)
-				verify.PodsHaveExpectedSG(namespace, podLabelKey, podLabelValue, securityGroups)
+				deploymentWrapper.
+					CreateAndWaitForDeploymentToStart(frameWork.DeploymentManager, ctx, deployment)
+				verify.VerifyNetworkingOfAllPodUsingENI(namespace, podLabelKey, podLabelValue,
+					securityGroups)
 			})
 		})
 	})
@@ -120,7 +120,7 @@ var _ = Describe("Branch ENI Pods", func() {
 			It("should get the SG from SGP in pod's namespace", func() {
 				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-				verify.PodHasExpectedSG(pod, securityGroups)
+				verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 			})
 		})
 
@@ -131,7 +131,7 @@ var _ = Describe("Branch ENI Pods", func() {
 			It("should get the SG from SGP in default namespace", func() {
 				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-				verify.PodHasExpectedSG(pod, securityGroups)
+				verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 			})
 		})
 
@@ -147,7 +147,7 @@ var _ = Describe("Branch ENI Pods", func() {
 			It("should run with the branch ENI and wait till the branch is deleted", func() {
 				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-				eniList = verify.PodHasExpectedSG(pod, securityGroups)
+				eniList = verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 			})
 		})
 
@@ -178,7 +178,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy2)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, append(securityGroups, securityGroupID2))
+					verify.VerifyNetworkingOfPodUsingENI(*pod, append(securityGroups, securityGroupID2))
 				})
 			})
 
@@ -192,7 +192,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy2)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, []string{securityGroupID1, securityGroupID2})
+					verify.VerifyNetworkingOfPodUsingENI(*pod, []string{securityGroupID1, securityGroupID2})
 				})
 			})
 		})
@@ -219,7 +219,7 @@ var _ = Describe("Branch ENI Pods", func() {
 				It("should run with Branch ENI IP with the SG from the matched SGP", func() {
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, securityGroups)
+					verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 				})
 			})
 
@@ -266,7 +266,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					It("should run with branch ENI annotation", func() {
 						sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 						pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-						verify.PodHasExpectedSG(pod, securityGroups)
+						verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 					})
 				})
 			})
@@ -283,7 +283,7 @@ var _ = Describe("Branch ENI Pods", func() {
 				)
 				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
 				By("the pod has two sgs")
-				verify.PodHasExpectedSG(pod, []string{securityGroupID1, securityGroupID2})
+				verify.VerifyNetworkingOfPodUsingENI(*pod, []string{securityGroupID1, securityGroupID2})
 			})
 		})
 
@@ -331,7 +331,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					CreateServiceAccount(sa)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, securityGroups)
+					verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 				})
 			})
 
@@ -348,7 +348,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					CreateServiceAccount(sa)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, securityGroups)
+					verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 				})
 			})
 
@@ -374,7 +374,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					CreateServiceAccount(sa)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, securityGroups)
+					verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 				})
 			})
 		})

@@ -131,7 +131,7 @@ func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func(res
 		}
 
 		// Node is eligible for management.
-		instanceId := getNodeInstanceID(v1Node)
+		instanceId := GetNodeInstanceID(v1Node)
 		os := getNodeOS(v1Node)
 
 		if instanceId == "" || os == "" {
@@ -233,8 +233,8 @@ func (m *manager) isSelectedForManagement(v1node *v1.Node) bool {
 	return canAttachTrunk(v1node)
 }
 
-// getNodeInstanceID returns the EC2 instance ID of a node
-func getNodeInstanceID(node *v1.Node) string {
+// GetNodeInstanceID returns the EC2 instance ID of a node
+func GetNodeInstanceID(node *v1.Node) string {
 	var instanceID string
 
 	if node.Spec.ProviderID != "" {

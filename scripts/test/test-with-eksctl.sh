@@ -25,6 +25,7 @@ EOM
 
 SCRIPTS_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
 TEMPLATE_DIR=$SCRIPTS_DIR/template/rbac
+BASHPID=$$
 
 source "$SCRIPTS_DIR/lib/common.sh"
 
@@ -73,6 +74,9 @@ check_is_installed kustomize
 
 CLUSTER_NAME=$(add_suffix "$CLUSTER_NAME")
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity | jq .Account -r)}"
+VPC_ID=$(aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION | jq -r '.cluster.resourcesVpcConfig.vpcId')
+KUBE_CONFIG_PATH=~/.kube/config
+CONTROLLER_LOG_FILE=/tmp/$CLUSTER_NAME.logs
 
 # If Role name is not provided, use the default role name
 if [[ -z "$VPC_RC_ROLE_ARN" ]]; then
@@ -116,17 +120,40 @@ function disable_eks_controller() {
   --patch "$(cat "$TEMPLATE_DIR/cp-vpc-leader-election-role-patch.yaml")"
 }
 
-function run_sgp_integration_test() {
+function set_pod_eni_flag_on_ipamd() {
+  local flag=$1
+  echo "Setting Pod ENI on aws-node/ipamd to $flag"
+  kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=$flag
+
+  kubectl rollout status daemonset aws-node -n kube-system
+}
+
+function run_inegration_test() {
   echo "running Security Group for Pods integration tests"
-  KUBE_CONFIG_PATH=~/.kube/config \
-  CLUSTER_NAME=$CLUSTER_NAME \
-  REGION=$AWS_REGION \
-  sh test/integration/run.sh
+
+  local additional_gingko_params=$1
+
+  (cd test/integration/perpodsg && \
+  CGO_ENABLED=0 ginkgo $additional_gingko_params \
+  -v -timeout 20m -- \
+  -cluster-kubeconfig=$KUBE_CONFIG_PATH \
+  -cluster-name=$CLUSTER_NAME \
+  --aws-region=$AWS_REGION \
+  --aws-vpc-id $VPC_ID)
+
+  (cd test/integration/webhook && \
+  CGO_ENABLED=0 ginkgo $additional_gingko_params -v -timeout 10m -- \
+  -cluster-kubeconfig=$KUBE_CONFIG_PATH \
+  -cluster-name=$CLUSTER_NAME \
+  --aws-region=$AWS_REGION \
+  --aws-vpc-id $VPC_ID)
+
+  # Add Windows Tests once feature enabled
 }
 
 function verify_controller_has_lease() {
   # Get the name of the VPC Resource Controller Pod
-  local controller_pod_name="$(kubectl get pods -n kube-system -l app=vpc-resource-controller \
+  local controller_pod_names="$(kubectl get pods -n kube-system -l app=vpc-resource-controller \
   --no-headers -o custom-columns=":metadata.name")"
 
   # Wait till the new controller has acquired the leader lease
@@ -137,10 +164,14 @@ function verify_controller_has_lease() {
     | jq '.metadata.annotations."control-plane.alpha.kubernetes.io/leader"' --raw-output \
     | jq .holderIdentity --raw-output)"
 
-    if [[ $lease_holder == $controller_pod_name* ]]; then
-      echo "new controller has the lease: $lease_holder"
-      break
-    elif [[ i -ge 20 ]]; then
+    for controller_pod_name in $controller_pod_names
+    do
+       if [[ $lease_holder == $controller_pod_name* ]]; then
+          echo "one of the new controller has the lease: $lease_holder"
+          break 2
+       fi
+    done
+    if  [[ i -ge 20 ]]; then
       echo "new controller failed to accquire leader lease in $i attempts"
       exit 1
     else
@@ -175,7 +206,7 @@ function get_leader_lease_transistion_count() {
 }
 
 function output_logs() {
-  kubectl logs -n kube-system -l app=vpc-resource-controller --tail -1
+  cat $CONTROLLER_LOG_FILE
 }
 
 function clean_up() {
@@ -184,8 +215,25 @@ function clean_up() {
   output_logs
 }
 
+function redirect_vpc_controller_logs() {
+  # Till the time the bash process keeps running, keep on redirecting the logs to the file
+  # The parent process will log the output of the file on exit
+  while ps -p $BASHPID > /dev/null
+  do
+    kubectl logs -n kube-system -l app=vpc-resource-controller \
+    --tail -1 -f >> $CONTROLLER_LOG_FILE || echo "LOG COLLECTOR:existing controller killed, will retry"
+    # Allow for the new controller to come up
+    sleep 10
+  done
+
+  echo "LOG COLLECTOR: exiting the process"
+}
+
 # Delete the IAM Policies, Roles and the EKS Cluster
 trap 'clean_up' EXIT
+
+# Install the stable version of VPC CNI
+sh "$SCRIPTS_DIR/install-vpc-cni.sh" "v1.7.10"
 
 # Install Cert Manager which is used for generating the
 # certificates for the Webhooks
@@ -204,14 +252,33 @@ build_and_push_image
 # Install the CRD and the Controller on the Data Plane
 install_controller
 
+# Start redirecting the logs to the log file which will be outputted at
+# when the script exits. This log should be run in background and exit
+# when the bash script exits
+redirect_vpc_controller_logs &
+
 # Disable the Controller on EKS Control Plane
 disable_eks_controller
 
 # Verify the Controller on Data Plane has the leader lease
 verify_controller_has_lease
 
-# Run Ginko Test for Security Group for Pods
-run_sgp_integration_test
+# Enables the SGP feature on IPAMD, which lables the node
+# with a fetaure flag used by controller to start managing
+# the node for ENI Trunking/Branching
+set_pod_eni_flag_on_ipamd "true"
+
+# Run Ginko Test for Security Group for Pods and skip all the local tests as
+# they require restarts and it will lead to leader lease being switched and the
+# next validation step failing
+run_inegration_test "--skip=LOCAL"
 
 # Verify the leader lease didn't transition during the execution of test cases
 verify_leader_lease_didnt_change
+
+# Run Local Ginko Test that require multiple restarts of controller for negative
+# scenarios testing
+run_inegration_test "--focus=LOCAL"
+
+# Revert back to initial state after the test
+set_pod_eni_flag_on_ipamd "false"

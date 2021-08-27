@@ -53,13 +53,14 @@ func (p *PodBuilder) Build() (*v1.Pod, error) {
 
 func NewDefaultPodBuilder() *PodBuilder {
 	return &PodBuilder{
-		namespace:              "default",
-		name:                   utils.ResourceNamePrefix + "pod",
-		container:              NewBusyBoxContainerBuilder().Build(),
-		os:                     "linux",
-		labels:                 map[string]string{},
-		annotations:            map[string]string{},
-		terminationGracePeriod: 0,
+		namespace:   "default",
+		name:        utils.ResourceNamePrefix + "pod",
+		container:   NewBusyBoxContainerBuilder().Build(),
+		os:          "linux",
+		labels:      map[string]string{},
+		annotations: map[string]string{},
+		// See https://github.com/aws/amazon-vpc-cni-k8s/issues/1313#issuecomment-901818609
+		terminationGracePeriod: 10,
 		restartPolicy:          v1.RestartPolicyNever,
 	}
 }
