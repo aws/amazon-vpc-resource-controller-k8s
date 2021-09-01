@@ -20,7 +20,6 @@ package mock_node
 import (
 	node "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	gomock "github.com/golang/mock/gomock"
-	v1 "k8s.io/api/core/v1"
 	reflect "reflect"
 )
 
@@ -47,18 +46,18 @@ func (m *MockManager) EXPECT() *MockManagerMockRecorder {
 	return m.recorder
 }
 
-// AddOrUpdateNode mocks base method
-func (m *MockManager) AddOrUpdateNode(arg0 *v1.Node) error {
+// AddNode mocks base method
+func (m *MockManager) AddNode(arg0 string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AddOrUpdateNode", arg0)
+	ret := m.ctrl.Call(m, "AddNode", arg0)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// AddOrUpdateNode indicates an expected call of AddOrUpdateNode
-func (mr *MockManagerMockRecorder) AddOrUpdateNode(arg0 interface{}) *gomock.Call {
+// AddNode indicates an expected call of AddNode
+func (mr *MockManagerMockRecorder) AddNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddOrUpdateNode", reflect.TypeOf((*MockManager)(nil).AddOrUpdateNode), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddNode", reflect.TypeOf((*MockManager)(nil).AddNode), arg0)
 }
 
 // DeleteNode mocks base method
@@ -88,4 +87,18 @@ func (m *MockManager) GetNode(arg0 string) (node.Node, bool) {
 func (mr *MockManagerMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNode", reflect.TypeOf((*MockManager)(nil).GetNode), arg0)
+}
+
+// UpdateNode mocks base method
+func (m *MockManager) UpdateNode(arg0 string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateNode", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateNode indicates an expected call of UpdateNode
+func (mr *MockManagerMockRecorder) UpdateNode(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateNode", reflect.TypeOf((*MockManager)(nil).UpdateNode), arg0)
 }

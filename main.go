@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -31,10 +32,11 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
+	asyncWorkers "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhooks/core"
 
 	zapRaw "go.uber.org/zap"
@@ -220,8 +222,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	nodeManager := node.
-		NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager, apiWrapper)
+	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
+		3, 1, ctrl.Log.WithName("node async workers"), context.TODO())
+	nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager, apiWrapper, nodeManagerWorkers)
+	if err != nil {
+		ctrl.Log.Error(err, "failed to init node manager")
+		os.Exit(1)
+	}
 
 	// hasPodDataStoreSynced is set to true when the custom controller has synced
 	var hasPodDataStoreSynced = new(bool)

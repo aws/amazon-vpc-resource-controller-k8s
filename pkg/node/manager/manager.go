@@ -11,19 +11,19 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package node
+package manager
 
 import (
 	"fmt"
-	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
-	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
+	asyncWorker "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
@@ -34,153 +34,208 @@ type manager struct {
 	Log logr.Logger
 	// lock to prevent multiple routines to write/update to data store concurrently
 	lock sync.RWMutex
-	// dataStore is the in memory data store of all the managed nodes in the cluster
-	dataStore map[string]Node
+	// dataStore is the in memory data store of all the managed/un-managed nodes in the cluster
+	dataStore map[string]node.Node
 	// resourceManager provides the resource provider for all supported resources
 	resourceManager resource.ResourceManager
-	// ec2APIHelper is the helper function to get instance details from EC2 API
-	ec2APIHelper ec2API.EC2APIHelper
 	// wrapper around the clients for all APIs used by controller
 	wrapper api.Wrapper
+	// worker for performing async operation on node APIs
+	worker asyncWorker.Worker
 }
 
+// Manager to perform operation of list of managed/un-managed node
 type Manager interface {
-	AddOrUpdateNode(v1Node *v1.Node) error
+	GetNode(nodeName string) (node node.Node, found bool)
+	AddNode(nodeName string) error
+	UpdateNode(nodeName string) error
 	DeleteNode(nodeName string) error
-	GetNode(nodeName string) (node Node, managed bool)
+}
+
+// AsyncOperation is operation on a node after the lock has been released.
+// All AsyncOperation are done without lock as it involves API calls that
+// will temporarily block the access to Manager in Pod Watcher. This is done
+// to prevent Pod startup latency for already processed nodes.
+type AsyncOperation string
+
+const (
+	Init   = AsyncOperation("Init")
+	Update = AsyncOperation("Update")
+	Delete = AsyncOperation("Delete")
+)
+
+type AsyncOperationJob struct {
+	op       AsyncOperation
+	node     node.Node
+	nodeName string
 }
 
 // NewNodeManager returns a new node manager
-func NewNodeManager(logger logr.Logger,
-	resourceManager resource.ResourceManager, wrapper api.Wrapper) Manager {
-	return &manager{
+func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
+	wrapper api.Wrapper, worker asyncWorker.Worker) (Manager, error) {
+
+	manager := &manager{
 		resourceManager: resourceManager,
 		Log:             logger,
-		dataStore:       make(map[string]Node),
+		dataStore:       make(map[string]node.Node),
 		wrapper:         wrapper,
+		worker:          worker,
 	}
+
+	return manager, worker.StartWorkerPool(manager.performAsyncOperation)
 }
 
-// GetNode returns the node from in memory store
-func (m *manager) GetNode(nodeName string) (node Node, managed bool) {
+// GetNode returns the node from in memory data store
+func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 
-	node, managed = m.dataStore[nodeName]
+	node, found = m.dataStore[nodeName]
 	return
 }
 
-// AddNode adds or updates the node to the node manager cache and performs resource initialization/updates based
-// on the managed status of the node.
-func (m *manager) AddOrUpdateNode(v1Node *v1.Node) error {
-	// postUnlockOperation is any operation that involves making network call. It must be done after
-	// releasing the node manager lock to allow concurrent processing of multiple nodes and not blocking
-	// the GetNode call in the critical path of pod processing.
-	postUnlockOperation, err := m.addOrUpdateNode(v1Node)
+// AddNode adds the managed and un-managed nodes to the in memory data store, the
+// user of node can verify if the node is managed before performing any operations
+func (m *manager) AddNode(nodeName string) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
 
+	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to add node %s, doesn't exist in cache anymore", nodeName)
 	}
 
-	return m.performPostUnlockOperation(v1Node.Name, postUnlockOperation)
+	log := m.Log.WithValues("node name", k8sNode.Name, "request", "add")
+
+	var newNode node.Node
+	var nodeFound bool
+
+	newNode, nodeFound = m.dataStore[k8sNode.Name]
+	if nodeFound {
+		log.Info("node is already processed, not processing add event again")
+		return nil
+	}
+
+	shouldManage := m.isSelectedForManagement(k8sNode)
+	var op AsyncOperation
+
+	if shouldManage {
+		newNode = node.NewManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
+			GetNodeOS(k8sNode))
+		err := m.updateSubnetIfUsingENIConfig(newNode, k8sNode)
+		if err != nil {
+			return err
+		}
+		m.dataStore[k8sNode.Name] = newNode
+		log.Info("node added as a managed node")
+		op = Init
+	} else {
+		newNode = node.NewUnManagedNode()
+		m.dataStore[k8sNode.Name] = newNode
+		log.V(1).Info("node added as an un-managed node")
+		return nil
+	}
+
+	m.worker.SubmitJob(AsyncOperationJob{
+		op:       op,
+		node:     newNode,
+		nodeName: nodeName,
+	})
+	return nil
+}
+
+// UpdateNode updates the node object and, if the node is previously un-managed and now
+// is selected for management, node resources are initialized, if the node is managed
+// and now is not required to be managed, it's resources are de-initialized. Finally,
+// if there is no toggling, the resources are updated
+func (m *manager) UpdateNode(nodeName string) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
+	if err != nil {
+		return fmt.Errorf("failed to update node %s, doesn't exist in cache anymore", nodeName)
+	}
+
+	log := m.Log.WithValues("node name", nodeName, "request", "update")
+
+	cachedNode, found := m.dataStore[nodeName]
+	if !found {
+		m.Log.Info("the node doesn't exist in cache anymore, it might have been deleted")
+	}
+
+	isSelectedForManagement := m.isSelectedForManagement(k8sNode)
+
+	hasToggledToManagedNode := isSelectedForManagement && !cachedNode.IsManaged()
+	hasToggledToUnManagedNode := !isSelectedForManagement && cachedNode.IsManaged()
+
+	var op AsyncOperation
+	// Node was not being managed, but not it's managed
+	if hasToggledToManagedNode {
+		log.Info("node was previously un-managed, will be added as managed node now")
+		cachedNode = node.NewManagedNode(m.Log, k8sNode.Name,
+			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode))
+		m.dataStore[nodeName] = cachedNode
+		op = Init
+	} else if hasToggledToUnManagedNode {
+		log.Info("node was being managed earlier, will be added as un-managed node now")
+		// Change the node in cache, but for de initializing all resource providers
+		// pass the async job the older cached value instead
+		m.dataStore[nodeName] = node.NewUnManagedNode()
+		op = Delete
+	} else if !cachedNode.IsManaged() {
+		log.V(1).Info("node not managed, no operation required")
+		return nil
+	} else {
+		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
+		if err != nil {
+			return err
+		}
+		op = Update
+	}
+
+	m.worker.SubmitJob(AsyncOperationJob{
+		op:       op,
+		node:     cachedNode,
+		nodeName: nodeName,
+	})
+	return nil
 }
 
 // DeleteNode deletes the nodes from the cache and cleans up the resources used by all the resource providers
 func (m *manager) DeleteNode(nodeName string) error {
-	// postUnlockOperation is any operation that involves making network call. It must be done after
-	// releasing the node manager lock to allow concurrent processing of multiple nodes and not blocking
-	// the GetNode call in the critical path of pod processing.
-	postUnlockOperation, err := m.deleteNode(nodeName)
-
-	if err != nil {
-		return err
-	}
-
-	return m.performPostUnlockOperation(nodeName, postUnlockOperation)
-}
-
-// addOrUpdateNode adds eligible nodes to the cache. If the node was previously managed and
-// is not eligible for management currently, the node is removed
-func (m *manager) addOrUpdateNode(v1Node *v1.Node) (postUnlockOperation func(resource.ResourceManager, ec2API.EC2APIHelper) error, err error) {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	log := m.Log.WithValues("node name", v1Node.Name, "request", "add/update")
-
-	node, managed := m.dataStore[v1Node.Name]
-
-	if managed { // Cache hit
-		shouldManageNode := m.isSelectedForManagement(v1Node)
-		if shouldManageNode {
-			log.V(1).Info("no updates on the managed status of the node")
-			err = m.updateSubnetIfUsingENIConfig(node, v1Node)
-			postUnlockOperation = node.UpdateResources
-			return
-		}
-
-		delete(m.dataStore, v1Node.Name)
-		postUnlockOperation = node.DeleteResources
-
-		log.Info("node removed from the list of managed node as it's not eligible for management anymore")
-
-	} else { // Cache miss
-		isSelected := m.isSelectedForManagement(v1Node)
-		if !isSelected {
-			log.V(1).Info("skipping as node is not eligible for management by controller")
-			return
-		}
-
-		// Node is eligible for management.
-		instanceId := GetNodeInstanceID(v1Node)
-		os := getNodeOS(v1Node)
-
-		if instanceId == "" || os == "" {
-			err = fmt.Errorf("instance id %s or os %s  not found in the label", instanceId, os)
-			log.Error(err, "not adding node to list of managed node")
-			return
-		}
-
-		node := NewNode(m.Log.WithName("node initializer").WithValues("name",
-			v1Node.Name), v1Node.Name, instanceId, os)
-
-		err = m.updateSubnetIfUsingENIConfig(node, v1Node)
-		if err != nil {
-			return
-		}
-
-		m.dataStore[v1Node.Name] = node
-		postUnlockOperation = node.InitResources
-
-		log.Info("node added to list of managed node")
-	}
-	return
-}
-
-// deleteNode deletes the nodes from the node manager cache
-func (m *manager) deleteNode(nodeName string) (postUnlockOperation func(resource.ResourceManager, ec2API.EC2APIHelper) error, err error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
 	log := m.Log.WithValues("node name", nodeName, "request", "delete")
 
-	node, managed := m.dataStore[nodeName]
-
-	if !managed {
-		log.Info("node is not managed by controller, not processing the request")
-		return
+	cachedNode, nodeFound := m.dataStore[nodeName]
+	if !nodeFound {
+		log.Info("node not found in the data store, ignoring the event")
+		return nil
 	}
 
 	delete(m.dataStore, nodeName)
-	postUnlockOperation = node.DeleteResources
 
-	log.Info("node removed from list of managed node")
+	if !cachedNode.IsManaged() {
+		log.V(1).Info("un managed node removed from data store")
+		return nil
+	}
 
-	return
+	m.worker.SubmitJob(AsyncOperationJob{
+		op:       Delete,
+		node:     cachedNode,
+		nodeName: nodeName,
+	})
+
+	log.Info("node removed from data store")
+
+	return nil
 }
 
 // updateSubnetIfUsingENIConfig updates the subnet id for the node to the subnet specified in ENIConfig if the node is
 // using custom networking
-func (m *manager) updateSubnetIfUsingENIConfig(node Node, k8sNode *v1.Node) error {
+func (m *manager) updateSubnetIfUsingENIConfig(cachedNode node.Node, k8sNode *v1.Node) error {
 	eniConfigName, isPresent := k8sNode.Labels[config.CustomNetworkingLabel]
 	if isPresent {
 		eniConfig, err := m.wrapper.K8sAPI.GetENIConfig(eniConfigName)
@@ -190,47 +245,70 @@ func (m *manager) updateSubnetIfUsingENIConfig(node Node, k8sNode *v1.Node) erro
 		if eniConfig.Spec.Subnet != "" {
 			m.Log.V(1).Info("node is using custom networking, updating the subnet", "node", k8sNode.Name,
 				"subnet", eniConfig.Spec.Subnet)
-			node.UpdateCustomNetworkingSpecs(eniConfig.Spec.Subnet, eniConfig.Spec.SecurityGroups)
+			cachedNode.UpdateCustomNetworkingSpecs(eniConfig.Spec.Subnet, eniConfig.Spec.SecurityGroups)
 			return nil
 		}
 		return fmt.Errorf("failed to find subnet in eniconfig spec %s", eniConfigName)
 	} else {
-		node.UpdateCustomNetworkingSpecs("", nil)
+		cachedNode.UpdateCustomNetworkingSpecs("", nil)
 	}
 	return nil
 }
 
-// performPostUnlockOperation performs the operation on a node without taking the node manager lock
-func (m *manager) performPostUnlockOperation(nodeName string, postUnlockOperation func(resource.ResourceManager, ec2API.EC2APIHelper) error) error {
-	log := m.Log.WithValues("node", nodeName)
-	if postUnlockOperation == nil {
-		return nil
+// performAsyncOperation performs the operation on a node without taking the node manager lock
+func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
+	asyncJob, ok := job.(AsyncOperationJob)
+	if !ok {
+		m.Log.Error(fmt.Errorf("wrong job type submitted"), "not re-queuing")
+		return ctrl.Result{}, nil
 	}
 
-	err := postUnlockOperation(m.resourceManager, m.wrapper.EC2API)
-	operationName := runtime.FuncForPC(reflect.ValueOf(postUnlockOperation).Pointer()).Name()
+	log := m.Log.WithValues("node", asyncJob.nodeName, "operation", asyncJob.op)
+
+	var err error
+	switch asyncJob.op {
+	case Init:
+		err = asyncJob.node.InitResources(m.resourceManager, m.wrapper.EC2API)
+	case Update:
+		err = asyncJob.node.UpdateResources(m.resourceManager, m.wrapper.EC2API)
+	case Delete:
+		err = asyncJob.node.DeleteResources(m.resourceManager, m.wrapper.EC2API)
+	default:
+		m.Log.V(1).Info("no operation operation requested",
+			"node", asyncJob.nodeName)
+		return ctrl.Result{}, nil
+	}
+
 	if err == nil {
-		log.V(1).Info("successfully performed node operation", "operation", operationName)
-		return nil
+		log.V(1).Info("successfully performed node operation")
+		return ctrl.Result{}, nil
 	}
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	log.Error(err, "failed to performed node operation", "operation", operationName)
+	log.Error(err, "failed to performed node operation")
 
-	if _, ok := err.(*ErrInitResources); ok {
+	if _, ok := err.(*node.ErrInitResources); ok {
 		// Remove entry from the cache, so it's initialized again
 		log.Error(err, "removing the node from cache as it failed to initialize")
-		delete(m.dataStore, nodeName)
+		delete(m.dataStore, asyncJob.nodeName)
 	}
-	return err
+	return ctrl.Result{}, nil
 }
 
 // isSelectedForManagement returns true if the node should be managed by the controller
 func (m *manager) isSelectedForManagement(v1node *v1.Node) bool {
-	//return isWindowsNode(v1node) || canAttachTrunk(v1node)
-	return canAttachTrunk(v1node)
+	os := GetNodeOS(v1node)
+	instanceID := GetNodeInstanceID(v1node)
+
+	if os == "" || instanceID == "" {
+		m.Log.V(1).Info("node doesn't have os/instance id", v1node.Name,
+			"os", os, "instance ID", instanceID)
+		return false
+	}
+
+	return isWindowsNode(v1node) || canAttachTrunk(v1node)
 }
 
 // GetNodeInstanceID returns the EC2 instance ID of a node
@@ -248,7 +326,7 @@ func GetNodeInstanceID(node *v1.Node) string {
 }
 
 // getNodeOS returns the operating system of a node.
-func getNodeOS(node *v1.Node) string {
+func GetNodeOS(node *v1.Node) string {
 	labels := node.GetLabels()
 	os := labels[config.NodeLabelOS]
 	if os == "" {

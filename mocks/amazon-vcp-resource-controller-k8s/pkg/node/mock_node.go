@@ -75,6 +75,20 @@ func (mr *MockNodeMockRecorder) InitResources(arg0, arg1 interface{}) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitResources", reflect.TypeOf((*MockNode)(nil).InitResources), arg0, arg1)
 }
 
+// IsManaged mocks base method
+func (m *MockNode) IsManaged() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsManaged")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsManaged indicates an expected call of IsManaged
+func (mr *MockNodeMockRecorder) IsManaged() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsManaged", reflect.TypeOf((*MockNode)(nil).IsManaged))
+}
+
 // IsReady mocks base method
 func (m *MockNode) IsReady() bool {
 	m.ctrl.T.Helper()

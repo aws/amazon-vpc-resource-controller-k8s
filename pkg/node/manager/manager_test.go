@@ -11,19 +11,21 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package node
+package manager
 
 import (
-	"reflect"
+	"fmt"
 	"testing"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
-	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	resource2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -38,6 +40,7 @@ var (
 	providerId    = "aws:///us-west-2c/" + instanceID
 	eniConfigName = "eni-config-name"
 	subnetID      = "subnet-id"
+	nodeName      = "ip-192-168-55-73.us-west-2.compute.internal"
 
 	eniConfig = &v1alpha1.ENIConfig{
 		Spec: v1alpha1.ENIConfigSpec{
@@ -48,7 +51,7 @@ var (
 	v1Node = &v1.Node{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   "ip-192-168-55-73.us-west-2.compute.internal",
+			Name:   nodeName,
 			Labels: map[string]string{config.NodeLabelOS: config.OSLinux, config.HasTrunkAttachedLabel: "true"},
 		},
 		Spec: v1.NodeSpec{
@@ -60,194 +63,373 @@ var (
 			},
 		},
 	}
+	mockError = fmt.Errorf("mock error")
+
+	unManagedNode = node.NewUnManagedNode()
+	managedNode   = node.NewManagedNode(zap.New(), nodeName, instanceID, config.OSLinux)
 )
 
-// getMockManager returns the mock manager object
-func getMockManager() manager {
-	return manager{
-		dataStore: make(map[string]Node),
-		Log:       zap.New(zap.UseDevMode(true)).WithName("node manager"),
+type AsyncJobMatcher struct {
+	expected AsyncOperationJob
+}
+
+func NewAsyncOperationMatcher(expected AsyncOperationJob) *AsyncJobMatcher {
+	return &AsyncJobMatcher{expected: expected}
+}
+
+func (m *AsyncJobMatcher) Matches(actual interface{}) bool {
+	actualJob := actual.(AsyncOperationJob)
+	return actualJob.op == m.expected.op &&
+		actualJob.nodeName == m.expected.nodeName &&
+		actualJob.node.IsManaged() == m.expected.node.IsManaged()
+}
+
+func (m *AsyncJobMatcher) String() string {
+	return "verify AsyncOperationJob match"
+}
+
+func AreNodesEqual(expected node.Node, actual node.Node) bool {
+	return expected.IsManaged() == actual.IsManaged() &&
+		expected.IsReady() == actual.IsReady()
+}
+
+type Mock struct {
+	Manager             manager
+	MockK8sAPI          *mock_k8s.MockK8sWrapper
+	MockEC2API          *mock_api.MockEC2APIHelper
+	MockWorker          *mock_worker.MockWorker
+	MockNode            *mock_node.MockNode
+	MockResourceManager *mock_resource.MockResourceManager
+}
+
+func NewMock(ctrl *gomock.Controller, existingDataStore map[string]node.Node) Mock {
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockEC2APIHelper := mock_api.NewMockEC2APIHelper(ctrl)
+	mockAsyncWorker := mock_worker.NewMockWorker(ctrl)
+	mockResourceManager := mock_resource.NewMockResourceManager(ctrl)
+	mockNode := mock_node.NewMockNode(ctrl)
+
+	return Mock{
+		Manager: manager{
+			dataStore: existingDataStore,
+			Log:       zap.New(),
+			wrapper: api.Wrapper{
+				K8sAPI: mockK8sWrapper,
+				EC2API: mockEC2APIHelper,
+			},
+			worker:          mockAsyncWorker,
+			resourceManager: mockResourceManager,
+		},
+		MockK8sAPI:          mockK8sWrapper,
+		MockEC2API:          mockEC2APIHelper,
+		MockWorker:          mockAsyncWorker,
+		MockNode:            mockNode,
+		MockResourceManager: mockResourceManager,
 	}
 }
 
-// getMockManagerWithK8sWrapper returns the mock manager with mock K8s object
-func getMockManagerWithK8sWrapper(ctrl *gomock.Controller) (manager, *mock_k8s.MockK8sWrapper, *mock_api.MockEC2APIHelper) {
-	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
-	mockeEC2APIHelper := mock_api.NewMockEC2APIHelper(ctrl)
-	return manager{
-		dataStore: make(map[string]Node),
-		Log:       zap.New(zap.UseDevMode(true)).WithName("node manager"),
-		wrapper: api.Wrapper{
-			K8sAPI: mockK8sWrapper,
-		},
-		ec2APIHelper: mockeEC2APIHelper,
-	}, mockK8sWrapper, mockeEC2APIHelper
+// Test_GetNewManager tests new node manager is created without error
+func Test_GetNewManager(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+
+	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(nil)
+	manager, err := NewNodeManager(nil, nil, api.Wrapper{}, mock.MockWorker)
+
+	assert.NotNil(t, manager)
+	assert.NoError(t, err)
 }
 
-// Test_GetNewManager tests if new node manager is not nil
-func Test_GetNewManager(t *testing.T) {
-	manager := NewNodeManager(nil, nil, api.Wrapper{})
+// Test_GetNewManager tests new node manager is created with error
+func Test_GetNewManager_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+
+	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(mockError)
+	manager, err := NewNodeManager(nil, nil, api.Wrapper{}, mock.MockWorker)
+
 	assert.NotNil(t, manager)
+	assert.Error(t, err, mockError)
 }
 
 // Test_addOrUpdateNode_new_node tests if a node that doesn't exist in managed list is added and a request
 // to perform init resource is returned.
-func Test_addOrUpdateNode_new_node(t *testing.T) {
-	manager := getMockManager()
-
-	postUnlockOperation, err := manager.addOrUpdateNode(v1Node)
-	node, _ := manager.GetNode(v1Node.Name)
-
-	assert.NoError(t, err)
-	assert.Equal(t, reflect.ValueOf(node.InitResources).Pointer(), reflect.ValueOf(postUnlockOperation).Pointer())
-}
-
-// Test_addOrUpdateNode_new_node_custom_networking tests if node has custom networking label then the eni config is
-// loaded from K8s Wrapper
-func Test_addOrUpdateNode_new_node_custom_networking(t *testing.T) {
+func Test_AddNode(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	manager, mockK8sWrapper, _ := getMockManagerWithK8sWrapper(ctrl)
+	mock := NewMock(ctrl, map[string]node.Node{})
+
+	expectedJob := AsyncOperationJob{
+		op:       Init,
+		nodeName: nodeName,
+		node:     managedNode,
+	}
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(expectedJob)))
+
+	err := mock.Manager.AddNode(nodeName)
+	assert.NoError(t, err)
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
+}
+
+func Test_AddNode_UnManaged(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+
+	nodeWithoutLabel := v1Node.DeepCopy()
+	nodeWithoutLabel.Labels = map[string]string{}
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithoutLabel, nil)
+
+	err := mock.Manager.AddNode(nodeName)
+	assert.NoError(t, err)
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], unManagedNode))
+}
+
+func Test_AddNode_AlreadyAdded(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: unManagedNode})
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
+
+	err := mock.Manager.AddNode(nodeName)
+	assert.NoError(t, err)
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], unManagedNode))
+}
+
+func Test_AddNode_CustomNetworking(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+
+	job := AsyncOperationJob{
+		op:       Init,
+		nodeName: nodeName,
+		node:     managedNode,
+	}
 
 	nodeWithENIConfig := v1Node.DeepCopy()
 	nodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
 
-	mockK8sWrapper.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil)
-	postUnlockOperation, err := manager.addOrUpdateNode(nodeWithENIConfig)
-	node, _ := manager.GetNode(v1Node.Name)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
+	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
 
+	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
-	assert.Equal(t, reflect.ValueOf(node.InitResources).Pointer(), reflect.ValueOf(postUnlockOperation).Pointer())
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
-// Test_addOrUpdateNode_new_node_custom_networking_eniConfig_notfound tests that error is returned if the eni config
-// set on the node's custom networking label is not found
-func Test_addOrUpdateNode_new_node_custom_networking_eniConfig_notfound(t *testing.T) {
+func Test_AddNode_CustomNetworking_NoENIConfig(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	manager, mockK8sWrapper, _ := getMockManagerWithK8sWrapper(ctrl)
+	mock := NewMock(ctrl, map[string]node.Node{})
 
 	nodeWithENIConfig := v1Node.DeepCopy()
 	nodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
-	nodeWithENIConfig.Labels[eniConfig.Spec.Subnet] = subnetID
 
-	mockK8sWrapper.EXPECT().GetENIConfig(eniConfigName).Return(nil, mockError)
-	_, err := manager.addOrUpdateNode(nodeWithENIConfig)
-	_, isPresent := manager.GetNode(v1Node.Name)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
+	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(nil, mockError)
 
-	assert.Error(t, mockError, err)
-	assert.False(t, isPresent)
+	err := mock.Manager.AddNode(nodeName)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
+	assert.Error(t, err, mockError)
 }
 
-// Test_addOrUpdateNode_new_node_custom_networking tests if node has custom networking label then the eni config is
-// loaded from K8s Wrapper
-func Test_addOrUpdateNode_existing_node_custom_networking(t *testing.T) {
+func Test_UpdateNode_Managed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	manager, mockK8sWrapper, _ := getMockManagerWithK8sWrapper(ctrl)
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
 
-	// Add node once
-	_, err := manager.addOrUpdateNode(v1Node)
+	job := AsyncOperationJob{
+		op:       Update,
+		nodeName: nodeName,
+		node:     managedNode,
+	}
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
+
+	err := mock.Manager.UpdateNode(nodeName)
 	assert.NoError(t, err)
-
-	// Update the node label key and value pair
-	updatedNodeWithENIConfig := v1Node.DeepCopy()
-	updatedNodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
-
-	mockK8sWrapper.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil)
-	// Update the node, expect to get the eni config
-	postUnlockOperation, err := manager.addOrUpdateNode(updatedNodeWithENIConfig)
-	node, _ := manager.GetNode(v1Node.Name)
-
-	assert.NoError(t, err)
-	assert.Equal(t, reflect.ValueOf(node.UpdateResources).Pointer(), reflect.ValueOf(postUnlockOperation).Pointer())
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
-// Test_addOrUpdateNode_existing_node tests if the node already exists, then the operation update resource is returned
-func Test_addOrUpdateNode_existing_node(t *testing.T) {
-	manager := getMockManager()
+func Test_UpdateNode_UnManaged(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-	// Add node twice
-	_, err := manager.addOrUpdateNode(v1Node)
+	mock := NewMock(ctrl, map[string]node.Node{v1Node.Name: unManagedNode})
+
+	k8sNode := v1Node.DeepCopy()
+	k8sNode.Labels = map[string]string{}
+
+	mock.MockK8sAPI.EXPECT().GetNode(v1Node.Name).Return(k8sNode, nil)
+
+	err := mock.Manager.UpdateNode(v1Node.Name)
 	assert.NoError(t, err)
-
-	postUnlockOperation, err := manager.addOrUpdateNode(v1Node)
-	node, _ := manager.GetNode(v1Node.Name)
-
-	assert.NoError(t, err)
-	assert.Equal(t, reflect.ValueOf(node.UpdateResources).Pointer(), reflect.ValueOf(postUnlockOperation).Pointer())
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], unManagedNode))
 }
 
-// Test_addOrUpdateNode_notSelected verifies if the node is not selected for management it is not added to the
-// list of managed node
-func Test_addOrUpdateNode_notSelected(t *testing.T) {
-	manager := getMockManager()
+func Test_UpdateNode_ManagedToUnManaged(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-	v1NodeCopy := v1Node.DeepCopy()
-	delete(v1NodeCopy.Labels, config.HasTrunkAttachedLabel)
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
 
-	postUnlockOperation, err := manager.addOrUpdateNode(v1NodeCopy)
+	job := AsyncOperationJob{
+		op:       Delete,
+		nodeName: nodeName,
+		node:     managedNode, // should pass the older cached value, instead of new node
+	}
+
+	updatedNode := v1Node.DeepCopy()
+	updatedNode.Labels = map[string]string{}
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(updatedNode, nil)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
+
+	err := mock.Manager.UpdateNode(nodeName)
 	assert.NoError(t, err)
-	assert.Nil(t, postUnlockOperation)
-
-	node, managed := manager.GetNode(v1NodeCopy.Name)
-	assert.Nil(t, node)
-	assert.False(t, managed)
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], unManagedNode))
 }
 
-// Test_addOrUpdateNode_statusChanged tests if the status of a managed node changes it is removed from the list
-// of managed node and requested to delete the resources
-func Test_addOrUpdateNode_statusChanged(t *testing.T) {
-	manager := getMockManager()
+func Test_UpdateNode_UnManagedToManaged(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-	// Add node to list of managed node
-	_, _ = manager.addOrUpdateNode(v1Node)
-	node, managed := manager.GetNode(v1Node.Name)
-	assert.True(t, managed)
+	dataStoreWithUnManagedNode := map[string]node.Node{v1Node.Name: unManagedNode}
 
-	// Set the capacity for the node to 0
-	v1NodeCopy := v1Node.DeepCopy()
-	delete(v1NodeCopy.Labels, config.HasTrunkAttachedLabel)
-	_, err := manager.addOrUpdateNode(v1Node)
+	mock := NewMock(ctrl, dataStoreWithUnManagedNode)
+
+	job := AsyncOperationJob{
+		op:       Init,
+		nodeName: v1Node.Name,
+		node:     managedNode,
+	}
+
+	mock.MockK8sAPI.EXPECT().GetNode(v1Node.Name).Return(v1Node, nil)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
+
+	err := mock.Manager.UpdateNode(v1Node.Name)
 	assert.NoError(t, err)
-
-	postUnlockOperation, err := manager.addOrUpdateNode(v1NodeCopy)
-
-	assert.NoError(t, err)
-	assert.Equal(t, reflect.ValueOf(node.DeleteResources).Pointer(), reflect.ValueOf(postUnlockOperation).Pointer())
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
-// Test_deleteNode_notExists tests if the node that is in list of managed node is deleted on calling delteNode
-func Test_deleteNode(t *testing.T) {
-	manager := getMockManager()
+func Test_DeleteNode_Managed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-	// Add node to list of managed node
-	_, _ = manager.addOrUpdateNode(v1Node)
-	node, managed := manager.GetNode(v1Node.Name)
-	assert.True(t, managed)
+	dataStoreWithManagedNode := map[string]node.Node{v1Node.Name: managedNode}
 
-	// Delete node
-	postUnlockOperation, err := manager.deleteNode(v1Node.Name)
+	mock := NewMock(ctrl, dataStoreWithManagedNode)
+
+	job := AsyncOperationJob{
+		op:       Delete,
+		nodeName: v1Node.Name,
+		node:     managedNode,
+	}
+
+	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
+
+	err := mock.Manager.DeleteNode(v1Node.Name)
 	assert.NoError(t, err)
-	assert.Equal(t, reflect.ValueOf(node.DeleteResources).Pointer(), reflect.ValueOf(postUnlockOperation).Pointer())
-
-	// Verify deleted from managed list
-	node, managed = manager.GetNode(v1Node.Name)
-	assert.False(t, managed)
-	assert.Nil(t, node)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
 }
 
-// Test_deleteNode_notExists tests that deletion of node that doesn't exist does't throw an error
-func Test_deleteNode_notExists(t *testing.T) {
-	manager := getMockManager()
+func Test_DeleteNode_UnManaged(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-	// Delete node
-	postUnlockOperation, err := manager.deleteNode(v1Node.Name)
+	dataStoreWithUnManagedNode := map[string]node.Node{v1Node.Name: unManagedNode}
+
+	mock := NewMock(ctrl, dataStoreWithUnManagedNode)
+
+	err := mock.Manager.DeleteNode(v1Node.Name)
 	assert.NoError(t, err)
-	assert.Nil(t, postUnlockOperation)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
+}
+
+func Test_DeleteNode_AlreadyDeleted(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+
+	err := mock.Manager.DeleteNode(v1Node.Name)
+	assert.NoError(t, err)
+}
+
+func Test_performAsyncOperation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+
+	job := AsyncOperationJob{
+		node:     mock.MockNode,
+		nodeName: nodeName,
+	}
+
+	job.op = Init
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
+	_, err := mock.Manager.performAsyncOperation(job)
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.NoError(t, err)
+
+	job.op = Update
+	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
+	_, err = mock.Manager.performAsyncOperation(job)
+	assert.NoError(t, err)
+
+	job.op = Delete
+	mock.MockNode.EXPECT().DeleteResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
+	_, err = mock.Manager.performAsyncOperation(job)
+	assert.NoError(t, err)
+
+	job.op = ""
+	_, err = mock.Manager.performAsyncOperation(job)
+	assert.NoError(t, err)
+}
+
+func Test_performAsyncOperation_fail(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+
+	job := AsyncOperationJob{
+		node:     mock.MockNode,
+		nodeName: nodeName,
+		op:       Init,
+	}
+
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager, mock.MockEC2API).Return(&node.ErrInitResources{})
+
+	_, err := mock.Manager.performAsyncOperation(job)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName) // It should be cleared from cache
+	assert.NoError(t, err)
 }
 
 // Test_isPodENICapacitySet test if the pod-eni capacity then true is returned
@@ -297,47 +479,17 @@ func Test_getNodeInstanceID(t *testing.T) {
 
 // Test_getNodeOS tests that is OS label is set then the correct os is returned
 func Test_getNodeOS(t *testing.T) {
-	os := getNodeOS(v1Node)
+	os := GetNodeOS(v1Node)
 	assert.Equal(t, config.OSLinux, os)
 }
 
 // Test_isSelectedForManagement tests if the either the capacity or the label is set true is returned
 func Test_isSelectedForManagement(t *testing.T) {
-	manager := getMockManager()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-	isSelected := manager.isSelectedForManagement(v1Node)
+	mock := NewMock(ctrl, map[string]node.Node{})
+
+	isSelected := mock.Manager.isSelectedForManagement(v1Node)
 	assert.True(t, isSelected)
-}
-
-// Test_performPostUnlockOperation doesn't return an error on executing the postUnlockOperation
-func Test_performPostUnlockOperation(t *testing.T) {
-	manager := getMockManager()
-
-	postUnlockFunc := func(manager resource2.ResourceManager, helper ec2API.EC2APIHelper) error {
-		return nil
-	}
-
-	err := manager.performPostUnlockOperation(v1Node.Name, postUnlockFunc)
-	assert.Nil(t, err)
-}
-
-// Test_performPostUnlockOperation_intiFails tests that the node in the managed list is removed after the post unlock
-// operation fails
-func Test_performPostUnlockOperation_intiFails(t *testing.T) {
-	manager := getMockManager()
-	_, err := manager.addOrUpdateNode(v1Node)
-	assert.NoError(t, err)
-
-	_, managed := manager.GetNode(v1Node.Name)
-	assert.True(t, managed)
-
-	postUnlockFunc := func(resourceManager resource2.ResourceManager, helper ec2API.EC2APIHelper) error {
-		return &ErrInitResources{}
-	}
-
-	err = manager.performPostUnlockOperation(v1Node.Name, postUnlockFunc)
-	assert.NotNil(t, err)
-
-	_, managed = manager.GetNode(v1Node.Name)
-	assert.False(t, managed)
 }
