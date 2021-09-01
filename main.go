@@ -131,10 +131,12 @@ func main() {
 		outputPath,
 	}
 	cfg.Level = logLvl
+	cfg.Development = enableDevLogging
+
 	// Change from the default epoch time to human readable time format
 	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	cfg.EncoderConfig.TimeKey = "timestamp"
-	cfg.Development = enableDevLogging
+	cfg.EncoderConfig.CallerKey = ""
 
 	logger, err := cfg.Build()
 	if err != nil {
