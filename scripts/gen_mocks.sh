@@ -15,7 +15,7 @@ mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/provider/mo
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk/mock_trunk.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk TrunkENI
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/provider/ip/eni/mock_eni.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni ENIManager
 # package node mocks
-mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/node/mock_manager.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node Manager
+mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager/mock_manager.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager Manager
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/node/mock_node.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node Node
 # package utils mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/utils/mock_k8shelper.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils SecurityGroupForPodsAPI
@@ -23,3 +23,5 @@ mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/utils/mock_
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/pool/mock_pool.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool Pool
 # package resource maocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/resource/mock_resources.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource ResourceManager
+# package condition maocks
+mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/condition/mock_condtion.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition Conditions

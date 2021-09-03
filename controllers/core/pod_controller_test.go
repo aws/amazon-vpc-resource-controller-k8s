@@ -19,6 +19,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 
@@ -84,7 +85,7 @@ var (
 )
 
 type Mock struct {
-	MockNodeManager     *mock_node.MockManager
+	MockNodeManager     *mock_manager.MockManager
 	MockResourceManager *mock_resource.MockResourceManager
 	MockNode            *mock_node.MockNode
 	PodReconciler       *PodReconciler
@@ -93,7 +94,7 @@ type Mock struct {
 
 func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
 	mockHandler := mock_handler.NewMockHandler(ctrl)
-	mockNodeManager := mock_node.NewMockManager(ctrl)
+	mockNodeManager := mock_manager.NewMockManager(ctrl)
 	mockResourceManager := mock_resource.NewMockResourceManager(ctrl)
 	mockNode := mock_node.NewMockNode(ctrl)
 

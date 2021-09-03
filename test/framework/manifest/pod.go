@@ -31,6 +31,7 @@ type PodBuilder struct {
 	annotations            map[string]string
 	terminationGracePeriod int
 	restartPolicy          v1.RestartPolicy
+	nodeName               string
 }
 
 func (p *PodBuilder) Build() (*v1.Pod, error) {
@@ -42,6 +43,7 @@ func (p *PodBuilder) Build() (*v1.Pod, error) {
 			Annotations: p.annotations,
 		},
 		Spec: v1.PodSpec{
+			NodeName:                      p.nodeName,
 			ServiceAccountName:            p.serviceAccountName,
 			Containers:                    []v1.Container{p.container},
 			NodeSelector:                  map[string]string{"kubernetes.io/os": p.os},
@@ -117,5 +119,10 @@ func (p *PodBuilder) ServiceAccount(serviceAccountName string) *PodBuilder {
 
 func (p *PodBuilder) TerminationGracePeriod(terminationGracePeriod int) *PodBuilder {
 	p.terminationGracePeriod = terminationGracePeriod
+	return p
+}
+
+func (p *PodBuilder) NodeName(nodeName string) *PodBuilder {
+	p.nodeName = nodeName
 	return p
 }

@@ -44,7 +44,7 @@ type manager struct {
 	worker asyncWorker.Worker
 }
 
-// Manager to perform operation of list of managed/un-managed node
+// Manager to perform operation on list of managed/un-managed node
 type Manager interface {
 	GetNode(nodeName string) (node node.Node, found bool)
 	AddNode(nodeName string) error
@@ -170,7 +170,7 @@ func (m *manager) UpdateNode(nodeName string) error {
 	hasToggledToUnManagedNode := !isSelectedForManagement && cachedNode.IsManaged()
 
 	var op AsyncOperation
-	// Node was not being managed, but not it's managed
+	// Node was not being managed, but now it is managed
 	if hasToggledToManagedNode {
 		log.Info("node was previously un-managed, will be added as managed node now")
 		cachedNode = node.NewManagedNode(m.Log, k8sNode.Name,
@@ -187,6 +187,9 @@ func (m *manager) UpdateNode(nodeName string) error {
 		log.V(1).Info("node not managed, no operation required")
 		return nil
 	} else {
+		// We only need to update the Subnet for Managed Node. This subnet is required for creating
+		// Branch ENIs when user is using Custom Networking. In future, we should move this to
+		// UpdateResources for Trunk ENI Provider as this is resource specific
 		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
 		if err != nil {
 			return err

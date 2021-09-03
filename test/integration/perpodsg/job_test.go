@@ -24,6 +24,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
 	sgpWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -123,7 +124,7 @@ var _ = Describe("Security Group Per Pod", func() {
 
 			By("creating the server pod")
 			serverPod, err = frameWork.PodManager.
-				CreateAndWaitTillPodIsRunning(ctx, serverPod)
+				CreateAndWaitTillPodIsRunning(ctx, serverPod, utils.ResourceCreationTimeout)
 			Expect(err).ToNot(HaveOccurred())
 
 			for i := 0; i < testNodeCount; i++ {

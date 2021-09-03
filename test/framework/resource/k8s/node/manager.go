@@ -18,11 +18,14 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type Manager interface {
 	GetNodesWithOS(os string) (*v1.NodeList, error)
+	AddLabels(nodeList []v1.Node, label map[string]string) error
+	RemoveLabels(nodeList []v1.Node, label map[string]string) error
 }
 
 type defaultManager struct {
@@ -39,4 +42,48 @@ func (d *defaultManager) GetNodesWithOS(os string) (*v1.NodeList, error) {
 		LabelSelector: labels.SelectorFromSet(map[string]string{"kubernetes.io/os": os}),
 	})
 	return nodeList, err
+}
+
+func (d *defaultManager) AddLabels(nodeList []v1.Node, label map[string]string) error {
+	for _, node := range nodeList {
+		latestNode := &v1.Node{}
+		// Get the latest node object reference from cache
+		err := d.k8sClient.Get(context.TODO(), types.NamespacedName{
+			Name: node.Name,
+		}, latestNode)
+		if err != nil {
+			return err
+		}
+		patchedNode := latestNode.DeepCopy()
+		for labelKey, labelVal := range label {
+			patchedNode.Labels[labelKey] = labelVal
+		}
+		err = d.k8sClient.Patch(context.TODO(), patchedNode, client.MergeFrom(latestNode))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *defaultManager) RemoveLabels(nodeList []v1.Node, label map[string]string) error {
+	for _, node := range nodeList {
+		latestNode := &v1.Node{}
+		// Get the latest node object reference from cache
+		err := d.k8sClient.Get(context.TODO(), types.NamespacedName{
+			Name: node.Name,
+		}, latestNode)
+		if err != nil {
+			return err
+		}
+		patchedNode := latestNode.DeepCopy()
+		for labelKey, _ := range label {
+			delete(patchedNode.Labels, labelKey)
+		}
+		err = d.k8sClient.Patch(context.TODO(), patchedNode, client.MergeFrom(latestNode))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

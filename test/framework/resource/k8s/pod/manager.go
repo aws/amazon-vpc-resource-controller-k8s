@@ -17,6 +17,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
@@ -29,7 +31,7 @@ import (
 )
 
 type Manager interface {
-	CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod) (*v1.Pod, error)
+	CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod, timeOut time.Duration) (*v1.Pod, error)
 	CreateAndWaitTillPodIsCompleted(context context.Context, pod *v1.Pod) (*v1.Pod, error)
 	DeleteAndWaitTillPodIsDeleted(context context.Context, pod *v1.Pod) error
 	GetENIDetailsFromPodAnnotation(podAnnotation map[string]string) ([]*trunk.ENIDetails, error)
@@ -45,20 +47,20 @@ func NewManager(k8sClient client.Client) Manager {
 	return &defaultManager{k8sClient: k8sClient}
 }
 
-func (d *defaultManager) CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod) (*v1.Pod, error) {
+func (d *defaultManager) CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod, timeOut time.Duration) (*v1.Pod, error) {
 	err := d.k8sClient.Create(context, pod)
 	if err != nil {
 		return nil, err
 	}
 
 	updatedPod := &v1.Pod{}
-	err = wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
+	err = wait.Poll(utils.PollIntervalShort, timeOut, func() (done bool, err error) {
 		err = d.k8sClient.Get(context, utils.NamespacedName(pod), updatedPod)
 		if err != nil {
 			return true, err
 		}
 		return isPodReady(updatedPod), nil
-	}, context.Done())
+	})
 
 	return updatedPod, err
 }

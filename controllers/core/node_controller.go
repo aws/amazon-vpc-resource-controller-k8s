@@ -28,6 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 )
 
+// MaxConcurrentReconciles is the number of go routines that can invoke
+// Reconcile in parallel. Since Node Reconciler, performs local operation
+// on cache only a single go routine is sufficient
 const MaxConcurrentReconciles = 1
 
 // NodeReconciler reconciles a Node object
@@ -42,6 +45,12 @@ type NodeReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=nodes/status,verbs=get;patch
 
+// Reconcile Adds a new node by calling the Node Manager. A node can be added as a
+// Managed Node in which case the controller can provide resources for Pod's scheduled
+// on the node or it can be added as a un managed Node in which case controller doesn't
+// do any operations on the Node or any Pods scheduled on the Node. A node can be toggled
+// from Un-Managed to Managed and vice-versa in which case the Node Manager updates it's
+// status accordingly
 func (r *NodeReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	r.Conditions.WaitTillPodDataStoreSynced()
 
@@ -53,9 +62,15 @@ func (r *NodeReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	if err := r.Client.Get(ctx, req.NamespacedName, k8sNode); err != nil {
 		if errors.IsNotFound(err) {
-			err := r.Manager.DeleteNode(req.Name)
-			if err != nil {
-				logger.Error(err, "failed to delete node from manager")
+			_, found := r.Manager.GetNode(req.Name)
+			if found {
+				err := r.Manager.DeleteNode(req.Name)
+				if err != nil {
+					// The request is not retryable so not returning the error
+					logger.Error(err, "failed to delete node from manager")
+					return ctrl.Result{}, nil
+				}
+				logger.Info("deleted the node from manager")
 			}
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
