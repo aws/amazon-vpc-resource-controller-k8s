@@ -135,7 +135,7 @@ function run_inegration_test() {
 
   (cd test/integration/perpodsg && \
   CGO_ENABLED=0 ginkgo $additional_gingko_params \
-  -v -timeout 20m -- \
+  -v -timeout 40m -- \
   -cluster-kubeconfig=$KUBE_CONFIG_PATH \
   -cluster-name=$CLUSTER_NAME \
   --aws-region=$AWS_REGION \
