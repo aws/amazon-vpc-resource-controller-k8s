@@ -175,6 +175,22 @@ func TestPodReconciler_Reconcile_NonManaged(t *testing.T) {
 	assert.Equal(t, result, controllerruntime.Result{})
 }
 
+// TestPodReconciler_Reconcile_NoNodeAssigned tests that the request for a Pod with no Node assigned
+// should be ignored
+func TestPodReconciler_Reconcile_NoNodeAssigned(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	podWithoutNode := mockPod.DeepCopy()
+	podWithoutNode.Spec.NodeName = ""
+
+	mock := NewMock(ctrl, podWithoutNode)
+
+	result, err := mock.PodReconciler.Reconcile(mockReq)
+	assert.NoError(t, err)
+	assert.Equal(t, result, controllerruntime.Result{})
+}
+
 // TestPodReconciler_Reconcile_NodeNotReady tests that the request is ignored when the node is not ready
 func TestPodReconciler_Reconcile_NodeNotReady(t *testing.T) {
 	ctrl := gomock.NewController(t)

@@ -64,6 +64,16 @@ const (
 	Delete = AsyncOperation("Delete")
 )
 
+// NodeUpdateStatus represents the status of the Node on Update operation.
+type NodeUpdateStatus string
+
+const (
+	ManagedToUnManaged = NodeUpdateStatus("managedToUnManaged")
+	UnManagedToManaged = NodeUpdateStatus("UnManagedToManaged")
+	StillManaged       = NodeUpdateStatus("Managed")
+	StillUnManaged     = NodeUpdateStatus("UnManaged")
+)
+
 type AsyncOperationJob struct {
 	op       AsyncOperation
 	node     node.Node
@@ -164,29 +174,28 @@ func (m *manager) UpdateNode(nodeName string) error {
 		m.Log.Info("the node doesn't exist in cache anymore, it might have been deleted")
 	}
 
-	isSelectedForManagement := m.isSelectedForManagement(k8sNode)
-
-	hasToggledToManagedNode := isSelectedForManagement && !cachedNode.IsManaged()
-	hasToggledToUnManagedNode := !isSelectedForManagement && cachedNode.IsManaged()
-
 	var op AsyncOperation
-	// Node was not being managed, but now it is managed
-	if hasToggledToManagedNode {
+	status := m.GetNodeUpdateStatus(k8sNode, cachedNode)
+
+	switch status {
+	case UnManagedToManaged:
 		log.Info("node was previously un-managed, will be added as managed node now")
 		cachedNode = node.NewManagedNode(m.Log, k8sNode.Name,
 			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode))
+		// Update the Subnet if the node has custom networking configured
+		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
+		if err != nil {
+			return err
+		}
 		m.dataStore[nodeName] = cachedNode
 		op = Init
-	} else if hasToggledToUnManagedNode {
+	case ManagedToUnManaged:
 		log.Info("node was being managed earlier, will be added as un-managed node now")
 		// Change the node in cache, but for de initializing all resource providers
 		// pass the async job the older cached value instead
 		m.dataStore[nodeName] = node.NewUnManagedNode()
 		op = Delete
-	} else if !cachedNode.IsManaged() {
-		log.V(1).Info("node not managed, no operation required")
-		return nil
-	} else {
+	case StillManaged:
 		// We only need to update the Subnet for Managed Node. This subnet is required for creating
 		// Branch ENIs when user is using Custom Networking. In future, we should move this to
 		// UpdateResources for Trunk ENI Provider as this is resource specific
@@ -195,6 +204,10 @@ func (m *manager) UpdateNode(nodeName string) error {
 			return err
 		}
 		op = Update
+	case StillUnManaged:
+		log.V(1).Info("node not managed, no operation required")
+		// No async operation required for un-managed nodes
+		return nil
 	}
 
 	m.worker.SubmitJob(AsyncOperationJob{
@@ -203,6 +216,20 @@ func (m *manager) UpdateNode(nodeName string) error {
 		nodeName: nodeName,
 	})
 	return nil
+}
+
+func (m *manager) GetNodeUpdateStatus(k8sNode *v1.Node, cachedNode node.Node) NodeUpdateStatus {
+	isSelectedForManagement := m.isSelectedForManagement(k8sNode)
+
+	if isSelectedForManagement && !cachedNode.IsManaged() {
+		return UnManagedToManaged
+	} else if !isSelectedForManagement && cachedNode.IsManaged() {
+		return ManagedToUnManaged
+	} else if isSelectedForManagement {
+		return StillManaged
+	} else {
+		return StillUnManaged
+	}
 }
 
 // DeleteNode deletes the nodes from the cache and cleans up the resources used by all the resource providers

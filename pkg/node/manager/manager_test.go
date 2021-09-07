@@ -327,8 +327,34 @@ func Test_UpdateNode_UnManagedToManaged(t *testing.T) {
 		nodeName: v1Node.Name,
 		node:     managedNode,
 	}
-
 	mock.MockK8sAPI.EXPECT().GetNode(v1Node.Name).Return(v1Node, nil)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
+
+	err := mock.Manager.UpdateNode(v1Node.Name)
+	assert.NoError(t, err)
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
+}
+
+func Test_UpdateNode_UnManagedToManaged_WithENIConfig(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	dataStoreWithUnManagedNode := map[string]node.Node{v1Node.Name: unManagedNode}
+
+	mock := NewMock(ctrl, dataStoreWithUnManagedNode)
+
+	job := AsyncOperationJob{
+		op:       Init,
+		nodeName: v1Node.Name,
+		node:     managedNode,
+	}
+
+	nodeWithENIConfig := v1Node.DeepCopy()
+	nodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
+
+	mock.MockK8sAPI.EXPECT().GetNode(v1Node.Name).Return(nodeWithENIConfig, nil)
+	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
 
 	err := mock.Manager.UpdateNode(v1Node.Name)

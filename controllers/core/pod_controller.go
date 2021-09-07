@@ -80,6 +80,12 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 	logger := r.Log.WithValues("UID", pod.UID, "pod", request.NamespacedName,
 		"node", pod.Spec.NodeName)
 
+	// If the Pod doesn't have a Node assigned, ignore the request instead of querying the
+	// node manager
+	if pod.Spec.NodeName == "" {
+		return ctrl.Result{}, nil
+	}
+
 	// On Controller startup, the Pod event should be processed after the Pod's node
 	// has initialized (or it will be stuck till the next re-sync period or Pod update).
 	// Once the Pod has been initialized if it's managed then wait till the asynchronous
