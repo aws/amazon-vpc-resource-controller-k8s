@@ -18,7 +18,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 
 	"github.com/go-logr/logr"
@@ -37,11 +37,13 @@ type PodReconciler struct {
 	// resources supported by vpc-resource-controller
 	ResourceManager resource.ResourceManager
 	// Manager manages all the nodes on the cluster
-	NodeManager node.Manager
+	NodeManager manager.Manager
 	// DataStore is the cache with memory optimized Pod Objects
 	DataStore       cache.Indexer
 	DataStoreSynced *bool
 }
+
+var PodRequeueRequest = ctrl.Result{Requeue: true, RequeueAfter: time.Second}
 
 // Reconcile handles create/update/delete event by delegating the request to the  handler
 // if the resource is supported by the controller.
@@ -78,15 +80,26 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 	logger := r.Log.WithValues("UID", pod.UID, "pod", request.NamespacedName,
 		"node", pod.Spec.NodeName)
 
-	// Verify the node is managed by the controller and the node is ready to handle
-	// incoming requests
-	node, managed := r.NodeManager.GetNode(pod.Spec.NodeName)
-	if !managed {
+	// If the Pod doesn't have a Node assigned, ignore the request instead of querying the
+	// node manager
+	if pod.Spec.NodeName == "" {
+		return ctrl.Result{}, nil
+	}
+
+	// On Controller startup, the Pod event should be processed after the Pod's node
+	// has initialized (or it will be stuck till the next re-sync period or Pod update).
+	// Once the Pod has been initialized if it's managed then wait till the asynchronous
+	// operation on the Node has been performed and node is ready to server requests.
+	node, found := r.NodeManager.GetNode(pod.Spec.NodeName)
+	if !found {
+		logger.V(1).Info("pod's node is not yet initialized by the manager, will retry")
+		return PodRequeueRequest, nil
+	} else if !node.IsManaged() {
 		logger.V(1).Info("pod's node is not managed, skipping pod event")
 		return ctrl.Result{}, nil
 	} else if !node.IsReady() {
 		logger.Info("pod's node is not ready to handle request yet, will retry")
-		return ctrl.Result{Requeue: true, RequeueAfter: time.Millisecond * 500}, nil
+		return PodRequeueRequest, nil
 	}
 	// Get the aggregate level resource, vpc controller doesn't support allocating
 	// container level resources

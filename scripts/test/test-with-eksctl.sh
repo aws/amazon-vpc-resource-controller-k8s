@@ -135,7 +135,7 @@ function run_inegration_test() {
 
   (cd test/integration/perpodsg && \
   CGO_ENABLED=0 ginkgo $additional_gingko_params \
-  -v -timeout 20m -- \
+  -v -timeout 40m -- \
   -cluster-kubeconfig=$KUBE_CONFIG_PATH \
   -cluster-name=$CLUSTER_NAME \
   --aws-region=$AWS_REGION \
@@ -267,6 +267,10 @@ verify_controller_has_lease
 # with a fetaure flag used by controller to start managing
 # the node for ENI Trunking/Branching
 set_pod_eni_flag_on_ipamd "true"
+
+# Allow for IPAMD to label the node after startup
+# TODO: Handle this in the Test Suite in more concrete manner
+sleep 60
 
 # Run Ginko Test for Security Group for Pods and skip all the local tests as
 # they require restarts and it will lead to leader lease being switched and the

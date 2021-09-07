@@ -17,7 +17,7 @@ import (
 	"context"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
-	nodeManager "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -28,45 +28,64 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 )
 
-const MaxConcurrentReconciles = 3
+// MaxConcurrentReconciles is the number of go routines that can invoke
+// Reconcile in parallel. Since Node Reconciler, performs local operation
+// on cache only a single go routine is sufficient
+const MaxConcurrentReconciles = 1
 
 // NodeReconciler reconciles a Node object
 type NodeReconciler struct {
 	client.Client
 	Log        logr.Logger
 	Scheme     *runtime.Scheme
-	Manager    nodeManager.Manager
+	Manager    manager.Manager
 	Conditions condition.Conditions
 }
 
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=nodes/status,verbs=get;patch
 
+// Reconcile Adds a new node by calling the Node Manager. A node can be added as a
+// Managed Node in which case the controller can provide resources for Pod's scheduled
+// on the node or it can be added as a un managed Node in which case controller doesn't
+// do any operations on the Node or any Pods scheduled on the Node. A node can be toggled
+// from Un-Managed to Managed and vice-versa in which case the Node Manager updates it's
+// status accordingly
 func (r *NodeReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	r.Conditions.WaitTillPodDataStoreSynced()
 
-	ctx := context.Background()
-	node := &corev1.Node{}
+	ctx := context.TODO()
+	k8sNode := &corev1.Node{}
+	var err error
 
 	logger := r.Log.WithValues("node", req.NamespacedName)
 
-	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
+	if err := r.Client.Get(ctx, req.NamespacedName, k8sNode); err != nil {
 		if errors.IsNotFound(err) {
-			err := r.Manager.DeleteNode(req.Name)
-			if err != nil {
-				logger.Error(err, "failed to delete node from manager")
+			_, found := r.Manager.GetNode(req.Name)
+			if found {
+				err := r.Manager.DeleteNode(req.Name)
+				if err != nil {
+					// The request is not retryable so not returning the error
+					logger.Error(err, "failed to delete node from manager")
+					return ctrl.Result{}, nil
+				}
+				logger.Info("deleted the node from manager")
 			}
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	err := r.Manager.AddOrUpdateNode(node)
-	if err != nil {
-		logger.Error(err, "failed to add node")
-		return ctrl.Result{}, err
+	_, found := r.Manager.GetNode(req.Name)
+	if found {
+		logger.V(1).Info("updating node")
+		err = r.Manager.UpdateNode(req.Name)
+	} else {
+		logger.Info("adding node")
+		err = r.Manager.AddNode(req.Name)
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, err
 }
 
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
