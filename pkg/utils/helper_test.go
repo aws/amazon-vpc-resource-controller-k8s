@@ -241,12 +241,12 @@ func TestEmptySecurityGroupInSGP(t *testing.T) {
 
 // TestShouldAddENILimits tests if pod is valid for SGP to inject ENI limits/requests.
 func TestShouldAddENILimits(t *testing.T) {
-	sgList, _ := helper.GetPodSecurityGroups(testPod)
+	sgList, _ := helper.GetMatchingSecurityGroupForPods(testPod)
 	assert.True(t, sgList[0] == testSecurityGroupsOne[0])
 
 	// Mismatched testPod namespace
 	mismatchedPod := NewPod("test_pod", "test_sa", "test_namespace_1")
-	list, err := helper.GetPodSecurityGroups(mismatchedPod)
+	list, err := helper.GetMatchingSecurityGroupForPods(mismatchedPod)
 	assert.True(t, list == nil)
 	assert.Error(t, err)
 }

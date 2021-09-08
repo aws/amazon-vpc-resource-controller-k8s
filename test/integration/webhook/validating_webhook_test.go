@@ -60,7 +60,7 @@ var _ = Describe("when doing pod operations from non vpc-resource-controller use
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, newPod)
+			_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, newPod, utils.ResourceCreationTimeout)
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -72,7 +72,7 @@ var _ = Describe("when doing pod operations from non vpc-resource-controller use
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, newPod)
+			_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, newPod, utils.ResourceCreationTimeout)
 			Expect(err).ToNot(HaveOccurred())
 
 			// Allow the cache to sync

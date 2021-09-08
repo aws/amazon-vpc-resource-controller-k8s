@@ -16,8 +16,7 @@ package handler
 import (
 	"testing"
 
-	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/golang/mock/gomock"
@@ -76,7 +75,7 @@ func getHandlerWithMock(ctrl *gomock.Controller) (Handler, *mock_provider.MockRe
 	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
 	log := zap.New(zap.UseDevMode(true)).WithName("on demand handler")
 
-	handler := NewOnDemandHandler(log, map[string]provider.ResourceProvider{mockResourceName: mockProvider})
+	handler := NewOnDemandHandler(log, mockResourceName, mockProvider)
 
 	return handler, mockProvider
 }
@@ -90,16 +89,6 @@ func Test_NewOnDemandHandler(t *testing.T) {
 	assert.NotNil(t, handler)
 }
 
-// Test_CanHandle tests if handler is the resource worker it should return true
-func Test_CanHandle(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	handler, _ := getHandlerWithMock(ctrl)
-	canHandle := handler.CanHandle(mockResourceName)
-	assert.True(t, canHandle)
-}
-
 // Test_HandleCreate tests the create job is submitted to the respective worker on create operation
 func Test_HandleCreate(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -109,7 +98,7 @@ func Test_HandleCreate(t *testing.T) {
 
 	mockProvider.EXPECT().SubmitAsyncJob(createJob)
 
-	_, err := handler.HandleCreate(mockResourceName, 1, mockPod)
+	_, err := handler.HandleCreate(1, mockPod)
 	assert.NoError(t, err)
 }
 
@@ -122,17 +111,6 @@ func Test_HandleDeleted(t *testing.T) {
 
 	mockProvider.EXPECT().SubmitAsyncJob(deletedJob)
 
-	_, err := handler.HandleDelete(mockResourceName, mockPod)
+	_, err := handler.HandleDelete(mockPod)
 	assert.NoError(t, err)
-}
-
-// Test_HandleCreate_error tests that the create operation returns error if submit job returns an error
-func Test_HandleCreate_error(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	handler, _ := getHandlerWithMock(ctrl)
-
-	_, err := handler.HandleCreate(mockResourceName+"not-supported", 1, mockPod)
-	assert.NotNil(t, err)
 }

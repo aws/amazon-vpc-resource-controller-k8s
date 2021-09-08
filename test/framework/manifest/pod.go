@@ -31,6 +31,7 @@ type PodBuilder struct {
 	annotations            map[string]string
 	terminationGracePeriod int
 	restartPolicy          v1.RestartPolicy
+	nodeName               string
 }
 
 func (p *PodBuilder) Build() (*v1.Pod, error) {
@@ -42,6 +43,7 @@ func (p *PodBuilder) Build() (*v1.Pod, error) {
 			Annotations: p.annotations,
 		},
 		Spec: v1.PodSpec{
+			NodeName:                      p.nodeName,
 			ServiceAccountName:            p.serviceAccountName,
 			Containers:                    []v1.Container{p.container},
 			NodeSelector:                  map[string]string{"kubernetes.io/os": p.os},
@@ -53,13 +55,14 @@ func (p *PodBuilder) Build() (*v1.Pod, error) {
 
 func NewDefaultPodBuilder() *PodBuilder {
 	return &PodBuilder{
-		namespace:              "default",
-		name:                   utils.ResourceNamePrefix + "pod",
-		container:              NewBusyBoxContainerBuilder().Build(),
-		os:                     "linux",
-		labels:                 map[string]string{},
-		annotations:            map[string]string{},
-		terminationGracePeriod: 0,
+		namespace:   "default",
+		name:        utils.ResourceNamePrefix + "pod",
+		container:   NewBusyBoxContainerBuilder().Build(),
+		os:          "linux",
+		labels:      map[string]string{},
+		annotations: map[string]string{},
+		// See https://github.com/aws/amazon-vpc-cni-k8s/issues/1313#issuecomment-901818609
+		terminationGracePeriod: 10,
 		restartPolicy:          v1.RestartPolicyNever,
 	}
 }
@@ -116,5 +119,10 @@ func (p *PodBuilder) ServiceAccount(serviceAccountName string) *PodBuilder {
 
 func (p *PodBuilder) TerminationGracePeriod(terminationGracePeriod int) *PodBuilder {
 	p.terminationGracePeriod = terminationGracePeriod
+	return p
+}
+
+func (p *PodBuilder) NodeName(nodeName string) *PodBuilder {
+	p.nodeName = nodeName
 	return p
 }

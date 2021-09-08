@@ -24,7 +24,6 @@ import (
 // processed on demand would fit into this category. For instance, Branch ENIs are tied to the Security
 // Group required by the pod which we would know only after receiving the pod request.
 type Handler interface {
-	CanHandle(resourceName string) bool
-	HandleCreate(resourceName string, requestCount int, pod *v1.Pod) (ctrl.Result, error)
-	HandleDelete(resourceName string, pod *v1.Pod) (ctrl.Result, error)
+	HandleCreate(requestCount int, pod *v1.Pod) (ctrl.Result, error)
+	HandleDelete(pod *v1.Pod) (ctrl.Result, error)
 }

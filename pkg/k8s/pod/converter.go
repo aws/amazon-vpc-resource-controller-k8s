@@ -18,8 +18,6 @@ import (
 	"strings"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
-
 	v1 "k8s.io/api/core/v1"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -77,14 +75,14 @@ func (c *PodConverter) ResourceType() runtime.Object {
 // NodeNameIndexer returns indexer to index in the data store using node name
 func NodeNameIndexer() cache.Indexers {
 	indexer := map[string]cache.IndexFunc{}
-	indexer[k8s.NodeNameSpec] = func(obj interface{}) (strings []string, err error) {
+	indexer[NodeNameSpec] = func(obj interface{}) (strings []string, err error) {
 		return []string{obj.(*v1.Pod).Spec.NodeName}, nil
 	}
 	return indexer
 }
 
 // NSKeyIndexer is the key function to index the pod object using namespace/name
-func NSKeyIndexer(obj interface{}) (string, error) {
+func (c *PodConverter) Indexer(obj interface{}) (string, error) {
 	pod := obj.(*v1.Pod)
 	return types.NamespacedName{
 		Namespace: pod.Namespace,
@@ -107,6 +105,9 @@ func (c *PodConverter) StripDownPod(pod *v1.Pod) *v1.Pod {
 			Containers:         getContainersWithVPCLimits(pod.Spec.Containers),
 			ServiceAccountName: pod.Spec.ServiceAccountName,
 			NodeName:           pod.Spec.NodeName,
+		},
+		Status: v1.PodStatus{
+			Phase: pod.Status.Phase,
 		},
 	}
 }

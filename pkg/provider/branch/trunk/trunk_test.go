@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	mockEC2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
-	mockEC2API "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
@@ -170,13 +170,6 @@ var (
 		},
 	}
 
-	trunkAssociationsBranch1Only = []*awsEc2.TrunkInterfaceAssociation{
-		{
-			BranchInterfaceId: &EniDetails1.ID,
-			VlanId:            aws.Int64(int64(EniDetails1.VlanID)),
-		},
-	}
-
 	trunkAssociationsBranch1And2 = []*awsEc2.TrunkInterfaceAssociation{
 		{
 			BranchInterfaceId: &EniDetails1.ID,
@@ -191,10 +184,10 @@ var (
 	MockError = fmt.Errorf("mock error")
 )
 
-func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *mockEC2API.MockEC2APIHelper,
-	*mockEC2.MockEC2Instance) {
-	mockHelper := mockEC2API.NewMockEC2APIHelper(ctrl)
-	mockInstance := mockEC2.NewMockEC2Instance(ctrl)
+func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *mock_api.MockEC2APIHelper,
+	*mock_ec2.MockEC2Instance) {
+	mockHelper := mock_api.NewMockEC2APIHelper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 
 	trunkENI := getMockTrunk()
 	trunkENI.usedVlanIds[0] = true
@@ -555,10 +548,9 @@ func TestTrunkENI_PushBranchENIsToCoolDownQueue(t *testing.T) {
 
 	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails1, EniDetails2}
 
-	err := trunkENI.PushBranchENIsToCoolDownQueue(PodUID)
+	trunkENI.PushBranchENIsToCoolDownQueue(PodUID)
 	_, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 
-	assert.NoError(t, err)
 	assert.Equal(t, 2, len(trunkENI.deleteQueue))
 	assert.Equal(t, EniDetails1, trunkENI.deleteQueue[0])
 	assert.Equal(t, EniDetails2, trunkENI.deleteQueue[1])

@@ -17,11 +17,12 @@ import (
 	"fmt"
 	"testing"
 
-	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
-	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
-	mock_pool "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/pool"
-	mock_eni "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/ip/eni"
-	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/pool"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/ip/eni"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
@@ -284,7 +285,7 @@ func TestIPv4Provider_UpdateResourceCapacity(t *testing.T) {
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
 
-	ipv4Provider := ipv4Provider{k8sWrapper: mockK8sWrapper, log: zap.New(zap.UseDevMode(true)).WithName("ip provider")}
+	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, log: zap.New(zap.UseDevMode(true)).WithName("ip provider")}
 
 	mockInstance.EXPECT().Name().Return(nodeName).Times(2)
 	mockInstance.EXPECT().Type().Return(instanceType)

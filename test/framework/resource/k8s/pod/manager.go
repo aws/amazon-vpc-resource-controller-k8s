@@ -31,7 +31,7 @@ import (
 )
 
 type Manager interface {
-	CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod) (*v1.Pod, error)
+	CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod, timeOut time.Duration) (*v1.Pod, error)
 	CreateAndWaitTillPodIsCompleted(context context.Context, pod *v1.Pod) (*v1.Pod, error)
 	DeleteAndWaitTillPodIsDeleted(context context.Context, pod *v1.Pod) error
 	GetENIDetailsFromPodAnnotation(podAnnotation map[string]string) ([]*trunk.ENIDetails, error)
@@ -47,22 +47,20 @@ func NewManager(k8sClient client.Client) Manager {
 	return &defaultManager{k8sClient: k8sClient}
 }
 
-func (d *defaultManager) CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod) (*v1.Pod, error) {
+func (d *defaultManager) CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod, timeOut time.Duration) (*v1.Pod, error) {
 	err := d.k8sClient.Create(context, pod)
 	if err != nil {
 		return nil, err
 	}
-	// Allow the cache to sync, without the interval cache may be stale and return an error
-	time.Sleep(utils.PollIntervalShort)
 
 	updatedPod := &v1.Pod{}
-	err = wait.PollImmediateUntil(utils.PollIntervalShort, func() (done bool, err error) {
+	err = wait.Poll(utils.PollIntervalShort, timeOut, func() (done bool, err error) {
 		err = d.k8sClient.Get(context, utils.NamespacedName(pod), updatedPod)
 		if err != nil {
 			return true, err
 		}
 		return isPodReady(updatedPod), nil
-	}, context.Done())
+	})
 
 	return updatedPod, err
 }
@@ -72,11 +70,9 @@ func (d *defaultManager) CreateAndWaitTillPodIsCompleted(context context.Context
 	if err != nil {
 		return nil, err
 	}
-	// Allow the cache to sync, without the interval cache may be stale and return an error
-	time.Sleep(utils.PollIntervalShort)
 
 	updatedPod := &v1.Pod{}
-	err = wait.PollImmediateUntil(utils.PollIntervalShort, func() (done bool, err error) {
+	err = wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
 		err = d.k8sClient.Get(context, utils.NamespacedName(pod), updatedPod)
 		if err != nil {
 			return true, err
@@ -112,7 +108,7 @@ func (d *defaultManager) DeleteAndWaitTillPodIsDeleted(context context.Context, 
 	}
 
 	observedPod := &v1.Pod{}
-	return wait.PollImmediateUntil(utils.PollIntervalShort, func() (done bool, err error) {
+	return wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
 		err = d.k8sClient.Get(context, utils.NamespacedName(pod), observedPod)
 		if errors.IsNotFound(err) {
 			return true, nil

@@ -13,7 +13,9 @@
 
 package config
 
-import "time"
+import (
+	"time"
+)
 
 // TODO: Find more appropriate package for the labels and annotation constants.
 

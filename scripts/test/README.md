@@ -21,7 +21,7 @@ K8S_VERSION=<k8s-Version>
   ```
 - Start test Execution
   ```
-  ./test-on-dataplane.sh -n $CLUSTER_NAME
+  ./test-with-eksctl.sh -n $CLUSTER_NAME
   ```
 - Delete the IAM Role and Policies
   ```
