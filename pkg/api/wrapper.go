@@ -11,11 +11,19 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package utils
+package api
 
-func GetNamespacedName(podNamespace string, podName string) string {
-	if podNamespace == "" {
-		podNamespace = "default"
-	}
-	return podNamespace + "/" + podName
+import (
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+)
+
+// Wrapper providers wrapper around all clients used by the controller
+type Wrapper struct {
+	EC2API api.EC2APIHelper
+	K8sAPI k8s.K8sWrapper
+	PodAPI pod.PodClientAPIWrapper
+	SGPAPI utils.SecurityGroupForPodsAPI
 }

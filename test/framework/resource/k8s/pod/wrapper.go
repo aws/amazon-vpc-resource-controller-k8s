@@ -16,6 +16,8 @@ package pod
 import (
 	"context"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
+
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	v1 "k8s.io/api/core/v1"
@@ -23,7 +25,7 @@ import (
 
 func CreateAndWaitForPodToStart(podManager Manager, ctx context.Context, pod *v1.Pod) *v1.Pod {
 	By("create the pod")
-	pod, err := podManager.CreateAndWaitTillPodIsRunning(ctx, pod)
+	pod, err := podManager.CreateAndWaitTillPodIsRunning(ctx, pod, utils.ResourceCreationTimeout)
 	Expect(err).NotTo(HaveOccurred())
 
 	return pod

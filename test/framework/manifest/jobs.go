@@ -23,11 +23,13 @@ import (
 type JobBuilder struct {
 	namespace              string
 	name                   string
+	nodeName               string
 	parallelism            int
 	os                     string
 	container              v1.Container
 	labels                 map[string]string
 	terminationGracePeriod int
+	restartPolicy          v1.RestartPolicy
 }
 
 func NewWindowsJob() *JobBuilder {
@@ -36,7 +38,19 @@ func NewWindowsJob() *JobBuilder {
 		name:                   "windows-job",
 		os:                     "windows",
 		terminationGracePeriod: 0,
+		restartPolicy:          v1.RestartPolicyNever,
 		labels:                 map[string]string{},
+	}
+}
+
+func NewLinuxJob() *JobBuilder {
+	return &JobBuilder{
+		namespace:              "linux-sgp-test",
+		name:                   "linux-job",
+		os:                     "linux",
+		restartPolicy:          v1.RestartPolicyNever,
+		labels:                 map[string]string{},
+		terminationGracePeriod: 10,
 	}
 }
 
@@ -70,8 +84,18 @@ func (j *JobBuilder) TerminationGracePeriod(terminationGracePeriod int) *JobBuil
 	return j
 }
 
+func (j *JobBuilder) RestartPolicy(policy v1.RestartPolicy) *JobBuilder {
+	j.restartPolicy = policy
+	return j
+}
+
 func (j *JobBuilder) Parallelism(parallelism int) *JobBuilder {
 	j.parallelism = parallelism
+	return j
+}
+
+func (j *JobBuilder) ForNode(nodeName string) *JobBuilder {
+	j.nodeName = nodeName
 	return j
 }
 
@@ -82,16 +106,18 @@ func (j *JobBuilder) Build() *batchV1.Job {
 			Namespace: j.namespace,
 		},
 		Spec: batchV1.JobSpec{
-			Parallelism: aws.Int32(int32(j.parallelism)),
+			Parallelism:  aws.Int32(int32(j.parallelism)),
+			BackoffLimit: aws.Int32(int32(j.parallelism)),
 			Template: v1.PodTemplateSpec{
 				ObjectMeta: metaV1.ObjectMeta{
 					Labels: j.labels,
 				},
 				Spec: v1.PodSpec{
+					NodeName:                      j.nodeName,
 					Containers:                    []v1.Container{j.container},
 					TerminationGracePeriodSeconds: aws.Int64(int64(j.terminationGracePeriod)),
 					NodeSelector:                  map[string]string{"kubernetes.io/os": j.os},
-					RestartPolicy:                 v1.RestartPolicyNever,
+					RestartPolicy:                 j.restartPolicy,
 				},
 			},
 		},

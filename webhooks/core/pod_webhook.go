@@ -26,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	vpcresourceconfig "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	webhookutils "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 )
 
 const resourceLimit = "1"
@@ -37,15 +37,15 @@ const fargatePodLabel = "eks.amazonaws.com/fargate-profile"
 
 // PodResourceInjector injects resources into Pods
 type PodResourceInjector struct {
-	Client      client.Client
-	decoder     *admission.Decoder
-	CacheHelper webhookutils.K8sCacheHelper
-	Log         logr.Logger
+	Client  client.Client
+	decoder *admission.Decoder
+	SGPAPI  utils.SecurityGroupForPodsAPI
+	Log     logr.Logger
 }
 
-func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Request) admission.Response {
+func (i *PodResourceInjector) Handle(ctx context.Context, req admission.Request) admission.Response {
 	pod := &corev1.Pod{}
-	err := prj.decoder.Decode(req, pod)
+	err := i.decoder.Decode(req, pod)
 	if err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
@@ -68,7 +68,7 @@ func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Reques
 		pod.Namespace = req.Namespace
 	}
 
-	webhookLog := prj.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
+	webhookLog := i.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
 
 	// Attach private ip to Windows pod which is not running on Host Network.
 	// Attach ENI to non-Windows pod which is not running on Host Network.
@@ -89,7 +89,7 @@ func (prj *PodResourceInjector) Handle(ctx context.Context, req admission.Reques
 		annotationMap = make(map[string]string)
 	}
 
-	if sgList, cacheErr := prj.CacheHelper.GetPodSecurityGroups(pod); cacheErr != nil {
+	if sgList, cacheErr := i.SGPAPI.GetMatchingSecurityGroupForPods(pod); cacheErr != nil {
 		webhookLog.Error(cacheErr, "Webhook client failed to Get or List objects from cache.")
 		return admission.Denied("Webhood encountered error to Get or List object from k8s cache.")
 	} else if len(sgList) > 0 && !isFargatePod {
@@ -163,7 +163,7 @@ func containerHasCustomizedLimit(pod *corev1.Pod) bool {
 // A decoder will be automatically injected.
 
 // InjectDecoder injects the decoder.
-func (prj *PodResourceInjector) InjectDecoder(d *admission.Decoder) error {
-	prj.decoder = d
+func (i *PodResourceInjector) InjectDecoder(d *admission.Decoder) error {
+	i.decoder = d
 	return nil
 }

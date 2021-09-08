@@ -14,9 +14,14 @@
 package perpodsg_test
 
 import (
+	"time"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
 	deploymentWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/deployment"
 	podWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/pod"
 	sgpWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
@@ -24,9 +29,9 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -94,8 +99,10 @@ var _ = Describe("Branch ENI Pods", func() {
 		Context("when the deployment is created", func() {
 			It("should have all the pods running", func() {
 				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
-				deploymentWrapper.CreateAndWaitForDeploymentToStart(frameWork.DeploymentManager, ctx, deployment)
-				verify.PodsHaveExpectedSG(namespace, podLabelKey, podLabelValue, securityGroups)
+				deploymentWrapper.
+					CreateAndWaitForDeploymentToStart(frameWork.DeploymentManager, ctx, deployment)
+				verify.VerifyNetworkingOfAllPodUsingENI(namespace, podLabelKey, podLabelValue,
+					securityGroups)
 			})
 		})
 	})
@@ -120,7 +127,7 @@ var _ = Describe("Branch ENI Pods", func() {
 			It("should get the SG from SGP in pod's namespace", func() {
 				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-				verify.PodHasExpectedSG(pod, securityGroups)
+				verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 			})
 		})
 
@@ -131,7 +138,7 @@ var _ = Describe("Branch ENI Pods", func() {
 			It("should get the SG from SGP in default namespace", func() {
 				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-				verify.PodHasExpectedSG(pod, securityGroups)
+				verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 			})
 		})
 
@@ -147,7 +154,7 @@ var _ = Describe("Branch ENI Pods", func() {
 			It("should run with the branch ENI and wait till the branch is deleted", func() {
 				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-				eniList = verify.PodHasExpectedSG(pod, securityGroups)
+				eniList = verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 			})
 		})
 
@@ -178,7 +185,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy2)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, append(securityGroups, securityGroupID2))
+					verify.VerifyNetworkingOfPodUsingENI(*pod, append(securityGroups, securityGroupID2))
 				})
 			})
 
@@ -192,7 +199,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy2)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, []string{securityGroupID1, securityGroupID2})
+					verify.VerifyNetworkingOfPodUsingENI(*pod, []string{securityGroupID1, securityGroupID2})
 				})
 			})
 		})
@@ -219,7 +226,7 @@ var _ = Describe("Branch ENI Pods", func() {
 				It("should run with Branch ENI IP with the SG from the matched SGP", func() {
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, securityGroups)
+					verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 				})
 			})
 
@@ -266,7 +273,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					It("should run with branch ENI annotation", func() {
 						sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 						pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-						verify.PodHasExpectedSG(pod, securityGroups)
+						verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 					})
 				})
 			})
@@ -283,7 +290,7 @@ var _ = Describe("Branch ENI Pods", func() {
 				)
 				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
 				By("the pod has two sgs")
-				verify.PodHasExpectedSG(pod, []string{securityGroupID1, securityGroupID2})
+				verify.VerifyNetworkingOfPodUsingENI(*pod, []string{securityGroupID1, securityGroupID2})
 			})
 		})
 
@@ -331,7 +338,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					CreateServiceAccount(sa)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, securityGroups)
+					verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 				})
 			})
 
@@ -348,7 +355,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					CreateServiceAccount(sa)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, securityGroups)
+					verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 				})
 			})
 
@@ -374,8 +381,122 @@ var _ = Describe("Branch ENI Pods", func() {
 					CreateServiceAccount(sa)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
-					verify.PodHasExpectedSG(pod, securityGroups)
+					verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
 				})
+			})
+		})
+	})
+
+	Describe("Toggle Node between Managed/Un-Managed", func() {
+		// targetedNodes is the list of node where the test will be run
+		var targetedNodes []v1.Node
+		// resourceMap is the list of resources to be allocated to the container
+		var resourceMap map[v1.ResourceName]resource.Quantity
+		var podTemplate *v1.Pod
+		var container v1.Container
+		var err error
+
+		BeforeEach(func() {
+			// for default use case we the pod-eni resource will be injected
+			// by the WebHook, so create the container with empty resource limits
+			resourceMap = map[v1.ResourceName]resource.Quantity{}
+		})
+
+		JustBeforeEach(func() {
+			sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+
+			targetedNodes = nodeList.Items[:1]
+
+			container = manifest.NewBusyBoxContainerBuilder().
+				Resources(v1.ResourceRequirements{
+					Limits:   resourceMap,
+					Requests: resourceMap,
+				}).
+				Build()
+
+			podTemplate, err = manifest.NewDefaultPodBuilder().
+				Labels(map[string]string{podLabelKey: podLabelValue}).
+				Container(container).
+				NodeName(targetedNodes[0].Name).
+				Namespace(namespace).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		Context("when node is toggled from managed to un-managed and back to managed", func() {
+			It("pod should not run when un-managed and run when managed", func() {
+				node := targetedNodes[0]
+
+				By("verifying node has trunk ENI label present")
+				// This label is added by IPAM-D
+				_, found := node.Labels[config.HasTrunkAttachedLabel]
+				Expect(found).To(BeTrue())
+
+				// This should never happens as once the trunk is attached,
+				// this label will not be removed again. This is for testing
+				// purposes to make a managed node an un-managed node
+				By("removing the has-trunk-attached label from the node")
+				err = frameWork.NodeManager.RemoveLabels(targetedNodes,
+					map[string]string{config.HasTrunkAttachedLabel: "true"})
+
+				firstPod := podTemplate.DeepCopy()
+				By("creating a Pod on the un-managed node and verifying it fails")
+				_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, firstPod, utils.ResourceCreationTimeout)
+				Expect(err).To(HaveOccurred())
+
+				By("deleting the pod")
+				err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, firstPod)
+				Expect(err).ToNot(HaveOccurred())
+
+				// Currently we wait for some time before removing the trunk from cache
+				// to allow evicted Pods's event to be received and their Branch ENIs be
+				// removed. In this period if we try to make the node managed again, it will
+				// fail
+				time.Sleep(branch.NodeDeleteRequeueRequestDelay)
+
+				By("adding the has trunk ENI label")
+				err = frameWork.NodeManager.AddLabels(targetedNodes,
+					map[string]string{config.HasTrunkAttachedLabel: "true"})
+				Expect(err).ToNot(HaveOccurred())
+
+				By("creating the Pod on now managed node and verify it runs")
+				secondPod := podTemplate.DeepCopy()
+				secondPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, secondPod, utils.ResourceCreationTimeout)
+				Expect(err).ToNot(HaveOccurred())
+
+				verify.VerifyNetworkingOfPodUsingENI(*secondPod, []string{securityGroupID1})
+			})
+		})
+
+		Context("[LOCAL] when pod is created when the controller is down", func() {
+
+			BeforeEach(func() {
+				// We are explicitly adding the limits for this test, because we are removing
+				// both controllers (and WebHook), in production we would expect one of the
+				// functional WebHook to inject this annotation in the HA setup
+				resourceMap = map[v1.ResourceName]resource.Quantity{
+					config.ResourceNamePodENI: resource.MustParse("1"),
+				}
+			})
+
+			It("pod should be created on startup", func() {
+				By("scaling the controller deployment to 0")
+				controller.ScaleControllerDeployment(ctx, frameWork.DeploymentManager, 0)
+				pod := podTemplate.DeepCopy()
+
+				By("creating pod which should not run since controller is down")
+				pod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, pod, time.Second*10)
+				Expect(err).To(HaveOccurred())
+
+				By("scaling the controller deployment to 2")
+				controller.ScaleControllerDeployment(ctx, frameWork.DeploymentManager, 2)
+
+				By("waiting for leader lease to be acquired")
+				time.Sleep(ControllerInitWaitPeriod)
+
+				By("verifying the Pod is running with Branch ENI")
+				verify.VerifyNetworkingOfAllPodUsingENI(namespace, podLabelKey, podLabelValue,
+					[]string{securityGroupID1})
 			})
 		})
 	})

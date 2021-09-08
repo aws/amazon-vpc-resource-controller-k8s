@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"testing"
 
-	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -87,8 +87,8 @@ func getMockInstanceInterface() EC2Instance {
 	return NewEC2Instance(nodeName, instanceID, os)
 }
 
-func getMockInstance(ctrl *gomock.Controller) (ec2Instance, *mock_ec2.MockEC2APIHelper) {
-	mockEC2ApiHelper := mock_ec2.NewMockEC2APIHelper(ctrl)
+func getMockInstance(ctrl *gomock.Controller) (ec2Instance, *mock_api.MockEC2APIHelper) {
+	mockEC2ApiHelper := mock_api.NewMockEC2APIHelper(ctrl)
 	return ec2Instance{instanceID: instanceID, os: os, name: nodeName}, mockEC2ApiHelper
 }
 

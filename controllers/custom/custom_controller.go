@@ -14,19 +14,23 @@
 package custom
 
 import (
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"sigs.k8s.io/controller-runtime/pkg/event"
+	"k8s.io/client-go/util/workqueue"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 // Converter for converting k8s object and object list used in watches and list operation
+// to the desired format.
 type Converter interface {
 	// ConvertObject takes an object and returns the modified object which will be
 	// stored in the data store
@@ -39,130 +43,120 @@ type Converter interface {
 	Resource() string
 	// ResourceType returns the k8s object to list/watch
 	ResourceType() runtime.Object
+	// Indexer returns the key for indexing custom converted object
+	Indexer(obj interface{}) (string, error)
 }
 
-type Controller interface {
-	// StartController starts the controller. Will block the calling routine
-	StartController(dataStore cache.Indexer, stopChanel chan struct{})
-	// GetDataStore returns the data store once it has synced with the API Server
-	GetDataStore() cache.Indexer
+type Reconciler interface {
+	Reconcile(request Request) (ctrl.Result, error)
 }
 
-type CustomController struct {
-	// ClientSet is the kubernetes client set
-	ClientSet *kubernetes.Clientset
+// Options contains the configurable parameters of the Custom Controller
+type Options struct {
+	// Name of the controller used for creating named work queues
+	Name string
 	// PageLimit is the number of objects returned per page on a list operation
-	PageLimit int64
-	// Namespace to list/watch for
+	PageLimit int
+	// Namespace to list and watch for
 	Namespace string
-	// Converter is the converter implementation that converts the k8s
-	// object before storing in the data store
-	Converter Converter
 	// ResyncPeriod how often to sync using list with the API Server
 	ResyncPeriod time.Duration
-	// RetryOnError weather item should be retried on error. Should remain false in usual use case
-	RetryOnError bool
-	// Queue is the Delta FIFO queue
-	Queue *cache.DeltaFIFO
-	// CreateUpdateEventNotificationChan channel will be notified for all create and update
-	// events for the k8s resource. If we don't want memory usage spikes we should
-	// process the events as soon as soon as the channel is notified.
-	CreateUpdateEventNotificationChan chan event.GenericEvent
-	// DeleteEventNotificationChan channel will be notified for all delete events for the
-	// k8s resource. If we don't want memory usage spikes we should process the events as
-	// soon as soon as the channel is notified.
-	DeleteEventNotificationChan chan event.GenericEvent
-	// SkipCacheDeletion will not delete the entry from cache on receiving a Delete event.
-	// The k8s object should be deleted by the routine listing for delete events on the delete
-	// event chanel. This is useful for kube builder controller which provides API with just the
-	// namespace + name without returning the entire object from the event
-	SkipCacheDeletion bool
-	// Log for custom controller
-	Log logr.Logger
-	// Controller is the K8s Controller
-	Controller cache.Controller
-	// dataStore with the converted k8s object. It should not be directly accessed and used with
-	// the exposed APIs
-	dataStore cache.Indexer
+	// MaxConcurrentReconciles to parallelize processing of worker queue
+	MaxConcurrentReconciles int
 }
 
-// StartController starts the custom controller by doing a list and watch on the specified k8s
-// resource. The controller would store the converted k8s object in the provided indexer. The
-// stop channel should be notified to stop the controller
-func (c *CustomController) StartController(dataStore cache.Indexer, stopChanel chan struct{}) {
+// This Controller can be used for any type of K8s object, but is used for Pod Objects
+// in this repository. There are two reasons why we are using a wrapper over the low level
+// controllers instead of using controllers from controller-runtime.
+// 1. We don't want to cache the entire Pod Object because of Memory constraints.
+//    We need specific details from metadata and Pod Spec. To do this we intercept
+//    the request at List; and watch, optimize it before it's stored in cache.
+//    Long term plan is to use MetaData only cache or disable Pod caching altogether
+// 2. We want the Deleted Object when Pod is Terminating. Pod Networking should only be deleted
+//    once the Pod has deleted or all containers have exited.
+//    Long term plan is to consider migrating to using finalizers and delete only when
+//    all containers have exited.
+// In future, we may be able to switch to upstream controller for reconciling Pods if the
+// long term solutions are in place
+type CustomController struct {
+	// workQueue to store create/update/delete events
+	workQueue workqueue.RateLimitingInterface
+	// mu is the mutex to allow the controller to sync before
+	// other controller start
+	mu sync.Mutex
+	// log for custom controller
+	log logr.Logger
+	// Reconciler will be called on all the K8s object events
+	Do Reconciler
+	// config to create a new client-go controller
+	config *cache.Config
+	// options is the configurable parameters for creating
+	// the controller
+	options  Options
+	syncFlag *bool
+}
 
-	c.dataStore = dataStore
+// Request for Add/Update only contains the Namespace/Name
+// Request for Delete contains the Pod Object as by the time
+// Delete Request is reconciled the cache will not have it
+type Request struct {
+	// Add/Update Request will contain the Namespaced Name only. The
+	// item can be retrieved from the indexer for add/update events
+	NamespacedName types.NamespacedName
+	// Delete Event will contain the DeletedObject only.
+	DeletedObject interface{}
+}
 
-	config := &cache.Config{
-		Queue: c.Queue,
-		ListerWatcher: newListWatcher(c.ClientSet.CoreV1().RESTClient(),
-			c.Converter.Resource(), c.Namespace, c.PageLimit, c.Converter),
-		ObjectType:       c.Converter.ResourceType(),
-		FullResyncPeriod: c.ResyncPeriod,
-		RetryOnError:     c.RetryOnError,
-		Process: func(obj interface{}) error {
-			// from oldest to newest
-			for _, d := range obj.(cache.Deltas) {
-				// Strip down the pod object and keep only the required details
-				convertedObj, err := c.Converter.ConvertObject(d.Object)
-				if err != nil {
-					return err
-				}
-				switch d.Type {
-				case cache.Sync, cache.Added, cache.Updated:
-					if _, exists, err := c.dataStore.Get(convertedObj); err == nil && exists {
-						if err := c.dataStore.Update(convertedObj); err != nil {
-							return err
-						}
-					} else {
-						if err := c.dataStore.Add(convertedObj); err != nil {
-							return err
-						}
-					}
+// Starts the low level controller
+func (c *CustomController) Start(stop <-chan struct{}) error {
+	// This is important to allow the data store to be synced
+	// Before the other controller starts
+	c.mu.Lock()
+	// Shut down the queue so the worker can stop
+	defer c.workQueue.ShutDown()
 
-					c.notifyChannelOnCreateUpdate(convertedObj)
-					if err != nil {
-						return err
-					}
+	err := func() error {
+		defer c.mu.Unlock()
 
-				case cache.Deleted:
-					// Prevent removing from cache on delete. The notified channel should take
-					// care of removing the entry.
-					if !c.SkipCacheDeletion {
-						if err := c.dataStore.Delete(convertedObj); err != nil {
-							return err
-						}
-					}
-					err = c.notifyChannelOnDelete(convertedObj)
-					if err != nil {
-						return err
-					}
-				}
-			}
-			return nil
-		},
+		coreController := cache.New(c.config)
+
+		c.log.Info("starting custom controller")
+		go coreController.Run(stop)
+
+		// Wait till cache sync
+		c.WaitForCacheSync(coreController)
+
+		c.log.Info("Starting Workers", "worker count",
+			c.options.MaxConcurrentReconciles)
+		for i := 0; i < c.options.MaxConcurrentReconciles; i++ {
+			go wait.Until(c.worker, time.Second, stop)
+		}
+
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
 
-	c.Log.Info("starting custom controller")
-	defer close(stopChanel)
-	c.Controller = cache.New(config)
-
-	// Run the controller
-	c.Controller.Run(stopChanel)
+	<-stop
+	c.log.Info("stopping workers")
+	return nil
 }
 
-// GetDataStore returns the data store when it has successfully synced with API Server
-func (c *CustomController) GetDataStore() cache.Indexer {
-	for c.Controller == nil || (!c.Controller.HasSynced() && c.Controller.LastSyncResourceVersion() == "") {
-		c.Log.Info("waiting for controller to sync")
+// WaitForCacheSync tills the cache has synced, this must be done under
+// mutex lock to prevent other controllers from starting at same time
+func (c *CustomController) WaitForCacheSync(controller cache.Controller) {
+	for !controller.HasSynced() && controller.LastSyncResourceVersion() == "" {
+		c.log.Info("waiting for controller to sync")
 		time.Sleep(time.Second * 5)
 	}
-	return c.dataStore
+	*c.syncFlag = true
+	c.log.Info("cache has synced successfully")
 }
 
-// newListWatcher returns a list watcher with a custom list function that converts the
+// newOptimizedListWatcher returns a list watcher with a custom list function that converts the
 // response for each page using the converter function and returns a general watcher
-func newListWatcher(restClient cache.Getter, resource string, namespace string, limit int64,
+func newOptimizedListWatcher(restClient cache.Getter, resource string, namespace string, limit int,
 	converter Converter) *cache.ListWatch {
 
 	listFunc := func(options metav1.ListOptions) (runtime.Object, error) {
@@ -172,7 +166,7 @@ func newListWatcher(restClient cache.Getter, resource string, namespace string, 
 			// This needs to be done because just setting the limit using option's
 			// Limit is being overridden and the response is returned without pagination.
 			VersionedParams(&metav1.ListOptions{
-				Limit:    limit,
+				Limit:    int64(limit),
 				Continue: options.Continue,
 			}, metav1.ParameterCodec).
 			Do().
@@ -199,28 +193,69 @@ func newListWatcher(restClient cache.Getter, resource string, namespace string, 
 	return &cache.ListWatch{ListFunc: listFunc, WatchFunc: watchFunc}
 }
 
-// notifyChannelOnCreateUpdate notifies the add/update event on the appropriate channel
-func (c *CustomController) notifyChannelOnCreateUpdate(obj interface{}) error {
-	meta, err := apimeta.Accessor(obj)
-	if err != nil {
-		return err
+func (c *CustomController) worker() {
+	for c.processNextWorkItem() {
 	}
-	c.CreateUpdateEventNotificationChan <- event.GenericEvent{
-		Meta:   meta,
-		Object: obj.(runtime.Object),
-	}
-	return nil
 }
 
-// notifyChannelOnCreateUpdate notifies the delete event on the appropriate channel
-func (c *CustomController) notifyChannelOnDelete(obj interface{}) error {
-	meta, err := apimeta.Accessor(obj)
-	if err != nil {
-		return err
+func (c *CustomController) processNextWorkItem() bool {
+	obj, shutdown := c.workQueue.Get()
+	if shutdown {
+		// Stop working
+		return false
 	}
-	c.DeleteEventNotificationChan <- event.GenericEvent{
-		Meta:   meta,
-		Object: obj.(runtime.Object),
+
+	// We call Done here so the workqueue knows we have finished
+	// processing this item. We also must remember to call Forget if we
+	// do not want this work item being re-queued. For example, we do
+	// not call Forget if a transient error occurs, instead the item is
+	// put back on the workqueue and attempted again after a back-off
+	// period.
+	defer c.workQueue.Done(obj)
+
+	// The item from the workqueue will be forgotten in the handler, when
+	// it's successfully processed.
+	return c.reconcileHandler(obj)
+}
+
+func (c *CustomController) reconcileHandler(obj interface{}) bool {
+	var req Request
+	var ok bool
+	if req, ok = obj.(Request); !ok {
+		// As the item in the workqueue is actually invalid, we call
+		// Forget here else we'd go into a loop of attempting to
+		// process a work item that is invalid.
+		c.workQueue.Forget(obj)
+		c.log.Error(nil, "Queue item was not a Request",
+			"type", fmt.Sprintf("%T", obj), "value", obj)
+		// Return true, don't take a break
+		return true
 	}
-	return nil
+	// RunInformersAndControllers the syncHandler, passing it the namespace/Name string of the
+	// resource to be synced.
+	if result, err := c.Do.Reconcile(req); err != nil {
+		c.workQueue.AddRateLimited(req)
+		c.log.Error(err, "Reconciler error", "request", req)
+		return false
+	} else if result.RequeueAfter > 0 {
+		// The result.RequeueAfter request will be lost, if it is returned
+		// along with a non-nil error. But this is intended as
+		// We need to drive to stable reconcile loops before queuing due
+		// to result.RequestAfter
+		c.workQueue.Forget(obj)
+		c.workQueue.AddAfter(req, result.RequeueAfter)
+		return true
+	} else if result.Requeue {
+		c.workQueue.AddRateLimited(req)
+		return true
+	}
+
+	// Finally, if no error occurs we Forget this item so it does not
+	// get queued again until another change happens.
+	c.workQueue.Forget(obj)
+
+	c.log.V(1).Info("Successfully Reconciled", "request", req)
+
+	// Return true, don't take a break
+	return true
 }

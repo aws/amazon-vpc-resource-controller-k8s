@@ -18,11 +18,13 @@ import (
 	"fmt"
 	"testing"
 
-	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
-	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
-	mock_trunk "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk"
-	mock_utils "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/utils"
-	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/utils"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
@@ -65,18 +67,22 @@ var (
 )
 
 // getProviderAndMockK8sWrapperAndHelper returns the mock provider along with the k8s wrapper and helper
-func getProviderAndMockK8sWrapperAndHelper(ctrl *gomock.Controller) (branchENIProvider, *mock_k8s.MockK8sWrapper,
-	*mock_utils.MockK8sCacheHelper) {
+func getProviderAndMocks(ctrl *gomock.Controller) (branchENIProvider, *mock_pod.MockPodClientAPIWrapper,
+	*mock_utils.MockSecurityGroupForPodsAPI, *mock_k8s.MockK8sWrapper) {
 	log := zap.New(zap.UseDevMode(true)).WithName("branch provider")
-	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
-	mockK8sCacheHelper := mock_utils.NewMockK8sCacheHelper(ctrl)
+	mockPodAPI := mock_pod.NewMockPodClientAPIWrapper(ctrl)
+	mockSGPAPI := mock_utils.NewMockSecurityGroupForPodsAPI(ctrl)
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
 
 	return branchENIProvider{
-		k8s:           mockK8sWrapper,
-		k8sHelper:     mockK8sCacheHelper,
+		apiWrapper: api.Wrapper{
+			PodAPI: mockPodAPI,
+			SGPAPI: mockSGPAPI,
+			K8sAPI: mockK8sAPI,
+		},
 		log:           log,
 		trunkENICache: make(map[string]trunk.TrunkENI),
-	}, mockK8sWrapper, mockK8sCacheHelper
+	}, mockPodAPI, mockSGPAPI, mockK8sAPI
 }
 
 // getProviderAndMockK8sWrapper returns the mock provider along with the k8s wrapper
@@ -85,7 +91,9 @@ func getProviderAndMockK8sWrapper(ctrl *gomock.Controller) (branchENIProvider, *
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
 
 	return branchENIProvider{
-		k8s:           mockK8sWrapper,
+		apiWrapper: api.Wrapper{
+			K8sAPI: mockK8sWrapper,
+		},
 		log:           log,
 		trunkENICache: make(map[string]trunk.TrunkENI),
 	}, mockK8sWrapper
@@ -201,7 +209,7 @@ func TestBranchENIProvider_DeleteBranchUsedByPods(t *testing.T) {
 	provider.trunkENICache[NodeName] = fakeTrunk1
 	provider.trunkENICache[NodeName+"2"] = fakeTrunk2
 
-	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1).Return(nil)
+	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1)
 
 	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
 
@@ -222,11 +230,11 @@ func TestBranchENIProvider_DeleteBranchUsedByPods_PodNotFound(t *testing.T) {
 	provider.trunkENICache[NodeName] = fakeTrunk1
 	provider.trunkENICache[NodeName+"2"] = fakeTrunk2
 
-	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1).Return(MockError)
+	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1)
 
 	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
 
-	assert.Error(t, MockError, err)
+	assert.Nil(t, err)
 }
 
 // TestBranchENIProvider_DeInitResources verifies that resources is removed from cache after calling de init workflow
@@ -287,7 +295,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider, mockK8sWrapper, k8sHelper := getProviderAndMockK8sWrapperAndHelper(ctrl)
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
 
 	resCount := 1
 	expectedAnnotation, _ := json.Marshal(EniDetails)
@@ -295,14 +303,14 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 
 	provider.trunkENICache[NodeName] = fakeTrunk
 
-	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockK8sWrapper.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	k8sHelper.EXPECT().GetPodSecurityGroups(MockPod1).Return(SecurityGroups, nil)
-	mockK8sWrapper.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
-	mockK8sWrapper.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI,
+	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI,
 		string(expectedAnnotation)).Return(nil)
-	mockK8sWrapper.EXPECT().BroadcastEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
@@ -313,7 +321,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources_AlreadyAnnotated_Cache(t *
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider, mockK8sWrapper, _ := getProviderAndMockK8sWrapperAndHelper(ctrl)
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
 
 	resCount := 1
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
@@ -323,7 +331,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources_AlreadyAnnotated_Cache(t *
 	mockPodWithAnnotation := MockPod1.DeepCopy()
 	mockPodWithAnnotation.Annotations[config.ResourceNamePodENI] = "EniDetails"
 
-	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(mockPodWithAnnotation, nil)
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(mockPodWithAnnotation, nil)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
@@ -336,7 +344,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources_AlreadyAnnotated_APIServer
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider, mockK8sWrapper, _ := getProviderAndMockK8sWrapperAndHelper(ctrl)
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
 
 	resCount := 1
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
@@ -346,8 +354,8 @@ func TestBranchENIProvider_CreateAndAnnotateResources_AlreadyAnnotated_APIServer
 	mockPodWithAnnotation := MockPod1.DeepCopy()
 	mockPodWithAnnotation.Annotations[config.ResourceNamePodENI] = "EniDetails"
 
-	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockK8sWrapper.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(mockPodWithAnnotation, nil)
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(mockPodWithAnnotation, nil)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
@@ -359,15 +367,15 @@ func TestBranchENIProvider_CreateAndAnnotateResources_GetPodError(t *testing.T) 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider, mockK8sWrapper, _ := getProviderAndMockK8sWrapperAndHelper(ctrl)
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
 
 	resCount := 1
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 
 	provider.trunkENICache[NodeName] = fakeTrunk
 
-	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockK8sWrapper.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(nil, MockError)
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(nil, MockError)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
@@ -379,15 +387,15 @@ func TestBranchENIProvider_CreateAndAnnotateResources_TrunkNotPreset(t *testing.
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider, mockK8sWrapper, _ := getProviderAndMockK8sWrapperAndHelper(ctrl)
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
 
 	resCount := 1
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 
 	provider.trunkENICache[NodeName] = fakeTrunk
 
-	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockK8sWrapper.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(nil, MockError)
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(nil, MockError)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 	assert.NotNil(t, err)
@@ -399,13 +407,13 @@ func TestBranchENIProvider_CreateAndAnnotateResources_GetSecurityGroup_Error(t *
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider, mockK8sWrapper, k8sHelper := getProviderAndMockK8sWrapperAndHelper(ctrl)
+	provider, mockPodAPI, mockSGPAPI, _ := getProviderAndMocks(ctrl)
 
 	resCount := 1
 
-	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockK8sWrapper.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	k8sHelper.EXPECT().GetPodSecurityGroups(MockPod1).Return(nil, MockError)
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(nil, MockError)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
@@ -418,7 +426,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider, mockK8sWrapper, k8sHelper := getProviderAndMockK8sWrapperAndHelper(ctrl)
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
 
 	resCount := 1
 	expectedAnnotation, _ := json.Marshal(EniDetails)
@@ -426,13 +434,13 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 
 	provider.trunkENICache[NodeName] = fakeTrunk
 
-	mockK8sWrapper.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockK8sWrapper.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockK8sWrapper.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
-	k8sHelper.EXPECT().GetPodSecurityGroups(MockPod1).Return(SecurityGroups, nil)
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
 	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
-	mockK8sWrapper.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)
-	mockK8sWrapper.EXPECT().BroadcastEvent(MockPod1, ReasonBranchENIAnnotationFailed, gomock.Any(), v1.EventTypeWarning)
+	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchENIAnnotationFailed, gomock.Any(), v1.EventTypeWarning)
 	fakeTrunk.EXPECT().PushENIsToFrontOfDeleteQueue(MockPod1, EniDetails)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
@@ -446,13 +454,13 @@ func TestBranchENIProvider_ReconcileNode(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider, mockK8sWrapper, _ := getProviderAndMockK8sWrapperAndHelper(ctrl)
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
 
 	fakeTrunk1 := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk1
 
 	list := &v1.PodList{}
-	mockK8sWrapper.EXPECT().ListPods(NodeName).Return(list, nil)
+	mockPodAPI.EXPECT().ListPods(NodeName).Return(list, nil)
 
 	fakeTrunk1.EXPECT().Reconcile(list.Items)
 

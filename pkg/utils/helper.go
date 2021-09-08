@@ -16,14 +16,15 @@ package utils
 import (
 	"context"
 
+	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
+
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 )
 
 // Include checks if a string existing in a string slice and returns true or false.
@@ -50,21 +51,34 @@ func RemoveDuplicatedSg(list []string) []string {
 	return processedList
 }
 
-type K8sCacheHelper interface {
-	GetPodSecurityGroups(pod *corev1.Pod) ([]string, error)
-	GetSecurityGroupsFromPod(podId types.NamespacedName) ([]string, error)
+type SecurityGroupForPodsAPI interface {
+	GetMatchingSecurityGroupForPods(pod *corev1.Pod) ([]string, error)
 }
 
-// GetPodSecurityGroups decide if the testPod can be mutated to inject ENI annotation for security groups.
-// The function returns security group list and true or false for mutating testPod.
-func (kch *k8sCacheHelper) GetPodSecurityGroups(pod *corev1.Pod) ([]string, error) {
-	helperLog := kch.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
+type SecurityGroupForPods struct {
+	Client client.Client
+	Log    logr.Logger
+}
+
+// NewSecurityGroupForPodsAPI returns the SecurityGroupForPod APIs for common operations on objects
+// Using Security Group Policy
+func NewSecurityGroupForPodsAPI(client client.Client, log logr.Logger) SecurityGroupForPodsAPI {
+	return &SecurityGroupForPods{
+		Client: client,
+		Log:    log,
+	}
+}
+
+// GetMatchingSecurityGroupForPods returns the list of security groups that should be associated
+// with the Pod by matching against all the SecurityGroupPolicy
+func (s *SecurityGroupForPods) GetMatchingSecurityGroupForPods(pod *corev1.Pod) ([]string, error) {
+	helperLog := s.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
 
 	// Build SGP list from cache.
 	ctx := context.Background()
 	sgpList := &vpcresourcesv1beta1.SecurityGroupPolicyList{}
 
-	if err := kch.Client.List(ctx, sgpList, &client.ListOptions{Namespace: pod.Namespace}); err != nil {
+	if err := s.Client.List(ctx, sgpList, &client.ListOptions{Namespace: pod.Namespace}); err != nil {
 		// If the CRD was removed intentionally or accidentally, we don't want to interrupt pods creation.
 		// GroupVersionResource or GroupKind not matched check.
 		if meta.IsNoMatchError(err) {
@@ -83,11 +97,11 @@ func (kch *k8sCacheHelper) GetPodSecurityGroups(pod *corev1.Pod) ([]string, erro
 		Name:      pod.Spec.ServiceAccountName}
 
 	// Get metadata of SA associated with Pod from cache
-	if err := kch.Client.Get(ctx, key, sa); err != nil {
+	if err := s.Client.Get(ctx, key, sa); err != nil {
 		return nil, err
 	}
 
-	sgList := kch.filterPodSecurityGroups(sgpList, pod, sa)
+	sgList := s.filterPodSecurityGroups(sgpList, pod, sa)
 	if len(sgList) > 0 {
 		helperLog.V(1).Info("Pod matched a SecurityGroupPolicy and will get the following Security Groups:",
 			"Security Groups", sgList)
@@ -95,12 +109,12 @@ func (kch *k8sCacheHelper) GetPodSecurityGroups(pod *corev1.Pod) ([]string, erro
 	return sgList, nil
 }
 
-func (kch *k8sCacheHelper) filterPodSecurityGroups(
+func (s *SecurityGroupForPods) filterPodSecurityGroups(
 	sgpList *vpcresourcesv1beta1.SecurityGroupPolicyList,
 	pod *corev1.Pod,
 	sa *corev1.ServiceAccount) []string {
 	var sgList []string
-	sgpLogger := kch.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
+	sgpLogger := s.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
 	for _, sgp := range sgpList.Items {
 		hasPodSelector := sgp.Spec.PodSelector != nil
 		hasSASelector := sgp.Spec.ServiceAccountSelector != nil
