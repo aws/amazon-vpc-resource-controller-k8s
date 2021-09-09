@@ -46,11 +46,11 @@ func (e *ENICleaner) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // StartENICleaner starts the ENI Cleaner routine that cleans up dangling ENIs created by the controller
-func (e *ENICleaner) Start(stop <-chan struct{}) error {
+func (e *ENICleaner) Start(ctx context.Context) error {
 	e.Log.Info("starting eni clean up routine")
 	// Start routine to listen for shut down signal, on receiving the signal it set shutdown to true
 	go func() {
-		<-stop
+		<-ctx.Done()
 		e.shutdown = true
 	}()
 	// Perform ENI cleanup after fixed time intervals till shut down variable is set to true on receiving the shutdown

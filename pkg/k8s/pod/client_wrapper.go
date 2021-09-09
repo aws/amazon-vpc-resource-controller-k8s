@@ -186,7 +186,8 @@ func (p *podClientAPIWrapper) GetPod(namespace string, name string) (*v1.Pod, er
 // GetPodFromAPIServer returns the pod details by querying the API Server directly
 func (p *podClientAPIWrapper) GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error) {
 	getPodFromAPIServeCallCount.Inc()
-	pod, err := p.coreV1.Pods(namespace).Get(name, metav1.GetOptions{
+	ctx := context.TODO()
+	pod, err := p.coreV1.Pods(namespace).Get(ctx, name, metav1.GetOptions{
 		TypeMeta:        metav1.TypeMeta{},
 		ResourceVersion: "",
 	})

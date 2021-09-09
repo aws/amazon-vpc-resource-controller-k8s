@@ -19,7 +19,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -112,5 +112,5 @@ func TestENICleaner_StartENICleaner_Shutdown(t *testing.T) {
 
 	eniCleaner.shutdown = true
 
-	eniCleaner.Start(make(chan struct{}))
+	eniCleaner.Start(context.TODO())
 }
