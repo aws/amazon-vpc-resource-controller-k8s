@@ -14,12 +14,17 @@
 package controllers
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
@@ -39,7 +44,12 @@ type PodReconciler struct {
 	// Manager manages all the nodes on the cluster
 	NodeManager manager.Manager
 	// DataStore is the cache with memory optimized Pod Objects
-	DataStore       cache.Indexer
+	DataStore cache.Indexer
+	// DeletedObjDataStore stores the objects deleted from etcd, reconciler
+	// must remove the object after accessing it
+	DeletedObjDataStore cache.Indexer
+	// DataStoreSynced when set to true indicates the data store is synced
+	// successfully
 	DataStoreSynced *bool
 }
 
@@ -47,37 +57,49 @@ var PodRequeueRequest = ctrl.Result{Requeue: true, RequeueAfter: time.Second}
 
 // Reconcile handles create/update/delete event by delegating the request to the  handler
 // if the resource is supported by the controller.
-func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
+func (r *PodReconciler) Reconcile(request ctrl.Request) (ctrl.Result, error) {
 	var isDeleteEvent bool
 	var hasPodCompleted bool
 
 	var pod *v1.Pod
 
-	if request.DeletedObject != nil {
-		isDeleteEvent = true
-		pod = request.DeletedObject.(*v1.Pod)
-	} else {
-		obj, exists, err := r.DataStore.GetByKey(request.NamespacedName.String())
+	logger := r.Log.WithValues("namespaced name", request.NamespacedName.String())
+	obj, exists, err := r.DataStore.GetByKey(request.NamespacedName.String())
+	if err != nil {
+		logger.Error(err, "failed to retrieve the pod object")
+		return ctrl.Result{}, nil
+	}
+	if !exists {
+		logger.V(1).Info("pod doesn't exists in the active pod object's cache")
+
+		// Since the Pod doesn't exist in cache anymore, it must be a delete event. Access
+		// the event and remove it from deleted object data store
+		obj, exists, err = r.DeletedObjDataStore.GetByKey(request.NamespacedName.String())
 		if err != nil {
-			r.Log.Error(err, "failed to retrieve the pod object",
-				"namespace name", request.NamespacedName.String())
+			logger.Error(err, "failed to retrieve the pod object from deleted object data store")
 			return ctrl.Result{}, nil
 		}
 		if !exists {
-			r.Log.Info("pod doesn't exists in the cache anymore",
-				"namespace name", request.NamespacedName.String())
+			logger.Error(fmt.Errorf("object not found"), "failed to find object in delete data store")
 			return ctrl.Result{}, nil
 		}
-		// convert to pod object
-		pod = obj.(*v1.Pod)
+		err = r.DeletedObjDataStore.Delete(obj)
+		if err != nil {
+			// Log the error, but still process the event
+			logger.Error(err, "failed to remove object from data store",
+				"size", len(r.DeletedObjDataStore.List()))
+		}
+		isDeleteEvent = true
 	}
+	// convert to pod object
+	pod = obj.(*v1.Pod)
 
 	// If Pod is Completed, the networking for the Pod should be removed
 	// given the container will not be restarted again
 	hasPodCompleted = pod.Status.Phase == v1.PodSucceeded ||
 		pod.Status.Phase == v1.PodFailed
 
-	logger := r.Log.WithValues("UID", pod.UID, "pod", request.NamespacedName,
+	logger = r.Log.WithValues("UID", pod.UID, "pod", request.NamespacedName,
 		"node", pod.Spec.NodeName)
 
 	// If the Pod doesn't have a Node assigned, ignore the request instead of querying the
@@ -152,17 +174,39 @@ func getAggregateResources(pod *v1.Pod) map[string]int64 {
 func (r *PodReconciler) SetupWithManager(manager ctrl.Manager,
 	clientSet *kubernetes.Clientset, pageLimit int, syncPeriod time.Duration) error {
 
-	return custom.NewControllerManagedBy(manager).
+	// event chanel is used by the custom controller to send Pod events after optimizing
+	// them. On the receiving end the Pod events will be processed by the High Level
+	// controller which sends the Namespace/Name request to Reconcile
+	sourceEventChan := make(chan event.GenericEvent)
+
+	// Create the low level controller that optimizes Pod Object in cache
+	err := custom.NewControllerManagedBy(manager).
 		WithLogger(r.Log.WithName("custom pod controller")).
 		UsingDataStore(r.DataStore).
+		UsingDeleteDataStore(r.DeletedObjDataStore).
 		WithClientSet(clientSet).
 		UsingConverter(&pod.PodConverter{
 			K8sResource:     "pods",
 			K8sResourceType: &v1.Pod{},
 		}).DataStoreSyncFlag(r.DataStoreSynced).
 		Options(custom.Options{
-			PageLimit:               pageLimit,
-			ResyncPeriod:            syncPeriod,
+			PageLimit:    pageLimit,
+			ResyncPeriod: syncPeriod,
+		}).Complete(sourceEventChan)
+	if err != nil {
+		return err
+	}
+
+	// Start the high level controller, low level controller will notify this controller
+	// using a chanel
+	podController, err := controller.New("pod-controller", manager,
+		controller.Options{
+			Reconciler:              r,
 			MaxConcurrentReconciles: 2,
-		}).Complete(r)
+		})
+	if err != nil {
+		return err
+	}
+
+	return podController.Watch(&source.Channel{Source: sourceEventChan}, &handler.EnqueueRequestForObject{})
 }

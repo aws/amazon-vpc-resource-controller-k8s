@@ -16,7 +16,6 @@ package controllers
 import (
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
@@ -31,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 	controllerruntime "sigs.k8s.io/controller-runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -46,7 +46,7 @@ var (
 		Namespace: mockPodNS,
 		Name:      mockPodName,
 	}
-	mockReq = custom.Request{NamespacedName: n}
+	mockReq = ctrl.Request{NamespacedName: n}
 
 	mockPod = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},
@@ -90,6 +90,8 @@ type Mock struct {
 	MockNode            *mock_node.MockNode
 	PodReconciler       *PodReconciler
 	MockHandler         *mock_handler.MockHandler
+	MockDataStore       cache.Indexer
+	MockDeleteDataStore cache.Indexer
 }
 
 func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
@@ -99,19 +101,24 @@ func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
 	mockNode := mock_node.NewMockNode(ctrl)
 
 	converter := pod.PodConverter{}
-	mockIndexer := cache.NewIndexer(converter.Indexer, pod.NodeNameIndexer())
-	mockIndexer.Add(mockPod)
+	mockDataStore := cache.NewIndexer(converter.Indexer, pod.NodeNameIndexer())
+	mockDataStore.Add(mockPod)
+	mockDeleteDataStore := cache.NewIndexer(converter.Indexer, pod.NodeNameIndexer())
+	mockDeleteDataStore.Add(mockPod)
 
 	return Mock{
 		MockNodeManager:     mockNodeManager,
 		MockResourceManager: mockResourceManager,
 		MockNode:            mockNode,
 		MockHandler:         mockHandler,
+		MockDataStore:       mockDataStore,
+		MockDeleteDataStore: mockDeleteDataStore,
 		PodReconciler: &PodReconciler{
-			Log:             zap.New(),
-			ResourceManager: mockResourceManager,
-			NodeManager:     mockNodeManager,
-			DataStore:       mockIndexer,
+			Log:                 zap.New(),
+			ResourceManager:     mockResourceManager,
+			NodeManager:         mockNodeManager,
+			DataStore:           mockDataStore,
+			DeletedObjDataStore: mockDeleteDataStore,
 		},
 	}
 }
@@ -144,6 +151,9 @@ func TestPodReconciler_Reconcile_Delete(t *testing.T) {
 
 	mock := NewMock(ctrl, mockPod)
 
+	// Remove the pod from Active Pod Data Store
+	mock.MockDataStore.Delete(mockPod)
+
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.MockNode.EXPECT().IsManaged().Return(true)
 	mock.MockNode.EXPECT().IsReady().Return(true)
@@ -151,11 +161,24 @@ func TestPodReconciler_Reconcile_Delete(t *testing.T) {
 	mock.MockHandler.EXPECT().HandleDelete(mockPod).Return(reconcile.Result{}, nil)
 	mock.MockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
 
-	delReq := custom.Request{
-		DeletedObject: mockPod,
-	}
+	result, err := mock.PodReconciler.Reconcile(mockReq)
+	assert.NoError(t, err)
+	assert.Equal(t, result, controllerruntime.Result{})
+	assert.NotContains(t, n.String(), mock.MockDeleteDataStore)
+}
 
-	result, err := mock.PodReconciler.Reconcile(delReq)
+func TestPodReconciler_Reconcile_Delete_DuplicateEvent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+
+	// Remove the pod from Active and Deleted Pod Data Store
+	mock.MockDataStore.Delete(mockPod)
+	mock.MockDeleteDataStore.Delete(mockPod)
+
+	// Expect reconciler to return without any operation
+	result, err := mock.PodReconciler.Reconcile(mockReq)
 	assert.NoError(t, err)
 	assert.Equal(t, result, controllerruntime.Result{})
 }

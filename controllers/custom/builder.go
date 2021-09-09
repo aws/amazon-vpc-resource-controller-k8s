@@ -19,10 +19,9 @@ import (
 
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/workqueue"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
@@ -38,15 +37,14 @@ type Builder struct {
 	// controller must be queried using this datastore
 	dataStore cache.Indexer
 	// mgr is the controller runtime manager
-	mgr               manager.Manager
+	mgr manager.Manager
+	// dataStoreSyncFlag when set to true means the controller has synced successfully
+	// and data store is safe to access
 	dataStoreSyncFlag *bool
-
-	log logr.Logger
-}
-
-func (b *Builder) Named(name string) *Builder {
-	b.options.Name = name
-	return b
+	log               logr.Logger
+	// deleteDataStore with the converted k8s object that are deleted from etcd
+	// the reconciler has the onus to clear the object after accessing this data store
+	deleteDataStore cache.Indexer
 }
 
 func (b *Builder) UsingConverter(converter Converter) *Builder {
@@ -61,6 +59,11 @@ func (b *Builder) WithClientSet(clientSet *kubernetes.Clientset) *Builder {
 
 func (b *Builder) UsingDataStore(dataStore cache.Indexer) *Builder {
 	b.dataStore = dataStore
+	return b
+}
+
+func (b *Builder) UsingDeleteDataStore(deleteDataStore cache.Indexer) *Builder {
+	b.deleteDataStore = deleteDataStore
 	return b
 }
 
@@ -85,7 +88,7 @@ func NewControllerManagedBy(mgr manager.Manager) *Builder {
 
 // Complete adds the controller to manager's Runnable. The Controller
 // runnable will start when the manager starts
-func (b *Builder) Complete(reconciler Reconciler) error {
+func (b *Builder) Complete(sourceEventChanel chan event.GenericEvent) error {
 	if b.log == nil {
 		return fmt.Errorf("need to set the logger")
 	}
@@ -103,9 +106,6 @@ func (b *Builder) Complete(reconciler Reconciler) error {
 		return fmt.Errorf("data store sync flag cannot be null")
 	}
 	b.SetDefaults()
-
-	workQueue := workqueue.NewNamedRateLimitingQueue(
-		workqueue.DefaultControllerRateLimiter(), b.options.Name)
 
 	optimizedListWatch := newOptimizedListWatcher(b.clientSet.CoreV1().RESTClient(),
 		b.converter.Resource(), b.options.Namespace, b.options.PageLimit, b.converter)
@@ -136,32 +136,26 @@ func (b *Builder) Complete(reconciler Reconciler) error {
 							return err
 						}
 					}
+					err = notifyChannelOnEvent(convertedObj, sourceEventChanel)
 					if err != nil {
 						return err
 					}
-					metaObj, ok := convertedObj.(metav1.Object)
-					if !ok {
-						return fmt.Errorf("failed to get object meta %v", obj)
-					}
-
-					// Add the namespace/name to the queue so multiple
-					// duplicate events are processed only once at a time
-					workQueue.Add(Request{
-						NamespacedName: types.NamespacedName{
-							Namespace: metaObj.GetNamespace(),
-							Name:      metaObj.GetName(),
-						},
-					})
 
 				case cache.Deleted:
-					if err := b.dataStore.Delete(convertedObj); err != nil {
+					if err = b.dataStore.Delete(convertedObj); err != nil {
 						return err
 					}
-					// Add entire object instead of namespace/name as from this
-					// point onwards the object will no longer be present in cache
-					workQueue.Add(Request{
-						DeletedObject: convertedObj,
-					})
+					// Not all controller may need the delete object in Reconciler,
+					// only add the object if delete object data store is passed
+					if b.deleteDataStore != nil {
+						if err = b.deleteDataStore.Add(convertedObj); err != nil {
+							return err
+						}
+					}
+					err = notifyChannelOnEvent(convertedObj, sourceEventChanel)
+					if err != nil {
+						return err
+					}
 				}
 			}
 			return nil
@@ -169,28 +163,18 @@ func (b *Builder) Complete(reconciler Reconciler) error {
 	}
 
 	controller := &CustomController{
-		log:       b.log,
-		options:   b.options,
-		config:    config,
-		Do:        reconciler,
-		workQueue: workQueue,
-		syncFlag:  b.dataStoreSyncFlag,
+		log:             b.log,
+		config:          config,
+		dataStoreSynced: b.dataStoreSyncFlag,
 	}
-
 	// Adds the controller to the manager's Runnable
 	return b.mgr.Add(controller)
 }
 
 // SetDefaults sets the default options for controller
 func (b *Builder) SetDefaults() {
-	if b.options.Name == "" {
-		b.options.Name = fmt.Sprintf("%s custom controller", b.converter.Resource())
-	}
 	if b.options.Namespace == "" {
 		b.options.Namespace = metav1.NamespaceAll
-	}
-	if b.options.MaxConcurrentReconciles == 0 {
-		b.options.MaxConcurrentReconciles = 1
 	}
 	if b.options.PageLimit == 0 {
 		b.options.PageLimit = 100

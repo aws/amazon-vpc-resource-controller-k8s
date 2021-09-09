@@ -222,6 +222,7 @@ func main() {
 	// accessed only after the Pod Reconciler has started
 	podConverter := pod.PodConverter{}
 	dataStore := cache.NewIndexer(podConverter.Indexer, pod.NodeNameIndexer())
+	deleteDataStore := cache.NewIndexer(podConverter.Indexer, pod.NodeNameIndexer())
 
 	apiWrapper := api.Wrapper{
 		EC2API: ec2APIHelper,
@@ -253,11 +254,12 @@ func main() {
 	// IMPORTANT: The Pod Reconciler must be the first controller to Run. The controller
 	// will not allow any other controller to run till the cache has synced.
 	if err = (&corecontroller.PodReconciler{
-		Log:             ctrl.Log.WithName("controllers").WithName("Pod Reconciler"),
-		ResourceManager: resourceManager,
-		NodeManager:     nodeManager,
-		DataStore:       dataStore,
-		DataStoreSynced: hasPodDataStoreSynced,
+		Log:                 ctrl.Log.WithName("controllers").WithName("Pod Reconciler"),
+		ResourceManager:     resourceManager,
+		NodeManager:         nodeManager,
+		DataStore:           dataStore,
+		DeletedObjDataStore: deleteDataStore,
+		DataStoreSynced:     hasPodDataStoreSynced,
 	}).SetupWithManager(mgr, clientSet, listPageLimit, syncPeriod); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "pod")
 		os.Exit(1)
