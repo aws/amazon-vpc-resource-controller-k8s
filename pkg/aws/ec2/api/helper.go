@@ -43,14 +43,14 @@ var (
 		Factor:   2.0,
 		Jitter:   0.1,
 		Steps:    7,
-		Cap:      time.Minute,
+		Cap:      time.Minute * 5,
 	}
 	waitForIPAttachment = wait.Backoff{
-		Duration: time.Millisecond * 50,
+		Duration: time.Millisecond * 250,
 		Factor:   2.0,
 		Jitter:   0.1,
 		Steps:    7,
-		Cap:      time.Second * 5,
+		Cap:      time.Minute,
 	}
 	defaultControllerTag = &ec2.Tag{
 		Key:   aws.String(config.NetworkInterfaceOwnerTagKey),

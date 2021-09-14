@@ -308,7 +308,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
-	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI,
+	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1, config.ResourceNamePodENI,
 		string(expectedAnnotation)).Return(nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
 
@@ -439,7 +439,8 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
 	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
-	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)
+	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1,
+		config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchENIAnnotationFailed, gomock.Any(), v1.EventTypeWarning)
 	fakeTrunk.EXPECT().PushENIsToFrontOfDeleteQueue(MockPod1, EniDetails)
 

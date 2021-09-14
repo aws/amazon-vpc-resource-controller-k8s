@@ -13,23 +13,23 @@ K8S_VERSION=<k8s-Version>
 
 - Create the EKS Cluster.
   ```
-  ./create-cluster.sh -n $CLUSTER_NAME -v $K8S_VERSION
+  ./scripts/test/create-cluster.sh -n $CLUSTER_NAME -v $K8S_VERSION
   ```
 - Create the necessary IAM Policies and Roles
   ```
-  ./iam-resources.sh -o create -n $CLUSTER_NAME
+  ./scripts/test/iam-resources.sh -o create -n $CLUSTER_NAME
   ```
 - Start test Execution
   ```
-  ./test-with-eksctl.sh -n $CLUSTER_NAME
+  ./scripts/test/test-with-eksctl.sh -n $CLUSTER_NAME
   ```
 - Delete the IAM Role and Policies
   ```
-  ./iam-resources.sh -o delete -n $CLUSTER_NAME
+  ./scripts/test/iam-resources.sh -o delete -n $CLUSTER_NAME
   ```
 - Delete the EKS Cluster
   ```
-  ./delete-cluster.sh
+  ./scripts/test/delete-cluster.sh
   ```
 
 ### Design

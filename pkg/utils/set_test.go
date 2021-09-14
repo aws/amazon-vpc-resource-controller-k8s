@@ -14,22 +14,29 @@
 package utils
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-// NamespacedName returns the namespaced name for k8s objects
-func NamespacedName(obj metav1.Object) types.NamespacedName {
-	return types.NamespacedName{
-		Namespace: obj.GetNamespace(),
-		Name:      obj.GetName(),
-	}
+func TestDifference(t *testing.T) {
+	a := []string{"X", "Y", "Z"}
+	b := []string{"X", "Z", "Q"}
+
+	assert.ElementsMatch(t, Difference(a, b), []string{"Y"})
+	assert.ElementsMatch(t, Difference(b, a), []string{"Q"})
+	assert.ElementsMatch(t, Difference(a, a), []string{})
 }
 
-func CopyMap(original map[string]string) map[string]string {
-	copy := make(map[string]string)
-	for key, val := range original {
-		copy[key] = val
+func TestGetKeySet(t *testing.T) {
+	keys := []string{"a", "b", "c"}
+	m := map[string]string{}
+
+	for _, key := range keys {
+		m[key] = key
 	}
-	return copy
+
+	k, v := GetKeyValSlice(m)
+	assert.ElementsMatch(t, k, keys)
+	assert.ElementsMatch(t, v, keys)
 }

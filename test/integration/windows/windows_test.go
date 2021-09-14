@@ -128,7 +128,7 @@ var _ = Describe("Windows Integration Test", func() {
 		Context("when connecting to internet", func() {
 			BeforeEach(func() {
 				testerContainerCommands = []string{
-					GetCommandToTestHostConnectivity("www.amazon.com"),
+					GetCommandToTestHostConnectivity("www.amazon.com", 2),
 				}
 			})
 
@@ -141,7 +141,7 @@ var _ = Describe("Windows Integration Test", func() {
 		Context("when connecting to invalid url", func() {
 			BeforeEach(func() {
 				testerContainerCommands = []string{
-					GetCommandToTestHostConnectivity("www.amazon.zzz"),
+					GetCommandToTestHostConnectivity("www.amazon.zzz", 1),
 				}
 			})
 
@@ -249,7 +249,7 @@ var _ = Describe("Windows Integration Test", func() {
 	Describe("when creating pod with same namespace and name", func() {
 		BeforeEach(func() {
 			testerContainerCommands = []string{
-				GetCommandToTestHostConnectivity("www.amazon.com"),
+				GetCommandToTestHostConnectivity("www.amazon.com", 2),
 			}
 		})
 
@@ -295,51 +295,6 @@ var _ = Describe("Windows Integration Test", func() {
 			})
 		})
 	})
-
-	Describe("restart the vpc-resource-controller", func() {
-		var deployment *appsV1.Deployment
-		Context("pod should retain IP when vpc resource controller is deleted", func() {
-
-			JustBeforeEach(func() {
-				deploymentContainer := manifest.NewWindowsContainerBuilder().
-					Args([]string{GetCommandToStartHttpServer()}).
-					Build()
-
-				deployment = manifest.NewWindowsDeploymentBuilder().
-					Replicas(10).
-					PodLabel(podLabelKey, podLabelVal).
-					Container(deploymentContainer).
-					Build()
-			})
-
-			JustAfterEach(func() {
-				err = frameWork.DeploymentManager.DeleteAndWaitUntilDeploymentDeleted(ctx, deployment)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			It("", func() {
-				By("creating a deployment")
-				_, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReady(ctx, deployment)
-				Expect(err).ToNot(HaveOccurred())
-
-				By("scaling the vpc controller deployment to 0")
-				frameWork.DeploymentManager.ScaleDeploymentAndWaitTillReady(ctx,
-					"kube-system", "vpc-resource-controller", 0)
-
-				By("scaling the vpc controller deployment to 1")
-				frameWork.DeploymentManager.ScaleDeploymentAndWaitTillReady(ctx, ""+
-					"kube-system", "vpc-resource-controller", 1)
-
-				// If the IP is re-assigned to some other pod the container will be stuck
-				By("scale up the windows deployment")
-				err = frameWork.DeploymentManager.ScaleDeploymentAndWaitTillReady(ctx,
-					deployment.Namespace, deployment.Name, 20)
-				Expect(err).ToNot(HaveOccurred())
-
-				verify.WindowsPodsHaveExpectedIPv4Address(namespace, podLabelKey, podLabelVal)
-			})
-		})
-	})
 })
 
 // GetCommandToTestTCPConnection checks TCP connection with the given host and port, if the
@@ -352,9 +307,20 @@ func GetCommandToTestTCPConnection(host string, port int32) string {
 
 // GetCommandToTestHostConnectivity tests the DNS Resolution and the tcp connection to the
 // host
-func GetCommandToTestHostConnectivity(host string) string {
-	return fmt.Sprintf("if (-Not (Test-NetConnection -ComputerName %s "+
-		"-CommonTCPPort HTTP).TcpTestSucceeded) {Write-Output 'connection failed:'; exit 10}", host)
+func GetCommandToTestHostConnectivity(host string, retries int) string {
+	return fmt.Sprintf(`
+     $Server = "%s"
+     $Retries = %d
+
+     While (-Not (Test-NetConnection -ComputerName $Server -CommonTCPPort HTTP).TcpTestSucceeded) {
+       if ($Retries -le 0) {
+         Write-Warning "maximum number of connection attempts reached, exiting"
+         exit 1
+       }
+       Write-Warning "failed to connect to server $Server, will retry"
+       $Retries -= 1
+     }
+     Write-Output "connection from $env:COMPUTERNAME to $Server succeeded"`, host, retries)
 }
 
 // Install and start the dot net web server, it's light weight so starts pretty quick
@@ -363,4 +329,14 @@ func GetCommandToStartHttpServer() string {
 		"-Uri 'https://dotnetbinaries.blob.core.windows.net/servicemonitor/2.0.1.6/ServiceMonitor.exe'" +
 		" -OutFile 'C:\\ServiceMonitor.exe'; " +
 		"echo 'ok' > C:\\inetpub\\wwwroot\\default.html; " + "C:\\ServiceMonitor.exe 'w3svc'; "
+}
+
+// TODO: Test internet connectivity too along side pod to pod connectivity
+func GetCommandToContinuouslyTestHostConnectivity(host string, tries int, interval int) string {
+	return fmt.Sprintf(`
+    while($val -ne %d) {
+      Start-Sleep -s %d # Sleep for specified interval before testing connection
+      %s # The test connection command
+      $val++
+    }`, tries, interval, GetCommandToTestHostConnectivity(host, 5))
 }

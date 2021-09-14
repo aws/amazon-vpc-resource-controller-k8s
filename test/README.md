@@ -3,8 +3,16 @@
 All Ginkgo Integration test suites are located in `test/integration` directory.
 
 ### Prerequisite
+The integration test requires the following setup
+
+**For Security Group for Pods Test**
 - Have all Nitro Based Instances in your EKS Cluster.
 - Have at least 3 X c5.xlarge instance type or larger in terms of number of ENI/IP allocatable.
+
+**For Windows Test**
+- Have 1 Linux Operating System worker Node for running coreDNS.
+- Have at-least 3 Windows Operating System worker Node (Preferably c5.4xlarge or larger).
+- Have all the Windows Node belonging to same nodegroup with same Security Group.
 
 ### Available Ginkgo Focus
 
@@ -16,6 +24,13 @@ The Integration test suite provides the following focuses.
   ```
   # Use when running test on the Controller on EKS Control Plane. 
   --skip=LOCAL 
+  ```
+- **[STRESS]**
+
+  These tests are run to stress the controller by running higher than average workload. To skip these tests, use the following.
+  ```
+  # Use when running only the Integration test.
+  --skip=STRESS
   ```
   
 ### How to Run the Integration Tests
@@ -34,9 +49,11 @@ The Integration test suite provides the following focuses.
    ```
    cd test/integration
    echo "Running Validation Webhook Tests"
-   (cd webhook && CGO_ENABLED=0 GOOS=$OS ginkgo -v -timeout 40m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id $VPC_ID)
+   (cd webhook && CGO_ENABLED=0 GOOS=$OS ginkgo -v -timeout 10m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id $VPC_ID)
    echo "Running Security Group for Pods Integration Tests"
    (cd perpodsg && CGO_ENABLED=0 GOOS=$OS ginkgo -v -timeout 40m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id $VPC_ID)
+   echo "Running Windows Integration Tests"
+   (cd windows && CGO_ENABLED=0 GOOS=$OS ginkgo -v -timeout 40m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id $VPC_ID)
    ```
 
 #### Running Integration tests on Controller running on EKS Control Plane

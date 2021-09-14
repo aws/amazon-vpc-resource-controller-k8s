@@ -262,6 +262,31 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool_Fail(t *testing.T) {
 	ipv4Provider.CreatePrivateIPv4AndUpdatePool(createJob)
 }
 
+func TestIpv4Provider_ReSyncPool(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ipv4Provider := getMockIpProvider()
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockManager := mock_eni.NewMockENIManager(ctrl)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
+	resources := []string{ip1, ip2}
+
+	reSyncJob := &worker.WarmPoolJob{
+		Operations: worker.OperationReSyncPool,
+		NodeName:   nodeName,
+	}
+
+	// When error occurs, pool should not be re-synced
+	mockManager.EXPECT().InitResources(ipv4Provider.apiWrapper.EC2API).Return(nil, fmt.Errorf(""))
+	ipv4Provider.ReSyncPool(reSyncJob)
+
+	// When no error occurs, pool should be re-synced
+	mockManager.EXPECT().InitResources(ipv4Provider.apiWrapper.EC2API).Return(resources, nil)
+	mockPool.EXPECT().ReSync(resources)
+	ipv4Provider.ReSyncPool(reSyncJob)
+}
+
 // TestIPv4Provider_SubmitAsyncJob tests that the job is submitted to the worker on calling SubmitAsyncJob
 func TestIPv4Provider_SubmitAsyncJob(t *testing.T) {
 	ctrl := gomock.NewController(t)

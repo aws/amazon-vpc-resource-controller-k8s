@@ -90,13 +90,15 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 	warmResources := difference(presentIPs, usedIPSet)
 
 	nodeCapacity := getCapacity(instance.Type(), instance.Os())
-	resourcePool := pool.NewResourcePool(p.log.WithName("ipv4 resource pool"), p.config, podToResourceMap,
+	resourcePool := pool.NewResourcePool(p.log.WithName("ipv4 resource pool").
+		WithValues("node name", instance.Name()), p.config, podToResourceMap,
 		warmResources, instance.Name(), nodeCapacity)
 
 	p.putInstanceProviderAndPool(nodeName, resourcePool, eniManager)
 
 	p.log.Info("initialized the resource provider for resource IPv4",
-		"capacity", nodeCapacity, "node name", nodeName)
+		"capacity", nodeCapacity, "node name", nodeName, "instance type",
+		instance.Type(), "instance ID", instance.InstanceID())
 
 	// Reconcile pool after starting up and submit the async job
 	job := resourcePool.ReconcilePool()
@@ -171,6 +173,8 @@ func (p *ipv4Provider) ProcessAsyncJob(job interface{}) (ctrl.Result, error) {
 		p.CreatePrivateIPv4AndUpdatePool(warmPoolJob)
 	case worker.OperationDeleted:
 		p.DeletePrivateIPv4AndUpdatePool(warmPoolJob)
+	case worker.OperationReSyncPool:
+		p.ReSyncPool(warmPoolJob)
 	case worker.OperationProcessDeleteQueue:
 		return p.ProcessDeleteQueue(warmPoolJob)
 	}
@@ -194,6 +198,24 @@ func (p *ipv4Provider) CreatePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 	}
 	job.Resources = ips
 	p.updatePoolAndReconcileIfRequired(instanceResource.resourcePool, job, didSucceed)
+}
+
+func (p *ipv4Provider) ReSyncPool(job *worker.WarmPoolJob) {
+	providerAndPool, found := p.instanceProviderAndPool[job.NodeName]
+	if !found {
+		p.log.Error(fmt.Errorf("instnace provider not found"), "node is not initialized",
+			"name", job.NodeName)
+		return
+	}
+
+	resources, err := providerAndPool.eniManager.InitResources(p.apiWrapper.EC2API)
+	if err != nil {
+		p.log.Error(err, "failed to get init resources for the node",
+			"name", job.NodeName)
+		return
+	}
+
+	providerAndPool.resourcePool.ReSync(resources)
 }
 
 // DeletePrivateIPv4AndUpdatePool executes the Delete IPv4 workflow for the list of IPs provided in the warm pool job

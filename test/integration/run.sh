@@ -39,7 +39,8 @@ echo "Starting the ginkgo test suite"
 
 # Skip all the local tests that require restarting the controller when
 # running the tests on data plane
-(cd $SCRIPT_DIR/perpodsg && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --skip=LOCAL -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+(cd $SCRIPT_DIR/perpodsg && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --skip="LOCAL|STRESS" -v -timeout 40m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+(cd $SCRIPT_DIR/windows && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --skip="LOCAL|STRESS" -v -timeout 40m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
 (cd $SCRIPT_DIR/webhook && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --skip=LOCAL -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
 
 #Tear down local resources

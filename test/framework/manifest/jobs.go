@@ -28,6 +28,7 @@ type JobBuilder struct {
 	os                     string
 	container              v1.Container
 	labels                 map[string]string
+	nodeSelector           map[string]string
 	terminationGracePeriod int
 	restartPolicy          v1.RestartPolicy
 }
@@ -40,6 +41,7 @@ func NewWindowsJob() *JobBuilder {
 		terminationGracePeriod: 0,
 		restartPolicy:          v1.RestartPolicyNever,
 		labels:                 map[string]string{},
+		nodeSelector:           map[string]string{"kubernetes.io/os": "windows"},
 	}
 }
 
@@ -51,6 +53,7 @@ func NewLinuxJob() *JobBuilder {
 		restartPolicy:          v1.RestartPolicyNever,
 		labels:                 map[string]string{},
 		terminationGracePeriod: 10,
+		nodeSelector:           map[string]string{"kubernetes.io/os": "linux"},
 	}
 }
 
@@ -94,6 +97,11 @@ func (j *JobBuilder) Parallelism(parallelism int) *JobBuilder {
 	return j
 }
 
+func (j *JobBuilder) NodeSelector(selector map[string]string) *JobBuilder {
+	j.nodeSelector = selector
+	return j
+}
+
 func (j *JobBuilder) ForNode(nodeName string) *JobBuilder {
 	j.nodeName = nodeName
 	return j
@@ -116,7 +124,7 @@ func (j *JobBuilder) Build() *batchV1.Job {
 					NodeName:                      j.nodeName,
 					Containers:                    []v1.Container{j.container},
 					TerminationGracePeriodSeconds: aws.Int64(int64(j.terminationGracePeriod)),
-					NodeSelector:                  map[string]string{"kubernetes.io/os": j.os},
+					NodeSelector:                  j.nodeSelector,
 					RestartPolicy:                 j.restartPolicy,
 				},
 			},

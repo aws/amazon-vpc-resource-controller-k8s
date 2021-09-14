@@ -13,23 +13,25 @@
 
 package utils
 
-import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-)
+// Difference returns a-b, elements present in a and not in b
+func Difference(a, b []string) (diff []string) {
+	m := make(map[string]struct{})
 
-// NamespacedName returns the namespaced name for k8s objects
-func NamespacedName(obj metav1.Object) types.NamespacedName {
-	return types.NamespacedName{
-		Namespace: obj.GetNamespace(),
-		Name:      obj.GetName(),
+	for _, item := range b {
+		m[item] = struct{}{}
 	}
+	for _, item := range a {
+		if _, ok := m[item]; !ok {
+			diff = append(diff, item)
+		}
+	}
+	return
 }
 
-func CopyMap(original map[string]string) map[string]string {
-	copy := make(map[string]string)
-	for key, val := range original {
-		copy[key] = val
+func GetKeyValSlice(m map[string]string) (key []string, val []string) {
+	for k, v := range m {
+		key = append(key, k)
+		val = append(val, v)
 	}
-	return copy
+	return
 }

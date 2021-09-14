@@ -69,7 +69,7 @@ var (
 type PodClientAPIWrapper interface {
 	GetPod(namespace string, name string) (*v1.Pod, error)
 	ListPods(nodeName string) (*v1.PodList, error)
-	AnnotatePod(podNamespace string, podName string, key string, val string) error
+	AnnotatePod(podNamespace string, podName string, uid types.UID, key string, val string) error
 	GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error)
 	GetRunningPodsOnNode(nodeName string) ([]v1.Pod, error)
 }
@@ -143,7 +143,8 @@ func (p *podClientAPIWrapper) ListPods(nodeName string) (*v1.PodList, error) {
 }
 
 // AnnotatePod annotates the pod with the provided key and value
-func (p *podClientAPIWrapper) AnnotatePod(podNamespace string, podName string, key string, val string) error {
+func (p *podClientAPIWrapper) AnnotatePod(podNamespace string, podName string, uid types.UID,
+	key string, val string) error {
 	annotatePodRequestCallCount.WithLabelValues(key).Inc()
 	ctx := context.Background()
 
@@ -153,6 +154,12 @@ func (p *podClientAPIWrapper) AnnotatePod(podNamespace string, podName string, k
 		var err error
 		if pod, err = p.GetPod(podNamespace, podName); err != nil {
 			return err
+		}
+		// Prevent conditions where the Pod with same namespace/name is
+		// re-created before the older pod is annotated with the key-val
+		if pod.UID != uid {
+			return fmt.Errorf("not annotating the Pod with UID %s as the annotation was "+
+				"intended for Pod with UID %s", pod.UID, uid)
 		}
 		newPod := pod.DeepCopy()
 		newPod.Annotations[key] = val

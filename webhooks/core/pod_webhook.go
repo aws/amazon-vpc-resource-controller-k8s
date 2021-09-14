@@ -72,13 +72,6 @@ func (i *PodResourceInjector) Handle(ctx context.Context, req admission.Request)
 
 	// Attach private ip to Windows pod which is not running on Host Network.
 	// Attach ENI to non-Windows pod which is not running on Host Network.
-	// TODO: enable this check when we enable Windows support.
-	//if shouldInjectPrivateIP(pod) {
-	//	webhookLog.Info("Injecting resource to the first container of the pod",
-	//		"resource name", vpcresourceconfig.ResourceNameIPAddress, "resource count", resourceLimit)
-	//	pod.Spec.Containers[0].Resources.Limits[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
-	//	pod.Spec.Containers[0].Resources.Requests[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
-	//} else
 
 	isFargatePod := false
 	if _, ok := pod.ObjectMeta.Labels[fargatePodLabel]; ok {
@@ -89,6 +82,7 @@ func (i *PodResourceInjector) Handle(ctx context.Context, req admission.Request)
 		annotationMap = make(map[string]string)
 	}
 
+	// TODO: Stop processing events if ENABLE_POD_ENI is set to true + No trunk Node
 	if sgList, cacheErr := i.SGPAPI.GetMatchingSecurityGroupForPods(pod); cacheErr != nil {
 		webhookLog.Error(cacheErr, "Webhook client failed to Get or List objects from cache.")
 		return admission.Denied("Webhood encountered error to Get or List object from k8s cache.")
@@ -115,6 +109,11 @@ func (i *PodResourceInjector) Handle(ctx context.Context, req admission.Request)
 		} else {
 			return admission.Allowed("Fargate pod will not be annotated with security group.")
 		}
+	} else if shouldInjectPrivateIP(pod) {
+		webhookLog.Info("injecting resource to the first container of the pod",
+			"resource name", vpcresourceconfig.ResourceNameIPAddress, "resource count", resourceLimit)
+		pod.Spec.Containers[0].Resources.Limits[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
+		pod.Spec.Containers[0].Resources.Requests[vpcresourceconfig.ResourceNameIPAddress] = resource.MustParse(resourceLimit)
 	} else {
 		return admission.Allowed("Pod will not be injected with resources limits.")
 	}
@@ -149,13 +148,11 @@ func hasWindowsNodeSelector(pod *corev1.Pod) bool {
 
 func hasWindowsNodeAffinity(pod *corev1.Pod) bool {
 	// TODO: implement node affinity for Windows pod
-	// Referring to https://t.corp.amazon.com/V167778691
 	return false
 }
 
 func containerHasCustomizedLimit(pod *corev1.Pod) bool {
 	// TODO: implement container limits user input
-	// Referring to https://sim.amazon.com/issues/EKS-NW-424
 	return false
 }
 

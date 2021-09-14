@@ -230,7 +230,7 @@ func main() {
 		SGPAPI: sgpAPI,
 	}
 
-	supportedResources := []string{config.ResourceNamePodENI}
+	supportedResources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
 	resourceManager, err := resource.NewResourceManager(supportedResources, apiWrapper)
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init resources", "resources", supportedResources)

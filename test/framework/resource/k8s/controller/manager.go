@@ -32,6 +32,11 @@ const (
 	DeploymentName     = "vpc-resource-controller"
 	Namespace          = "kube-system"
 	LeaderLeaseMapName = "cp-vpc-resource-controller"
+
+	PodLabelKey = "app"
+	PodLabelVal = "vpc-resource-controller"
+
+	ClusterRoleName = "vpc-resource-controller-role"
 )
 
 type LeaderLease struct {
@@ -55,7 +60,7 @@ func (d *defaultManager) WaitTillControllerHasLeaderLease(ctx context.Context) (
 
 	controllerPods := &v1.PodList{}
 	err := d.k8sClient.List(ctx, controllerPods, &client.ListOptions{
-		LabelSelector: labels.SelectorFromSet(labels.Set{"app": "vpc-resource-controller"}),
+		LabelSelector: labels.SelectorFromSet(labels.Set{PodLabelKey: PodLabelVal}),
 	})
 	if err != nil {
 		return "", err

@@ -71,7 +71,7 @@ func TestWarmResourceHandler_HandleCreate(t *testing.T) {
 
 	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
 	mockPool.EXPECT().AssignResource(uid).Return(ipAddress, true, nil)
-	mockPodAPI.EXPECT().AnnotatePod(pod.Namespace, pod.Name, resourceName, ipAddress).Return(nil)
+	mockPodAPI.EXPECT().AnnotatePod(pod.Namespace, pod.Name, types.UID(uid), resourceName, ipAddress).Return(nil)
 	mockK8sWrapper.EXPECT().BroadcastEvent(podCopy, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
 
 	mockPool.EXPECT().ReconcilePool().Return(job)
@@ -162,6 +162,26 @@ func TestWarmResourceHandler_HandleDelete_ResourceNotExist(t *testing.T) {
 	podCopy := pod.DeepCopy()
 	delete(podCopy.Annotations, config.ResourceNameIPAddress)
 
+	mockPool.EXPECT().GetAssignedResource(uid).Return("", false)
+
+	_, err := handler.HandleDelete(podCopy)
+	assert.NoError(t, err)
+}
+
+func TestWarmResourceHandler_HandleDelete_ResourceExistsInDataStoreOnly(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	handler, _, _, mockProvider, mockPool := getHandlerAndMocks(ctrl)
+
+	mockProvider.EXPECT().GetPool(nodeName).Return(mockPool, true)
+
+	podCopy := pod.DeepCopy()
+	delete(podCopy.Annotations, config.ResourceNameIPAddress)
+
+	mockPool.EXPECT().GetAssignedResource(string(podCopy.UID)).Return(ipAddress, true)
+	mockPool.EXPECT().FreeResource(string(podCopy.UID), ipAddress).Return(false, nil)
+
 	_, err := handler.HandleDelete(podCopy)
 	assert.NoError(t, err)
 }
@@ -176,7 +196,7 @@ func TestWarmResourceHandler_HandleDelete_Error(t *testing.T) {
 	mockProvider.EXPECT().GetPool(nodeName).Return(nil, false)
 
 	_, err := handler.HandleDelete(pod)
-	assert.NotNil(t, err)
+	assert.Nil(t, err)
 }
 
 // TestWarmResourceHandler_getResourcePool returns the resource pool for the given node name

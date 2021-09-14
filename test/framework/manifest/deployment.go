@@ -30,6 +30,7 @@ type DeploymentBuilder struct {
 	container              corev1.Container
 	labels                 map[string]string
 	terminationGracePeriod int
+	nodeSelector           map[string]string
 }
 
 func NewDefaultDeploymentBuilder() *DeploymentBuilder {
@@ -37,6 +38,7 @@ func NewDefaultDeploymentBuilder() *DeploymentBuilder {
 		namespace:              "default",
 		name:                   utils.ResourceNamePrefix + "deployment",
 		replicas:               10,
+		nodeSelector:           map[string]string{"kubernetes.io/os": "linux"},
 		os:                     "linux",
 		container:              NewBusyBoxContainerBuilder().Build(),
 		labels:                 map[string]string{},
@@ -49,6 +51,7 @@ func NewWindowsDeploymentBuilder() *DeploymentBuilder {
 		namespace:              "windows-test",
 		name:                   "windows-deployment",
 		os:                     "windows",
+		nodeSelector:           map[string]string{"kubernetes.io/os": "windows"},
 		labels:                 map[string]string{},
 		terminationGracePeriod: 0,
 	}
@@ -89,6 +92,11 @@ func (d *DeploymentBuilder) PodLabel(labelKey string, labelValue string) *Deploy
 	return d
 }
 
+func (d *DeploymentBuilder) NodeSelector(selector map[string]string) *DeploymentBuilder {
+	d.nodeSelector = selector
+	return d
+}
+
 func (d *DeploymentBuilder) Build() *v1.Deployment {
 	return &v1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -106,7 +114,7 @@ func (d *DeploymentBuilder) Build() *v1.Deployment {
 				},
 				Spec: corev1.PodSpec{
 					Containers:                    []corev1.Container{d.container},
-					NodeSelector:                  map[string]string{"kubernetes.io/os": d.os},
+					NodeSelector:                  d.nodeSelector,
 					TerminationGracePeriodSeconds: aws.Int64(int64(d.terminationGracePeriod)),
 				},
 			},

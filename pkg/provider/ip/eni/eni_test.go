@@ -28,7 +28,8 @@ import (
 )
 
 var (
-	instanceID = "i-000000000000001"
+	instanceID   = "i-000000000000001"
+	instanceName = "ip-192-0-2-1.us-west-2.compute.internal"
 
 	eniID1 = "eni-000000000000001"
 	eniID2 = "eni-000000000000002"
@@ -168,8 +169,9 @@ func TestEniManager_CreateIPV4Address_FromSingleENI(t *testing.T) {
 	manager.attachedENIs = []*eni{createENIDetails(eniID1, 2)}
 
 	mockEc2APIHelper.EXPECT().AssignIPv4AddressesAndWaitTillReady(eniID1, 2).Return([]string{ip1, ip2}, nil)
-	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(2)
+	mockInstance.EXPECT().Name().Return(instanceName)
 	mockInstance.EXPECT().Type().Return(instanceType).Times(2)
+	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(2)
 
 	ips, err := manager.CreateIPV4Address(2, mockEc2APIHelper, log)
 
@@ -194,6 +196,7 @@ func TestEniManager_CreateIPV4Address_FromMultipleENI(t *testing.T) {
 	)
 
 	mockInstance.EXPECT().Type().Return(instanceType).Times(2)
+	mockInstance.EXPECT().Name().Return(instanceName)
 	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(2)
 
 	ips, err := manager.CreateIPV4Address(2, mockEc2APIHelper, log)
@@ -220,6 +223,7 @@ func TestEniManager_CreateIPV4Address_FromNewENI(t *testing.T) {
 	existingENI := createENIDetails(eniID1, 0)
 	manager.attachedENIs = []*eni{existingENI}
 
+	mockInstance.EXPECT().Name().Return(instanceName)
 	mockInstance.EXPECT().Type().Return(instanceType).Times(2)
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int64(3), nil).Times(2)
 	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
@@ -256,6 +260,7 @@ func TestEniManager_CreateIPV4Address_InBetweenENIFail(t *testing.T) {
 	existingENI := createENIDetails(eniID1, 0)
 	manager.attachedENIs = []*eni{existingENI}
 
+	mockInstance.EXPECT().Name().Return(instanceName)
 	mockInstance.EXPECT().Type().Return(instanceType).Times(2)
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int64(3), nil).Times(2)
 	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
@@ -292,7 +297,8 @@ func TestEniManager_DeleteIPV4Address(t *testing.T) {
 	manager.ipToENIMap = map[string]*eni{ip1: eniDetails1, ip2: eniDetails1, ip3: eniDetails2, ip4: eniDetails2}
 	manager.attachedENIs = []*eni{eniDetails1, eniDetails2}
 
-	mockInstance.EXPECT().Type().Return(instanceType)
+	mockInstance.EXPECT().Name().Return(instanceName)
+	mockInstance.EXPECT().Type().Return(instanceType).Times(1)
 	mockInstance.EXPECT().PrimaryNetworkInterfaceID().Return(eniID1)
 	// Unassign the IPs from interface 1 and 2
 	mockEc2APIHelper.EXPECT().UnassignPrivateIpAddresses(eniID1, []string{ip1}).Return(nil)
@@ -322,7 +328,8 @@ func TestEniManager_DeleteIPV4Address_SomeFail(t *testing.T) {
 	manager.ipToENIMap = map[string]*eni{ip1: eniDetails1, ip2: eniDetails1, ip3: eniDetails2}
 	manager.attachedENIs = []*eni{eniDetails1, eniDetails2}
 
-	mockInstance.EXPECT().Type().Return(instanceType)
+	mockInstance.EXPECT().Name().Return(instanceName)
+	mockInstance.EXPECT().Type().Return(instanceType).Times(1)
 	mockInstance.EXPECT().PrimaryNetworkInterfaceID().Return(eniID1)
 	// Unassign the IPs from interface 1 and 2
 	mockEc2APIHelper.EXPECT().UnassignPrivateIpAddresses(eniID1, []string{ip1}).Return(mockError)

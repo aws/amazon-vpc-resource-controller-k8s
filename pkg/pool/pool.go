@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/go-logr/logr"
@@ -37,7 +38,9 @@ var (
 type Pool interface {
 	AssignResource(requesterID string) (resourceID string, shouldReconcile bool, err error)
 	FreeResource(requesterID string, resourceID string) (shouldReconcile bool, err error)
+	GetAssignedResource(requesterID string) (resourceID string, ownsResource bool)
 	UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldReconcile bool)
+	ReSync(resources []string)
 	ReconcilePool() *worker.WarmPoolJob
 	ProcessCoolDownQueue() bool
 }
@@ -63,6 +66,9 @@ type pool struct {
 	pendingDelete int
 	// nodeName k8s name of the node
 	nodeName string
+	// reSyncRequired is set if the upstream and pool are possibly out of sync due to
+	// errors in creating/deleting resources
+	reSyncRequired bool
 }
 
 type coolDownResource struct {
@@ -83,6 +89,69 @@ func NewResourcePool(log logr.Logger, poolConfig *config.WarmPoolConfig, usedRes
 		nodeName:       nodeName,
 	}
 	return pool
+}
+
+// ReSync syncs state of upstream with the local pool. If local resources have additional
+// resource which doesn't reflect in upstream list then these resources are removed. If the
+// upstream has additional resources which are not present locally, these resources are added
+// to the warm pool. During ReSync all Create/Delete operations on the Pool should be halted
+// but Assign/Free on the Pool can be allowed.
+func (p *pool) ReSync(upstreamResource []string) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	// This is possible if two Re-Syn were requested at same time
+	if !p.reSyncRequired {
+		p.log.Info("duplicate re-sync request, will be ignored")
+		return
+	}
+	p.reSyncRequired = false
+
+	// Get the list of local resources
+	var localResources []string
+	for _, resource := range p.coolDownQueue {
+		localResources = append(localResources, resource.resourceID)
+	}
+	_, usedResources := utils.GetKeyValSlice(p.usedResources)
+	localResources = append(localResources, usedResources...)
+	localResources = append(localResources, p.warmResources...)
+
+	// resources that are present upstream but missing in the pool
+	newResources := utils.Difference(upstreamResource, localResources)
+	// resources that are deleted from upstream but still present in the pool
+	deletedResources := utils.Difference(localResources, upstreamResource)
+
+	if len(newResources) == 0 && len(deletedResources) == 0 {
+		p.log.Info("local and upstream state is in sync")
+		return
+	}
+
+	if len(newResources) > 0 {
+		p.log.Info("adding new resources to warm pool", "resource", newResources)
+		p.warmResources = append(p.warmResources, newResources...)
+	}
+
+	if len(deletedResources) > 0 {
+		p.log.Info("attempting to remove deleted resources",
+			"deleted resources", deletedResources)
+
+		for _, deletedResource := range deletedResources {
+			for i := len(p.warmResources) - 1; i >= 0; i-- {
+				if p.warmResources[i] == deletedResource {
+					p.log.Info("removing resource from warm pool",
+						"resource id", deletedResource)
+					p.warmResources = append(p.warmResources[:i], p.warmResources[i+1:]...)
+				}
+			}
+			for i := len(p.coolDownQueue) - 1; i >= 0; i-- {
+				if p.coolDownQueue[i].resourceID == deletedResource {
+					p.log.Info("removing resource from cool down queue",
+						"resource id", deletedResource)
+					p.coolDownQueue = append(p.coolDownQueue[:i], p.coolDownQueue[i+1:]...)
+				}
+			}
+		}
+	}
 }
 
 // AssignResource assigns a resources to the requester, the caller must retry in case there is capacity and the warm pool
@@ -128,6 +197,14 @@ func (p *pool) AssignResource(requesterID string) (resourceID string, shouldReco
 	return resourceID, true, nil
 }
 
+func (p *pool) GetAssignedResource(requesterID string) (resourceID string, ownsResource bool) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	resourceID, ownsResource = p.usedResources[requesterID]
+	return
+}
+
 // FreeResource puts the resource allocated to the given requester into the cool down queue
 func (p *pool) FreeResource(requesterID string, resourceID string) (shouldReconcile bool, err error) {
 	p.lock.Lock()
@@ -164,12 +241,13 @@ func (p *pool) UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldRecon
 	log := p.log.WithValues("operation", job.Operations)
 
 	if !didSucceed {
+		// If the job fails, re-sync the state of the Pool with upstream
+		p.reSyncRequired = true
 		shouldReconcile = true
 		log.Error(fmt.Errorf("warm pool job failed: %v", job), "operation failed")
 	}
 
 	if job.Resources != nil && len(job.Resources) > 0 {
-		// TODO: limit the number of times a failed resource can be repeatedly tried to be deleted
 		// Add the resources to the warm pool
 		for _, resource := range job.Resources {
 			p.warmResources = append(p.warmResources, resource)
@@ -227,9 +305,23 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 	totalCreatedResources := len(p.warmResources) + len(p.usedResources) + len(p.coolDownQueue) +
 		p.pendingCreate + p.pendingDelete
 
-	log := p.log.WithValues("warm", len(p.warmResources), "used", len(p.usedResources),
-		"pending create", p.pendingCreate, "pending delete", &p.pendingDelete, "cool down queue",
-		len(p.coolDownQueue), "total created/pending resources", totalCreatedResources, "max capacity", p.capacity)
+	log := p.log.WithValues("resync", p.reSyncRequired, "warm", len(p.warmResources), "used",
+		len(p.usedResources), "pending create", p.pendingCreate, "pending delete", &p.pendingDelete,
+		"cool down queue", len(p.coolDownQueue), "total resources", totalCreatedResources,
+		"max capacity", p.capacity, "desired size", p.warmPoolConfig.DesiredSize)
+
+	if p.reSyncRequired {
+		// If Pending operations are present then we can't re-sync as the upstream
+		// and pool could change during re-sync
+		if p.pendingCreate != 0 || p.pendingDelete != 0 {
+			p.log.Info("cannot re-sync as there are pending add/delete request")
+			return &worker.WarmPoolJob{
+				Operations: worker.OperationReconcileNotRequired,
+			}
+		}
+		p.log.Info("submitting request re-sync the pool")
+		return worker.NewWarmPoolReSyncJob(p.nodeName)
+	}
 
 	if len(p.usedResources)+p.pendingCreate+p.pendingDelete+len(p.coolDownQueue) == p.capacity {
 		log.V(1).Info("cannot reconcile, at max capacity")
@@ -258,7 +350,7 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 		// pending
 		p.pendingCreate += deviation
 
-		log.Info("created job to add resources for warm pool", "requested count", deviation)
+		log.Info("created job to add resources to warm pool", "requested count", deviation)
 
 		return worker.NewWarmPoolCreateJob(p.nodeName, deviation)
 

@@ -30,6 +30,8 @@ const (
 	OperationDeleting Operations = "Deleting"
 	// OperationReconcileNotRequired represents job that don't need execution
 	OperationReconcileNotRequired Operations = "NoReconcile"
+	// OperationReSyncPool represents a job to re-sync a dirty pool
+	OperationReSyncPool Operations = "ReSyncPool"
 	// OperationDeleteNode represents the job to delete the node
 	OperationDeleteNode Operations = "NodeDelete"
 )
@@ -111,6 +113,14 @@ func NewWarmPoolCreateJob(nodeName string, count int) *WarmPoolJob {
 		Operations:    OperationCreate,
 		NodeName:      nodeName,
 		ResourceCount: count,
+	}
+}
+
+// NewWarmPoolReSyncJob returns a job to re-sync the warm pool with upstream
+func NewWarmPoolReSyncJob(nodeName string) *WarmPoolJob {
+	return &WarmPoolJob{
+		Operations: OperationReSyncPool,
+		NodeName:   nodeName,
 	}
 }
 
