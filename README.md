@@ -10,7 +10,7 @@ This is a new open source project and we are actively working on enhancing the p
 
 ## Usage
 
-The ENI Trunking APIs are not yet publicly accessible. Attempting to run the controller on your worker node for enabling [Security Group for Pod](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) or use of aws-sdk-go from the internal directory for managing Trunk and Branch Network Interface will result in failure of the API calls. 
+The ENI Trunking APIs are not yet publicly accessible. Attempting to run the controller on your worker node for enabling [Security Group for Pod](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) for managing Trunk and Branch Network Interface will result in failure of the API calls.
 
 Please follow the [guide](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) for enabling Security Group for Pods on your EKS Cluster. 
 
