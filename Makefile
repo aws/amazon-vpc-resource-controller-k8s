@@ -73,13 +73,13 @@ docker-push: check-env
 # find or download controller-gen
 # download controller-gen if necessary
 controller-gen:
-ifeq (, $(shell which controller-gen))
+ifeq (, $(findstring v0.6.2,$(shell controller-gen --version)))
 	@{ \
 	set -e ;\
 	CONTROLLER_GEN_TMP_DIR=$$(mktemp -d) ;\
 	cd $$CONTROLLER_GEN_TMP_DIR ;\
 	go mod init tmp ;\
-	go get sigs.k8s.io/controller-tools/cmd/controller-gen@v0.6.2 ;\
+	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.6.2 ;\
 	rm -rf $$CONTROLLER_GEN_TMP_DIR ;\
 	}
 CONTROLLER_GEN=$(GOBIN)/controller-gen
