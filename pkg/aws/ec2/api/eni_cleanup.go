@@ -37,10 +37,10 @@ type ENICleaner struct {
 	ctx               context.Context
 }
 
-func (e *ENICleaner) SetupWithManager(mgr ctrl.Manager) error {
+func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
 	e.clusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
 	e.availableENIs = make(map[string]struct{})
-	e.ctx = context.TODO()
+	e.ctx = ctx
 
 	return mgr.Add(e)
 }

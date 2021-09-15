@@ -7,8 +7,6 @@ ENV GOPROXY direct
 # Copy the Go Modules manifests
 COPY go.mod go.mod
 COPY go.sum go.sum
-# Internal folder contains the aws-sdk-go with private API calls for ENI Trunking
-COPY internal/ internal/
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
 RUN go mod download
@@ -30,11 +28,10 @@ RUN GIT_VERSION=$(git describe --tags --dirty --always) && \
         CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build \
         -ldflags="-X ${VERSION_PKG}.GitVersion=${GIT_VERSION} -X ${VERSION_PKG}.GitCommit=${GIT_COMMIT} -X ${VERSION_PKG}.BuildDate=${BUILD_DATE}" -a -o controller main.go
 
-# Use distroless as minimal base image to package the manager binary
-# Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base:2021-08-22-1629654770
 
 WORKDIR /
+COPY --from=public.ecr.aws/eks-distro/kubernetes/go-runner:v0.9.0-eks-1-21-4 /usr/local/bin/go-runner /usr/local/bin/go-runner
 COPY --from=builder /workspace/controller .
 
 ENTRYPOINT ["/controller"]

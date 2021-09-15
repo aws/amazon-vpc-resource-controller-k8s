@@ -157,11 +157,10 @@ func (c *CustomController) WaitForCacheSync(controller cache.Controller) {
 
 // newOptimizedListWatcher returns a list watcher with a custom list function that converts the
 // response for each page using the converter function and returns a general watcher
-func newOptimizedListWatcher(restClient cache.Getter, resource string, namespace string, limit int,
+func newOptimizedListWatcher(ctx context.Context, restClient cache.Getter, resource string, namespace string, limit int,
 	converter Converter) *cache.ListWatch {
 
 	listFunc := func(options metav1.ListOptions) (runtime.Object, error) {
-		ctx := context.TODO()
 		list, err := restClient.Get().
 			Namespace(namespace).
 			Resource(resource).
@@ -185,7 +184,6 @@ func newOptimizedListWatcher(restClient cache.Getter, resource string, namespace
 	// We don't need to modify the watcher, we will strip down the k8s object in the ProcessFunc
 	// before storing the object in the data store.
 	watchFunc := func(options metav1.ListOptions) (watch.Interface, error) {
-		ctx := context.TODO()
 		options.Watch = true
 		return restClient.Get().
 			Namespace(namespace).

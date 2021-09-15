@@ -4,7 +4,7 @@ go 1.16
 
 require (
 	github.com/aws/amazon-vpc-cni-k8s v1.9.0
-	github.com/aws/aws-sdk-go v1.40.6
+	github.com/aws/aws-sdk-go v1.40.43
 	github.com/go-logr/logr v0.4.0
 	github.com/go-logr/zapr v0.4.0
 	github.com/golang/mock v1.4.1
@@ -20,5 +20,3 @@ require (
 	k8s.io/client-go v0.21.3
 	sigs.k8s.io/controller-runtime v0.9.5
 )
-
-replace github.com/aws/aws-sdk-go => ./internal/aws-sdk-go

@@ -14,6 +14,7 @@
 package custom
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -42,6 +43,7 @@ type Builder struct {
 	dataStoreSyncFlag *bool
 
 	log logr.Logger
+	ctx context.Context
 }
 
 func (b *Builder) Named(name string) *Builder {
@@ -79,8 +81,9 @@ func (b *Builder) DataStoreSyncFlag(flag *bool) *Builder {
 	return b
 }
 
-func NewControllerManagedBy(mgr manager.Manager) *Builder {
-	return &Builder{mgr: mgr}
+func NewControllerManagedBy(ctx context.Context, mgr manager.Manager) *Builder {
+	return &Builder{mgr: mgr,
+		ctx: ctx}
 }
 
 // Complete adds the controller to manager's Runnable. The Controller
@@ -107,7 +110,7 @@ func (b *Builder) Complete(reconciler Reconciler) error {
 	workQueue := workqueue.NewNamedRateLimitingQueue(
 		workqueue.DefaultControllerRateLimiter(), b.options.Name)
 
-	optimizedListWatch := newOptimizedListWatcher(b.clientSet.CoreV1().RESTClient(),
+	optimizedListWatch := newOptimizedListWatcher(b.ctx, b.clientSet.CoreV1().RESTClient(),
 		b.converter.Resource(), b.options.Namespace, b.options.PageLimit, b.converter)
 
 	// Create the config for low level controller with the custom converter
