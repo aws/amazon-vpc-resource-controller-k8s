@@ -14,6 +14,7 @@
 package branch
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -92,11 +93,12 @@ type branchENIProvider struct {
 	workerPool worker.Worker
 	// apiWrapper
 	apiWrapper api.Wrapper
+	ctx        context.Context
 }
 
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
 func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
-	worker worker.Worker, _ config.ResourceConfig) provider.ResourceProvider {
+	worker worker.Worker, _ config.ResourceConfig, ctx context.Context) provider.ResourceProvider {
 	prometheusRegister()
 	trunk.PrometheusRegister()
 
@@ -105,6 +107,7 @@ func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
 		log:           logger,
 		workerPool:    worker,
 		trunkENICache: make(map[string]trunk.TrunkENI),
+		ctx:           ctx,
 	}
 }
 
@@ -309,7 +312,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	}
 
 	// Get the pod object again directly from API Server as the cache can be stale
-	pod, err = b.apiWrapper.PodAPI.GetPodFromAPIServer(podNamespace, podName)
+	pod, err = b.apiWrapper.PodAPI.GetPodFromAPIServer(b.ctx, podNamespace, podName)
 	if err != nil {
 		branchProviderOperationsErrCount.WithLabelValues("get_pod_api_server").Inc()
 		return ctrl.Result{}, err
@@ -439,7 +442,6 @@ func (b *branchENIProvider) removeTrunkFromCache(nodeName string) {
 
 	delete(b.trunkENICache, nodeName)
 	log.Info("trunk removed from cache successfully")
-	return
 }
 
 // getTrunkFromCache returns the trunkENI form the cache for the given node name

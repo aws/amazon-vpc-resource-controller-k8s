@@ -16,14 +16,15 @@ package core
 import (
 	"context"
 	"encoding/json"
-	v1 "k8s.io/api/authentication/v1"
 	"net/http"
 	"testing"
+
+	v1 "k8s.io/api/authentication/v1"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/stretchr/testify/assert"
-	"k8s.io/api/admission/v1beta1"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -104,8 +105,8 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[create] when no annotation, approve request ",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
-					Operation: v1beta1.Create,
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Create,
 					Object: runtime.RawExtension{
 						Raw:    podWithoutAnnotationRaw,
 						Object: podWithoutAnnotation,
@@ -113,7 +114,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: true,
 					Result: &metav1.Status{
 						Code: http.StatusOK,
@@ -124,8 +125,8 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[create] when there's annotation, reject request",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
-					Operation: v1beta1.Create,
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Create,
 					Object: runtime.RawExtension{
 						Raw:    podWithAnnotationRaw,
 						Object: podWithAnnotation,
@@ -133,7 +134,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: false,
 					Result: &metav1.Status{
 						Code: http.StatusForbidden,
@@ -144,9 +145,9 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[update] annotation created by old vpc-resource-controller SA, allow request",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
+				AdmissionRequest: admissionv1.AdmissionRequest{
 					UserInfo:  v1.UserInfo{Username: validUserInfo},
-					Operation: v1beta1.Update,
+					Operation: admissionv1.Update,
 					Object: runtime.RawExtension{
 						Raw:    podWithAnnotationRaw,
 						Object: podWithAnnotation,
@@ -158,7 +159,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: true,
 					Result: &metav1.Status{
 						Code: http.StatusOK,
@@ -169,9 +170,9 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[update] annotation created by new vpc-resource-controller SA, allow request",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
+				AdmissionRequest: admissionv1.AdmissionRequest{
 					UserInfo:  v1.UserInfo{Username: newValidUserInfo},
-					Operation: v1beta1.Update,
+					Operation: admissionv1.Update,
 					Object: runtime.RawExtension{
 						Raw:    podWithAnnotationRaw,
 						Object: podWithAnnotation,
@@ -183,7 +184,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: true,
 					Result: &metav1.Status{
 						Code: http.StatusOK,
@@ -194,9 +195,9 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[update] annotation created by unauthorized user, deny request",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
+				AdmissionRequest: admissionv1.AdmissionRequest{
 					UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
-					Operation: v1beta1.Update,
+					Operation: admissionv1.Update,
 					Object: runtime.RawExtension{
 						Raw:    podWithAnnotationRaw,
 						Object: podWithAnnotation,
@@ -208,7 +209,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: false,
 					Result: &metav1.Status{
 						Code: http.StatusForbidden,
@@ -219,9 +220,9 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[update] annotation updated by unauthorized user, deny request",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
+				AdmissionRequest: admissionv1.AdmissionRequest{
 					UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
-					Operation: v1beta1.Update,
+					Operation: admissionv1.Update,
 					Object: runtime.RawExtension{
 						Raw:    podWithAnnotationRaw,
 						Object: podWithAnnotation,
@@ -233,7 +234,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: false,
 					Result: &metav1.Status{
 						Code: http.StatusForbidden,
@@ -244,9 +245,9 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[update] annotation deleted by unauthorized user, deny request",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
+				AdmissionRequest: admissionv1.AdmissionRequest{
 					UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
-					Operation: v1beta1.Update,
+					Operation: admissionv1.Update,
 					Object: runtime.RawExtension{
 						Raw:    podWithoutAnnotationRaw,
 						Object: podWithoutAnnotation,
@@ -258,7 +259,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: false,
 					Result: &metav1.Status{
 						Code: http.StatusForbidden,
@@ -269,8 +270,8 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[update] fargate pod-sg annotation added during UPDATE event, deny request",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
-					Operation: v1beta1.Update,
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Update,
 					Object: runtime.RawExtension{
 						Raw:    fargatePodWithAnnotationRaw,
 						Object: fargatePodWithAnnotation,
@@ -282,7 +283,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: false,
 					Result: &metav1.Status{
 						Code: http.StatusForbidden,
@@ -293,8 +294,8 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[update] fargate pod-sg annotation updated during UPDATE event, deny request",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
-					Operation: v1beta1.Update,
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Update,
 					Object: runtime.RawExtension{
 						Raw:    fargatePodWithDifferentAnnotationRaw,
 						Object: fargatePodWithDifferentAnnotation,
@@ -306,7 +307,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: false,
 					Result: &metav1.Status{
 						Code: http.StatusForbidden,
@@ -317,8 +318,8 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[update] fargate pod-sg annotation deleted during UPDATE event, deny request",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
-					Operation: v1beta1.Update,
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Update,
 					Object: runtime.RawExtension{
 						Raw:    fargatePodWithoutAnnotationRaw,
 						Object: fargatePodWithoutAnnotation,
@@ -330,7 +331,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: false,
 					Result: &metav1.Status{
 						Code: http.StatusForbidden,
@@ -341,9 +342,9 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		{
 			name: "[delete] delete, allow request",
 			req: admission.Request{
-				AdmissionRequest: v1beta1.AdmissionRequest{
+				AdmissionRequest: admissionv1.AdmissionRequest{
 					UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
-					Operation: v1beta1.Delete,
+					Operation: admissionv1.Delete,
 					OldObject: runtime.RawExtension{
 						Raw:    podWithAnnotationRaw,
 						Object: podWithAnnotation,
@@ -351,7 +352,7 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 				},
 			},
 			want: admission.Response{
-				AdmissionResponse: v1beta1.AdmissionResponse{
+				AdmissionResponse: admissionv1.AdmissionResponse{
 					Allowed: true,
 					Result: &metav1.Status{
 						Code: http.StatusOK,

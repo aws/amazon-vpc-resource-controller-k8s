@@ -14,9 +14,10 @@
 package resource
 
 import (
+	"context"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
+	mock_handler "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
@@ -43,7 +44,7 @@ func Test_NewResourceManager(t *testing.T) {
 
 	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
 
-	manger, err := NewResourceManager(resources, mock.Wrapper)
+	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper)
 	assert.NoError(t, err)
 
 	podENIHandler, ok := manger.GetResourceHandler(config.ResourceNamePodENI)

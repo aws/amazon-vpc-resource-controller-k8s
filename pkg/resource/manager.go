@@ -39,7 +39,7 @@ type ResourceManager interface {
 	GetResourceHandler(resourceName string) (handler.Handler, bool)
 }
 
-func NewResourceManager(resourceNames []string, wrapper api.Wrapper) (ResourceManager, error) {
+func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api.Wrapper) (ResourceManager, error) {
 	// Load that static configuration of the resource
 	resourceConfig := config.LoadResourceConfig()
 	// Resource Handler supported by the controller
@@ -62,7 +62,7 @@ func NewResourceManager(resourceNames []string, wrapper api.Wrapper) (ResourceMa
 			resourceConfig.Name,
 			resourceConfig.WorkerCount,
 			config.WorkQueueDefaultMaxRetries,
-			ctrl.Log.WithName(fmt.Sprintf("%s-%s", resourceName, "worker")), context.TODO())
+			ctrl.Log.WithName(fmt.Sprintf("%s-%s", resourceName, "worker")), ctx)
 
 		var resourceHandler handler.Handler
 		var resourceProvider provider.ResourceProvider
@@ -74,7 +74,7 @@ func NewResourceManager(resourceNames []string, wrapper api.Wrapper) (ResourceMa
 				resourceName, resourceProvider)
 		} else if resourceName == config.ResourceNamePodENI {
 			resourceProvider = branch.NewBranchENIProvider(ctrl.Log.WithName("branch eni provider"),
-				wrapper, workers, resourceConfig)
+				wrapper, workers, resourceConfig, ctx)
 			resourceHandler = handler.NewOnDemandHandler(ctrl.Log.WithName(resourceName),
 				resourceName, resourceProvider)
 		} else {
