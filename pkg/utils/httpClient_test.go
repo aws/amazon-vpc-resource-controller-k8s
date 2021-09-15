@@ -21,11 +21,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
+
+var ua = "user-agent"
 
 func TestNewRateLimitedClient(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/test", testHandler)
+	h := handler{t: t}
+	mux.HandleFunc("/test", h.testHandler)
 
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
@@ -64,7 +69,7 @@ func TestNewRateLimitedClient(t *testing.T) {
 		},
 	}
 	for idx, tt := range tbs {
-		cli, err := NewRateLimitedClient(tt.qps, tt.burst)
+		cli, err := NewRateLimitedClient(tt.qps, tt.burst, ua)
 		if err != nil {
 			t.Fatalf("#%d: failed to create a new client (%v)", idx, err)
 		}
@@ -132,7 +137,12 @@ func TestNewRateLimitedClient(t *testing.T) {
 	}
 }
 
-func testHandler(w http.ResponseWriter, req *http.Request) {
+type handler struct {
+	t *testing.T
+}
+
+func (h *handler) testHandler(w http.ResponseWriter, req *http.Request) {
+	assert.Equal(h.t, req.Header.Get(UserAgentHeader), ua)
 	switch req.Method {
 	case "GET":
 		fmt.Fprint(w, `test`)
