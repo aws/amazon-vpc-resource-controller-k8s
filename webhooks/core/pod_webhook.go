@@ -33,7 +33,7 @@ const resourceLimit = "1"
 const fargatePodSgAnnotKey = "fargate.amazonaws.com/pod-sg"
 const fargatePodLabel = "eks.amazonaws.com/fargate-profile"
 
-// +kubebuilder:webhook:path=/mutate-v1-pod,mutating=true,failurePolicy=ignore,groups="",resources=pods,verbs=create,versions=v1,name=mpod.vpc.k8s.aws
+// +kubebuilder:webhook:path=/mutate-v1-pod,mutating=true,failurePolicy=ignore,groups="",resources=pods,verbs=create,versions=v1,name=mpod.vpc.k8s.aws,sideEffects=None,admissionReviewVersions=v1
 
 // PodResourceInjector injects resources into Pods
 type PodResourceInjector struct {
