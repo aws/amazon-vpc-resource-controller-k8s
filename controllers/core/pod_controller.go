@@ -14,6 +14,7 @@
 package controllers
 
 import (
+	"context"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
@@ -149,10 +150,10 @@ func getAggregateResources(pod *v1.Pod) map[string]int64 {
 // SetupWithManager adds the custom Pod controller's runnable to the manager's
 // list of runnable. After Manager acquire the lease the pod controller runnable
 // will be started and the Pod events will be sent to Reconcile function
-func (r *PodReconciler) SetupWithManager(manager ctrl.Manager,
+func (r *PodReconciler) SetupWithManager(ctx context.Context, manager ctrl.Manager,
 	clientSet *kubernetes.Clientset, pageLimit int, syncPeriod time.Duration) error {
 
-	return custom.NewControllerManagedBy(manager).
+	return custom.NewControllerManagedBy(ctx, manager).
 		WithLogger(r.Log.WithName("custom pod controller")).
 		UsingDataStore(r.DataStore).
 		WithClientSet(clientSet).

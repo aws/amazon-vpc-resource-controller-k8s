@@ -1,5 +1,5 @@
 # Build the controller binary
-FROM public.ecr.aws/bitnami/golang:1.13 as builder
+FROM public.ecr.aws/bitnami/golang:1.16 as builder
 
 WORKDIR /workspace
 ENV GOPROXY direct

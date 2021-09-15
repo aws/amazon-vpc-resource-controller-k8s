@@ -51,16 +51,15 @@ type NodeReconciler struct {
 // do any operations on the Node or any Pods scheduled on the Node. A node can be toggled
 // from Un-Managed to Managed and vice-versa in which case the Node Manager updates it's
 // status accordingly
-func (r *NodeReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	r.Conditions.WaitTillPodDataStoreSynced()
 
-	ctx := context.TODO()
-	k8sNode := &corev1.Node{}
+	node := &corev1.Node{}
 	var err error
 
 	logger := r.Log.WithValues("node", req.NamespacedName)
 
-	if err := r.Client.Get(ctx, req.NamespacedName, k8sNode); err != nil {
+	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
 		if errors.IsNotFound(err) {
 			_, found := r.Manager.GetNode(req.Name)
 			if found {

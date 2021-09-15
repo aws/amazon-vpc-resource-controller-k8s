@@ -37,20 +37,20 @@ type ENICleaner struct {
 	ctx               context.Context
 }
 
-func (e *ENICleaner) SetupWithManager(mgr ctrl.Manager) error {
+func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
 	e.clusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
 	e.availableENIs = make(map[string]struct{})
-	e.ctx = context.TODO()
+	e.ctx = ctx
 
 	return mgr.Add(e)
 }
 
 // StartENICleaner starts the ENI Cleaner routine that cleans up dangling ENIs created by the controller
-func (e *ENICleaner) Start(stop <-chan struct{}) error {
+func (e *ENICleaner) Start(ctx context.Context) error {
 	e.Log.Info("starting eni clean up routine")
 	// Start routine to listen for shut down signal, on receiving the signal it set shutdown to true
 	go func() {
-		<-stop
+		<-ctx.Done()
 		e.shutdown = true
 	}()
 	// Perform ENI cleanup after fixed time intervals till shut down variable is set to true on receiving the shutdown

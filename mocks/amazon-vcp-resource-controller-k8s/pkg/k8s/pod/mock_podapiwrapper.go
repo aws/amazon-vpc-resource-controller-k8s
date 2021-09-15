@@ -18,6 +18,7 @@
 package mock_pod
 
 import (
+	context "context"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
 	reflect "reflect"
@@ -76,18 +77,18 @@ func (mr *MockPodClientAPIWrapperMockRecorder) GetPod(arg0, arg1 interface{}) *g
 }
 
 // GetPodFromAPIServer mocks base method
-func (m *MockPodClientAPIWrapper) GetPodFromAPIServer(arg0, arg1 string) (*v1.Pod, error) {
+func (m *MockPodClientAPIWrapper) GetPodFromAPIServer(arg0 context.Context, arg1, arg2 string) (*v1.Pod, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetPodFromAPIServer", arg0, arg1)
+	ret := m.ctrl.Call(m, "GetPodFromAPIServer", arg0, arg1, arg2)
 	ret0, _ := ret[0].(*v1.Pod)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetPodFromAPIServer indicates an expected call of GetPodFromAPIServer
-func (mr *MockPodClientAPIWrapperMockRecorder) GetPodFromAPIServer(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockPodClientAPIWrapperMockRecorder) GetPodFromAPIServer(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPodFromAPIServer", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).GetPodFromAPIServer), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPodFromAPIServer", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).GetPodFromAPIServer), arg0, arg1, arg2)
 }
 
 // GetRunningPodsOnNode mocks base method

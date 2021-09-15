@@ -106,7 +106,7 @@ func TestK8sWrapper_AdvertiseCapacity_AlreadySet(t *testing.T) {
 	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
 	err := wrapper.AdvertiseCapacityIfNotSet(nodeName, existingResource, 5)
 
-	capacity, _ := mockNode.Status.Capacity[v1.ResourceName(existingResource)]
+	capacity := mockNode.Status.Capacity[v1.ResourceName(existingResource)]
 	assert.NoError(t, err)
 	assert.Equal(t, existingResourceQuantity, capacity.Value())
 }

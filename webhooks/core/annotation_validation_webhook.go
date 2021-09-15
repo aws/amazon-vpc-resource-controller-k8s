@@ -21,12 +21,12 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/go-logr/logr"
-	"k8s.io/api/admission/v1beta1"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
-// +kubebuilder:webhook:path=/validate-v1-pod,mutating=false,failurePolicy=ignore,groups="",resources=pods,verbs=create;update,versions=v1,name=vpod.vpc.k8s.aws
+// +kubebuilder:webhook:path=/validate-v1-pod,mutating=false,failurePolicy=ignore,groups="",resources=pods,verbs=create;update,versions=v1,name=vpod.vpc.k8s.aws,sideEffects=None,admissionReviewVersions=v1
 
 // AnnotationValidator injects resources into Pods
 type AnnotationValidator struct {
@@ -46,9 +46,9 @@ func (a *AnnotationValidator) Handle(_ context.Context, req admission.Request) a
 		"request", req)
 
 	switch req.Operation {
-	case v1beta1.Create:
+	case admissionv1.Create:
 		response = a.handleCreate(req)
-	case v1beta1.Update:
+	case admissionv1.Update:
 		response = a.handleUpdate(req)
 	default:
 		response = admission.Allowed("")
