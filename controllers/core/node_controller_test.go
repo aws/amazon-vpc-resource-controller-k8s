@@ -14,11 +14,12 @@
 package controllers
 
 import (
+	"context"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
+	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
+	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
+	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -84,7 +85,7 @@ func TestNodeReconciler_Reconcile_AddNode(t *testing.T) {
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
 	mock.Manager.EXPECT().AddNode(mockNodeName).Return(nil)
 
-	res, err := mock.Reconciler.Reconcile(reconcileRequest)
+	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
 }
@@ -99,7 +100,7 @@ func TestNodeReconciler_Reconcile_UpdateNode(t *testing.T) {
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.Manager.EXPECT().UpdateNode(mockNodeName).Return(nil)
 
-	res, err := mock.Reconciler.Reconcile(reconcileRequest)
+	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
 }
@@ -114,7 +115,7 @@ func TestNodeReconciler_Reconcile_DeleteNode(t *testing.T) {
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.Manager.EXPECT().DeleteNode(mockNodeName).Return(nil)
 
-	res, err := mock.Reconciler.Reconcile(reconcileRequest)
+	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
 }
@@ -128,7 +129,7 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentNode(t *testing.T) {
 	mock.Conditions.EXPECT().WaitTillPodDataStoreSynced()
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
 
-	res, err := mock.Reconciler.Reconcile(reconcileRequest)
+	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
 }

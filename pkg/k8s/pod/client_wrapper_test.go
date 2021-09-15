@@ -115,8 +115,7 @@ func getFakeDataStore() cache.Indexer {
 // TestPodAPI_GetPodFromAPIServer tests if the pod is returned if it's stored with API server
 func TestPodAPI_GetPodFromAPIServer(t *testing.T) {
 	podAPI, _ := getMockPodAPIWithClient()
-
-	pod, err := podAPI.GetPodFromAPIServer(podNamespace, podName)
+	pod, err := podAPI.GetPodFromAPIServer(context.TODO(), podNamespace, podName)
 
 	assert.NoError(t, err)
 	assert.Equal(t, runningPod, pod)
@@ -135,7 +134,7 @@ func TestPodAPI_GetRunningPodsOnNode(t *testing.T) {
 func TestPodPAI_GetPodFromAPIServer_NoError(t *testing.T) {
 	podAPI, _ := getMockPodAPIWithClient()
 
-	_, err := podAPI.GetPodFromAPIServer(podNamespace, podName+"not-exists")
+	_, err := podAPI.GetPodFromAPIServer(context.TODO(), podNamespace, podName+"not-exists")
 
 	assert.NotNil(t, err)
 }

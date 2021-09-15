@@ -20,7 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"k8s.io/api/admission/v1beta1"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -291,9 +291,9 @@ func TestPodResourceInjector_Without_Pod_namespace_Handle(t *testing.T) {
 func getResponse(pod *corev1.Pod, injector *PodResourceInjector) admission.Response {
 	podRaw, _ := json.Marshal(pod)
 	req := admission.Request{
-		AdmissionRequest: v1beta1.AdmissionRequest{
+		AdmissionRequest: admissionv1.AdmissionRequest{
 			Namespace: namespace,
-			Operation: v1beta1.Create,
+			Operation: admissionv1.Create,
 			Object: runtime.RawExtension{
 				Raw: podRaw,
 			},

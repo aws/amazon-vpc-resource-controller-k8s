@@ -14,7 +14,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -230,15 +229,16 @@ func main() {
 		SGPAPI: sgpAPI,
 	}
 
+	ctx := ctrl.SetupSignalHandler()
 	supportedResources := []string{config.ResourceNamePodENI}
-	resourceManager, err := resource.NewResourceManager(supportedResources, apiWrapper)
+	resourceManager, err := resource.NewResourceManager(ctx, supportedResources, apiWrapper)
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init resources", "resources", supportedResources)
 		os.Exit(1)
 	}
 
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
-		3, 1, ctrl.Log.WithName("node async workers"), context.TODO())
+		3, 1, ctrl.Log.WithName("node async workers"), ctx)
 	nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager, apiWrapper, nodeManagerWorkers)
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init node manager")
@@ -258,7 +258,7 @@ func main() {
 		NodeManager:     nodeManager,
 		DataStore:       dataStore,
 		DataStoreSynced: hasPodDataStoreSynced,
-	}).SetupWithManager(mgr, clientSet, listPageLimit, syncPeriod); err != nil {
+	}).SetupWithManager(ctx, mgr, clientSet, listPageLimit, syncPeriod); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "pod")
 		os.Exit(1)
 	}
@@ -267,7 +267,7 @@ func main() {
 		EC2Wrapper:  ec2Wrapper,
 		ClusterName: clusterName,
 		Log:         ctrl.Log.WithName("eni cleaner"),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to start eni cleaner")
 		os.Exit(1)
 	}
@@ -300,7 +300,7 @@ func main() {
 	}})
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

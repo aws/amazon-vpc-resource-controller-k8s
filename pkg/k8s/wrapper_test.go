@@ -17,7 +17,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/controllers/custom"
+	mock_custom "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/golang/mock/gomock"
@@ -106,7 +106,7 @@ func TestK8sWrapper_AdvertiseCapacity_AlreadySet(t *testing.T) {
 	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
 	err := wrapper.AdvertiseCapacityIfNotSet(nodeName, existingResource, 5)
 
-	capacity, _ := mockNode.Status.Capacity[v1.ResourceName(existingResource)]
+	capacity := mockNode.Status.Capacity[v1.ResourceName(existingResource)]
 	assert.NoError(t, err)
 	assert.Equal(t, existingResourceQuantity, capacity.Value())
 }

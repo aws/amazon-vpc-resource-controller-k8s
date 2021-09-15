@@ -70,7 +70,7 @@ type PodClientAPIWrapper interface {
 	GetPod(namespace string, name string) (*v1.Pod, error)
 	ListPods(nodeName string) (*v1.PodList, error)
 	AnnotatePod(podNamespace string, podName string, key string, val string) error
-	GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error)
+	GetPodFromAPIServer(ctx context.Context, namespace string, name string) (*v1.Pod, error)
 	GetRunningPodsOnNode(nodeName string) ([]v1.Pod, error)
 }
 
@@ -184,9 +184,9 @@ func (p *podClientAPIWrapper) GetPod(namespace string, name string) (*v1.Pod, er
 }
 
 // GetPodFromAPIServer returns the pod details by querying the API Server directly
-func (p *podClientAPIWrapper) GetPodFromAPIServer(namespace string, name string) (*v1.Pod, error) {
+func (p *podClientAPIWrapper) GetPodFromAPIServer(ctx context.Context, namespace string, name string) (*v1.Pod, error) {
 	getPodFromAPIServeCallCount.Inc()
-	pod, err := p.coreV1.Pods(namespace).Get(name, metav1.GetOptions{
+	pod, err := p.coreV1.Pods(namespace).Get(ctx, name, metav1.GetOptions{
 		TypeMeta:        metav1.TypeMeta{},
 		ResourceVersion: "",
 	})
