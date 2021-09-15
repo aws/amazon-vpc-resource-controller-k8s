@@ -21,5 +21,5 @@ const (
 
 	// ResourceCreationTimeout is the number of seconds till the controller waits
 	// for the resource creation to complete
-	ResourceCreationTimeout = 90 * time.Second
+	ResourceCreationTimeout = 120 * time.Second
 )
