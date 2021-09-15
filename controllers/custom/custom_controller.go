@@ -14,6 +14,7 @@
 package custom
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -108,7 +109,7 @@ type Request struct {
 }
 
 // Starts the low level controller
-func (c *CustomController) Start(stop <-chan struct{}) error {
+func (c *CustomController) Start(ctx context.Context) error {
 	// This is important to allow the data store to be synced
 	// Before the other controller starts
 	c.mu.Lock()
@@ -121,7 +122,7 @@ func (c *CustomController) Start(stop <-chan struct{}) error {
 		coreController := cache.New(c.config)
 
 		c.log.Info("starting custom controller")
-		go coreController.Run(stop)
+		go coreController.Run(ctx.Done())
 
 		// Wait till cache sync
 		c.WaitForCacheSync(coreController)
@@ -129,7 +130,7 @@ func (c *CustomController) Start(stop <-chan struct{}) error {
 		c.log.Info("Starting Workers", "worker count",
 			c.options.MaxConcurrentReconciles)
 		for i := 0; i < c.options.MaxConcurrentReconciles; i++ {
-			go wait.Until(c.worker, time.Second, stop)
+			go wait.Until(c.worker, time.Second, ctx.Done())
 		}
 
 		return nil
@@ -138,7 +139,7 @@ func (c *CustomController) Start(stop <-chan struct{}) error {
 		return err
 	}
 
-	<-stop
+	<-ctx.Done()
 	c.log.Info("stopping workers")
 	return nil
 }
@@ -156,7 +157,7 @@ func (c *CustomController) WaitForCacheSync(controller cache.Controller) {
 
 // newOptimizedListWatcher returns a list watcher with a custom list function that converts the
 // response for each page using the converter function and returns a general watcher
-func newOptimizedListWatcher(restClient cache.Getter, resource string, namespace string, limit int,
+func newOptimizedListWatcher(ctx context.Context, restClient cache.Getter, resource string, namespace string, limit int,
 	converter Converter) *cache.ListWatch {
 
 	listFunc := func(options metav1.ListOptions) (runtime.Object, error) {
@@ -169,7 +170,7 @@ func newOptimizedListWatcher(restClient cache.Getter, resource string, namespace
 				Limit:    int64(limit),
 				Continue: options.Continue,
 			}, metav1.ParameterCodec).
-			Do().
+			Do(ctx).
 			Get()
 		if err != nil {
 			return list, err
@@ -188,7 +189,7 @@ func newOptimizedListWatcher(restClient cache.Getter, resource string, namespace
 			Namespace(namespace).
 			Resource(resource).
 			VersionedParams(&options, metav1.ParameterCodec).
-			Watch()
+			Watch(ctx)
 	}
 	return &cache.ListWatch{ListFunc: listFunc, WatchFunc: watchFunc}
 }

@@ -112,5 +112,5 @@ func TestENICleaner_StartENICleaner_Shutdown(t *testing.T) {
 
 	eniCleaner.shutdown = true
 
-	eniCleaner.Start(make(chan struct{}))
+	eniCleaner.Start(context.TODO())
 }

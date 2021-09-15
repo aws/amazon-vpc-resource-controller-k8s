@@ -78,14 +78,11 @@ func New(options Options) *Framework {
 
 	realClient, err := client.New(config, client.Options{Scheme: k8sSchema})
 	Expect(err).NotTo(HaveOccurred())
-	k8sClient := client.DelegatingClient{
-		Reader: &client.DelegatingReader{
-			CacheReader:  cache,
-			ClientReader: realClient,
-		},
-		Writer:       realClient,
-		StatusClient: realClient,
-	}
+	k8sClient, err := client.NewDelegatingClient(client.NewDelegatingClientInput{
+		CacheReader: cache,
+		Client:      realClient,
+	})
+	Expect(err).NotTo(HaveOccurred())
 
 	sess := session.Must(session.NewSession(&aws.Config{
 		Region: aws.String(options.AWSRegion),
