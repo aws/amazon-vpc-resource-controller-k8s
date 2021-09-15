@@ -15,6 +15,7 @@ package api
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -440,6 +441,7 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN st
 			*userStsSession.Config.Region, err)
 	}
 
+	roleARN = strings.Trim(roleARN, "\"")
 	// Add the regional sts end point
 	regionalProvider := &stscreds.AssumeRoleProvider{
 		Client: sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
