@@ -46,7 +46,6 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -177,18 +176,17 @@ func main() {
 	retryPeriod := time.Second * time.Duration(leaderLeaseRetryPeriod)
 
 	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
-		SyncPeriod:                 &syncPeriod,
-		Scheme:                     scheme,
-		MetricsBindAddress:         metricsAddr,
-		Port:                       9443,
-		LeaderElection:             enableLeaderElection,
-		LeaseDuration:              &leaseDuration,
-		RenewDeadline:              &renewDeadline,
-		RetryPeriod:                &retryPeriod,
-		LeaderElectionID:           config.LeaderElectionKey,
-		LeaderElectionNamespace:    config.LeaderElectionNamespace,
-		LeaderElectionResourceLock: resourcelock.ConfigMapsResourceLock,
-		HealthProbeBindAddress:     ":61779", // the liveness endpoint is default to "/healthz",
+		SyncPeriod:              &syncPeriod,
+		Scheme:                  scheme,
+		MetricsBindAddress:      metricsAddr,
+		Port:                    9443,
+		LeaderElection:          enableLeaderElection,
+		LeaseDuration:           &leaseDuration,
+		RenewDeadline:           &renewDeadline,
+		RetryPeriod:             &retryPeriod,
+		LeaderElectionID:        config.LeaderElectionKey,
+		LeaderElectionNamespace: config.LeaderElectionNamespace,
+		HealthProbeBindAddress:  ":61779", // the liveness endpoint is default to "/healthz"
 
 	})
 	if err != nil {
