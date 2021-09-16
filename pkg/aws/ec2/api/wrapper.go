@@ -37,7 +37,7 @@ import (
 
 const (
 	MaxRetries = 3
-	UserAgent  = "amazon-vpc-resource-controller-k8s"
+	AppName    = "amazon-vpc-resource-controller-k8s"
 )
 
 type EC2Wrapper interface {
@@ -336,20 +336,15 @@ type ec2Wrapper struct {
 	instanceServiceClient *ec2.EC2
 	userServiceClient     *ec2.EC2
 	accountID             string
-	userAgent             string
 }
 
 // NewEC2Wrapper takes the roleARN that will be assumed to make all the EC2 API Calls, if no roleARN
 // is passed then the ec2 client will be initialized with the instance's service role account.
-func NewEC2Wrapper(roleARN string, log logr.Logger, controllerVersion string) (EC2Wrapper, error) {
+func NewEC2Wrapper(roleARN string, log logr.Logger) (EC2Wrapper, error) {
 	// Register the metrics
 	prometheusRegister()
 
-	ec2Wrapper := &ec2Wrapper{
-		log: log,
-		userAgent: fmt.Sprintf("%s/%s", UserAgent,
-			controllerVersion),
-	}
+	ec2Wrapper := &ec2Wrapper{log: log}
 
 	instanceSession, err := ec2Wrapper.getInstanceSession()
 	if err != nil {
@@ -391,6 +386,7 @@ func NewEC2Wrapper(roleARN string, log logr.Logger, controllerVersion string) (E
 func (e *ec2Wrapper) getInstanceSession() (instanceSession *session.Session, err error) {
 	// Create a new session
 	instanceSession = session.Must(session.NewSession())
+	injectUserAgent(&instanceSession.Handlers)
 
 	// Get the region from the ec2 Metadata if the region is missing in the session config
 	ec2Metadata := ec2metadata.New(instanceSession)
@@ -417,7 +413,7 @@ func (e *ec2Wrapper) getInstanceSession() (instanceSession *session.Session, err
 }
 
 func (e *ec2Wrapper) getInstanceServiceClient(qps int, burst int, instanceSession *session.Session) (*ec2.EC2, error) {
-	instanceClient, err := utils.NewRateLimitedClient(qps, burst, e.userAgent)
+	instanceClient, err := utils.NewRateLimitedClient(qps, burst)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v",
 			qps, burst, err)
@@ -431,9 +427,10 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN st
 
 	userStsSession := session.Must(session.NewSession())
 	userStsSession.Config.Region = &instanceRegion
+	injectUserAgent(&userStsSession.Handlers)
 
 	// Create a rate limited http client for the
-	client, err := utils.NewRateLimitedClient(qps, burst, e.userAgent)
+	client, err := utils.NewRateLimitedClient(qps, burst)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v", qps, burst, err)
 	}
@@ -453,8 +450,8 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN st
 		Client: sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
 			WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
 		RoleARN:         roleARN,
-		RoleSessionName: UserAgent,
 		Duration:        time.Minute * 60,
+		RoleSessionName: AppName,
 	}
 	providers = append(providers, regionalProvider)
 

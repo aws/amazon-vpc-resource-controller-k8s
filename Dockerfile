@@ -22,7 +22,7 @@ COPY webhooks/ webhooks/
 # Version package for passing the ldflags
 ENV VERSION_PKG=github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version
 # Build
-RUN GIT_VERSION=$(git describe --tags --always) && \
+RUN GIT_VERSION=$(git describe --tags --dirty --always) && \
         GIT_COMMIT=$(git rev-parse HEAD) && \
         BUILD_DATE=$(date +%Y-%m-%dT%H:%M:%S%z) && \
         CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build \

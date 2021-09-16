@@ -1,7 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMAGE_NAME=eks/vpc-resource-controller
 REPO=$(AWS_ACCOUNT).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE_NAME)
-GIT_VERSION=$(shell git describe --tags --always)
+GIT_VERSION=$(shell git describe --dirty --tags --always)
 
 VERSION ?= $(GIT_VERSION)
 IMAGE ?= $(REPO):$(VERSION)

@@ -20,12 +20,8 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var (
-	UserAgentHeader = "User-Agent"
-)
-
 // NewRateLimitedClient returns a new HTTP client with rate limiter.
-func NewRateLimitedClient(qps int, burst int, userAgent string) (*http.Client, error) {
+func NewRateLimitedClient(qps int, burst int) (*http.Client, error) {
 	if qps == 0 {
 		return http.DefaultClient, nil
 	}
@@ -34,7 +30,6 @@ func NewRateLimitedClient(qps int, burst int, userAgent string) (*http.Client, e
 	}
 	return &http.Client{
 		Transport: &rateLimitedRoundTripper{
-			ua: userAgent,
 			rt: http.DefaultTransport,
 			rl: rate.NewLimiter(rate.Limit(qps), burst),
 		},
@@ -42,26 +37,13 @@ func NewRateLimitedClient(qps int, burst int, userAgent string) (*http.Client, e
 }
 
 type rateLimitedRoundTripper struct {
-	ua string
 	rt http.RoundTripper
 	rl *rate.Limiter
 }
 
 func (rr *rateLimitedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	rr.SetUserAgent(req)
 	if err := rr.rl.Wait(req.Context()); err != nil {
 		return nil, err
 	}
 	return rr.rt.RoundTrip(req)
-}
-
-// SetUserAgent add controller name/version in the request's User Agent for tracking
-// API calls made by the controller
-func (rr *rateLimitedRoundTripper) SetUserAgent(req *http.Request) {
-	curUA := req.Header.Get(UserAgentHeader)
-	newUA := rr.ua
-	if len(curUA) > 0 {
-		newUA = newUA + " " + curUA
-	}
-	req.Header.Set(UserAgentHeader, newUA)
 }

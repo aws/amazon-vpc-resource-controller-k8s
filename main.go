@@ -209,7 +209,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ec2Wrapper, err := ec2API.NewEC2Wrapper(roleARN, setupLog, version.GitVersion)
+	ec2Wrapper, err := ec2API.NewEC2Wrapper(roleARN, setupLog)
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
 	}
