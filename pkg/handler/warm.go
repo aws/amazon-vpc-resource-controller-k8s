@@ -14,6 +14,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -39,16 +40,18 @@ type warmResourceHandler struct {
 	APIWrapper       api.Wrapper
 	resourceProvider provider.ResourceProvider
 	resourceName     string
+	ctx              context.Context
 }
 
 func NewWarmResourceHandler(log logr.Logger, wrapper api.Wrapper,
-	resourceName string, resourceProviders provider.ResourceProvider) Handler {
+	resourceName string, resourceProviders provider.ResourceProvider, ctx context.Context) Handler {
 
 	return &warmResourceHandler{
 		log:              log,
 		APIWrapper:       wrapper,
 		resourceProvider: resourceProviders,
 		resourceName:     resourceName,
+		ctx:              ctx,
 	}
 }
 
@@ -85,7 +88,7 @@ func (w *warmResourceHandler) HandleCreate(_ int, pod *v1.Pod) (ctrl.Result, err
 		case pool.ErrResourceAlreadyAssigned:
 			// The Pod may already have the request annotated, however the cache may not have
 			// may not reflect the change immediately.
-			pod, err := w.APIWrapper.PodAPI.GetPodFromAPIServer(pod.Namespace, pod.Name)
+			pod, err := w.APIWrapper.PodAPI.GetPodFromAPIServer(w.ctx, pod.Namespace, pod.Name)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
