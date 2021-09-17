@@ -37,6 +37,7 @@ import (
 
 const (
 	MaxRetries = 3
+	AppName    = "amazon-vpc-resource-controller-k8s"
 )
 
 type EC2Wrapper interface {
@@ -385,6 +386,7 @@ func NewEC2Wrapper(roleARN string, log logr.Logger) (EC2Wrapper, error) {
 func (e *ec2Wrapper) getInstanceSession() (instanceSession *session.Session, err error) {
 	// Create a new session
 	instanceSession = session.Must(session.NewSession())
+	injectUserAgent(&instanceSession.Handlers)
 
 	// Get the region from the ec2 Metadata if the region is missing in the session config
 	ec2Metadata := ec2metadata.New(instanceSession)
@@ -425,6 +427,7 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN st
 
 	userStsSession := session.Must(session.NewSession())
 	userStsSession.Config.Region = &instanceRegion
+	injectUserAgent(&userStsSession.Handlers)
 
 	// Create a rate limited http client for the
 	client, err := utils.NewRateLimitedClient(qps, burst)
@@ -446,8 +449,9 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN st
 	regionalProvider := &stscreds.AssumeRoleProvider{
 		Client: sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
 			WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
-		RoleARN:  roleARN,
-		Duration: time.Minute * 60,
+		RoleARN:         roleARN,
+		Duration:        time.Minute * 60,
+		RoleSessionName: AppName,
 	}
 	providers = append(providers, regionalProvider)
 
