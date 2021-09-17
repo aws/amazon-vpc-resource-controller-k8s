@@ -397,7 +397,7 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 
 	branchENIs, isPresent := t.uidToBranchENIMap[UID]
 	if !isPresent {
-		t.log.Info("failed to find Branch ENI in cache, it could have been released if pod"+
+		t.log.V(1).Info("failed to find Branch ENI in cache, it could have been released if pod"+
 			"succeeded/failed before being deleted", "uid", UID)
 		trunkENIOperationsErrCount.WithLabelValues("get_branch_from_cache").Inc()
 		return

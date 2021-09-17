@@ -77,6 +77,21 @@ func (mr *MockPoolMockRecorder) FreeResource(arg0, arg1 interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FreeResource", reflect.TypeOf((*MockPool)(nil).FreeResource), arg0, arg1)
 }
 
+// GetAssignedResource mocks base method
+func (m *MockPool) GetAssignedResource(arg0 string) (string, bool) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAssignedResource", arg0)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(bool)
+	return ret0, ret1
+}
+
+// GetAssignedResource indicates an expected call of GetAssignedResource
+func (mr *MockPoolMockRecorder) GetAssignedResource(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAssignedResource", reflect.TypeOf((*MockPool)(nil).GetAssignedResource), arg0)
+}
+
 // ProcessCoolDownQueue mocks base method
 func (m *MockPool) ProcessCoolDownQueue() bool {
 	m.ctrl.T.Helper()
@@ -89,6 +104,18 @@ func (m *MockPool) ProcessCoolDownQueue() bool {
 func (mr *MockPoolMockRecorder) ProcessCoolDownQueue() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ProcessCoolDownQueue", reflect.TypeOf((*MockPool)(nil).ProcessCoolDownQueue))
+}
+
+// ReSync mocks base method
+func (m *MockPool) ReSync(arg0 []string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ReSync", arg0)
+}
+
+// ReSync indicates an expected call of ReSync
+func (mr *MockPoolMockRecorder) ReSync(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReSync", reflect.TypeOf((*MockPool)(nil).ReSync), arg0)
 }
 
 // ReconcilePool mocks base method

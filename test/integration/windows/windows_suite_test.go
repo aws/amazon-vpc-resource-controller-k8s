@@ -15,8 +15,11 @@ package windows_test
 
 import (
 	"context"
+	"math/rand"
 	"testing"
+	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
 	_ "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	_ "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/verify"
@@ -24,13 +27,17 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	v1 "k8s.io/api/core/v1"
 )
 
 var (
-	frameWork *framework.Framework
-	verify    *verifier.PodVerification
-	ctx       context.Context
-	err       error
+	frameWork             *framework.Framework
+	verify                *verifier.PodVerification
+	ctx                   context.Context
+	err                   error
+	windowsNodeList       *v1.NodeList
+	defaultTestPort       int
+	instanceSecurityGroup string
 )
 
 func TestWindowsVPCResourceController(t *testing.T) {
@@ -40,6 +47,31 @@ func TestWindowsVPCResourceController(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	frameWork = framework.New(framework.GlobalOptions)
+
 	ctx = context.Background()
 	verify = verifier.NewPodVerification(frameWork, ctx)
+
+	By("getting the list of Windows node")
+	windowsNodeList, err = frameWork.NodeManager.GetNodesWithOS("windows")
+	Expect(err).ToNot(HaveOccurred())
+
+	By("getting the instance ID for the first node")
+	Expect(len(windowsNodeList.Items)).To(BeNumerically(">", 1))
+	instanceID := manager.GetNodeInstanceID(&windowsNodeList.Items[0])
+
+	By("getting the security group associated with the instance")
+	instance, err := frameWork.EC2Manager.GetInstanceDetails(instanceID)
+	Expect(err).ToNot(HaveOccurred())
+	instanceSecurityGroup = *instance.SecurityGroups[0].GroupId
+
+	By("authorizing the security group ingress for HTTP traffic")
+	defaultTestPort = 80
+	frameWork.EC2Manager.AuthorizeSecurityGroupIngress(instanceSecurityGroup, defaultTestPort, "TCP")
+
+	rand.Seed(time.Now().UnixNano())
+})
+
+var _ = AfterSuite(func() {
+	By("revoking the security group ingress for HTTP traffic")
+	frameWork.EC2Manager.RevokeSecurityGroupIngress(instanceSecurityGroup, defaultTestPort, "TCP")
 })

@@ -71,7 +71,7 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 			resourceProvider = ip.NewIPv4Provider(ctrl.Log.WithName("ipv4 provider"),
 				wrapper, workers, resourceConfig)
 			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
-				resourceName, resourceProvider)
+				resourceName, resourceProvider, ctx)
 		} else if resourceName == config.ResourceNamePodENI {
 			resourceProvider = branch.NewBranchENIProvider(ctrl.Log.WithName("branch eni provider"),
 				wrapper, workers, resourceConfig, ctx)

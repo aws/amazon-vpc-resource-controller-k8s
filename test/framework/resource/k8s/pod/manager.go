@@ -34,6 +34,7 @@ type Manager interface {
 	CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod, timeOut time.Duration) (*v1.Pod, error)
 	CreateAndWaitTillPodIsCompleted(context context.Context, pod *v1.Pod) (*v1.Pod, error)
 	DeleteAndWaitTillPodIsDeleted(context context.Context, pod *v1.Pod) error
+	DeleteAllPodsForcefully(context context.Context, podLabelKey string, podLabelVal string) error
 	GetENIDetailsFromPodAnnotation(podAnnotation map[string]string) ([]*trunk.ENIDetails, error)
 	GetPodsWithLabel(context context.Context, namespace string, labelKey string, labelValue string) ([]v1.Pod, error)
 	PatchPod(context context.Context, oldPod *v1.Pod, newPod *v1.Pod) error
@@ -115,6 +116,30 @@ func (d *defaultManager) DeleteAndWaitTillPodIsDeleted(context context.Context, 
 		}
 		return false, err
 	}, context.Done())
+}
+
+func (d *defaultManager) DeleteAllPodsForcefully(context context.Context,
+	podLabelKey string, podLabelVal string) error {
+
+	podList := &v1.PodList{}
+	d.k8sClient.List(context, podList, &client.ListOptions{
+		LabelSelector: labels.SelectorFromSet(labels.Set{podLabelKey: podLabelVal}),
+	})
+
+	if len(podList.Items) == 0 {
+		return fmt.Errorf("no pods found with label %s:%s", podLabelKey, podLabelVal)
+	}
+
+	gracePeriod := int64(0)
+	for _, pod := range podList.Items {
+		err := d.k8sClient.Delete(context, &pod, &client.DeleteOptions{
+			GracePeriodSeconds: &gracePeriod,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *defaultManager) GetENIDetailsFromPodAnnotation(podAnnotation map[string]string) ([]*trunk.ENIDetails, error) {

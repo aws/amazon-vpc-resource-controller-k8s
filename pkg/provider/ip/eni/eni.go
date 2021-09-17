@@ -103,6 +103,7 @@ func (e *eniManager) CreateIPV4Address(required int, ec2APIHelper api.EC2APIHelp
 	defer e.lock.Unlock()
 
 	var assignedIPv4Address []string
+	log = log.WithValues("node name", e.instance.Name())
 
 	// Loop till we reach the last available ENI and list of assigned IPv4 addresses is less than the required IPv4 addresses
 	for index := 0; index < len(e.attachedENIs) && len(assignedIPv4Address) < required; index++ {
@@ -137,8 +138,8 @@ func (e *eniManager) CreateIPV4Address(required int, ec2APIHelper api.EC2APIHelp
 				e.ipToENIMap[ip] = e.attachedENIs[index]
 			}
 
-			log.Info("assigned IPv4 addresses", "ip", assignedIPs,
-				"eni", e.attachedENIs[index].eniID, "want", want, "can provide up", canAssign)
+			log.Info("assigned IPv4 addresses", "ip", assignedIPs, "eni",
+				e.attachedENIs[index].eniID, "want", want, "can provide upto", canAssign)
 		}
 	}
 
@@ -200,6 +201,7 @@ func (e *eniManager) DeleteIPV4Address(ipList []string, ec2APIHelper api.EC2APIH
 	var failedToUnAssign []string
 	var errors []error
 
+	log = log.WithValues("node name", e.instance.Name())
 	ipList = e.stripSubnetMaskFromIPSlice(ipList)
 
 	groupedIPs := e.groupIPsPerENI(ipList)

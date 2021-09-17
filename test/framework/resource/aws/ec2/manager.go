@@ -35,6 +35,7 @@ type Manager interface {
 	DeleteSecurityGroup(securityGroupID string) error
 	GetENISecurityGroups(eniID string) ([]string, error)
 	WaitTillTheENIIsDeleted(ctx context.Context, eniID string) error
+	UnAssignSecondaryIPv4Address(instance string, secondaryIPv4Address []string) error
 }
 
 func NewManager(ec2Client *ec2.EC2, vpcID string) Manager {
@@ -185,4 +186,27 @@ func (d *defaultManager) WaitTillTheENIIsDeleted(ctx context.Context, eniID stri
 
 	}, ctx.Done())
 
+}
+
+func (d *defaultManager) UnAssignSecondaryIPv4Address(instanceID string, secondaryIPv4Address []string) error {
+	describeInstanceOutput, err := d.ec2Client.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("attachment.instance-id"),
+				Values: aws.StringSlice([]string{instanceID}),
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if len(describeInstanceOutput.NetworkInterfaces) == 0 {
+		return fmt.Errorf("no instnace found")
+	}
+
+	_, err = d.ec2Client.UnassignPrivateIpAddresses(&ec2.UnassignPrivateIpAddressesInput{
+		NetworkInterfaceId: describeInstanceOutput.NetworkInterfaces[0].NetworkInterfaceId,
+		PrivateIpAddresses: aws.StringSlice(secondaryIPv4Address),
+	})
+	return err
 }

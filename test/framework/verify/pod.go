@@ -135,6 +135,17 @@ func (v *PodVerification) WindowsPodsHaveExpectedIPv4Address(namespace string,
 	}
 }
 
+func (v *PodVerification) ExpectPodHaveDesiredPhase(namespace string,
+	podLabelKey string, podLabelVal string, phases []v1.PodPhase) {
+
+	pods, err := v.frameWork.PodManager.GetPodsWithLabel(v.ctx, namespace, podLabelKey, podLabelVal)
+	Expect(err).ToNot(HaveOccurred())
+
+	for _, pod := range pods {
+		Expect(phases).Should(ContainElement(pod.Status.Phase))
+	}
+}
+
 func (v *PodVerification) WindowsPodHaveExpectedIPv4Address(pod *v1.Pod) {
 	By("matching the IPv4 from annotation to the pod IP")
 	ipAddWithCidr, found := pod.Annotations["vpc.amazonaws.com/PrivateIPv4Address"]

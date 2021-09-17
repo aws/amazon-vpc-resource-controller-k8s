@@ -23,6 +23,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/namespace"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/pod"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/rbac"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/service"
 	sgpManager "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
 	"github.com/aws/aws-sdk-go/aws"
@@ -50,6 +51,7 @@ type Framework struct {
 	JobManager        jobs.Manager
 	NodeManager       node.Manager
 	ControllerManager controller.Manager
+	RBACManager       rbac.Manager
 }
 
 func New(options Options) *Framework {
@@ -99,5 +101,6 @@ func New(options Options) *Framework {
 		JobManager:        jobs.NewManager(k8sClient),
 		NodeManager:       node.NewManager(k8sClient),
 		ControllerManager: controller.NewManager(k8sClient),
+		RBACManager:       rbac.NewManager(k8sClient),
 	}
 }

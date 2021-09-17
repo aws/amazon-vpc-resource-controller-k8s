@@ -64,9 +64,8 @@ func (m *defaultManager) DeleteAndWaitUntilDeploymentDeleted(ctx context.Context
 	if err != nil {
 		return err
 	}
-	observedDP := &appsv1.Deployment{}
-
 	return wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
+		observedDP := &appsv1.Deployment{}
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(dp), observedDP); err != nil {
 			if errors.IsNotFound(err) {
 				return true, nil

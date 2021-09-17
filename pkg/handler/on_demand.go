@@ -48,11 +48,6 @@ func (h *onDemandResourceHandler) HandleCreate(requestCount int, pod *v1.Pod) (c
 
 // HandleDelete reclaims the on demand resource by passing the Delete Job to the respective Worker
 func (h *onDemandResourceHandler) HandleDelete(pod *v1.Pod) (ctrl.Result, error) {
-	if _, ok := pod.Annotations[h.resourceName]; !ok {
-		// Ignore the pod as it was not allocated the resource
-		return ctrl.Result{}, nil
-	}
-
 	deleteJob := worker.NewOnDemandDeletedJob(pod.Spec.NodeName, pod.UID)
 	h.resourceProvider.SubmitAsyncJob(deleteJob)
 

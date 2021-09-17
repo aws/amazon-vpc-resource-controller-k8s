@@ -33,6 +33,8 @@ var (
 	podName      = "running-pod"
 	podNamespace = "namespace"
 
+	podUid = types.UID("00000000-0000-0000-0000-000000000000")
+
 	oldAnnotation = "old-annotation-key"
 
 	newAnnotation      = "new-annotation"
@@ -43,6 +45,7 @@ var (
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   podNamespace,
 			Annotations: map[string]string{oldAnnotation: oldAnnotation},
+			UID:         podUid,
 		},
 		Spec:   v1.PodSpec{NodeName: mockNode.Name},
 		Status: v1.PodStatus{},
@@ -150,11 +153,20 @@ func TestPodAPI_ListPods(t *testing.T) {
 	assert.ElementsMatch(t, podList.Items, []v1.Pod{*runningPod, *completedPod, *failedPod})
 }
 
+func TestPodAPI_AnnotatePod_UID_Changed(t *testing.T) {
+	podAPI, _ := getMockPodAPIWithClient()
+
+	newUiD := types.UID("00000000-0000-0000-0000-000000000001")
+
+	err := podAPI.AnnotatePod(podNamespace, podName, newUiD, newAnnotation, newAnnotationValue)
+	assert.Error(t, err)
+}
+
 // TestPodAPI_AnnotatePod tests that annotate pod doesn't throw error on adding a new annotation to pod
 func TestPodAPI_AnnotatePod(t *testing.T) {
 	podAPI, k8sClient := getMockPodAPIWithClient()
 
-	err := podAPI.AnnotatePod(podNamespace, podName, newAnnotation, newAnnotationValue)
+	err := podAPI.AnnotatePod(podNamespace, podName, podUid, newAnnotation, newAnnotationValue)
 	assert.NoError(t, err)
 
 	// Validate the pod got the annotation
@@ -172,7 +184,7 @@ func TestPodAPI_AnnotatePod(t *testing.T) {
 func TestPodAPI_AnnotatePod_PodNotExists(t *testing.T) {
 	podAPI, _ := getMockPodAPIWithClient()
 
-	err := podAPI.AnnotatePod(podNamespace, "non-existent-pod", newAnnotation, newAnnotationValue)
+	err := podAPI.AnnotatePod(podNamespace, "non-existent-pod", podUid, newAnnotation, newAnnotationValue)
 	assert.NotNil(t, err)
 }
 

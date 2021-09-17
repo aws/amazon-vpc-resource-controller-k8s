@@ -13,13 +13,10 @@
 
 package utils
 
-import "time"
-
-const (
-	PollIntervalShort  = 2 * time.Second
-	PollIntervalMedium = 10 * time.Second
-
-	// ResourceCreationTimeout is the number of seconds till the controller waits
-	// for the resource creation to complete
-	ResourceCreationTimeout = 120 * time.Second
-)
+func CopyMap(original map[string]string) map[string]string {
+	copy := make(map[string]string)
+	for key, val := range original {
+		copy[key] = val
+	}
+	return copy
+}

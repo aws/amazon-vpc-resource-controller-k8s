@@ -78,3 +78,10 @@ func TestNewWarmPoolDeleteJob(t *testing.T) {
 	assert.Equal(t, resources, WarmPoolJob.Resources)
 	assert.Equal(t, len(resources), WarmPoolJob.ResourceCount)
 }
+
+func TestNewWarmPoolReSyncJob(t *testing.T) {
+	WarmPoolJob := NewWarmPoolReSyncJob(nodeName)
+
+	assert.Equal(t, OperationReSyncPool, WarmPoolJob.Operations)
+	assert.Equal(t, nodeName, WarmPoolJob.NodeName)
+}

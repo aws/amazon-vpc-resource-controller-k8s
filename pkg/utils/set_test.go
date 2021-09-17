@@ -13,13 +13,30 @@
 
 package utils
 
-import "time"
+import (
+	"testing"
 
-const (
-	PollIntervalShort  = 2 * time.Second
-	PollIntervalMedium = 10 * time.Second
-
-	// ResourceCreationTimeout is the number of seconds till the controller waits
-	// for the resource creation to complete
-	ResourceCreationTimeout = 120 * time.Second
+	"github.com/stretchr/testify/assert"
 )
+
+func TestDifference(t *testing.T) {
+	a := []string{"X", "Y", "Z"}
+	b := []string{"X", "Z", "Q"}
+
+	assert.ElementsMatch(t, Difference(a, b), []string{"Y"})
+	assert.ElementsMatch(t, Difference(b, a), []string{"Q"})
+	assert.ElementsMatch(t, Difference(a, a), []string{})
+}
+
+func TestGetKeySet(t *testing.T) {
+	keys := []string{"a", "b", "c"}
+	m := map[string]string{}
+
+	for _, key := range keys {
+		m[key] = key
+	}
+
+	k, v := GetKeyValSlice(m)
+	assert.ElementsMatch(t, k, keys)
+	assert.ElementsMatch(t, v, keys)
+}

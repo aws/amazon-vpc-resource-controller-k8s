@@ -232,7 +232,7 @@ func main() {
 	}
 
 	ctx := ctrl.SetupSignalHandler()
-	supportedResources := []string{config.ResourceNamePodENI}
+	supportedResources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
 	resourceManager, err := resource.NewResourceManager(ctx, supportedResources, apiWrapper)
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init resources", "resources", supportedResources)
@@ -290,8 +290,7 @@ func main() {
 	webhookServer := mgr.GetWebhookServer()
 
 	setupLog.Info("registering webhooks to the webhook server")
-	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{Handler: &webhookcore.PodResourceInjector{
-		Client: mgr.GetClient(),
+	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{Handler: &webhookcore.PodMutationWebHook{
 		SGPAPI: sgpAPI,
 		Log:    ctrl.Log.WithName("webhook").WithName("Pod Mutating"),
 	}})

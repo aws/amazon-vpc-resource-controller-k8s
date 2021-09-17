@@ -37,7 +37,7 @@ var (
 	pod2 = "default/pod-2"
 	pod3 = "test/pod-3"
 
-	res1, res2, res3, res4, res5, res6 = "res-1", "res-2", "res-3", "res-4", "res-5", "res-6"
+	res1, res2, res3, res4, res5, res6, res7 = "res-1", "res-2", "res-3", "res-4", "res-5", "res-6", "res-7"
 
 	warmPoolResources = []string{res3, res4}
 	usedResources     = map[string]string{pod1: res1, pod2: res2}
@@ -185,6 +185,7 @@ func TestPool_UpdatePool_OperationCreate_Failed(t *testing.T) {
 	}, false)
 
 	assert.True(t, shouldReconcile)
+	assert.True(t, warmPool.reSyncRequired)
 }
 
 // TestPool_UpdatePool_OperationDelete tests that reconciler is not triggered again if delete operation succeeds
@@ -338,4 +339,94 @@ func TestPool_ReconcilePool_Delete(t *testing.T) {
 	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationDeleted,
 		Resources: []string{res6, res5}, ResourceCount: 2}, job)
 	assert.Equal(t, 2, warmPool.pendingDelete)
+}
+
+func TestPool_Reconcile_ReSync(t *testing.T) {
+	warmPool := getMockPool(poolConfig, usedResources, []string{}, 4)
+
+	warmPool.reSyncRequired = true
+	warmPool.nodeName = nodeName
+
+	job := warmPool.ReconcilePool()
+	assert.Equal(t, job, worker.NewWarmPoolReSyncJob(nodeName))
+
+	warmPool.pendingDelete = 1
+	job = warmPool.ReconcilePool()
+	assert.Equal(t, job, &worker.WarmPoolJob{
+		Operations: worker.OperationReconcileNotRequired,
+	})
+}
+
+func TestPool_ReSync(t *testing.T) {
+	warm := []string{res3, res4}
+	coolDown := []coolDownResource{{resourceID: res5}, {resourceID: res6}}
+
+	tests := []struct {
+		name string
+
+		shouldResync bool
+
+		warmPool      []string
+		coolDownQueue []coolDownResource
+
+		expectedWarmPool      []string
+		expectedCoolDownQueue []coolDownResource
+
+		upstreamResources []string
+	}{
+		{
+			name:                  "when re-sync flag is not set, don't sync",
+			shouldResync:          false,
+			warmPool:              warm,
+			coolDownQueue:         coolDown,
+			expectedWarmPool:      warm,
+			expectedCoolDownQueue: coolDown,
+		},
+		{
+			name:                  "when upstream and pool state match",
+			shouldResync:          true,
+			warmPool:              warm,
+			coolDownQueue:         coolDown,
+			expectedWarmPool:      warm,
+			expectedCoolDownQueue: coolDown,
+			upstreamResources:     []string{res1, res2, res3, res4, res5, res6},
+		},
+		{
+			name:                  "when upstream and pool are out of sync",
+			shouldResync:          true,
+			warmPool:              warm,
+			coolDownQueue:         coolDown,
+			expectedWarmPool:      []string{res3, res7},
+			expectedCoolDownQueue: []coolDownResource{{resourceID: res6}},
+			//Resource 4, 6 and got deleted from upstream and resource 7 added
+			upstreamResources: []string{res1, res2, res3, res6, res7},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			warmPool := getMockPool(poolConfig, usedResources, test.warmPool, 7)
+			warmPool.coolDownQueue = test.coolDownQueue
+			warmPool.reSyncRequired = test.shouldResync
+
+			warmPool.ReSync(test.upstreamResources)
+
+			assert.False(t, warmPool.reSyncRequired)
+			assert.Equal(t, warmPool.usedResources, usedResources)
+			assert.ElementsMatch(t, warmPool.warmResources, test.expectedWarmPool)
+			assert.ElementsMatch(t, warmPool.coolDownQueue, test.expectedCoolDownQueue)
+		})
+	}
+}
+
+func TestPool_GetAssignedResource(t *testing.T) {
+	warmPool := getMockPool(poolConfig, usedResources, nil, 7)
+
+	resID, found := warmPool.GetAssignedResource(pod1)
+	assert.True(t, found)
+	assert.Equal(t, resID, res1)
+
+	resID, found = warmPool.GetAssignedResource(pod3)
+	assert.False(t, found)
+	assert.Equal(t, resID, "")
 }

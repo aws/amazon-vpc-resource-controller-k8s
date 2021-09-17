@@ -88,12 +88,12 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 	assert.NoError(t, err)
 
 	fargatePodWithAnnotation := basePod.DeepCopy()
-	fargatePodWithAnnotation.Annotations[fargatePodSgAnnotKey] = "sg-123"
+	fargatePodWithAnnotation.Annotations[FargatePodSGAnnotationKey] = "sg-123"
 	fargatePodWithAnnotationRaw, err := json.Marshal(fargatePodWithAnnotation)
 	assert.NoError(t, err)
 
 	fargatePodWithDifferentAnnotation := basePod.DeepCopy()
-	fargatePodWithDifferentAnnotation.Annotations[fargatePodSgAnnotKey] = "sg-456"
+	fargatePodWithDifferentAnnotation.Annotations[FargatePodSGAnnotationKey] = "sg-456"
 	fargatePodWithDifferentAnnotationRaw, err := json.Marshal(fargatePodWithDifferentAnnotation)
 	assert.NoError(t, err)
 

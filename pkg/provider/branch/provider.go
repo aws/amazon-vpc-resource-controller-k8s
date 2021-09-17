@@ -372,7 +372,8 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	}
 
 	// Annotate the pod with the created resources
-	err = b.apiWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, config.ResourceNamePodENI, string(jsonBytes))
+	err = b.apiWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, pod.UID,
+		config.ResourceNamePodENI, string(jsonBytes))
 	if err != nil {
 		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
 		b.log.Info("pushed the ENIs to the delete queue as failed to annotate the pod", "ENI/s", branchENIs)

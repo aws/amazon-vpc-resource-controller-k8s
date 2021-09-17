@@ -77,6 +77,7 @@ AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity | jq .Account -r
 VPC_ID=$(aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION | jq -r '.cluster.resourcesVpcConfig.vpcId')
 KUBE_CONFIG_PATH=~/.kube/config
 CONTROLLER_LOG_FILE=/tmp/$CLUSTER_NAME.logs
+TEST_FAILED=false
 
 # If Role name is not provided, use the default role name
 if [[ -z "$VPC_RC_ROLE_ARN" ]]; then
@@ -129,26 +130,32 @@ function set_pod_eni_flag_on_ipamd() {
 }
 
 function run_inegration_test() {
-  echo "running Security Group for Pods integration tests"
-
   local additional_gingko_params=$1
 
+  # SGP Tests
   (cd test/integration/perpodsg && \
-  CGO_ENABLED=0 ginkgo $additional_gingko_params \
+  CGO_ENABLED=0 ginkgo "$additional_gingko_params" \
   -v -timeout 40m -- \
   -cluster-kubeconfig=$KUBE_CONFIG_PATH \
   -cluster-name=$CLUSTER_NAME \
   --aws-region=$AWS_REGION \
-  --aws-vpc-id $VPC_ID)
+  --aws-vpc-id $VPC_ID) || TEST_FAILED=true
 
-  (cd test/integration/webhook && \
-  CGO_ENABLED=0 ginkgo $additional_gingko_params -v -timeout 10m -- \
+  # Windows Test
+  (cd test/integration/windows && \
+  CGO_ENABLED=0 ginkgo "$additional_gingko_params" -v -timeout 40m -- \
   -cluster-kubeconfig=$KUBE_CONFIG_PATH \
   -cluster-name=$CLUSTER_NAME \
   --aws-region=$AWS_REGION \
-  --aws-vpc-id $VPC_ID)
+  --aws-vpc-id $VPC_ID) || TEST_FAILED=true
 
-  # Add Windows Tests once feature enabled
+  # SGP + Windows Webhook Test
+  (cd test/integration/webhook && \
+  CGO_ENABLED=0 ginkgo "$additional_gingko_params" -v -timeout 10m -- \
+  -cluster-kubeconfig=$KUBE_CONFIG_PATH \
+  -cluster-name=$CLUSTER_NAME \
+  --aws-region=$AWS_REGION \
+  --aws-vpc-id $VPC_ID) || TEST_FAILED=true
 }
 
 function verify_controller_has_lease() {
@@ -232,6 +239,10 @@ function redirect_vpc_controller_logs() {
 # Delete the IAM Policies, Roles and the EKS Cluster
 trap 'clean_up' EXIT
 
+# Cordon the Windows Nodes as cert manager and other future 3rd pary
+# dependency may not have nodeselectors to schedule pods on linux
+kubectl cordon -l kubernetes.io/os=windows
+
 # Install the stable version of VPC CNI
 sh "$SCRIPTS_DIR/install-vpc-cni.sh" "v1.7.10"
 
@@ -251,6 +262,10 @@ build_and_push_image
 
 # Install the CRD and the Controller on the Data Plane
 install_controller
+
+# Uncordon the Windows Node, all new deployment/pods fromt this
+# point must have nodeSelecotrs to be scheduled on the right OS
+kubectl uncordon -l kubernetes.io/os=windows
 
 # Start redirecting the logs to the log file which will be outputted at
 # when the script exits. This log should be run in background and exit
@@ -275,7 +290,9 @@ sleep 60
 # Run Ginko Test for Security Group for Pods and skip all the local tests as
 # they require restarts and it will lead to leader lease being switched and the
 # next validation step failing
-run_inegration_test "--skip=LOCAL"
+# TODO: Remove after the fix for issue is present in latest Windows AMI
+# https://github.com/kubernetes/kubernetes/issues/100384
+run_inegration_test "--skip=(LOCAL|windows service test)"
 
 # Verify the leader lease didn't transition during the execution of test cases
 verify_leader_lease_didnt_change
@@ -286,3 +303,8 @@ run_inegration_test "--focus=LOCAL"
 
 # Revert back to initial state after the test
 set_pod_eni_flag_on_ipamd "false"
+
+# If any of the test failed, exit with non zero exit code
+if [ $TEST_FAILED = true ]; then
+  exit 1
+fi

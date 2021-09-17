@@ -14,6 +14,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -39,16 +40,18 @@ type warmResourceHandler struct {
 	APIWrapper       api.Wrapper
 	resourceProvider provider.ResourceProvider
 	resourceName     string
+	ctx              context.Context
 }
 
 func NewWarmResourceHandler(log logr.Logger, wrapper api.Wrapper,
-	resourceName string, resourceProviders provider.ResourceProvider) Handler {
+	resourceName string, resourceProviders provider.ResourceProvider, ctx context.Context) Handler {
 
 	return &warmResourceHandler{
 		log:              log,
 		APIWrapper:       wrapper,
 		resourceProvider: resourceProviders,
 		resourceName:     resourceName,
+		ctx:              ctx,
 	}
 }
 
@@ -62,26 +65,47 @@ func (w *warmResourceHandler) HandleCreate(_ int, pod *v1.Pod) (ctrl.Result, err
 		return ctrl.Result{}, nil
 	}
 
+	log := w.log.WithValues("UID", string(pod.UID), "namespace",
+		pod.Namespace, "name", pod.Name)
+
 	resID, shouldReconcile, err := resourcePool.AssignResource(string(pod.UID))
 	if err != nil {
 		// Reconcile the pool before retrying or returning an error
 		w.reconcilePool(shouldReconcile, resourcePool)
-		if err == pool.ErrResourceAreBeingCooledDown {
+		switch err {
+		case pool.ErrResourceAreBeingCooledDown:
+			log.V(1).Info("resources are currently being cooled down, will retry")
 			w.APIWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocationFailed,
-				fmt.Sprintf("Resource %s are being cooled down, will retry in %s", w.resourceName,
-					RequeueAfterWhenResourceCooling), v1.EventTypeWarning)
+				fmt.Sprintf("Resource %s are being cooled down, will retry in %s",
+					w.resourceName, RequeueAfterWhenResourceCooling), v1.EventTypeWarning)
 			return ctrl.Result{Requeue: true, RequeueAfter: RequeueAfterWhenResourceCooling}, nil
-		} else if err == pool.ErrResourcesAreBeingCreated || err == pool.ErrWarmPoolEmpty {
+		case pool.ErrResourcesAreBeingCreated, pool.ErrWarmPoolEmpty:
+			log.V(1).Info("resources are currently being created or warm pool is empty, will retry")
 			w.APIWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocationFailed,
-				fmt.Sprintf("Warm pool for resource %s is currently empty, will retry in %s", w.resourceName,
-					RequeueAfterWhenWPEmpty), v1.EventTypeWarning)
+				fmt.Sprintf("Warm pool for resource %s is currently empty, will retry in %s",
+					w.resourceName, RequeueAfterWhenWPEmpty), v1.EventTypeWarning)
 			return ctrl.Result{Requeue: true, RequeueAfter: RequeueAfterWhenWPEmpty}, nil
-		} else {
+		case pool.ErrResourceAlreadyAssigned:
+			// The Pod may already have the request annotated, however the cache may not have
+			// may not reflect the change immediately.
+			pod, err := w.APIWrapper.PodAPI.GetPodFromAPIServer(w.ctx, pod.Namespace, pod.Name)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			resourceID, present := pod.Annotations[w.resourceName]
+			if present {
+				log.Info("cache had stale entry, pod already has resource",
+					"resource from annotation", resourceID,
+					"resource from data store", resID)
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, err
+		default:
 			return ctrl.Result{}, err
 		}
 	}
 
-	err = w.APIWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, w.resourceName, resID)
+	err = w.APIWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, pod.UID, w.resourceName, resID)
 	if err != nil {
 		_, errFree := resourcePool.FreeResource(string(pod.UID), resID)
 		if errFree != nil {
@@ -89,11 +113,10 @@ func (w *warmResourceHandler) HandleCreate(_ int, pod *v1.Pod) (ctrl.Result, err
 		}
 	}
 
-	w.APIWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocated, fmt.Sprintf("Allocated Resource %s: %s to the pod",
-		w.resourceName, resID), v1.EventTypeNormal)
+	w.APIWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocated,
+		fmt.Sprintf("Allocated Resource %s: %s to the pod", w.resourceName, resID), v1.EventTypeNormal)
 
-	w.log.Info("successfully allocated and annotated resource", "UID", string(pod.UID),
-		"namespace", pod.Namespace, "name", pod.Name, "resource id", w.resourceName)
+	log.Info("successfully allocated and annotated resource", "resource id", resID)
 
 	w.reconcilePool(shouldReconcile, resourcePool)
 
@@ -113,23 +136,41 @@ func (w *warmResourceHandler) reconcilePool(shouldReconcile bool, resourcePool p
 func (w *warmResourceHandler) HandleDelete(pod *v1.Pod) (ctrl.Result, error) {
 	resourcePool, err := w.getResourcePool(pod.Spec.NodeName)
 	if err != nil {
-		return ctrl.Result{}, err
-	}
-	resource, present := pod.Annotations[w.resourceName]
-	if !present {
-		// Resource was not allocated to the pod
+		w.log.Error(err, "failed to find resource pool for node",
+			"node", pod.Spec.NodeName)
 		return ctrl.Result{}, nil
 	}
-	shouldReconcile, err := resourcePool.FreeResource(string(pod.UID), resource)
+	resourceID, present := pod.Annotations[w.resourceName]
+	if !present {
+		// When a Pod with TerminationGracePeriodSeconds set to 0 is created and
+		// deleted immediately, the delete event doesnt' contain the resource
+		// annotation, in such cases, query the data store to get the assigned resource
+		resourceID, present = resourcePool.GetAssignedResource(string(pod.UID))
+		if !present {
+			return ctrl.Result{}, nil
+		}
+		w.log.Info("resource ID was not found in annotation, fetched from pool",
+			"resource from data store", resourceID)
+	}
+	log := w.log.WithValues("UID", string(pod.UID), "namespace", pod.Namespace,
+		"name", pod.Name, "resource id", resourceID)
+
+	// Handle Delete can be invoked multiple times for same object. For instance
+	// Once a Pod has Succeeded/Failed and once the object is actually deleted
+	shouldReconcile, err := resourcePool.FreeResource(string(pod.UID), resourceID)
 	if err != nil {
-		w.log.Error(err, "failed to free resource")
-		return ctrl.Result{}, err
+		if pod.Status.Phase == v1.PodSucceeded || pod.Status.Phase == v1.PodFailed {
+			log.V(1).Info("failed to free resource, resource likely freed when pod succeed/failed")
+			return ctrl.Result{}, nil
+		}
+		// Only Log the error, since this error is not retryable
+		log.Error(err, "failed to free resource")
+		return ctrl.Result{}, nil
 	}
 
 	w.reconcilePool(shouldReconcile, resourcePool)
 
-	w.log.Info("successfully freed resource", "UID", string(pod.UID), "namespace", pod.Namespace,
-		"name", pod.Name, "resource id", w.resourceName)
+	log.Info("successfully freed resource")
 
 	return ctrl.Result{}, nil
 }

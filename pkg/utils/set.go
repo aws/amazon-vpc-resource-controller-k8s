@@ -13,13 +13,25 @@
 
 package utils
 
-import "time"
+// Difference returns a-b, elements present in a and not in b
+func Difference(a, b []string) (diff []string) {
+	m := make(map[string]struct{})
 
-const (
-	PollIntervalShort  = 2 * time.Second
-	PollIntervalMedium = 10 * time.Second
+	for _, item := range b {
+		m[item] = struct{}{}
+	}
+	for _, item := range a {
+		if _, ok := m[item]; !ok {
+			diff = append(diff, item)
+		}
+	}
+	return
+}
 
-	// ResourceCreationTimeout is the number of seconds till the controller waits
-	// for the resource creation to complete
-	ResourceCreationTimeout = 120 * time.Second
-)
+func GetKeyValSlice(m map[string]string) (key []string, val []string) {
+	for k, v := range m {
+		key = append(key, k)
+		val = append(val, v)
+	}
+	return
+}

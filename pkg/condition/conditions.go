@@ -53,7 +53,8 @@ func (c *condition) WaitTillPodDataStoreSynced() {
 
 // TODO: Add implementation later
 func (c *condition) IsWindowsIPAMEnabled() bool {
-	panic("implement me")
+	// TODO: Switch using ConfigMap
+	return true
 }
 
 // TODO: Add implementation later
