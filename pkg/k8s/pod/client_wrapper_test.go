@@ -153,7 +153,6 @@ func TestPodAPI_ListPods(t *testing.T) {
 	assert.ElementsMatch(t, podList.Items, []v1.Pod{*runningPod, *completedPod, *failedPod})
 }
 
-// TestPodAPI_AnnotatePod tests that annotate pod doesn't throw error on adding a new annotation to pod
 func TestPodAPI_AnnotatePod_UID_Changed(t *testing.T) {
 	podAPI, _ := getMockPodAPIWithClient()
 
@@ -163,6 +162,7 @@ func TestPodAPI_AnnotatePod_UID_Changed(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestPodAPI_AnnotatePod tests that annotate pod doesn't throw error on adding a new annotation to pod
 func TestPodAPI_AnnotatePod(t *testing.T) {
 	podAPI, k8sClient := getMockPodAPIWithClient()
 

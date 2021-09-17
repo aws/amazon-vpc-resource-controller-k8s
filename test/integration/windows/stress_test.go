@@ -15,15 +15,17 @@ package windows_test
 
 import (
 	"fmt"
+
 	"math/rand"
 	"strconv"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
+	testUtils "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/google/uuid"
@@ -128,7 +130,7 @@ var _ = Describe("Windows Integration Stress Tests", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		serverPod, err = frameWork.PodManager.
-			CreateAndWaitTillPodIsRunning(ctx, serverPod, utils.ResourceCreationTimeout)
+			CreateAndWaitTillPodIsRunning(ctx, serverPod, testUtils.ResourceCreationTimeout)
 		Expect(err).ToNot(HaveOccurred())
 
 		clientContainer := manifest.NewWindowsContainerBuilder().

@@ -290,8 +290,7 @@ func main() {
 	webhookServer := mgr.GetWebhookServer()
 
 	setupLog.Info("registering webhooks to the webhook server")
-	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{Handler: &webhookcore.PodResourceInjector{
-		Client: mgr.GetClient(),
+	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{Handler: &webhookcore.PodMutationWebHook{
 		SGPAPI: sgpAPI,
 		Log:    ctrl.Log.WithName("webhook").WithName("Pod Mutating"),
 	}})

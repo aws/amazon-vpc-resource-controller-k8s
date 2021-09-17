@@ -203,7 +203,7 @@ func (p *ipv4Provider) CreatePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 func (p *ipv4Provider) ReSyncPool(job *worker.WarmPoolJob) {
 	providerAndPool, found := p.instanceProviderAndPool[job.NodeName]
 	if !found {
-		p.log.Error(fmt.Errorf("instnace provider not found"), "node is not initialized",
+		p.log.Error(fmt.Errorf("instance provider not found"), "node is not initialized",
 			"name", job.NodeName)
 		return
 	}
