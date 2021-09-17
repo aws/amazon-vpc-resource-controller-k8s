@@ -15,6 +15,7 @@ package ip
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
@@ -24,6 +25,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/golang/mock/gomock"
@@ -332,6 +334,27 @@ func TestIpv4Provider_GetPool(t *testing.T) {
 	pool, found := ipv4Provider.GetPool(nodeName)
 	assert.True(t, found)
 	assert.Equal(t, mockPool, pool)
+}
+
+func TestIpv4Provider_Introspect(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ipv4Provider := getMockIpProvider()
+	mockPool := mock_pool.NewMockPool(ctrl)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, nil)
+	expectedResp := pool.IntrospectResponse{}
+
+	mockPool.EXPECT().Introspect().Return(expectedResp)
+	resp := ipv4Provider.Introspect()
+	assert.True(t, reflect.DeepEqual(resp, map[string]pool.IntrospectResponse{nodeName: expectedResp}))
+
+	mockPool.EXPECT().Introspect().Return(expectedResp)
+	resp = ipv4Provider.IntrospectNode(nodeName)
+	assert.Equal(t, resp, expectedResp)
+
+	resp = ipv4Provider.IntrospectNode("unregistered-node")
+	assert.Equal(t, resp, struct{}{})
 }
 
 func getMockIpProvider() ipv4Provider {

@@ -20,8 +20,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
-
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
@@ -40,19 +38,20 @@ func NewMock(controller *gomock.Controller) Mock {
 
 func Test_NewResourceManager(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	mock := NewMock(ctrl)
+	defer ctrl.Finish()
 
+	mock := NewMock(ctrl)
 	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
 
 	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper)
 	assert.NoError(t, err)
 
-	podENIHandler, ok := manger.GetResourceHandler(config.ResourceNamePodENI)
+	_, ok := manger.GetResourceHandler(config.ResourceNamePodENI)
 	assert.True(t, ok)
 
-	ipAddressHandler, ok := manger.GetResourceHandler(config.ResourceNameIPAddress)
+	_, ok = manger.GetResourceHandler(config.ResourceNameIPAddress)
 	assert.True(t, ok)
 
-	handlers := manger.GetResourceHandlers()
-	assert.ElementsMatch(t, handlers, []handler.Handler{podENIHandler, ipAddressHandler})
+	providers := manger.GetResourceProviders()
+	assert.Equal(t, len(providers), 2)
 }

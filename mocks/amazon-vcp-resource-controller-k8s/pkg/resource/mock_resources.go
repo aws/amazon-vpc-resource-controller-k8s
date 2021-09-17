@@ -62,25 +62,11 @@ func (mr *MockResourceManagerMockRecorder) GetResourceHandler(arg0 interface{}) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetResourceHandler", reflect.TypeOf((*MockResourceManager)(nil).GetResourceHandler), arg0)
 }
 
-// GetResourceHandlers mocks base method
-func (m *MockResourceManager) GetResourceHandlers() []handler.Handler {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetResourceHandlers")
-	ret0, _ := ret[0].([]handler.Handler)
-	return ret0
-}
-
-// GetResourceHandlers indicates an expected call of GetResourceHandlers
-func (mr *MockResourceManagerMockRecorder) GetResourceHandlers() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetResourceHandlers", reflect.TypeOf((*MockResourceManager)(nil).GetResourceHandlers))
-}
-
 // GetResourceProviders mocks base method
-func (m *MockResourceManager) GetResourceProviders() []provider.ResourceProvider {
+func (m *MockResourceManager) GetResourceProviders() map[string]provider.ResourceProvider {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetResourceProviders")
-	ret0, _ := ret[0].([]provider.ResourceProvider)
+	ret0, _ := ret[0].(map[string]provider.ResourceProvider)
 	return ret0
 }
 

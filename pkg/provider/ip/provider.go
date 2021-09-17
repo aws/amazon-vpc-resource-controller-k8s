@@ -322,3 +322,25 @@ func (p *ipv4Provider) IsInstanceSupported(instance ec2.EC2Instance) bool {
 	}
 	return false
 }
+
+func (p *ipv4Provider) Introspect() interface{} {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	response := make(map[string]pool.IntrospectResponse)
+	for nodeName, resource := range p.instanceProviderAndPool {
+		response[nodeName] = resource.resourcePool.Introspect()
+	}
+	return response
+}
+
+func (p *ipv4Provider) IntrospectNode(nodeName string) interface{} {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	resource, found := p.instanceProviderAndPool[nodeName]
+	if !found {
+		return struct{}{}
+	}
+	return resource.resourcePool.Introspect()
+}

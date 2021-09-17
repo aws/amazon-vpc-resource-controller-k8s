@@ -18,6 +18,7 @@
 package mock_pool
 
 import (
+	pool "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	worker "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
@@ -90,6 +91,20 @@ func (m *MockPool) GetAssignedResource(arg0 string) (string, bool) {
 func (mr *MockPoolMockRecorder) GetAssignedResource(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAssignedResource", reflect.TypeOf((*MockPool)(nil).GetAssignedResource), arg0)
+}
+
+// Introspect mocks base method
+func (m *MockPool) Introspect() pool.IntrospectResponse {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Introspect")
+	ret0, _ := ret[0].(pool.IntrospectResponse)
+	return ret0
+}
+
+// Introspect indicates an expected call of Introspect
+func (mr *MockPoolMockRecorder) Introspect() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockPool)(nil).Introspect))
 }
 
 // ProcessCoolDownQueue mocks base method
