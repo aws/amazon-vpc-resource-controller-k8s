@@ -14,6 +14,7 @@
 package pool
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -115,7 +116,7 @@ func TestPool_AssignResource_WarmPoolEmpty(t *testing.T) {
 // TestPool_AssignResource_CoolDown tests error is returned if the resource are being cooled down
 func TestPool_AssignResource_CoolDown(t *testing.T) {
 	warmPool := getMockPool(poolConfig, usedResources, []string{}, 3)
-	warmPool.coolDownQueue = append(warmPool.coolDownQueue, coolDownResource{resourceID: res3})
+	warmPool.coolDownQueue = append(warmPool.coolDownQueue, CoolDownResource{ResourceID: res3})
 
 	_, shouldReconcile, err := warmPool.AssignResource(pod3)
 
@@ -133,7 +134,7 @@ func TestPool_FreeResource(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, shouldReconcile)
 	assert.False(t, present)
-	assert.Equal(t, res2, warmPool.coolDownQueue[0].resourceID)
+	assert.Equal(t, res2, warmPool.coolDownQueue[0].ResourceID)
 }
 
 // TestPool_FreeResource_isNotAssigned test error is returned if trying to free a resource that doesn't belong to any
@@ -222,10 +223,10 @@ func TestPool_UpdatePool_OperationDelete_Failed(t *testing.T) {
 // TestPool_ProcessCoolDownQueue tests that item are added back to the warm pool once they have cooled down
 func TestPool_ProcessCoolDownQueue(t *testing.T) {
 	warmPool := getMockPool(poolConfig, usedResources, []string{}, 3)
-	warmPool.coolDownQueue = []coolDownResource{
-		{resourceID: res3, deletionTimestamp: time.Now().Add(-time.Second * 33)},
-		{resourceID: res4, deletionTimestamp: time.Now().Add(-time.Second * 32)},
-		{resourceID: res5, deletionTimestamp: time.Now().Add(-time.Second * 10)},
+	warmPool.coolDownQueue = []CoolDownResource{
+		{ResourceID: res3, DeletionTimestamp: time.Now().Add(-time.Second * 33)},
+		{ResourceID: res4, DeletionTimestamp: time.Now().Add(-time.Second * 32)},
+		{ResourceID: res5, DeletionTimestamp: time.Now().Add(-time.Second * 10)},
 	}
 
 	needFurtherProcessing := warmPool.ProcessCoolDownQueue()
@@ -235,7 +236,7 @@ func TestPool_ProcessCoolDownQueue(t *testing.T) {
 	// Assert resources are added back to the warm pool
 	assert.Equal(t, []string{res3, res4}, warmPool.warmResources)
 	// Assert resource that is not cooled down is still in the queue
-	assert.Equal(t, res5, warmPool.coolDownQueue[0].resourceID)
+	assert.Equal(t, res5, warmPool.coolDownQueue[0].ResourceID)
 }
 
 // TestPool_ProcessCoolDownQueue_NoFurtherProcessingRequired tests that if all the items of the cool down queue are
@@ -243,8 +244,8 @@ func TestPool_ProcessCoolDownQueue(t *testing.T) {
 func TestPool_ProcessCoolDownQueue_NoFurtherProcessingRequired(t *testing.T) {
 	warmPool := getMockPool(poolConfig, usedResources, []string{}, 3)
 
-	warmPool.coolDownQueue = []coolDownResource{
-		{resourceID: res3, deletionTimestamp: time.Now().Add(-time.Second * 33)}}
+	warmPool.coolDownQueue = []CoolDownResource{
+		{ResourceID: res3, DeletionTimestamp: time.Now().Add(-time.Second * 33)}}
 
 	needFurtherProcessing := warmPool.ProcessCoolDownQueue()
 
@@ -268,7 +269,7 @@ func TestPool_ReconcilePool_MaxCapacity(t *testing.T) {
 	warmPool.pendingCreate = 1
 	warmPool.pendingDelete = 1
 
-	warmPool.coolDownQueue = append(warmPool.coolDownQueue, coolDownResource{resourceID: res4})
+	warmPool.coolDownQueue = append(warmPool.coolDownQueue, CoolDownResource{ResourceID: res4})
 
 	// used = 2, warm = 1, total pending = 2, cool down queue = 1, total = 6 & capacity = 6 => At max capacity
 	job := warmPool.ReconcilePool()
@@ -359,7 +360,7 @@ func TestPool_Reconcile_ReSync(t *testing.T) {
 
 func TestPool_ReSync(t *testing.T) {
 	warm := []string{res3, res4}
-	coolDown := []coolDownResource{{resourceID: res5}, {resourceID: res6}}
+	coolDown := []CoolDownResource{{ResourceID: res5}, {ResourceID: res6}}
 
 	tests := []struct {
 		name string
@@ -367,10 +368,10 @@ func TestPool_ReSync(t *testing.T) {
 		shouldResync bool
 
 		warmPool      []string
-		coolDownQueue []coolDownResource
+		coolDownQueue []CoolDownResource
 
 		expectedWarmPool      []string
-		expectedCoolDownQueue []coolDownResource
+		expectedCoolDownQueue []CoolDownResource
 
 		upstreamResources []string
 	}{
@@ -397,7 +398,7 @@ func TestPool_ReSync(t *testing.T) {
 			warmPool:              warm,
 			coolDownQueue:         coolDown,
 			expectedWarmPool:      []string{res3, res7},
-			expectedCoolDownQueue: []coolDownResource{{resourceID: res6}},
+			expectedCoolDownQueue: []CoolDownResource{{ResourceID: res6}},
 			//Resource 4, 6 and got deleted from upstream and resource 7 added
 			upstreamResources: []string{res1, res2, res3, res6, res7},
 		},
@@ -429,4 +430,18 @@ func TestPool_GetAssignedResource(t *testing.T) {
 	resID, found = warmPool.GetAssignedResource(pod3)
 	assert.False(t, found)
 	assert.Equal(t, resID, "")
+}
+
+func TestPool_Introspect(t *testing.T) {
+	coolingResources := []CoolDownResource{{
+		ResourceID: res6,
+	}}
+	warmPool := getMockPool(poolConfig, usedResources, warmPoolResources, 7)
+	warmPool.coolDownQueue = coolingResources
+
+	resp := warmPool.Introspect()
+
+	assert.True(t, reflect.DeepEqual(warmPool.usedResources, resp.UsedResources))
+	assert.ElementsMatch(t, warmPool.warmResources, resp.WarmResources)
+	assert.ElementsMatch(t, warmPool.coolDownQueue, resp.CoolingResources)
 }

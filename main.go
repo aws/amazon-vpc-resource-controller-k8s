@@ -84,6 +84,7 @@ func main() {
 	var leaderLeaseRenewDeadline int
 	var leaderLeaseRetryPeriod int
 	var outputPath string
+	var introspectBindAddr string
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080",
 		"The address the metric endpoint binds to.")
@@ -111,6 +112,8 @@ func main() {
 	flag.IntVar(&listPageLimit, "page-limit", 100,
 		"The page size limiting the number of response for list operation to API Server")
 	flag.StringVar(&outputPath, "log-file", "stderr", "The path to redirect controller logs")
+	flag.StringVar(&introspectBindAddr, "introspect-bind-addr", ":22775",
+		"Port for serving the introspection API")
 
 	flag.Parse()
 
@@ -282,6 +285,15 @@ func main() {
 		Conditions: controllerConditions,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
+		os.Exit(1)
+	}
+
+	if err = (&resource.IntrospectHandler{
+		Log:             ctrl.Log.WithName("introspect"),
+		BindAddress:     introspectBindAddr,
+		ResourceManager: resourceManager,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create introspect API")
 		os.Exit(1)
 	}
 

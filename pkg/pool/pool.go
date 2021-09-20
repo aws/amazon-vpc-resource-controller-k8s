@@ -43,6 +43,7 @@ type Pool interface {
 	ReSync(resources []string)
 	ReconcilePool() *worker.WarmPoolJob
 	ProcessCoolDownQueue() bool
+	Introspect() IntrospectResponse
 }
 
 type pool struct {
@@ -53,13 +54,13 @@ type pool struct {
 	// warmPoolConfig is the configuration for the given pool
 	warmPoolConfig *config.WarmPoolConfig
 	// lock to concurrently make modification to the poll resources
-	lock sync.Mutex // following resources are guarded by the lock
+	lock sync.RWMutex // following resources are guarded by the lock
 	// usedResources is the key value pair of the owner id to the resource id
 	usedResources map[string]string
 	// warmResources is the list of free resources available to be allocated to the pods
 	warmResources []string
 	// coolDownQueue is the resources that sit in the queue for the cool down period
-	coolDownQueue []coolDownResource
+	coolDownQueue []CoolDownResource
 	// pendingCreate represents the number of resources being created asynchronously
 	pendingCreate int
 	// pendingDelete represents the number of resources being deleted asynchronously
@@ -71,11 +72,18 @@ type pool struct {
 	reSyncRequired bool
 }
 
-type coolDownResource struct {
-	// resourceID is the unique ID of the resource
-	resourceID string
-	// deletionTimestamp is the time when the owner of the resource was deleted
-	deletionTimestamp time.Time
+type CoolDownResource struct {
+	// ResourceID is the unique ID of the resource
+	ResourceID string
+	// DeletionTimestamp is the time when the owner of the resource was deleted
+	DeletionTimestamp time.Time
+}
+
+// IntrospectResponse is the pool state returned to the introspect API
+type IntrospectResponse struct {
+	UsedResources    map[string]string
+	WarmResources    []string
+	CoolingResources []CoolDownResource
 }
 
 func NewResourcePool(log logr.Logger, poolConfig *config.WarmPoolConfig, usedResources map[string]string,
@@ -110,7 +118,7 @@ func (p *pool) ReSync(upstreamResource []string) {
 	// Get the list of local resources
 	var localResources []string
 	for _, resource := range p.coolDownQueue {
-		localResources = append(localResources, resource.resourceID)
+		localResources = append(localResources, resource.ResourceID)
 	}
 	_, usedResources := utils.GetKeyValSlice(p.usedResources)
 	localResources = append(localResources, usedResources...)
@@ -144,7 +152,7 @@ func (p *pool) ReSync(upstreamResource []string) {
 				}
 			}
 			for i := len(p.coolDownQueue) - 1; i >= 0; i-- {
-				if p.coolDownQueue[i].resourceID == deletedResource {
+				if p.coolDownQueue[i].ResourceID == deletedResource {
 					p.log.Info("removing resource from cool down queue",
 						"resource id", deletedResource)
 					p.coolDownQueue = append(p.coolDownQueue[:i], p.coolDownQueue[i+1:]...)
@@ -221,9 +229,9 @@ func (p *pool) FreeResource(requesterID string, resourceID string) (shouldReconc
 	delete(p.usedResources, requesterID)
 
 	// Put the resource in cool down queue
-	resource := coolDownResource{
-		resourceID:        actualResourceID,
-		deletionTimestamp: time.Now(),
+	resource := CoolDownResource{
+		ResourceID:        actualResourceID,
+		DeletionTimestamp: time.Now(),
 	}
 	p.coolDownQueue = append(p.coolDownQueue, resource)
 
@@ -277,11 +285,11 @@ func (p *pool) ProcessCoolDownQueue() (needFurtherProcessing bool) {
 	}
 
 	for index, resource := range p.coolDownQueue {
-		if time.Since(resource.deletionTimestamp) >= config.CoolDownPeriod {
+		if time.Since(resource.DeletionTimestamp) >= config.CoolDownPeriod {
 			// Add back to the cool down queue
-			p.warmResources = append(p.warmResources, resource.resourceID)
+			p.warmResources = append(p.warmResources, resource.ResourceID)
 			p.log.Info("moving the resource from delete to cool down queue",
-				"resource id", resource.resourceID, "deletion time", resource.deletionTimestamp)
+				"resource id", resource.ResourceID, "deletion time", resource.DeletionTimestamp)
 		} else {
 			// Remove the items from cool down queue that are processed and return
 			p.coolDownQueue = p.coolDownQueue[index:]
@@ -376,4 +384,20 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 	log.V(1).Info("no need for reconciliation")
 
 	return &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}
+}
+
+func (p *pool) Introspect() IntrospectResponse {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	usedResources := make(map[string]string)
+	for k, v := range p.usedResources {
+		usedResources[k] = v
+	}
+
+	return IntrospectResponse{
+		UsedResources:    usedResources,
+		WarmResources:    p.warmResources,
+		CoolingResources: p.coolDownQueue,
+	}
 }

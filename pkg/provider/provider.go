@@ -35,4 +35,8 @@ type ResourceProvider interface {
 	GetPool(nodeName string) (pool.Pool, bool)
 	// IsInstanceSupported returns true if an instance type is supported by the provider
 	IsInstanceSupported(instance ec2.EC2Instance) bool
+	// Introspect allows introspection of all nodes for the given resource
+	Introspect() interface{}
+	// IntrospectNode allows introspection of a node for the given resource
+	IntrospectNode(node string) interface{}
 }

@@ -101,6 +101,20 @@ func (mr *MockTrunkENIMockRecorder) InitTrunk(arg0, arg1 interface{}) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitTrunk", reflect.TypeOf((*MockTrunkENI)(nil).InitTrunk), arg0, arg1)
 }
 
+// Introspect mocks base method
+func (m *MockTrunkENI) Introspect() trunk.IntrospectResponse {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Introspect")
+	ret0, _ := ret[0].(trunk.IntrospectResponse)
+	return ret0
+}
+
+// Introspect indicates an expected call of Introspect
+func (mr *MockTrunkENIMockRecorder) Introspect() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockTrunkENI)(nil).Introspect))
+}
+
 // PushBranchENIsToCoolDownQueue mocks base method
 func (m *MockTrunkENI) PushBranchENIsToCoolDownQueue(arg0 string) {
 	m.ctrl.T.Helper()

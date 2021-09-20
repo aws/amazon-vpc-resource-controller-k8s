@@ -847,3 +847,20 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 	assert.Error(t, MockError, err)
 	assert.Equal(t, []*ENIDetails{EniDetails1}, trunkENI.deleteQueue)
 }
+
+func TestTrunkENI_Introspect(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	trunkENI.uidToBranchENIMap[PodUID] = branchENIs1
+
+	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	response := trunkENI.Introspect()
+	assert.Equal(t, response, IntrospectResponse{
+		TrunkENIID:     trunkId,
+		InstanceID:     InstanceId,
+		PodToBranchENI: map[string][]ENIDetails{PodUID: {*EniDetails1}}},
+	)
+}

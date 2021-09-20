@@ -29,23 +29,24 @@ import (
 )
 
 type Manager struct {
-	handlers  map[string]handler.Handler
-	providers []provider.ResourceProvider
+	resource map[string]Resource
+}
+
+type Resource struct {
+	handler.Handler
+	provider.ResourceProvider
 }
 
 type ResourceManager interface {
-	GetResourceHandlers() []handler.Handler
-	GetResourceProviders() []provider.ResourceProvider
+	GetResourceProviders() map[string]provider.ResourceProvider
 	GetResourceHandler(resourceName string) (handler.Handler, bool)
 }
 
 func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api.Wrapper) (ResourceManager, error) {
 	// Load that static configuration of the resource
 	resourceConfig := config.LoadResourceConfig()
-	// Resource Handler supported by the controller
-	resourceHandlers := make(map[string]handler.Handler)
 
-	var resourceProviders []provider.ResourceProvider
+	resources := make(map[string]Resource)
 
 	// For each supported resource, initialize the resource provider and handler
 	for _, resourceName := range resourceNames {
@@ -86,32 +87,32 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 			return nil, fmt.Errorf("unable to start the workers for resource %s", resourceName)
 		}
 
-		resourceHandlers[resourceName] = resourceHandler
-		resourceProviders = append(resourceProviders, resourceProvider)
+		resources[resourceName] = Resource{
+			Handler:          resourceHandler,
+			ResourceProvider: resourceProvider,
+		}
 
 		ctrl.Log.Info("successfully initialized resource handler and provider",
 			"resource name", resourceName)
 	}
 
 	return &Manager{
-		handlers:  resourceHandlers,
-		providers: resourceProviders,
+		resource: resources,
 	}, nil
 }
 
-func (m *Manager) GetResourceHandlers() []handler.Handler {
-	var handlers []handler.Handler
-	for _, handler := range m.handlers {
-		handlers = append(handlers, handler)
+func (m *Manager) GetResourceProviders() map[string]provider.ResourceProvider {
+	providers := make(map[string]provider.ResourceProvider)
+	for resourceName, provider := range m.resource {
+		providers[resourceName] = provider
 	}
-	return handlers
-}
-
-func (m *Manager) GetResourceProviders() []provider.ResourceProvider {
-	return m.providers
+	return providers
 }
 
 func (m *Manager) GetResourceHandler(resourceName string) (handler.Handler, bool) {
-	handler, found := m.handlers[resourceName]
-	return handler, found
+	resource, found := m.resource[resourceName]
+	if !found {
+		return nil, found
+	}
+	return resource.Handler, found
 }

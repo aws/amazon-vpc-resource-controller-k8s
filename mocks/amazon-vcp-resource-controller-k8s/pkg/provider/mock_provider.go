@@ -91,6 +91,34 @@ func (mr *MockResourceProviderMockRecorder) InitResource(arg0 interface{}) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitResource", reflect.TypeOf((*MockResourceProvider)(nil).InitResource), arg0)
 }
 
+// Introspect mocks base method
+func (m *MockResourceProvider) Introspect() interface{} {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Introspect")
+	ret0, _ := ret[0].(interface{})
+	return ret0
+}
+
+// Introspect indicates an expected call of Introspect
+func (mr *MockResourceProviderMockRecorder) Introspect() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockResourceProvider)(nil).Introspect))
+}
+
+// IntrospectNode mocks base method
+func (m *MockResourceProvider) IntrospectNode(arg0 string) interface{} {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IntrospectNode", arg0)
+	ret0, _ := ret[0].(interface{})
+	return ret0
+}
+
+// IntrospectNode indicates an expected call of IntrospectNode
+func (mr *MockResourceProviderMockRecorder) IntrospectNode(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IntrospectNode", reflect.TypeOf((*MockResourceProvider)(nil).IntrospectNode), arg0)
+}
+
 // IsInstanceSupported mocks base method
 func (m *MockResourceProvider) IsInstanceSupported(arg0 ec2.EC2Instance) bool {
 	m.ctrl.T.Helper()

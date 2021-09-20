@@ -470,3 +470,27 @@ func (b *branchENIProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
 	}
 	return false
 }
+
+func (b *branchENIProvider) Introspect() interface{} {
+	b.lock.RLock()
+	defer b.lock.RUnlock()
+
+	allResponse := make(map[string]trunk.IntrospectResponse)
+
+	for nodeName, trunkENI := range b.trunkENICache {
+		response := trunkENI.Introspect()
+		allResponse[nodeName] = response
+	}
+	return allResponse
+}
+
+func (b *branchENIProvider) IntrospectNode(nodeName string) interface{} {
+	b.lock.RLock()
+	defer b.lock.RUnlock()
+
+	trunkENI, found := b.trunkENICache[nodeName]
+	if !found {
+		return struct{}{}
+	}
+	return trunkENI.Introspect()
+}

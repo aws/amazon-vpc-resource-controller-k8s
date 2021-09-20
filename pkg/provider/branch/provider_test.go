@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
@@ -509,4 +510,27 @@ func TestBranchENIProvider_ProcessDeleteQueue(t *testing.T) {
 	result, err := provider.ProcessDeleteQueue(NodeName)
 	assert.NoError(t, err)
 	assert.Equal(t, deleteQueueRequeueRequest, result)
+}
+
+func TestBranchENIProvider_Introspect(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+	fakeTrunk1 := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk1
+
+	expectedResponse := trunk.IntrospectResponse{}
+
+	fakeTrunk1.EXPECT().Introspect().Return(expectedResponse)
+	resp := provider.Introspect()
+	assert.True(t, reflect.DeepEqual(resp,
+		map[string]trunk.IntrospectResponse{NodeName: expectedResponse}))
+
+	fakeTrunk1.EXPECT().Introspect().Return(expectedResponse)
+	resp = provider.IntrospectNode(NodeName)
+	assert.Equal(t, resp, expectedResponse)
+
+	resp = provider.IntrospectNode("unregistered-node")
+	assert.Equal(t, resp, struct{}{})
 }

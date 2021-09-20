@@ -80,6 +80,8 @@ type TrunkENI interface {
 	PushENIsToFrontOfDeleteQueue(*v1.Pod, []*ENIDetails)
 	// DeleteAllBranchENIs deletes all the branch ENI associated with the trunk and also clears the cool down queue
 	DeleteAllBranchENIs()
+	// Introspect returns the state of the Trunk ENI
+	Introspect() IntrospectResponse
 }
 
 // trunkENI is the first trunk network interface of an instance
@@ -119,6 +121,13 @@ type ENIDetails struct {
 	deletionTimeStamp time.Time
 	// deleteRetryCount is the
 	deleteRetryCount int
+}
+
+type IntrospectResponse struct {
+	TrunkENIID     string
+	InstanceID     string
+	PodToBranchENI map[string][]ENIDetails
+	DeleteQueue    []ENIDetails
 }
 
 // NewTrunkENI returns a new Trunk ENI interface.
@@ -631,4 +640,26 @@ func (t *trunkENI) canCreateMore() bool {
 		return true
 	}
 	return false
+}
+
+func (t *trunkENI) Introspect() IntrospectResponse {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	response := IntrospectResponse{
+		TrunkENIID:     t.trunkENIId,
+		InstanceID:     t.instance.InstanceID(),
+		PodToBranchENI: make(map[string][]ENIDetails),
+	}
+	for uid, allENI := range t.uidToBranchENIMap {
+		var eniDetails []ENIDetails
+		for _, eni := range allENI {
+			eniDetails = append(eniDetails, *eni)
+		}
+		response.PodToBranchENI[uid] = eniDetails
+	}
+	for _, eni := range t.deleteQueue {
+		response.DeleteQueue = append(response.DeleteQueue, *eni)
+	}
+	return response
 }
