@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
@@ -45,7 +46,8 @@ var (
 )
 
 type Mock struct {
-	SGPMock *mock_utils.MockSecurityGroupForPodsAPI
+	SGPMock       *mock_utils.MockSecurityGroupForPodsAPI
+	ConditionMock *mock_condition.MockConditions
 }
 
 func TestPodMutationWebHook_Handle(t *testing.T) {
@@ -418,6 +420,9 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 					PatchType: &jsonPatchType,
 				},
 			},
+			mockInvocation: func(mock Mock) {
+				mock.ConditionMock.EXPECT().IsWindowsIPAMEnabled().Return(true)
+			},
 		},
 		{
 			name: "[Windows] with beta label, should be allowed",
@@ -446,6 +451,9 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 					Allowed:   true,
 					PatchType: &jsonPatchType,
 				},
+			},
+			mockInvocation: func(mock Mock) {
+				mock.ConditionMock.EXPECT().IsWindowsIPAMEnabled().Return(true)
 			},
 		},
 		{
@@ -476,6 +484,28 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 					PatchType: &jsonPatchType,
 				},
 			},
+			mockInvocation: func(mock Mock) {
+				mock.ConditionMock.EXPECT().IsWindowsIPAMEnabled().Return(true)
+			},
+		},
+		{
+			name: "[Windows] when feature is disabled, there should be no ops",
+			req: admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw:    windowsNoLimitsRaw,
+						Object: windowsNoLimits,
+					},
+				},
+			},
+			want: admission.Response{
+				AdmissionResponse: admissionv1.AdmissionResponse{
+					Allowed: true,
+				},
+			},
+			mockInvocation: func(mock Mock) {
+				mock.ConditionMock.EXPECT().IsWindowsIPAMEnabled().Return(false)
+			},
 		},
 	}
 
@@ -486,12 +516,14 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 
 			ctx := context.TODO()
 			mock := Mock{
-				SGPMock: mock_utils.NewMockSecurityGroupForPodsAPI(ctrl),
+				SGPMock:       mock_utils.NewMockSecurityGroupForPodsAPI(ctrl),
+				ConditionMock: mock_condition.NewMockConditions(ctrl),
 			}
 			h := &PodMutationWebHook{
-				decoder: decoder,
-				Log:     zap.New(),
-				SGPAPI:  mock.SGPMock,
+				decoder:   decoder,
+				Log:       zap.New(),
+				SGPAPI:    mock.SGPMock,
+				Condition: mock.ConditionMock,
 			}
 
 			if tt.mockInvocation != nil {

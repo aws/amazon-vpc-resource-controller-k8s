@@ -302,15 +302,19 @@ func main() {
 	webhookServer := mgr.GetWebhookServer()
 
 	setupLog.Info("registering webhooks to the webhook server")
-	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{Handler: &webhookcore.PodMutationWebHook{
-		SGPAPI: sgpAPI,
-		Log:    ctrl.Log.WithName("webhook").WithName("Pod Mutating"),
-	}})
+	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{
+		Handler: &webhookcore.PodMutationWebHook{
+			SGPAPI:    sgpAPI,
+			Log:       ctrl.Log.WithName("resource mutation webhook"),
+			Condition: controllerConditions,
+		}})
 
 	// Validating webhook for pod.
-	webhookServer.Register("/validate-v1-pod", &webhook.Admission{Handler: &webhookcore.AnnotationValidator{
-		Log: ctrl.Log.WithName("webhook").WithName("Annotation Validator"),
-	}})
+	webhookServer.Register("/validate-v1-pod", &webhook.Admission{
+		Handler: &webhookcore.AnnotationValidator{
+			Log:       ctrl.Log.WithName("annotation validation webhook"),
+			Condition: controllerConditions,
+		}})
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctx); err != nil {

@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// TODO: Add integration test for Windows when ConfigMap feature is implemented.
 var _ = Describe("when doing pod operations from non vpc-resource-controller user", func() {
 	Context("when updating annotations", func() {
 		It("should fail on updating pod sgp annotation", func() {

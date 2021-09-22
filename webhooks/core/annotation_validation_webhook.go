@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/go-logr/logr"
@@ -28,10 +29,12 @@ import (
 
 // +kubebuilder:webhook:path=/validate-v1-pod,mutating=false,failurePolicy=ignore,groups="",resources=pods,verbs=create;update,versions=v1,name=vpod.vpc.k8s.aws,sideEffects=None,admissionReviewVersions=v1
 
-// AnnotationValidator injects resources into Pods
+// AnnotationValidator validates the resource allocated to the Pod via annotations. The WebHook
+// prevents unauthorized user from modifying/removing these Annotations.
 type AnnotationValidator struct {
-	decoder *admission.Decoder
-	Log     logr.Logger
+	decoder   *admission.Decoder
+	Condition condition.Conditions
+	Log       logr.Logger
 }
 
 const validUserInfo = "system:serviceaccount:kube-system:vpc-resource-controller"
@@ -67,11 +70,13 @@ func (a *AnnotationValidator) handleCreate(req admission.Request) admission.Resp
 	}
 	// The annotation is added by vpc-resource-controller which will come as an update event
 	// so we should block all request on create event
-	if val, ok := pod.Annotations[config.ResourceNamePodENI]; ok {
-		a.Log.Info("blocking request", "event", "create",
-			"annotation key", config.ResourceNamePodENI, "annotation value", val)
-		return admission.Denied(
-			fmt.Sprintf("pod cannot be created with %s annotation", config.ResourceNamePodENI))
+	for _, annotationKey := range a.getAnnotationKeysToBeValidated() {
+		if val, ok := pod.Annotations[annotationKey]; ok {
+			a.Log.Info("blocking request", "event", "create",
+				"annotation key", annotationKey, "annotation value", val)
+			return admission.Denied(
+				fmt.Sprintf("pod cannot be created with %s annotation", annotationKey))
+		}
 	}
 	return admission.Allowed("")
 }
@@ -87,18 +92,8 @@ func (a *AnnotationValidator) handleUpdate(req admission.Request) admission.Resp
 	}
 	logger := a.Log.WithValues("name", pod.Name, "namespace", pod.Namespace, "uid", pod.UID)
 
-	// This will block any update on the specific annotation from non vpc resource controller
-	// service accounts
-	if pod.Annotations[config.ResourceNamePodENI] !=
-		oldPod.Annotations[config.ResourceNamePodENI] {
-		if (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) {
-			logger.Info("denying annotation", "username", req.UserInfo.Username,
-				"annotation key", config.ResourceNamePodENI)
-			return admission.Denied("annotation is not set by vpc-resource-controller")
-		}
-		return admission.Allowed("")
-	}
-
+	// Block any update on Fargate SGP Annotation Key. The Fargate Security Group Annotation is
+	// added by the mutating WebHook on Create Event.
 	if pod.Annotations[FargatePodSGAnnotationKey] !=
 		oldPod.Annotations[FargatePodSGAnnotationKey] {
 		logger.Info("denying annotation", "username", req.UserInfo.Username,
@@ -106,7 +101,32 @@ func (a *AnnotationValidator) handleUpdate(req admission.Request) admission.Resp
 		return admission.Denied("annotation is not set by mutating webhook")
 	}
 
+	// This will block any update on the specific annotation from non vpc resource controller
+	// service accounts
+	for _, annotationKey := range a.getAnnotationKeysToBeValidated() {
+		if pod.Annotations[annotationKey] != oldPod.Annotations[annotationKey] {
+			// Checking for two users, as the Service Account used by controller was changed
+			// after first release.
+			if (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) {
+				logger.Info("denying annotation", "username", req.UserInfo.Username,
+					"annotation key", annotationKey)
+				return admission.Denied("annotation is not set by vpc-resource-controller")
+			}
+		}
+	}
 	return admission.Allowed("")
+}
+
+// getAnnotationKeysToBeValidated returns the list of
+func (a *AnnotationValidator) getAnnotationKeysToBeValidated() []string {
+	// Pod ENI annotation is validated by default
+	annotationsToValidate := []string{config.ResourceNamePodENI}
+	if a.Condition.IsWindowsIPAMEnabled() {
+		// Windows IPv4 Annotation is validated if feature is enabled, as the older controller could
+		// be installed on Customer Data Plane and new controller should not block it's annotations
+		annotationsToValidate = append(annotationsToValidate, config.ResourceNameIPAddress)
+	}
+	return annotationsToValidate
 }
 
 // InjectDecoder injects the decoder.

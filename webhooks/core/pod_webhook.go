@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 )
@@ -38,9 +39,10 @@ const (
 
 // PodResourceInjector injects resources into Pods
 type PodMutationWebHook struct {
-	decoder *admission.Decoder
-	SGPAPI  utils.SecurityGroupForPodsAPI
-	Log     logr.Logger
+	decoder   *admission.Decoder
+	SGPAPI    utils.SecurityGroupForPodsAPI
+	Log       logr.Logger
+	Condition condition.Conditions
 }
 
 type PodType string
@@ -139,7 +141,9 @@ func (i *PodMutationWebHook) HandleFargatePod(req admission.Request, pod *corev1
 func (i *PodMutationWebHook) HandleWindowsPod(req admission.Request, pod *corev1.Pod,
 	log logr.Logger) (response admission.Response) {
 
-	// TODO: Don't Process event if feature is disabled
+	if !i.Condition.IsWindowsIPAMEnabled() {
+		return admission.Allowed("")
+	}
 
 	i.Log.Info("injecting resource to the first container of the pod",
 		"resource name", config.ResourceNameIPAddress, "resource count", DefaultResourceLimit)

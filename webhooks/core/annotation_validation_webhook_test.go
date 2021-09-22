@@ -19,12 +19,13 @@ import (
 	"net/http"
 	"testing"
 
-	v1 "k8s.io/api/authentication/v1"
-
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	admissionv1 "k8s.io/api/admission/v1"
+	v1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,6 +33,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
+
+type MockAnnotationWebHook struct {
+	MockCondition *mock_condition.MockConditions
+}
 
 func TestAnnotationValidator_InjectDecoder(t *testing.T) {
 	a := AnnotationValidator{}
@@ -73,6 +78,11 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 	podWithoutAnnotationRaw, err := json.Marshal(podWithoutAnnotation)
 	assert.NoError(t, err)
 
+	windowsPodWithAnnotation := basePod.DeepCopy()
+	windowsPodWithAnnotation.Annotations[config.ResourceNameIPAddress] = "192.168.68.74"
+	windowsPodWithAnnotationRaw, err := json.Marshal(windowsPodWithAnnotation)
+	assert.NoError(t, err)
+
 	podWithAnnotation := basePod.DeepCopy()
 	podWithAnnotation.Annotations[config.ResourceNamePodENI] = "annotation-value"
 	podWithAnnotationRaw, err := json.Marshal(podWithAnnotation)
@@ -98,18 +108,35 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 	assert.NoError(t, err)
 
 	test := []struct {
-		name string
-		req  admission.Request
-		want admission.Response
+		name           string
+		req            []admission.Request // Club tests with similar response & diff request in 1 test
+		want           admission.Response
+		mockInvocation func(mock MockAnnotationWebHook)
 	}{
 		{
-			name: "[create] when no annotation, approve request ",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					Operation: admissionv1.Create,
-					Object: runtime.RawExtension{
-						Raw:    podWithoutAnnotationRaw,
-						Object: podWithoutAnnotation,
+			name: "[windows] allow all request when feature disabled ",
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						Operation: admissionv1.Create,
+						Object: runtime.RawExtension{
+							Raw:    windowsPodWithAnnotationRaw,
+							Object: windowsPodWithAnnotation,
+						},
+					},
+				},
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						Operation: admissionv1.Update,
+						UserInfo:  v1.UserInfo{Username: "unauthorized-user"},
+						Object: runtime.RawExtension{
+							Raw:    podWithoutAnnotationRaw,
+							Object: podWithoutAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    windowsPodWithAnnotationRaw,
+							Object: windowsPodWithAnnotation,
+						},
 					},
 				},
 			},
@@ -120,16 +147,55 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 						Code: http.StatusOK,
 					},
 				},
+			},
+			mockInvocation: func(mock MockAnnotationWebHook) {
+				mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
+			},
+		},
+		{
+			name: "[create] when no annotation, approve request ",
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						Operation: admissionv1.Create,
+						Object: runtime.RawExtension{
+							Raw:    podWithoutAnnotationRaw,
+							Object: podWithoutAnnotation,
+						},
+					},
+				},
+			},
+			want: admission.Response{
+				AdmissionResponse: admissionv1.AdmissionResponse{
+					Allowed: true,
+					Result: &metav1.Status{
+						Code: http.StatusOK,
+					},
+				},
+			},
+			mockInvocation: func(mock MockAnnotationWebHook) {
+				mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
 			},
 		},
 		{
 			name: "[create] when there's annotation, reject request",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					Operation: admissionv1.Create,
-					Object: runtime.RawExtension{
-						Raw:    podWithAnnotationRaw,
-						Object: podWithAnnotation,
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						Operation: admissionv1.Create,
+						Object: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
+					},
+				},
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						Operation: admissionv1.Create,
+						Object: runtime.RawExtension{
+							Raw:    windowsPodWithAnnotationRaw,
+							Object: windowsPodWithAnnotation,
+						},
 					},
 				},
 			},
@@ -140,21 +206,40 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 						Code: http.StatusForbidden,
 					},
 				},
+			},
+			mockInvocation: func(mock MockAnnotationWebHook) {
+				mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
 			},
 		},
 		{
 			name: "[update] annotation created by old vpc-resource-controller SA, allow request",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					UserInfo:  v1.UserInfo{Username: validUserInfo},
-					Operation: admissionv1.Update,
-					Object: runtime.RawExtension{
-						Raw:    podWithAnnotationRaw,
-						Object: podWithAnnotation,
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: validUserInfo},
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    podWithoutAnnotationRaw,
+							Object: podWithoutAnnotation,
+						},
 					},
-					OldObject: runtime.RawExtension{
-						Raw:    podWithoutAnnotationRaw,
-						Object: podWithoutAnnotation,
+				},
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: validUserInfo},
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    windowsPodWithAnnotationRaw,
+							Object: windowsPodWithAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
 					},
 				},
 			},
@@ -165,21 +250,40 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 						Code: http.StatusOK,
 					},
 				},
+			},
+			mockInvocation: func(mock MockAnnotationWebHook) {
+				mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
 			},
 		},
 		{
 			name: "[update] annotation created by new vpc-resource-controller SA, allow request",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					UserInfo:  v1.UserInfo{Username: newValidUserInfo},
-					Operation: admissionv1.Update,
-					Object: runtime.RawExtension{
-						Raw:    podWithAnnotationRaw,
-						Object: podWithAnnotation,
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: newValidUserInfo},
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    podWithoutAnnotationRaw,
+							Object: podWithoutAnnotation,
+						},
 					},
-					OldObject: runtime.RawExtension{
-						Raw:    podWithoutAnnotationRaw,
-						Object: podWithoutAnnotation,
+				},
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: newValidUserInfo},
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    windowsPodWithAnnotationRaw,
+							Object: windowsPodWithAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
 					},
 				},
 			},
@@ -191,20 +295,39 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 					},
 				},
 			},
+			mockInvocation: func(mock MockAnnotationWebHook) {
+				mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
+			},
 		},
 		{
 			name: "[update] annotation created by unauthorized user, deny request",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
-					Operation: admissionv1.Update,
-					Object: runtime.RawExtension{
-						Raw:    podWithAnnotationRaw,
-						Object: podWithAnnotation,
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    podWithoutAnnotationRaw,
+							Object: podWithoutAnnotation,
+						},
 					},
-					OldObject: runtime.RawExtension{
-						Raw:    podWithoutAnnotationRaw,
-						Object: podWithoutAnnotation,
+				},
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    windowsPodWithAnnotationRaw,
+							Object: windowsPodWithAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
 					},
 				},
 			},
@@ -215,21 +338,40 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 						Code: http.StatusForbidden,
 					},
 				},
+			},
+			mockInvocation: func(mock MockAnnotationWebHook) {
+				mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
 			},
 		},
 		{
 			name: "[update] annotation updated by unauthorized user, deny request",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
-					Operation: admissionv1.Update,
-					Object: runtime.RawExtension{
-						Raw:    podWithAnnotationRaw,
-						Object: podWithAnnotation,
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    podWithDifferentAnnotationRaw,
+							Object: podWithDifferentAnnotation,
+						},
 					},
-					OldObject: runtime.RawExtension{
-						Raw:    podWithDifferentAnnotationRaw,
-						Object: podWithDifferentAnnotation,
+				},
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    windowsPodWithAnnotationRaw,
+							Object: windowsPodWithAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
 					},
 				},
 			},
@@ -240,21 +382,40 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 						Code: http.StatusForbidden,
 					},
 				},
+			},
+			mockInvocation: func(mock MockAnnotationWebHook) {
+				mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
 			},
 		},
 		{
 			name: "[update] annotation deleted by unauthorized user, deny request",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
-					Operation: admissionv1.Update,
-					Object: runtime.RawExtension{
-						Raw:    podWithoutAnnotationRaw,
-						Object: podWithoutAnnotation,
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    podWithoutAnnotationRaw,
+							Object: podWithoutAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
 					},
-					OldObject: runtime.RawExtension{
-						Raw:    podWithAnnotationRaw,
-						Object: podWithAnnotation,
+				},
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    windowsPodWithAnnotationRaw,
+							Object: windowsPodWithAnnotation,
+						},
 					},
 				},
 			},
@@ -266,19 +427,24 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 					},
 				},
 			},
+			mockInvocation: func(mock MockAnnotationWebHook) {
+				mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
+			},
 		},
 		{
 			name: "[update] fargate pod-sg annotation added during UPDATE event, deny request",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					Operation: admissionv1.Update,
-					Object: runtime.RawExtension{
-						Raw:    fargatePodWithAnnotationRaw,
-						Object: fargatePodWithAnnotation,
-					},
-					OldObject: runtime.RawExtension{
-						Raw:    fargatePodWithoutAnnotationRaw,
-						Object: fargatePodWithoutAnnotation,
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    fargatePodWithAnnotationRaw,
+							Object: fargatePodWithAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    fargatePodWithoutAnnotationRaw,
+							Object: fargatePodWithoutAnnotation,
+						},
 					},
 				},
 			},
@@ -293,16 +459,18 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		},
 		{
 			name: "[update] fargate pod-sg annotation updated during UPDATE event, deny request",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					Operation: admissionv1.Update,
-					Object: runtime.RawExtension{
-						Raw:    fargatePodWithDifferentAnnotationRaw,
-						Object: fargatePodWithDifferentAnnotation,
-					},
-					OldObject: runtime.RawExtension{
-						Raw:    fargatePodWithAnnotationRaw,
-						Object: fargatePodWithAnnotation,
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    fargatePodWithDifferentAnnotationRaw,
+							Object: fargatePodWithDifferentAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    fargatePodWithAnnotationRaw,
+							Object: fargatePodWithAnnotation,
+						},
 					},
 				},
 			},
@@ -317,16 +485,18 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		},
 		{
 			name: "[update] fargate pod-sg annotation deleted during UPDATE event, deny request",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					Operation: admissionv1.Update,
-					Object: runtime.RawExtension{
-						Raw:    fargatePodWithoutAnnotationRaw,
-						Object: fargatePodWithoutAnnotation,
-					},
-					OldObject: runtime.RawExtension{
-						Raw:    fargatePodWithAnnotationRaw,
-						Object: fargatePodWithAnnotation,
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						Operation: admissionv1.Update,
+						Object: runtime.RawExtension{
+							Raw:    fargatePodWithoutAnnotationRaw,
+							Object: fargatePodWithoutAnnotation,
+						},
+						OldObject: runtime.RawExtension{
+							Raw:    fargatePodWithAnnotationRaw,
+							Object: fargatePodWithAnnotation,
+						},
 					},
 				},
 			},
@@ -341,13 +511,15 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 		},
 		{
 			name: "[delete] delete, allow request",
-			req: admission.Request{
-				AdmissionRequest: admissionv1.AdmissionRequest{
-					UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
-					Operation: admissionv1.Delete,
-					OldObject: runtime.RawExtension{
-						Raw:    podWithAnnotationRaw,
-						Object: podWithAnnotation,
+			req: []admission.Request{
+				{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						UserInfo:  v1.UserInfo{Username: "some unauthorized user"},
+						Operation: admissionv1.Delete,
+						OldObject: runtime.RawExtension{
+							Raw:    podWithAnnotationRaw,
+							Object: podWithAnnotation,
+						},
 					},
 				},
 			},
@@ -364,14 +536,29 @@ func TestAnnotationValidator_Handle(t *testing.T) {
 
 	for _, tt := range test {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			h := &AnnotationValidator{
-				decoder: decoder,
-				Log:     zap.New(),
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			for _, req := range tt.req {
+				ctx := context.Background()
+				mock := MockAnnotationWebHook{
+					MockCondition: mock_condition.NewMockConditions(ctrl),
+				}
+
+				h := &AnnotationValidator{
+					decoder:   decoder,
+					Log:       zap.New(),
+					Condition: mock.MockCondition,
+				}
+
+				if tt.mockInvocation != nil {
+					tt.mockInvocation(mock)
+				}
+
+				got := h.Handle(ctx, req)
+				assert.Equal(t, tt.want.Allowed, got.Allowed)
+				assert.Equal(t, tt.want.Result.Status, got.Result.Status)
 			}
-			got := h.Handle(ctx, tt.req)
-			assert.Equal(t, tt.want.Allowed, got.Allowed)
-			assert.Equal(t, tt.want.Result.Status, got.Result.Status)
 		})
 	}
 }
