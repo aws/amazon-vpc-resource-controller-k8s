@@ -124,14 +124,14 @@ func (v *PodVerification) PodHasNoBranchENIAnnotationInjected(pod *v1.Pod) {
 	Expect(hasNoAnnotation).To(BeFalse(), "Pod shouldn't have branch ENI annotations.")
 }
 
-func (v *PodVerification) WindowsPodsHaveExpectedIPv4Address(namespace string,
+func (v *PodVerification) WindowsPodsHaveIPv4Address(namespace string,
 	podLabelKey string, podLabelVal string) {
 
 	pods, err := v.frameWork.PodManager.GetPodsWithLabel(v.ctx, namespace, podLabelKey, podLabelVal)
 	Expect(err).ToNot(HaveOccurred())
 
 	for _, pod := range pods {
-		v.WindowsPodHaveExpectedIPv4Address(&pod)
+		v.WindowsPodHaveIPv4Address(&pod)
 	}
 }
 
@@ -146,10 +146,20 @@ func (v *PodVerification) ExpectPodHaveDesiredPhase(namespace string,
 	}
 }
 
-func (v *PodVerification) WindowsPodHaveExpectedIPv4Address(pod *v1.Pod) {
+func (v *PodVerification) WindowsPodHaveIPv4Address(pod *v1.Pod) {
 	By("matching the IPv4 from annotation to the pod IP")
 	ipAddWithCidr, found := pod.Annotations["vpc.amazonaws.com/PrivateIPv4Address"]
 	Expect(found).To(BeTrue())
 	// Remove the CIDR and compare pod IP with the IP annotated from VPC Controller
 	Expect(pod.Status.PodIP).To(Equal(strings.Split(ipAddWithCidr, "/")[0]))
+
+}
+
+func (v *PodVerification) WindowsPodHaveResourceLimits(pod *v1.Pod, expected bool) {
+	_, found := pod.Spec.Containers[0].Resources.Limits[config.ResourceNameIPAddress]
+	if expected {
+		Expect(found).To(BeTrue())
+	} else {
+		Expect(found).To(BeFalse())
+	}
 }

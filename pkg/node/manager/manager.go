@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
@@ -41,7 +42,8 @@ type manager struct {
 	// wrapper around the clients for all APIs used by controller
 	wrapper api.Wrapper
 	// worker for performing async operation on node APIs
-	worker asyncWorker.Worker
+	worker     asyncWorker.Worker
+	conditions condition.Conditions
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -82,7 +84,7 @@ type AsyncOperationJob struct {
 
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
-	wrapper api.Wrapper, worker asyncWorker.Worker) (Manager, error) {
+	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions) (Manager, error) {
 
 	manager := &manager{
 		resourceManager: resourceManager,
@@ -90,6 +92,7 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 		dataStore:       make(map[string]node.Node),
 		wrapper:         wrapper,
 		worker:          worker,
+		conditions:      conditions,
 	}
 
 	return manager, worker.StartWorkerPool(manager.performAsyncOperation)
@@ -172,6 +175,7 @@ func (m *manager) UpdateNode(nodeName string) error {
 	cachedNode, found := m.dataStore[nodeName]
 	if !found {
 		m.Log.Info("the node doesn't exist in cache anymore, it might have been deleted")
+		return nil
 	}
 
 	var op AsyncOperation
@@ -338,7 +342,7 @@ func (m *manager) isSelectedForManagement(v1node *v1.Node) bool {
 		return false
 	}
 
-	return isWindowsNode(v1node) || canAttachTrunk(v1node)
+	return (isWindowsNode(v1node) && m.conditions.IsWindowsIPAMEnabled()) || canAttachTrunk(v1node)
 }
 
 // GetNodeInstanceID returns the EC2 instance ID of a node

@@ -67,6 +67,8 @@ type K8sWrapper interface {
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
 	GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error)
 	BroadcastEvent(obj runtime.Object, reason string, message string, eventType string)
+	GetConfigMap(configMapName string) (*v1.ConfigMap, error)
+	ListNodes() (*v1.NodeList, error)
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -145,4 +147,18 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 	}
 
 	return err
+}
+
+func (k *k8sWrapper) GetConfigMap(configMapName string) (*v1.ConfigMap, error) {
+	configMap := &v1.ConfigMap{}
+	err := k.cacheClient.Get(context.Background(), types.NamespacedName{
+		Name: configMapName,
+	}, configMap)
+	return configMap, err
+}
+
+func (k *k8sWrapper) ListNodes() (*v1.NodeList, error) {
+	nodeList := &v1.NodeList{}
+	err := k.cacheClient.List(context.Background(), nodeList)
+	return nodeList, err
 }

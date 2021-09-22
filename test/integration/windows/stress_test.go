@@ -401,7 +401,7 @@ func CreateAndDeleteDeploymentAtRandomInterval(maxInterval int, deployment *apps
 			newDeployment, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReady(ctx, newDeployment)
 			Expect(err).ToNot(HaveOccurred())
 
-			verify.WindowsPodsHaveExpectedIPv4Address(deployment.Namespace, podLabelKey, podLabelVal)
+			verify.WindowsPodsHaveIPv4Address(deployment.Namespace, podLabelKey, podLabelVal)
 			verify.ExpectPodHaveDesiredPhase(deployment.Namespace, podLabelKey, podLabelVal,
 				[]coreV1.PodPhase{coreV1.PodRunning, coreV1.PodSucceeded})
 

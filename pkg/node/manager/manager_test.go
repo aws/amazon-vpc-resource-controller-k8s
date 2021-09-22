@@ -18,11 +18,12 @@ import (
 	"testing"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
+	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
+	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
@@ -63,6 +64,9 @@ var (
 			},
 		},
 	}
+	nodeList = &v1.NodeList{
+		Items: append([]v1.Node{}, *v1Node),
+	}
 	mockError = fmt.Errorf("mock error")
 
 	unManagedNode = node.NewUnManagedNode()
@@ -100,6 +104,7 @@ type Mock struct {
 	MockWorker          *mock_worker.MockWorker
 	MockNode            *mock_node.MockNode
 	MockResourceManager *mock_resource.MockResourceManager
+	MockConditions      *mock_condition.MockConditions
 }
 
 func NewMock(ctrl *gomock.Controller, existingDataStore map[string]node.Node) Mock {
@@ -108,6 +113,7 @@ func NewMock(ctrl *gomock.Controller, existingDataStore map[string]node.Node) Mo
 	mockAsyncWorker := mock_worker.NewMockWorker(ctrl)
 	mockResourceManager := mock_resource.NewMockResourceManager(ctrl)
 	mockNode := mock_node.NewMockNode(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
 
 	return Mock{
 		Manager: manager{
@@ -119,12 +125,14 @@ func NewMock(ctrl *gomock.Controller, existingDataStore map[string]node.Node) Mo
 			},
 			worker:          mockAsyncWorker,
 			resourceManager: mockResourceManager,
+			conditions:      mockConditions,
 		},
 		MockK8sAPI:          mockK8sWrapper,
 		MockEC2API:          mockEC2APIHelper,
 		MockWorker:          mockAsyncWorker,
 		MockNode:            mockNode,
 		MockResourceManager: mockResourceManager,
+		MockConditions:      mockConditions,
 	}
 }
 
@@ -136,7 +144,7 @@ func Test_GetNewManager(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(nil)
-	manager, err := NewNodeManager(nil, nil, api.Wrapper{}, mock.MockWorker)
+	manager, err := NewNodeManager(nil, nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions)
 
 	assert.NotNil(t, manager)
 	assert.NoError(t, err)
@@ -150,7 +158,7 @@ func Test_GetNewManager_Error(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(mockError)
-	manager, err := NewNodeManager(nil, nil, api.Wrapper{}, mock.MockWorker)
+	manager, err := NewNodeManager(nil, nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions)
 
 	assert.NotNil(t, manager)
 	assert.Error(t, err, mockError)
@@ -510,7 +518,7 @@ func Test_getNodeOS(t *testing.T) {
 }
 
 // Test_isSelectedForManagement tests if the either the capacity or the label is set true is returned
-func Test_isSelectedForManagement(t *testing.T) {
+func Test_isSelectedForManagement_WindowsIPAMEnabled_False(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -518,4 +526,42 @@ func Test_isSelectedForManagement(t *testing.T) {
 
 	isSelected := mock.Manager.isSelectedForManagement(v1Node)
 	assert.True(t, isSelected)
+}
+
+func Test_isSelectedForManagement_WindowsIPAMEnabled_True(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	windowsNode := v1Node.DeepCopy()
+	windowsNode.Labels = map[string]string{config.NodeLabelOS: config.OSWindows}
+	mock := NewMock(ctrl, map[string]node.Node{})
+	mock.MockConditions.EXPECT().IsWindowsIPAMEnabled().Return(true)
+
+	isSelected := mock.Manager.isSelectedForManagement(windowsNode)
+	assert.True(t, isSelected)
+}
+
+func Test_UpdateNode_Windows_UnManagedToManaged(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	windowsNode := v1Node.DeepCopy()
+	windowsNode.Labels = map[string]string{config.NodeLabelOS: config.OSWindows}
+	dataStoreWithUnManagedNode := map[string]node.Node{windowsNode.Name: unManagedNode}
+
+	mock := NewMock(ctrl, dataStoreWithUnManagedNode)
+
+	job := AsyncOperationJob{
+		op:       Init,
+		nodeName: windowsNode.Name,
+		node:     managedNode,
+	}
+	mock.MockK8sAPI.EXPECT().GetNode(windowsNode.Name).Return(windowsNode, nil)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
+	mock.MockConditions.EXPECT().IsWindowsIPAMEnabled().Return(true)
+
+	err := mock.Manager.UpdateNode(windowsNode.Name)
+	assert.NoError(t, err)
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }

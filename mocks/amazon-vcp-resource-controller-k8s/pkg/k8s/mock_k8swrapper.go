@@ -74,6 +74,21 @@ func (mr *MockK8sWrapperMockRecorder) BroadcastEvent(arg0, arg1, arg2, arg3 inte
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BroadcastEvent", reflect.TypeOf((*MockK8sWrapper)(nil).BroadcastEvent), arg0, arg1, arg2, arg3)
 }
 
+// GetConfigMap mocks base method
+func (m *MockK8sWrapper) GetConfigMap(arg0 string) (*v1.ConfigMap, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetConfigMap", arg0)
+	ret0, _ := ret[0].(*v1.ConfigMap)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetConfigMap indicates an expected call of GetConfigMap
+func (mr *MockK8sWrapperMockRecorder) GetConfigMap(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConfigMap", reflect.TypeOf((*MockK8sWrapper)(nil).GetConfigMap), arg0)
+}
+
 // GetENIConfig mocks base method
 func (m *MockK8sWrapper) GetENIConfig(arg0 string) (*v1alpha1.ENIConfig, error) {
 	m.ctrl.T.Helper()
@@ -102,4 +117,19 @@ func (m *MockK8sWrapper) GetNode(arg0 string) (*v1.Node, error) {
 func (mr *MockK8sWrapperMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNode", reflect.TypeOf((*MockK8sWrapper)(nil).GetNode), arg0)
+}
+
+// ListNodes mocks base method
+func (m *MockK8sWrapper) ListNodes() (*v1.NodeList, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListNodes")
+	ret0, _ := ret[0].(*v1.NodeList)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListNodes indicates an expected call of ListNodes
+func (mr *MockK8sWrapperMockRecorder) ListNodes() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListNodes", reflect.TypeOf((*MockK8sWrapper)(nil).ListNodes))
 }
