@@ -18,6 +18,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
@@ -34,16 +35,14 @@ import (
 )
 
 var (
-	mockConfigMapNS = "configmap-ns"
-
 	mockConfigMap = &corev1.ConfigMap{
 		TypeMeta:   metav1.TypeMeta{},
-		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: mockConfigMapNS},
+		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: config.VpcCNIConfigMapNamespace},
 		Data:       map[string]string{config.EnableWindowsIPAMKey: "true"},
 	}
 	mockConfigMapReq = reconcile.Request{
 		NamespacedName: types.NamespacedName{
-			Namespace: mockConfigMapNS,
+			Namespace: config.VpcCNIConfigMapNamespace,
 			Name:      config.VpcCniConfigMapName,
 		},
 	}
@@ -64,12 +63,15 @@ type ConfigMapMock struct {
 	ConfigMapReconciler *ConfigMapReconciler
 	MockNode            *mock_node.MockNode
 	MockK8sAPI          *mock_k8s.MockK8sWrapper
+	MockCondition       *mock_condition.MockConditions
+	curWinIPAMCond      bool
 }
 
 func NewConfigMapMock(ctrl *gomock.Controller, mockObjects ...runtime.Object) ConfigMapMock {
 	mockNodeManager := mock_manager.NewMockManager(ctrl)
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
 	mockNode := mock_node.NewMockNode(ctrl)
+	mockCondition := mock_condition.NewMockConditions(ctrl)
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -82,9 +84,12 @@ func NewConfigMapMock(ctrl *gomock.Controller, mockObjects ...runtime.Object) Co
 			Log:         zap.New(),
 			NodeManager: mockNodeManager,
 			K8sAPI:      mockK8sWrapper,
+			Condition:   mockCondition,
 		},
-		MockNode:   mockNode,
-		MockK8sAPI: mockK8sWrapper,
+		MockNode:       mockNode,
+		MockK8sAPI:     mockK8sWrapper,
+		MockCondition:  mockCondition,
+		curWinIPAMCond: false,
 	}
 }
 
@@ -93,6 +98,7 @@ func Test_Reconcile_ConfigMap_Updated(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewConfigMapMock(ctrl, mockConfigMap)
+	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
 	mock.MockK8sAPI.EXPECT().ListNodes().Return(nodeList, nil)
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.MockNodeManager.EXPECT().UpdateNode(mockNodeName).Return(nil)
@@ -111,6 +117,7 @@ func Test_Reconcile_ConfigMap_NoData(t *testing.T) {
 	mockConfigMap_WithNoData.Data = map[string]string{}
 	mock := NewConfigMapMock(ctrl, mockConfigMap_WithNoData)
 
+	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
 	mock.MockK8sAPI.EXPECT().ListNodes().Return(nodeList, nil)
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.MockNodeManager.EXPECT().UpdateNode(mockNodeName).Return(nil)
@@ -125,9 +132,7 @@ func Test_Reconcile_ConfigMap_Deleted(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewConfigMapMock(ctrl)
-	mock.MockK8sAPI.EXPECT().ListNodes().Return(nodeList, nil)
-	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
-	mock.MockNodeManager.EXPECT().UpdateNode(mockNodeName).Return(nil)
+	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
 
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.NoError(t, err)
@@ -139,6 +144,7 @@ func Test_Reconcile_UpdateNode_Error(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewConfigMapMock(ctrl, mockConfigMap)
+	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
 	mock.MockK8sAPI.EXPECT().ListNodes().Return(nodeList, nil)
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.MockNodeManager.EXPECT().UpdateNode(mockNodeName).Return(errMock)

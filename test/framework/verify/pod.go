@@ -156,10 +156,16 @@ func (v *PodVerification) WindowsPodHaveIPv4Address(pod *v1.Pod) {
 }
 
 func (v *PodVerification) WindowsPodHaveResourceLimits(pod *v1.Pod, expected bool) {
-	_, found := pod.Spec.Containers[0].Resources.Limits[config.ResourceNameIPAddress]
-	if expected {
-		Expect(found).To(BeTrue())
+	if pod.Spec.Containers[0].Resources.Limits != nil {
+		_, found := pod.Spec.Containers[0].Resources.Limits[config.ResourceNameIPAddress]
+		if expected {
+			Expect(found).To(BeTrue())
+		} else {
+			Expect(found).To(BeFalse())
+		}
 	} else {
-		Expect(found).To(BeFalse())
+		if expected {
+			Fail("expected pod to have resource limits")
+		}
 	}
 }

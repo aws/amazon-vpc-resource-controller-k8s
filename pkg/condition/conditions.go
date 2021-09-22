@@ -84,9 +84,9 @@ func (c *condition) WaitTillPodDataStoreSynced() {
 
 func (c *condition) IsWindowsIPAMEnabled() bool {
 	// Return false if configmap not present/any errors
-	vpcCniConfigMap, err := c.K8sAPI.GetConfigMap(config.VpcCniConfigMapName)
+	vpcCniConfigMap, err := c.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.VpcCNIConfigMapNamespace)
 
-	if err == nil && len(vpcCniConfigMap.Data) > 0 {
+	if err == nil && vpcCniConfigMap.Data != nil {
 		if val, ok := vpcCniConfigMap.Data[config.EnableWindowsIPAMKey]; ok {
 			enableWinIpamVal, err := strconv.ParseBool(val)
 			if err == nil && enableWinIpamVal {

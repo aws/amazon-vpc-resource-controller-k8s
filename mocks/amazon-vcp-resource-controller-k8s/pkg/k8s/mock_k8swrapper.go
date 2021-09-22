@@ -75,18 +75,18 @@ func (mr *MockK8sWrapperMockRecorder) BroadcastEvent(arg0, arg1, arg2, arg3 inte
 }
 
 // GetConfigMap mocks base method
-func (m *MockK8sWrapper) GetConfigMap(arg0 string) (*v1.ConfigMap, error) {
+func (m *MockK8sWrapper) GetConfigMap(arg0, arg1 string) (*v1.ConfigMap, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetConfigMap", arg0)
+	ret := m.ctrl.Call(m, "GetConfigMap", arg0, arg1)
 	ret0, _ := ret[0].(*v1.ConfigMap)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetConfigMap indicates an expected call of GetConfigMap
-func (mr *MockK8sWrapperMockRecorder) GetConfigMap(arg0 interface{}) *gomock.Call {
+func (mr *MockK8sWrapperMockRecorder) GetConfigMap(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConfigMap", reflect.TypeOf((*MockK8sWrapper)(nil).GetConfigMap), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConfigMap", reflect.TypeOf((*MockK8sWrapper)(nil).GetConfigMap), arg0, arg1)
 }
 
 // GetENIConfig mocks base method

@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
@@ -35,7 +36,12 @@ type ConfigMapReconciler struct {
 	Scheme      *runtime.Scheme
 	NodeManager manager.Manager
 	K8sAPI      k8s.K8sWrapper
+	Condition   condition.Conditions
 }
+
+var (
+	curWinIPAMEnabledCond = false
+)
 
 //+kubebuilder:rbac:groups=core,resources=configmaps,namespace=kube-system,resourceNames=amazon-vpc-cni,verbs=get;list;watch
 
@@ -46,7 +52,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	logger := r.Log.WithValues("configmap", req.NamespacedName)
 
 	// only update nodes on amazon-vpc-cni updates, return here for other updates
-	if req.Name != config.VpcCniConfigMapName {
+	if req.Name != config.VpcCniConfigMapName || req.Namespace != config.VpcCNIConfigMapNamespace {
 		return ctrl.Result{}, nil
 	}
 	configmap := &corev1.ConfigMap{}
@@ -61,18 +67,20 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 	}
 
-	if val, ok := configmap.Data[config.EnableWindowsIPAMKey]; ok {
-		logger.Info("updated configmap", config.EnableWindowsIPAMKey, val)
-	}
+	// Check if the flag value has changed
+	newWinIPAMEnabledCond := r.Condition.IsWindowsIPAMEnabled()
 
-	// TODO: Only call UpdateNodesOnConfigMapChanges on enable-windows-ipam flag changes
+	if curWinIPAMEnabledCond != newWinIPAMEnabledCond {
+		curWinIPAMEnabledCond = newWinIPAMEnabledCond
+		logger.Info("updated configmap", config.EnableWindowsIPAMKey, curWinIPAMEnabledCond)
 
-	// Configmap is created/updated/deleted, update nodes
-	err := r.UpdateNodesOnConfigMapChanges()
-	if err != nil {
-		// Error in updating nodes
-		logger.Error(err, "Failed to update nodes on configmap changes")
-		return ctrl.Result{}, err
+		// Flag is updated, update all nodes
+		err := r.UpdateNodesOnConfigMapChanges()
+		if err != nil {
+			// Error in updating nodes
+			logger.Error(err, "Failed to update nodes on configmap changes")
+			return ctrl.Result{}, err
+		}
 	}
 
 	return ctrl.Result{}, nil

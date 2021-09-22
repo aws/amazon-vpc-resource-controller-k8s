@@ -312,6 +312,7 @@ func main() {
 		Scheme:      mgr.GetScheme(),
 		NodeManager: nodeManager,
 		K8sAPI:      k8sApi,
+		Condition:   controllerConditions,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ConfigMap")
 		os.Exit(1)
