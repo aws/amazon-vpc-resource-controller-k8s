@@ -19,34 +19,22 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	v1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// TODO: create a manager and poll to wait for operation
-func CreateConfigMap(k8sClient client.Client, ctx context.Context, configmap *v1.ConfigMap) {
+func CreateConfigMap(manager Manager, ctx context.Context, configmap *v1.ConfigMap) {
 	By("creating the configmap")
-	err := k8sClient.Create(ctx, configmap)
+	err := manager.CreateConfigMap(ctx, configmap)
 	Expect(err).NotTo(HaveOccurred())
-
 }
 
-func DeleteConfigMap(k8sClient client.Client, ctx context.Context, configmap *v1.ConfigMap) {
+func DeleteConfigMap(manager Manager, ctx context.Context, configmap *v1.ConfigMap) {
 	By("deleting the configmap")
-	err := k8sClient.Delete(ctx, configmap)
+	err := manager.DeleteConfigMap(ctx, configmap)
 	Expect(err).NotTo(HaveOccurred())
 }
 
-func UpdateConfigMap(k8sClient client.Client, ctx context.Context, configmap *v1.ConfigMap, data map[string]string) {
+func UpdateConfigMap(manager Manager, ctx context.Context, configmap *v1.ConfigMap) {
 	By("updating the configmap")
-	observedConfigMap := &v1.ConfigMap{}
-	err := k8sClient.Get(ctx, client.ObjectKey{
-		Namespace: configmap.Namespace,
-		Name:      configmap.Name,
-	}, observedConfigMap)
-	Expect(err).NotTo(HaveOccurred())
-
-	updatedConfigmap := observedConfigMap.DeepCopy()
-	updatedConfigmap.Data = data
-	err = k8sClient.Update(ctx, updatedConfigmap)
+	err := manager.UpdateConfigMap(ctx, configmap)
 	Expect(err).NotTo(HaveOccurred())
 }

@@ -17,6 +17,7 @@ import (
 	eniConfig "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	sgp "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	ec2Manager "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/aws/ec2"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/configmap"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/deployment"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/jobs"
@@ -52,6 +53,7 @@ type Framework struct {
 	NodeManager       node.Manager
 	ControllerManager controller.Manager
 	RBACManager       rbac.Manager
+	ConfigMapManager  configmap.Manager
 }
 
 func New(options Options) *Framework {
@@ -102,5 +104,6 @@ func New(options Options) *Framework {
 		NodeManager:       node.NewManager(k8sClient),
 		ControllerManager: controller.NewManager(k8sClient),
 		RBACManager:       rbac.NewManager(k8sClient),
+		ConfigMapManager:  configmap.NewManager(k8sClient),
 	}
 }

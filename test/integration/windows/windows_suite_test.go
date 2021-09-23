@@ -24,7 +24,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
 	configMapWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/configmap"
 	_ "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
-	_ "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/verify"
 	verifier "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/verify"
 
 	. "github.com/onsi/ginkgo"
@@ -41,6 +40,7 @@ var (
 	defaultTestPort       int
 	instanceSecurityGroup string
 	configMap             *v1.ConfigMap
+	observedConfigMap     *v1.ConfigMap
 )
 
 func TestWindowsVPCResourceController(t *testing.T) {
@@ -54,9 +54,15 @@ var _ = BeforeSuite(func() {
 	ctx = context.Background()
 	verify = verifier.NewPodVerification(frameWork, ctx)
 
-	By("creating the configmap with enable-windows-ipam set to true")
+	By("creating the configmap with flag set to true if not exists")
 	configMap = manifest.NewConfigMapBuilder().Build()
-	configMapWrapper.CreateConfigMap(frameWork.K8sClient, ctx, configMap)
+	existingConfigmap, err := frameWork.ConfigMapManager.GetConfigMap(ctx, configMap)
+	if err != nil {
+		configMapWrapper.CreateConfigMap(frameWork.ConfigMapManager, ctx, configMap)
+	} else {
+		observedConfigMap = manifest.NewConfigMapBuilder().Data(existingConfigmap.Data).Build()
+		configMapWrapper.UpdateConfigMap(frameWork.ConfigMapManager, ctx, configMap)
+	}
 
 	By("getting the list of Windows node")
 	windowsNodeList, err = frameWork.NodeManager.GetNodesWithOS("windows")
@@ -79,8 +85,12 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
-	By("deleting the configmap")
-	configMapWrapper.DeleteConfigMap(frameWork.K8sClient, ctx, configMap)
+
+	if observedConfigMap != nil {
+		configMapWrapper.UpdateConfigMap(frameWork.ConfigMapManager, ctx, observedConfigMap)
+	} else {
+		configMapWrapper.DeleteConfigMap(frameWork.ConfigMapManager, ctx, configMap)
+	}
 
 	By("revoking the security group ingress for HTTP traffic")
 	frameWork.EC2Manager.RevokeSecurityGroupIngress(instanceSecurityGroup, defaultTestPort, "TCP")
