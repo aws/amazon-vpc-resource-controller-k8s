@@ -118,9 +118,6 @@ func Test_Reconcile_ConfigMap_NoData(t *testing.T) {
 	mock := NewConfigMapMock(ctrl, mockConfigMap_WithNoData)
 
 	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
-	mock.MockK8sAPI.EXPECT().ListNodes().Return(nodeList, nil)
-	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
-	mock.MockNodeManager.EXPECT().UpdateNode(mockNodeName).Return(nil)
 
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.NoError(t, err)

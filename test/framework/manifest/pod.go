@@ -71,6 +71,7 @@ func NewWindowsPodBuilder() *PodBuilder {
 	return &PodBuilder{
 		namespace:              "windows-test",
 		name:                   "windows-pod",
+		container:              NewWindowsContainerBuilder().Build(),
 		os:                     "windows",
 		terminationGracePeriod: 0,
 		restartPolicy:          v1.RestartPolicyNever,

@@ -227,6 +227,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx := ctrl.SetupSignalHandler()
+
 	ec2Wrapper, err := ec2API.NewEC2Wrapper(roleARN, setupLog)
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
@@ -242,7 +244,7 @@ func main() {
 	podConverter := pod.PodConverter{}
 	dataStore := clientgocache.NewIndexer(podConverter.Indexer, pod.NodeNameIndexer())
 
-	k8sApi := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1())
+	k8sApi := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), ctx)
 
 	apiWrapper := api.Wrapper{
 		EC2API: ec2APIHelper,
@@ -251,7 +253,6 @@ func main() {
 		SGPAPI: sgpAPI,
 	}
 
-	ctx := ctrl.SetupSignalHandler()
 	supportedResources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
 	resourceManager, err := resource.NewResourceManager(ctx, supportedResources, apiWrapper)
 	if err != nil {

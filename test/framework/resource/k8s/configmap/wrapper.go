@@ -15,9 +15,7 @@ package configmap
 
 import (
 	"context"
-	"time"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	v1 "k8s.io/api/core/v1"
@@ -30,16 +28,12 @@ func CreateConfigMap(k8sClient client.Client, ctx context.Context, configmap *v1
 	err := k8sClient.Create(ctx, configmap)
 	Expect(err).NotTo(HaveOccurred())
 
-	// sleep for 2s after creating the configMap
-	time.Sleep(utils.PollIntervalShort)
 }
 
 func DeleteConfigMap(k8sClient client.Client, ctx context.Context, configmap *v1.ConfigMap) {
 	By("deleting the configmap")
 	err := k8sClient.Delete(ctx, configmap)
 	Expect(err).NotTo(HaveOccurred())
-
-	time.Sleep(utils.PollIntervalShort)
 }
 
 func UpdateConfigMap(k8sClient client.Client, ctx context.Context, configmap *v1.ConfigMap, data map[string]string) {
@@ -55,6 +49,4 @@ func UpdateConfigMap(k8sClient client.Client, ctx context.Context, configmap *v1
 	updatedConfigmap.Data = data
 	err = k8sClient.Update(ctx, updatedConfigmap)
 	Expect(err).NotTo(HaveOccurred())
-
-	time.Sleep(utils.PollIntervalShort)
 }

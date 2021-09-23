@@ -32,16 +32,13 @@ import (
 // ConfigMapReconciler reconciles a ConfigMap object
 type ConfigMapReconciler struct {
 	client.Client
-	Log         logr.Logger
-	Scheme      *runtime.Scheme
-	NodeManager manager.Manager
-	K8sAPI      k8s.K8sWrapper
-	Condition   condition.Conditions
+	Log                   logr.Logger
+	Scheme                *runtime.Scheme
+	NodeManager           manager.Manager
+	K8sAPI                k8s.K8sWrapper
+	Condition             condition.Conditions
+	curWinIPAMEnabledCond bool
 }
-
-var (
-	curWinIPAMEnabledCond = false
-)
 
 //+kubebuilder:rbac:groups=core,resources=configmaps,namespace=kube-system,resourceNames=amazon-vpc-cni,verbs=get;list;watch
 
@@ -70,9 +67,9 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Check if the flag value has changed
 	newWinIPAMEnabledCond := r.Condition.IsWindowsIPAMEnabled()
 
-	if curWinIPAMEnabledCond != newWinIPAMEnabledCond {
-		curWinIPAMEnabledCond = newWinIPAMEnabledCond
-		logger.Info("updated configmap", config.EnableWindowsIPAMKey, curWinIPAMEnabledCond)
+	if r.curWinIPAMEnabledCond != newWinIPAMEnabledCond {
+		r.curWinIPAMEnabledCond = newWinIPAMEnabledCond
+		logger.Info("updated configmap", config.EnableWindowsIPAMKey, r.curWinIPAMEnabledCond)
 
 		// Flag is updated, update all nodes
 		err := r.UpdateNodesOnConfigMapChanges()

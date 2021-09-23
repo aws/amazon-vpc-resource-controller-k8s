@@ -84,10 +84,12 @@ var _ = Describe("Windows Integration Test", func() {
 	})
 
 	Describe("configMap enable-windows-ipam tests", func() {
+		// Test windows IPAM feature enable/disable. When feature enabled, pod must have
+		// resource limits injected. Otherwise, resources limits must not be injected.
 		var testPod *v1.Pod
 		var createdPod *v1.Pod
 		BeforeEach(func() {
-			testPod, err = manifest.NewWindowsPodBuilder().Container(testerContainer).Build()
+			testPod, err = manifest.NewWindowsPodBuilder().Build()
 			Expect(err).ToNot(HaveOccurred())
 		})
 
@@ -95,12 +97,18 @@ var _ = Describe("Windows Integration Test", func() {
 			JustBeforeEach(func() {
 				// Update configmap for tests
 				configMapWrapper.UpdateConfigMap(frameWork.K8sClient, ctx, configMap, data)
+				// Adding sleep to allow cache to update
+				time.Sleep(utils.PollIntervalShort)
 
 			})
+
 			JustAfterEach(func() {
 				// restore the configmap after each test
 				data = map[string]string{config.EnableWindowsIPAMKey: "true"}
 				configMapWrapper.UpdateConfigMap(frameWork.K8sClient, ctx, configMap, data)
+
+				err := frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+				Expect(err).ToNot(HaveOccurred())
 			})
 
 			Context("when enable-windows-ipam is True", func() {
@@ -116,7 +124,7 @@ var _ = Describe("Windows Integration Test", func() {
 					data = map[string]string{config.EnableWindowsIPAMKey: "wrongVal"}
 				})
 				It("pod should not be running and should not have resource limits", func() {
-					_, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+					createdPod, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
 					Expect(err).To(HaveOccurred())
 					verify.WindowsPodHaveResourceLimits(createdPod, false)
 				})
@@ -127,7 +135,7 @@ var _ = Describe("Windows Integration Test", func() {
 					data = map[string]string{}
 				})
 				It("pod should not be running and should not have resource limits", func() {
-					_, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+					createdPod, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
 					Expect(err).To(HaveOccurred())
 					verify.WindowsPodHaveResourceLimits(createdPod, false)
 				})
@@ -136,14 +144,16 @@ var _ = Describe("Windows Integration Test", func() {
 
 		Context("when configmap not created", func() {
 			JustBeforeEach(func() {
-				// Delete configmap
+				// Delete configmap created in BeforeSuite to test
 				configMapWrapper.DeleteConfigMap(frameWork.K8sClient, ctx, configMap)
 			})
 			JustAfterEach(func() {
-				configMapWrapper.CreateConfigMap(frameWork.K8sClient, ctx, configMap)
+				// Create the default configmap tp continue tests
+				defaultConfigMap := manifest.NewConfigMapBuilder().Build()
+				configMapWrapper.CreateConfigMap(frameWork.K8sClient, ctx, defaultConfigMap)
 			})
 			It("pod should not be running and should not have resource limits", func() {
-				_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+				createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
 				Expect(err).To(HaveOccurred())
 				verify.WindowsPodHaveResourceLimits(createdPod, false)
 			})
@@ -329,7 +339,7 @@ var _ = Describe("Windows Integration Test", func() {
 
 		It("should successfully run the pod each time", func() {
 			for i := 0; i < 5; i++ {
-				By(fmt.Sprintf("run # %d: creating pod with sanme ns/name", i))
+				By(fmt.Sprintf("run # %d: creating pod with same ns/name", i))
 				pod, err := manifest.NewWindowsPodBuilder().Container(testerContainer).Build()
 				Expect(err).ToNot(HaveOccurred())
 
