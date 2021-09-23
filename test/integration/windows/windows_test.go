@@ -124,7 +124,7 @@ var _ = Describe("Windows Integration Test", func() {
 				BeforeEach(func() {
 					data = map[string]string{config.EnableWindowsIPAMKey: "wrongVal"}
 				})
-				FIt("pod should not be running and should not have resource limits", func() {
+				It("pod should not be running and should not have resource limits", func() {
 					By("creating pod and waiting for timeout")
 					createdPod, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
 					Expect(err).To(HaveOccurred())
