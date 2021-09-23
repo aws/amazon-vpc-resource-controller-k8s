@@ -18,7 +18,7 @@ import "time"
 const (
 	PollIntervalShort  = 2 * time.Second
 	PollIntervalMedium = 10 * time.Second
-
+	PollIntervalLong   = 20 * time.Second
 	// ResourceCreationTimeout is the number of seconds till the controller waits
 	// for the resource creation to complete
 	ResourceCreationTimeout = 120 * time.Second
