@@ -16,6 +16,7 @@ package node
 import (
 	"context"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -26,6 +27,7 @@ type Manager interface {
 	GetNodesWithOS(os string) (*v1.NodeList, error)
 	AddLabels(nodeList []v1.Node, label map[string]string) error
 	RemoveLabels(nodeList []v1.Node, label map[string]string) error
+	GetNode(node *v1.Node) (*v1.Node, error)
 }
 
 type defaultManager struct {
@@ -86,4 +88,10 @@ func (d *defaultManager) RemoveLabels(nodeList []v1.Node, label map[string]strin
 		}
 	}
 	return nil
+}
+
+func (d *defaultManager) GetNode(node *v1.Node) (*v1.Node, error) {
+	observedNode := &v1.Node{}
+	err := d.k8sClient.Get(context.TODO(), utils.NamespacedName(node), observedNode)
+	return observedNode, err
 }

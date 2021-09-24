@@ -428,6 +428,7 @@ func Test_performAsyncOperation(t *testing.T) {
 
 	job.op = Init
 	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
+	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
 	_, err := mock.Manager.performAsyncOperation(job)
 	assert.Contains(t, mock.Manager.dataStore, nodeName)
 	assert.NoError(t, err)

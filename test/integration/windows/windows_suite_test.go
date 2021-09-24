@@ -19,10 +19,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
 	configMapWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/configmap"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/node"
 	_ "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	verifier "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/verify"
 
@@ -65,8 +67,8 @@ var _ = BeforeSuite(func() {
 	}
 
 	By("getting the list of Windows node")
-	windowsNodeList, err = frameWork.NodeManager.GetNodesWithOS("windows")
-	Expect(err).ToNot(HaveOccurred())
+	windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, ctx, "windows",
+		config.ResourceNameIPAddress)
 
 	By("getting the instance ID for the first node")
 	Expect(len(windowsNodeList.Items)).To(BeNumerically(">", 1))
