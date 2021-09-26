@@ -28,7 +28,7 @@ RUN GIT_VERSION=$(git describe --tags --always) && \
         CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build \
         -ldflags="-X ${VERSION_PKG}.GitVersion=${GIT_VERSION} -X ${VERSION_PKG}.GitCommit=${GIT_COMMIT} -X ${VERSION_PKG}.BuildDate=${BUILD_DATE}" -a -o controller main.go
 
-FROM public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base:2021-08-22-1629654770
+FROM public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-nonroot:2021-09-22-1632348472
 
 WORKDIR /
 COPY --from=public.ecr.aws/eks-distro/kubernetes/go-runner:v0.9.0-eks-1-21-4 /usr/local/bin/go-runner /usr/local/bin/go-runner
