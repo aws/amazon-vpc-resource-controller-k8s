@@ -22,6 +22,7 @@ import (
 	"time"
 
 	crdv1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
+
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
@@ -41,13 +42,15 @@ import (
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
-	"k8s.io/client-go/tools/cache"
+	clientgocache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	// +kubebuilder:scaffold:imports
@@ -179,6 +182,17 @@ func main() {
 	renewDeadline := time.Second * time.Duration(leaderLeaseRenewDeadline)
 	retryPeriod := time.Second * time.Duration(leaderLeaseRetryPeriod)
 
+	// filter cache to subscribe to events from specific configmaps
+	newCache := cache.BuilderWithOptions(cache.Options{
+		SelectorsByObject: cache.SelectorsByObject{
+			&corev1.ConfigMap{}: {Field: fields.Set{
+				"metadata.name":      config.VpcCniConfigMapName,
+				"metadata.namespace": config.VpcCNIConfigMapNamespace,
+			}.AsSelector(),
+			},
+		},
+	})
+
 	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
 		SyncPeriod:                 &syncPeriod,
 		Scheme:                     scheme,
@@ -192,6 +206,7 @@ func main() {
 		LeaderElectionNamespace:    config.LeaderElectionNamespace,
 		LeaderElectionResourceLock: resourcelock.ConfigMapsResourceLock,
 		HealthProbeBindAddress:     ":61779", // the liveness endpoint is default to "/healthz"
+		NewCache:                   newCache,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -212,6 +227,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx := ctrl.SetupSignalHandler()
+
 	ec2Wrapper, err := ec2API.NewEC2Wrapper(roleARN, setupLog)
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
@@ -225,16 +242,17 @@ func main() {
 	// Custom data store, with optimized Pod Object. The data store must be
 	// accessed only after the Pod Reconciler has started
 	podConverter := pod.PodConverter{}
-	dataStore := cache.NewIndexer(podConverter.Indexer, pod.NodeNameIndexer())
+	dataStore := clientgocache.NewIndexer(podConverter.Indexer, pod.NodeNameIndexer())
+
+	k8sApi := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), ctx)
 
 	apiWrapper := api.Wrapper{
 		EC2API: ec2APIHelper,
-		K8sAPI: k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1()),
+		K8sAPI: k8sApi,
 		PodAPI: pod.NewPodAPIWrapper(dataStore, mgr.GetClient(), clientSet.CoreV1()),
 		SGPAPI: sgpAPI,
 	}
 
-	ctx := ctrl.SetupSignalHandler()
 	supportedResources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
 	resourceManager, err := resource.NewResourceManager(ctx, supportedResources, apiWrapper)
 	if err != nil {
@@ -242,18 +260,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// hasPodDataStoreSynced is set to true when the custom controller has synced
+	var hasPodDataStoreSynced = new(bool)
+	controllerConditions := condition.NewControllerConditions(hasPodDataStoreSynced,
+		ctrl.Log.WithName("controller conditions"), k8sApi)
+
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
 		3, 1, ctrl.Log.WithName("node async workers"), ctx)
-	nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager, apiWrapper, nodeManagerWorkers)
+	nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager,
+		apiWrapper, nodeManagerWorkers, controllerConditions)
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init node manager")
 		os.Exit(1)
 	}
-
-	// hasPodDataStoreSynced is set to true when the custom controller has synced
-	var hasPodDataStoreSynced = new(bool)
-	controllerConditions := condition.NewControllerConditions(hasPodDataStoreSynced,
-		ctrl.Log.WithName("controller conditions"))
 
 	// IMPORTANT: The Pod Reconciler must be the first controller to Run. The controller
 	// will not allow any other controller to run till the cache has synced.
@@ -285,6 +304,18 @@ func main() {
 		Conditions: controllerConditions,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
+		os.Exit(1)
+	}
+
+	if err = (&corecontroller.ConfigMapReconciler{
+		Client:      mgr.GetClient(),
+		Log:         ctrl.Log.WithName("controllers").WithName("ConfigMap"),
+		Scheme:      mgr.GetScheme(),
+		NodeManager: nodeManager,
+		K8sAPI:      k8sApi,
+		Condition:   controllerConditions,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ConfigMap")
 		os.Exit(1)
 	}
 

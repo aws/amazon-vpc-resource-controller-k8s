@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
@@ -41,7 +42,8 @@ type manager struct {
 	// wrapper around the clients for all APIs used by controller
 	wrapper api.Wrapper
 	// worker for performing async operation on node APIs
-	worker asyncWorker.Worker
+	worker     asyncWorker.Worker
+	conditions condition.Conditions
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -82,7 +84,7 @@ type AsyncOperationJob struct {
 
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
-	wrapper api.Wrapper, worker asyncWorker.Worker) (Manager, error) {
+	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions) (Manager, error) {
 
 	manager := &manager{
 		resourceManager: resourceManager,
@@ -90,6 +92,7 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 		dataStore:       make(map[string]node.Node),
 		wrapper:         wrapper,
 		worker:          worker,
+		conditions:      conditions,
 	}
 
 	return manager, worker.StartWorkerPool(manager.performAsyncOperation)
@@ -172,6 +175,7 @@ func (m *manager) UpdateNode(nodeName string) error {
 	cachedNode, found := m.dataStore[nodeName]
 	if !found {
 		m.Log.Info("the node doesn't exist in cache anymore, it might have been deleted")
+		return nil
 	}
 
 	var op AsyncOperation
@@ -299,6 +303,15 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 	switch asyncJob.op {
 	case Init:
 		err = asyncJob.node.InitResources(m.resourceManager, m.wrapper.EC2API)
+		if err != nil {
+			log.Error(err, "removing the node from cache as it failed to initialize")
+			m.removeNodeSafe(asyncJob.nodeName)
+			// Node will be retried for init on next event
+			return ctrl.Result{}, nil
+		}
+		// If there's no error, we need to update the node so the capacity is advertised
+		asyncJob.op = Update
+		return m.performAsyncOperation(asyncJob)
 	case Update:
 		err = asyncJob.node.UpdateResources(m.resourceManager, m.wrapper.EC2API)
 	case Delete:
@@ -313,17 +326,8 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		log.V(1).Info("successfully performed node operation")
 		return ctrl.Result{}, nil
 	}
-
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
 	log.Error(err, "failed to performed node operation")
 
-	if _, ok := err.(*node.ErrInitResources); ok {
-		// Remove entry from the cache, so it's initialized again
-		log.Error(err, "removing the node from cache as it failed to initialize")
-		delete(m.dataStore, asyncJob.nodeName)
-	}
 	return ctrl.Result{}, nil
 }
 
@@ -338,7 +342,7 @@ func (m *manager) isSelectedForManagement(v1node *v1.Node) bool {
 		return false
 	}
 
-	return isWindowsNode(v1node) || canAttachTrunk(v1node)
+	return (isWindowsNode(v1node) && m.conditions.IsWindowsIPAMEnabled()) || canAttachTrunk(v1node)
 }
 
 // GetNodeInstanceID returns the EC2 instance ID of a node
@@ -385,4 +389,11 @@ func isWindowsNode(node *v1.Node) bool {
 func canAttachTrunk(node *v1.Node) bool {
 	_, ok := node.Labels[config.HasTrunkAttachedLabel]
 	return ok
+}
+
+func (m *manager) removeNodeSafe(nodeName string) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	delete(m.dataStore, nodeName)
 }

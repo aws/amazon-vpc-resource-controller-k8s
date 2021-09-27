@@ -62,7 +62,7 @@ func getMockK8sWrapperWithClient(ctrl *gomock.Controller) (K8sWrapper, client.Cl
 	clientSet := fakeClientSet.NewSimpleClientset(mockNode)
 	mockController := mock_custom.NewMockController(ctrl)
 
-	return NewK8sWrapper(client, clientSet.CoreV1()), client, mockController
+	return NewK8sWrapper(client, clientSet.CoreV1(), context.Background()), client, mockController
 }
 
 // TestK8sWrapper_AdvertiseCapacity tests that the capacity is advertised to the k8s node

@@ -19,10 +19,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
+	configMapWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/configmap"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/node"
 	_ "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
-	_ "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/verify"
 	verifier "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/verify"
 
 	. "github.com/onsi/ginkgo"
@@ -38,6 +41,8 @@ var (
 	windowsNodeList       *v1.NodeList
 	defaultTestPort       int
 	instanceSecurityGroup string
+	configMap             *v1.ConfigMap
+	observedConfigMap     *v1.ConfigMap
 )
 
 func TestWindowsVPCResourceController(t *testing.T) {
@@ -51,9 +56,19 @@ var _ = BeforeSuite(func() {
 	ctx = context.Background()
 	verify = verifier.NewPodVerification(frameWork, ctx)
 
+	By("creating the configmap with flag set to true if not exists")
+	configMap = manifest.NewConfigMapBuilder().Build()
+	existingConfigmap, err := frameWork.ConfigMapManager.GetConfigMap(ctx, configMap)
+	if err != nil {
+		configMapWrapper.CreateConfigMap(frameWork.ConfigMapManager, ctx, configMap)
+	} else {
+		observedConfigMap = manifest.NewConfigMapBuilder().Data(existingConfigmap.Data).Build()
+		configMapWrapper.UpdateConfigMap(frameWork.ConfigMapManager, ctx, configMap)
+	}
+
 	By("getting the list of Windows node")
-	windowsNodeList, err = frameWork.NodeManager.GetNodesWithOS("windows")
-	Expect(err).ToNot(HaveOccurred())
+	windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, ctx, "windows",
+		config.ResourceNameIPAddress)
 
 	By("getting the instance ID for the first node")
 	Expect(len(windowsNodeList.Items)).To(BeNumerically(">", 1))
@@ -72,6 +87,13 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
+
+	if observedConfigMap != nil {
+		configMapWrapper.UpdateConfigMap(frameWork.ConfigMapManager, ctx, observedConfigMap)
+	} else {
+		configMapWrapper.DeleteConfigMap(frameWork.ConfigMapManager, ctx, configMap)
+	}
+
 	By("revoking the security group ingress for HTTP traffic")
 	frameWork.EC2Manager.RevokeSecurityGroupIngress(instanceSecurityGroup, defaultTestPort, "TCP")
 })

@@ -67,6 +67,8 @@ type K8sWrapper interface {
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
 	GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error)
 	BroadcastEvent(obj runtime.Object, reason string, message string, eventType string)
+	GetConfigMap(configMapName string, configMapNamespace string) (*v1.ConfigMap, error)
+	ListNodes() (*v1.NodeList, error)
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -76,10 +78,11 @@ type k8sWrapper struct {
 	// other K8s Object use the cache client
 	cacheClient   client.Client
 	eventRecorder record.EventRecorder
+	context       context.Context
 }
 
 // NewK8sWrapper returns a new K8sWrapper
-func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface) K8sWrapper {
+func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, ctx context.Context) K8sWrapper {
 	if !prometheusRegistered {
 		prometheusRegister()
 	}
@@ -88,12 +91,12 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface) K8sWrapp
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{
 		Component: config.ControllerName,
 	})
-	return &k8sWrapper{cacheClient: client, eventRecorder: recorder}
+	return &k8sWrapper{cacheClient: client, eventRecorder: recorder, context: ctx}
 }
 
 func (k *k8sWrapper) GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error) {
 	sgp := &v1alpha1.ENIConfig{}
-	err := k.cacheClient.Get(context.Background(), types.NamespacedName{
+	err := k.cacheClient.Get(k.context, types.NamespacedName{
 		Name: eniConfigName,
 	}, sgp)
 
@@ -102,7 +105,7 @@ func (k *k8sWrapper) GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, er
 
 func (k *k8sWrapper) GetNode(nodeName string) (*v1.Node, error) {
 	node := &v1.Node{}
-	err := k.cacheClient.Get(context.Background(), types.NamespacedName{
+	err := k.cacheClient.Get(k.context, types.NamespacedName{
 		Name: nodeName,
 	}, node)
 	return node, err
@@ -114,7 +117,6 @@ func (k *k8sWrapper) BroadcastEvent(object runtime.Object, reason string, messag
 
 // AdvertiseCapacity advertises the resource capacity for the given resource
 func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error {
-	ctx := context.Background()
 
 	request := types.NamespacedName{
 		Name: nodeName,
@@ -122,7 +124,7 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		node := &v1.Node{}
-		if err := k.cacheClient.Get(ctx, request, node); err != nil {
+		if err := k.cacheClient.Get(k.context, request, node); err != nil {
 			return err
 		}
 
@@ -137,7 +139,7 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 		newNode := node.DeepCopy()
 		newNode.Status.Capacity[v1.ResourceName(resourceName)] = resource.MustParse(strconv.Itoa(capacity))
 
-		return k.cacheClient.Status().Patch(ctx, newNode, client.MergeFrom(node))
+		return k.cacheClient.Status().Patch(k.context, newNode, client.MergeFrom(node))
 	})
 
 	if err != nil {
@@ -145,4 +147,19 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 	}
 
 	return err
+}
+
+func (k *k8sWrapper) GetConfigMap(configMapName string, configMapNamespace string) (*v1.ConfigMap, error) {
+	configMap := &v1.ConfigMap{}
+	err := k.cacheClient.Get(k.context, types.NamespacedName{
+		Name:      configMapName,
+		Namespace: configMapNamespace,
+	}, configMap)
+	return configMap, err
+}
+
+func (k *k8sWrapper) ListNodes() (*v1.NodeList, error) {
+	nodeList := &v1.NodeList{}
+	err := k.cacheClient.List(k.context, nodeList)
+	return nodeList, err
 }
