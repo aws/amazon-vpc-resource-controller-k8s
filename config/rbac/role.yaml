@@ -72,6 +72,16 @@ metadata:
   namespace: kube-system
 rules:
 - apiGroups:
+  - apps
+  resourceNames:
+  - vpc-resource-controller
+  resources:
+  - deployments
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - ""
   resourceNames:
   - amazon-vpc-cni

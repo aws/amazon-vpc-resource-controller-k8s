@@ -43,6 +43,9 @@ type Conditions interface {
 	// IsPodSGPEnabled to process events only when Security Group for Pods feature
 	// is enabled by the user
 	IsPodSGPEnabled() bool
+	// IsOldVPCControllerDeploymentPresent returns true if the old controller deployment
+	// is still present on the cluster
+	IsOldVPCControllerDeploymentPresent() bool
 }
 
 var (
@@ -84,20 +87,7 @@ func (c *condition) WaitTillPodDataStoreSynced() {
 }
 
 func (c *condition) IsWindowsIPAMEnabled() bool {
-	// Watch for deployments of old VPC Resource controller, new controller will block
-	// till the user deletes the old controller deployment. Ideally we should block till
-	// old WebHook is deleted too. But the Field selectors don't support IN operator for
-	// selecting object names and the controller deployment doesn't have labels which removes
-	// possibility of using label selectors to watch for both deployments. However, Old and
-	// new WebHook running together should not have side effects on the existing Pods.
-	oldController, err := c.K8sAPI.GetDeployment(config.OldVPCControllerDeploymentNS,
-		config.OldVPCControllerDeploymentName)
-	if err == nil {
-		c.log.V(1).Info("old controller deployment is present",
-			"deployment", *oldController)
-		return false
-	} else if err != nil && !errors.IsNotFound(err) {
-		c.log.Error(err, "received unexpected error while checking for old controller deployment")
+	if c.IsOldVPCControllerDeploymentPresent() {
 		return false
 	}
 
@@ -115,6 +105,26 @@ func (c *condition) IsWindowsIPAMEnabled() bool {
 	}
 
 	conditionWindowsIPAMEnabled.Set(0)
+	return false
+}
+
+// Watch for deployments of old VPC Resource controller, new controller will block
+// till the user deletes the old controller deployment. Ideally we should block till
+// old WebHook is deleted too. But the Field selectors don't support IN operator for
+// selecting object names and the controller deployment doesn't have labels which removes
+// possibility of using label selectors to watch for both deployments. However, Old and
+// new WebHook running together should not have side effects on the existing Pods.
+func (c *condition) IsOldVPCControllerDeploymentPresent() bool {
+	oldController, err := c.K8sAPI.GetDeployment(config.OldVPCControllerDeploymentNS,
+		config.OldVPCControllerDeploymentName)
+	if err == nil {
+		c.log.V(1).Info("old controller deployment is present",
+			"deployment", *oldController)
+		return true
+	} else if err != nil && !errors.IsNotFound(err) {
+		c.log.Error(err, "received unexpected error while checking for old controller deployment")
+		return true
+	}
 	return false
 }
 

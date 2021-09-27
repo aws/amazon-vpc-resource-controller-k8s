@@ -105,7 +105,7 @@ function install_controller() {
   USER_ROLE_ARN=$VPC_RC_ROLE_ARN \
   make deploy
 
-  check_deployment_rollout vpc-resource-controller kube-system 2m
+  check_deployment_rollout eks-vpc-resource-controller kube-system 2m
 }
 
 function disable_eks_controller() {

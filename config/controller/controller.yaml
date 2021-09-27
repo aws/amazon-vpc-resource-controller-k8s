@@ -12,7 +12,7 @@ metadata:
   namespace: system
   labels:
     control-plane: controller
-    app: vpc-resource-controller
+    app: eks-vpc-resource-controller
 spec:
   selector:
     matchLabels:
@@ -22,9 +22,9 @@ spec:
     metadata:
       labels:
         control-plane: controller
-        app: vpc-resource-controller
+        app: eks-vpc-resource-controller
     spec:
-      serviceAccountName: vpc-resource-controller
+      serviceAccountName: eks-vpc-resource-controller
       containers:
       - command:
         - /controller
