@@ -99,7 +99,6 @@ var _ = Describe("Windows Integration Test", func() {
 				// Update configmap for tests
 				testConfigMap = *manifest.NewConfigMapBuilder().Data(data).Build()
 				configMapWrapper.UpdateConfigMap(frameWork.ConfigMapManager, ctx, &testConfigMap)
-
 			})
 
 			JustAfterEach(func() {
@@ -117,6 +116,25 @@ var _ = Describe("Windows Integration Test", func() {
 					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
 					Expect(err).ToNot(HaveOccurred())
 					verify.WindowsPodHaveResourceLimits(createdPod, true)
+				})
+			})
+
+			Context("when enable-windows-ipam is set to true but old controller deployment exists", func() {
+				FIt("pod should fail to create", func() {
+					By("creating a dummy deployment for vpc-resource-controller")
+					oldControllerDeployment := manifest.NewDefaultDeploymentBuilder().
+						Namespace(config.OldVPCControllerDeploymentNS).
+						Name(config.OldVPCControllerDeploymentName).
+						Build()
+					_, err = frameWork.DeploymentManager.
+						CreateAndWaitUntilDeploymentReady(ctx, oldControllerDeployment)
+					Expect(err).ToNot(HaveOccurred())
+
+					By("creating windows pod and waiting for it to timout")
+					createdPod, err := frameWork.PodManager.
+						CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+					Expect(err).To(HaveOccurred())
+					verify.WindowsPodHaveResourceLimits(createdPod, false)
 				})
 			})
 

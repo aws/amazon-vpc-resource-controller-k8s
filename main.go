@@ -41,6 +41,7 @@ import (
 	"github.com/go-logr/zapr"
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -188,8 +189,11 @@ func main() {
 			&corev1.ConfigMap{}: {Field: fields.Set{
 				"metadata.name":      config.VpcCniConfigMapName,
 				"metadata.namespace": config.VpcCNIConfigMapNamespace,
-			}.AsSelector(),
-			},
+			}.AsSelector()},
+			&appsv1.Deployment{}: {Field: fields.Set{
+				"metadata.name":      config.OldVPCControllerDeploymentName,
+				"metadata.namespace": config.OldVPCControllerDeploymentNS,
+			}.AsSelector()},
 		},
 	})
 

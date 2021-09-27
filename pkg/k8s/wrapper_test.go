@@ -22,6 +22,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	appV1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,6 +51,12 @@ var (
 			},
 		},
 	}
+	mockDeployment = &appV1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      config.OldVPCControllerDeploymentName,
+			Namespace: config.OldVPCControllerDeploymentNS,
+		},
+	}
 )
 
 // getMockK8sWrapper returns the mock wrapper interface
@@ -57,8 +64,9 @@ func getMockK8sWrapperWithClient(ctrl *gomock.Controller) (K8sWrapper, client.Cl
 	*mock_custom.MockController) {
 	scheme := runtime.NewScheme()
 	_ = v1.AddToScheme(scheme)
+	_ = appV1.AddToScheme(scheme)
 
-	client := fakeClient.NewFakeClientWithScheme(scheme, mockNode)
+	client := fakeClient.NewFakeClientWithScheme(scheme, mockNode, mockDeployment)
 	clientSet := fakeClientSet.NewSimpleClientset(mockNode)
 	mockController := mock_custom.NewMockController(ctrl)
 
@@ -109,4 +117,23 @@ func TestK8sWrapper_AdvertiseCapacity_AlreadySet(t *testing.T) {
 	capacity := mockNode.Status.Capacity[v1.ResourceName(existingResource)]
 	assert.NoError(t, err)
 	assert.Equal(t, existingResourceQuantity, capacity.Value())
+}
+
+func TestK8sWrapper_GetDeployment(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
+
+	deployment, err := wrapper.GetDeployment(config.OldVPCControllerDeploymentNS,
+		config.OldVPCControllerDeploymentName)
+	assert.NoError(t, err)
+	assert.Equal(t, deployment.ObjectMeta, mockDeployment.ObjectMeta)
+}
+
+func TestK8sWrapper_GetDeployment_Err(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
+
+	_, err := wrapper.GetDeployment("default",
+		config.OldVPCControllerDeploymentName)
+	assert.Error(t, err)
 }

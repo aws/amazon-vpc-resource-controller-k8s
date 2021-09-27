@@ -290,9 +290,7 @@ sleep 60
 # Run Ginko Test for Security Group for Pods and skip all the local tests as
 # they require restarts and it will lead to leader lease being switched and the
 # next validation step failing
-# TODO: Remove after the fix for issue is present in latest Windows AMI
-# https://github.com/kubernetes/kubernetes/issues/100384
-run_inegration_test "--skip=(LOCAL|windows service test)"
+run_inegration_test "--skip=LOCAL"
 
 # Verify the leader lease didn't transition during the execution of test cases
 verify_leader_lease_didnt_change

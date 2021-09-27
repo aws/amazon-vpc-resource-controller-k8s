@@ -21,6 +21,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
@@ -83,6 +84,23 @@ func (c *condition) WaitTillPodDataStoreSynced() {
 }
 
 func (c *condition) IsWindowsIPAMEnabled() bool {
+	// Watch for deployments of old VPC Resource controller, new controller will block
+	// till the user deletes the old controller deployment. Ideally we should block till
+	// old WebHook is deleted too. But the Field selectors don't support IN operator for
+	// selecting object names and the controller deployment doesn't have labels which removes
+	// possibility of using label selectors to watch for both deployments. However, Old and
+	// new WebHook running together should not have side effects on the existing Pods.
+	oldController, err := c.K8sAPI.GetDeployment(config.OldVPCControllerDeploymentNS,
+		config.OldVPCControllerDeploymentName)
+	if err == nil {
+		c.log.V(1).Info("old controller deployment is present",
+			"deployment", *oldController)
+		return false
+	} else if err != nil && !errors.IsNotFound(err) {
+		c.log.Error(err, "received unexpected error while checking for old controller deployment")
+		return false
+	}
+
 	// Return false if configmap not present/any errors
 	vpcCniConfigMap, err := c.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.VpcCNIConfigMapNamespace)
 
