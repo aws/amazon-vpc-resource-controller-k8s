@@ -21,6 +21,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/prometheus/client_golang/prometheus"
 
+	appV1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -66,6 +67,7 @@ type K8sWrapper interface {
 	GetNode(nodeName string) (*v1.Node, error)
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
 	GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error)
+	GetDeployment(namespace string, name string) (*appV1.Deployment, error)
 	BroadcastEvent(obj runtime.Object, reason string, message string, eventType string)
 	GetConfigMap(configMapName string, configMapNamespace string) (*v1.ConfigMap, error)
 	ListNodes() (*v1.NodeList, error)
@@ -92,6 +94,15 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, ctx cont
 		Component: config.ControllerName,
 	})
 	return &k8sWrapper{cacheClient: client, eventRecorder: recorder, context: ctx}
+}
+
+func (k *k8sWrapper) GetDeployment(namespace string, name string) (*appV1.Deployment, error) {
+	deployment := &appV1.Deployment{}
+	err := k.cacheClient.Get(k.context, types.NamespacedName{
+		Namespace: namespace,
+		Name:      name,
+	}, deployment)
+	return deployment, err
 }
 
 func (k *k8sWrapper) GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error) {

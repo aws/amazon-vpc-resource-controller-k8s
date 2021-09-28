@@ -31,7 +31,7 @@ func CreateConfigMap(manager Manager, ctx context.Context, configmap *v1.ConfigM
 	err := manager.CreateConfigMap(ctx, configmap)
 	Expect(err).NotTo(HaveOccurred())
 
-	time.Sleep(utils.PollIntervalLong)
+	time.Sleep(utils.PollIntervalMedium)
 }
 
 func DeleteConfigMap(manager Manager, ctx context.Context, configmap *v1.ConfigMap) {
@@ -39,7 +39,7 @@ func DeleteConfigMap(manager Manager, ctx context.Context, configmap *v1.ConfigM
 	err := manager.DeleteConfigMap(ctx, configmap)
 	Expect(err).NotTo(HaveOccurred())
 
-	time.Sleep(utils.PollIntervalLong)
+	time.Sleep(utils.PollIntervalMedium)
 }
 
 func UpdateConfigMap(manager Manager, ctx context.Context, configmap *v1.ConfigMap) {
@@ -47,5 +47,5 @@ func UpdateConfigMap(manager Manager, ctx context.Context, configmap *v1.ConfigM
 	err := manager.UpdateConfigMap(ctx, configmap)
 	Expect(err).NotTo(HaveOccurred())
 
-	time.Sleep(utils.PollIntervalLong)
+	time.Sleep(utils.PollIntervalMedium)
 }

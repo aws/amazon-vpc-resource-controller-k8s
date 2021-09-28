@@ -99,7 +99,6 @@ var _ = Describe("Windows Integration Test", func() {
 				// Update configmap for tests
 				testConfigMap = *manifest.NewConfigMapBuilder().Data(data).Build()
 				configMapWrapper.UpdateConfigMap(frameWork.ConfigMapManager, ctx, &testConfigMap)
-
 			})
 
 			JustAfterEach(func() {
@@ -141,6 +140,44 @@ var _ = Describe("Windows Integration Test", func() {
 					createdPod, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
 					Expect(err).To(HaveOccurred())
 					verify.WindowsPodHaveResourceLimits(createdPod, false)
+				})
+			})
+
+			Context("when enable-windows-ipam is set to true but old controller deployment exists", func() {
+				It("pod should fail to create", func() {
+					By("creating a dummy deployment for vpc-resource-controller")
+					oldControllerDeployment := manifest.NewDefaultDeploymentBuilder().
+						Namespace(config.OldVPCControllerDeploymentNS).
+						Name(config.OldVPCControllerDeploymentName).
+						PodLabel("app", "vpc-resource-controller").
+						Replicas(1).
+						Build()
+					_, err = frameWork.DeploymentManager.
+						CreateAndWaitUntilDeploymentReady(ctx, oldControllerDeployment)
+					Expect(err).ToNot(HaveOccurred())
+
+					By("creating windows pod and waiting for it to timout")
+					createdPod, err := frameWork.PodManager.
+						CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+					Expect(err).To(HaveOccurred())
+					verify.WindowsPodHaveResourceLimits(createdPod, false)
+
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, createdPod)
+					Expect(err).ToNot(HaveOccurred())
+
+					By("deleting the old controller dummy deployment")
+					err = frameWork.DeploymentManager.DeleteAndWaitUntilDeploymentDeleted(ctx,
+						oldControllerDeployment)
+					Expect(err).ToNot(HaveOccurred())
+
+					By("creating windows pod and waiting for it to run")
+					testPod, err = manifest.NewWindowsPodBuilder().Build()
+					Expect(err).ToNot(HaveOccurred())
+
+					createdPod, err = frameWork.PodManager.
+						CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+					verify.WindowsPodHaveResourceLimits(createdPod, true)
 				})
 			})
 		})

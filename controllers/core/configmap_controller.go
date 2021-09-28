@@ -72,7 +72,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		logger.Info("updated configmap", config.EnableWindowsIPAMKey, r.curWinIPAMEnabledCond)
 
 		// Flag is updated, update all nodes
-		err := r.UpdateNodesOnConfigMapChanges()
+		err := UpdateNodesOnConfigMapChanges(r.K8sAPI, r.NodeManager)
 		if err != nil {
 			// Error in updating nodes
 			logger.Error(err, "Failed to update nodes on configmap changes")
@@ -90,16 +90,16 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *ConfigMapReconciler) UpdateNodesOnConfigMapChanges() error {
-	nodeList, err := r.K8sAPI.ListNodes()
+func UpdateNodesOnConfigMapChanges(k8sAPI k8s.K8sWrapper, nodeManager manager.Manager) error {
+	nodeList, err := k8sAPI.ListNodes()
 	if err != nil {
 		return err
 	}
 	var errList []error
 	for _, node := range nodeList.Items {
-		_, found := r.NodeManager.GetNode(node.Name)
+		_, found := nodeManager.GetNode(node.Name)
 		if found {
-			err = r.NodeManager.UpdateNode(node.Name)
+			err = nodeManager.UpdateNode(node.Name)
 			if err != nil {
 				errList = append(errList, err)
 			}
