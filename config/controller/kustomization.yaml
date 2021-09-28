@@ -2,6 +2,10 @@ resources:
 - controller.yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+namePrefix: local-
+# Adding additional prefix as a workaround, because the controller will fail running locally
+# for Windows test, as it checks the same deployment name should not be deployed to enable Windows
+# IPAM
 images:
 - name: controller
   newName: controller

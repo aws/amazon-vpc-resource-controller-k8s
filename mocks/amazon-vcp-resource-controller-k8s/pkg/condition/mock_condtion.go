@@ -45,6 +45,20 @@ func (m *MockConditions) EXPECT() *MockConditionsMockRecorder {
 	return m.recorder
 }
 
+// IsOldVPCControllerDeploymentPresent mocks base method
+func (m *MockConditions) IsOldVPCControllerDeploymentPresent() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsOldVPCControllerDeploymentPresent")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsOldVPCControllerDeploymentPresent indicates an expected call of IsOldVPCControllerDeploymentPresent
+func (mr *MockConditionsMockRecorder) IsOldVPCControllerDeploymentPresent() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsOldVPCControllerDeploymentPresent", reflect.TypeOf((*MockConditions)(nil).IsOldVPCControllerDeploymentPresent))
+}
+
 // IsPodSGPEnabled mocks base method
 func (m *MockConditions) IsPodSGPEnabled() bool {
 	m.ctrl.T.Helper()

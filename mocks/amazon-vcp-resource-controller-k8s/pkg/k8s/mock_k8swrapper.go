@@ -20,7 +20,8 @@ package mock_k8s
 import (
 	v1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	gomock "github.com/golang/mock/gomock"
-	v1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/apps/v1"
+	v10 "k8s.io/api/core/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	reflect "reflect"
 )
@@ -75,10 +76,10 @@ func (mr *MockK8sWrapperMockRecorder) BroadcastEvent(arg0, arg1, arg2, arg3 inte
 }
 
 // GetConfigMap mocks base method
-func (m *MockK8sWrapper) GetConfigMap(arg0, arg1 string) (*v1.ConfigMap, error) {
+func (m *MockK8sWrapper) GetConfigMap(arg0, arg1 string) (*v10.ConfigMap, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetConfigMap", arg0, arg1)
-	ret0, _ := ret[0].(*v1.ConfigMap)
+	ret0, _ := ret[0].(*v10.ConfigMap)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -87,6 +88,21 @@ func (m *MockK8sWrapper) GetConfigMap(arg0, arg1 string) (*v1.ConfigMap, error) 
 func (mr *MockK8sWrapperMockRecorder) GetConfigMap(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConfigMap", reflect.TypeOf((*MockK8sWrapper)(nil).GetConfigMap), arg0, arg1)
+}
+
+// GetDeployment mocks base method
+func (m *MockK8sWrapper) GetDeployment(arg0, arg1 string) (*v1.Deployment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDeployment", arg0, arg1)
+	ret0, _ := ret[0].(*v1.Deployment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetDeployment indicates an expected call of GetDeployment
+func (mr *MockK8sWrapperMockRecorder) GetDeployment(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDeployment", reflect.TypeOf((*MockK8sWrapper)(nil).GetDeployment), arg0, arg1)
 }
 
 // GetENIConfig mocks base method
@@ -105,10 +121,10 @@ func (mr *MockK8sWrapperMockRecorder) GetENIConfig(arg0 interface{}) *gomock.Cal
 }
 
 // GetNode mocks base method
-func (m *MockK8sWrapper) GetNode(arg0 string) (*v1.Node, error) {
+func (m *MockK8sWrapper) GetNode(arg0 string) (*v10.Node, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetNode", arg0)
-	ret0, _ := ret[0].(*v1.Node)
+	ret0, _ := ret[0].(*v10.Node)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -120,10 +136,10 @@ func (mr *MockK8sWrapperMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
 }
 
 // ListNodes mocks base method
-func (m *MockK8sWrapper) ListNodes() (*v1.NodeList, error) {
+func (m *MockK8sWrapper) ListNodes() (*v10.NodeList, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListNodes")
-	ret0, _ := ret[0].(*v1.NodeList)
+	ret0, _ := ret[0].(*v10.NodeList)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

@@ -22,8 +22,8 @@ import (
 	"time"
 
 	crdv1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
-
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/apps"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
@@ -41,6 +41,7 @@ import (
 	"github.com/go-logr/zapr"
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -71,6 +72,9 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// To Watch for old controller deployments, windows IPAM will not be enabled till the old controller
+// deployments are deleted by users
+// +kubebuilder:rbac:groups=apps,resources=deployments,namespace=kube-system,resourceNames=vpc-resource-controller,verbs=get;list;watch
 // +kubebuilder:rbac:groups=crd.k8s.amazonaws.com,resources=eniconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies,verbs=get;list;watch
 
@@ -188,8 +192,11 @@ func main() {
 			&corev1.ConfigMap{}: {Field: fields.Set{
 				"metadata.name":      config.VpcCniConfigMapName,
 				"metadata.namespace": config.VpcCNIConfigMapNamespace,
-			}.AsSelector(),
-			},
+			}.AsSelector()},
+			&appsv1.Deployment{}: {Field: fields.Set{
+				"metadata.name":      config.OldVPCControllerDeploymentName,
+				"metadata.namespace": config.OldVPCControllerDeploymentNS,
+			}.AsSelector()},
 		},
 	})
 
@@ -316,6 +323,16 @@ func main() {
 		Condition:   controllerConditions,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ConfigMap")
+		os.Exit(1)
+	}
+
+	if err = (&apps.DeploymentReconciler{
+		Log:         ctrl.Log.WithName("controllers").WithName("Deployment"),
+		NodeManager: nodeManager,
+		K8sAPI:      k8sApi,
+		Condition:   controllerConditions,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Deployment")
 		os.Exit(1)
 	}
 
