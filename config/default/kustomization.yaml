@@ -6,7 +6,7 @@ namespace: kube-system
 # "wordpress" becomes "alices-wordpress".
 # Note that it should also match with the prefix (text before '-') of the namespace
 # field above.
-namePrefix: eks-vpc-resource-
+namePrefix: vpc-resource-
 
 # Labels to add to all resources and selectors.
 #commonLabels:
@@ -15,6 +15,7 @@ namePrefix: eks-vpc-resource-
 bases:
 - ../crd
 - ../rbac
+- ../sa
 - ../controller
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in 
 # crd/kustomization.yaml

@@ -105,7 +105,7 @@ function install_controller() {
   USER_ROLE_ARN=$VPC_RC_ROLE_ARN \
   make deploy
 
-  check_deployment_rollout eks-vpc-resource-controller kube-system 2m
+  check_deployment_rollout vpc-resource-local-controller kube-system 2m
 }
 
 function disable_eks_controller() {
@@ -160,7 +160,7 @@ function run_inegration_test() {
 
 function verify_controller_has_lease() {
   # Get the name of the VPC Resource Controller Pod
-  local controller_pod_names="$(kubectl get pods -n kube-system -l app=eks-vpc-resource-controller \
+  local controller_pod_names="$(kubectl get pods -n kube-system -l app=vpc-resource-controller \
   --no-headers -o custom-columns=":metadata.name")"
 
   # Wait till the new controller has acquired the leader lease
@@ -227,7 +227,7 @@ function redirect_vpc_controller_logs() {
   # The parent process will log the output of the file on exit
   while ps -p $BASHPID > /dev/null
   do
-    kubectl logs -n kube-system -l app=eks-vpc-resource-controller \
+    kubectl logs -n kube-system -l app=vpc-resource-controller \
     --tail -1 -f >> $CONTROLLER_LOG_FILE || echo "LOG COLLECTOR:existing controller killed, will retry"
     # Allow for the new controller to come up
     sleep 10
