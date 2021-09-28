@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	DeploymentName     = "vpc-resource-controller"
+	DeploymentName     = "vpc-resource-local-controller"
 	Namespace          = "kube-system"
 	LeaderLeaseMapName = "cp-vpc-resource-controller"
 
