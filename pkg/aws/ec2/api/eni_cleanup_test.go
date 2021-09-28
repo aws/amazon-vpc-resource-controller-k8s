@@ -48,8 +48,9 @@ var (
 				Values: []*string{aws.String(config.ClusterNameTagValue)},
 			},
 			{
-				Name:   aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
-				Values: []*string{aws.String(config.NetworkInterfaceOwnerTagValue)},
+				Name: aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
+				Values: aws.StringSlice([]string{config.NetworkInterfaceOwnerTagValue,
+					config.NetworkInterfaceOwnerVPCCNITagValue}),
 			},
 		},
 	}
