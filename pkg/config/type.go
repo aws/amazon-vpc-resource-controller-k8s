@@ -56,8 +56,9 @@ const (
 	ClusterNameTagKeyFormat = "kubernetes.io/cluster/%s"
 	ClusterNameTagValue     = "owned"
 
-	NetworkInterfaceOwnerTagKey   = "eks:eni:owner"
-	NetworkInterfaceOwnerTagValue = "eks-vpc-resource-controller"
+	NetworkInterfaceOwnerTagKey         = "eks:eni:owner"
+	NetworkInterfaceOwnerTagValue       = "eks-vpc-resource-controller"
+	NetworkInterfaceOwnerVPCCNITagValue = "amazon-vpc-cni"
 )
 
 const (
