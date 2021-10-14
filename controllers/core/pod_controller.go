@@ -99,7 +99,7 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 		logger.V(1).Info("pod's node is not managed, skipping pod event")
 		return ctrl.Result{}, nil
 	} else if !node.IsReady() {
-		logger.Info("pod's node is not ready to handle request yet, will retry")
+		logger.V(1).Info("pod's node is not ready to handle request yet, will retry")
 		return PodRequeueRequest, nil
 	}
 	// Get the aggregate level resource, vpc controller doesn't support allocating
