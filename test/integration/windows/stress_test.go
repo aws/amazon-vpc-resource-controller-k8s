@@ -183,7 +183,7 @@ var _ = Describe("Windows Integration Stress Tests", func() {
 	})
 
 	// Negative test to reinforce the positive test are working as intended
-	Describe("when connecting to the a non existent server", func() {
+	Describe("[CANARY] when connecting to the a non existent server", func() {
 		It("all job should fail", func() {
 			By("deleting the server Pod")
 			err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, serverPod)
@@ -267,7 +267,7 @@ var _ = Describe("Windows Integration Stress Tests", func() {
 			})
 		})
 
-		Context("when controller is not restarted in between", func() {
+		Context("[CANARY] when controller is not restarted in between", func() {
 			It("all pod should run without error", func() {
 				err = CreateJobAndWaitTillCompleted(clientJob, 2)
 				Expect(err).ToNot(HaveOccurred())

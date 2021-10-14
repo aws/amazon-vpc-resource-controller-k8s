@@ -33,6 +33,14 @@ The Integration test suite provides the following focuses.
   --skip=STRESS
   ```
   
+- **[CANARY]**
+
+  Continuous tests to ensure the correctness of the live production environment by testing the bare minimum functionality. Since the Canary runs quite frequently it doesn't contain all set of integration testes which could run for hours.
+    ```
+    # To run just the canary tests.
+    --focus=CANARY
+    ```
+
 ### How to Run the Integration Tests
 
 #### Running Individual Ginkgo Test Suites

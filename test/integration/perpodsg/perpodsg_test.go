@@ -180,7 +180,7 @@ var _ = Describe("Branch ENI Pods", func() {
 				Expect(err).NotTo(HaveOccurred())
 			})
 
-			Context("when these SGPs have different security groups", func() {
+			Context("[CANARY] when these SGPs have different security groups", func() {
 				It("should run with Branch ENI IP with all security groups from all SGPs", func() {
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy2)
@@ -209,7 +209,7 @@ var _ = Describe("Branch ENI Pods", func() {
 				sgpExpressionKey   = "environment"
 				sgpExpressionValue = []string{"qa", "production"}
 			)
-			Context("when the SGP has only expression selector and a pod matches the expression", func() {
+			Context("[CANARY] when the SGP has only expression selector and a pod matches the expression", func() {
 				BeforeEach(func() {
 					podLabelKey = sgpExpressionKey
 					podLabelValue = sgpExpressionValue[0]
@@ -230,7 +230,7 @@ var _ = Describe("Branch ENI Pods", func() {
 				})
 			})
 
-			Context("when the SGP has label selector and expression selector", func() {
+			Context("[CANARY] when the SGP has label selector and expression selector", func() {
 				JustBeforeEach(func() {
 					securityGroupPolicy, err = manifest.NewSGPBuilder().
 						Namespace(namespace).
@@ -279,7 +279,7 @@ var _ = Describe("Branch ENI Pods", func() {
 			})
 		})
 
-		Context("when adding new security group to a existing SGP", func() {
+		Context("[CANARY] when adding new security group to a existing SGP", func() {
 			JustBeforeEach(func() {
 				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
 			})
@@ -294,7 +294,7 @@ var _ = Describe("Branch ENI Pods", func() {
 			})
 		})
 
-		Context("when a pod without matching SGP is created", func() {
+		Context("[CANARY] when a pod without matching SGP is created", func() {
 			BeforeEach(func() {
 				podLabelValue = "dev"
 			})
