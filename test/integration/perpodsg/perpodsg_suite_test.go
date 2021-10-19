@@ -18,7 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	verifier "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/verify"
 
@@ -49,8 +51,8 @@ var _ = BeforeSuite(func() {
 	securityGroupID1 = reCreateSGIfAlreadyExists(utils.ResourceNamePrefix + "sg-1")
 	securityGroupID2 = reCreateSGIfAlreadyExists(utils.ResourceNamePrefix + "sg-2")
 
-	nodeList, err = frameWork.NodeManager.GetNodesWithOS("linux")
-	Expect(err).ToNot(HaveOccurred())
+	nodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, ctx, "linux",
+		config.ResourceNamePodENI)
 })
 
 var _ = AfterSuite(func() {

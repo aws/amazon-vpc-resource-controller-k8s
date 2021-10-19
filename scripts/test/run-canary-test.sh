@@ -47,7 +47,7 @@ echo "Starting the ginkgo test suite"
 
 # running the tests on data plane
 (cd $INTEGRATION_TEST_DIR/perpodsg && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --focus="CANARY" -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
-(cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --focus="CANARY" -v -timeout 30m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+(cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --focus="CANARY" -v -timeout 20m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
 (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --focus="CANARY" -v -timeout 5m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
 
 #Tear down local resources
