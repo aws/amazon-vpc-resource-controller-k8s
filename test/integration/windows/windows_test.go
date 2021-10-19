@@ -393,7 +393,7 @@ var _ = Describe("Windows Integration Test", func() {
 		})
 	})
 
-	Describe("[CANARY] windows deployment tests", func() {
+	Describe("windows deployment tests", func() {
 		var deployment *appsV1.Deployment
 
 		Context("creating a deployment multiple times", func() {
