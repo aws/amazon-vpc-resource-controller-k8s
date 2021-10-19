@@ -191,7 +191,7 @@ var _ = Describe("Security Group Per Pod", func() {
 					testNodeCount = 3
 				})
 
-				It("completed job's networking should be removed", func() {
+				It("[CANARY] completed job's networking should be removed", func() {
 					VerifyJobNetworkingRemovedOnCompletion(jobs, namespace,
 						jobPodLabelKey, jobPodLabelVal)
 				})

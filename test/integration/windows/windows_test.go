@@ -110,7 +110,7 @@ var _ = Describe("Windows Integration Test", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			Context("when enable-windows-ipam is True", func() {
+			Context("[CANARY] when enable-windows-ipam is True", func() {
 				It("pod should be running and have resourceLimit injected", func() {
 					By("creating pod and waiting for ready")
 					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
@@ -131,7 +131,7 @@ var _ = Describe("Windows Integration Test", func() {
 				})
 			})
 
-			Context("When data is missing", func() {
+			Context("[CANARY] When data is missing", func() {
 				BeforeEach(func() {
 					data = map[string]string{}
 				})
@@ -182,7 +182,7 @@ var _ = Describe("Windows Integration Test", func() {
 			})
 		})
 
-		Context("when configmap not created", func() {
+		Context("[CANARY] when configmap not created", func() {
 			JustBeforeEach(func() {
 				// Delete configmap created in BeforeSuite to test
 				configMapWrapper.DeleteConfigMap(frameWork.ConfigMapManager, ctx, configMap)
@@ -201,7 +201,7 @@ var _ = Describe("Windows Integration Test", func() {
 		})
 	})
 
-	Describe("windows connectivity tests", func() {
+	Describe("[CANARY] windows connectivity tests", func() {
 		var service *v1.Service
 
 		BeforeEach(func() {
@@ -276,7 +276,7 @@ var _ = Describe("Windows Integration Test", func() {
 		})
 	})
 
-	Describe("windows service tests", func() {
+	Describe("[CANARY] windows service tests", func() {
 		var service v1.Service
 		var deployment *appsV1.Deployment
 		var deploymentContainer v1.Container

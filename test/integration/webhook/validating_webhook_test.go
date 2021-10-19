@@ -26,7 +26,7 @@ import (
 
 // TODO: Add integration test for Windows when ConfigMap feature is implemented.
 var _ = Describe("when doing pod operations from non vpc-resource-controller user", func() {
-	Context("when updating annotations", func() {
+	Context("[CANARY] when updating annotations", func() {
 		It("should fail on updating pod sgp annotation", func() {
 			newPod := pod.DeepCopy()
 			newPod.Annotations[config.ResourceNamePodENI] = "updated-annotation"
@@ -52,7 +52,7 @@ var _ = Describe("when doing pod operations from non vpc-resource-controller use
 		})
 	})
 
-	Context("when creating new pod", func() {
+	Context("[CANARY] when creating new pod", func() {
 		It("should fail on creating pod with sgp annotation", func() {
 			newPod, err := manifest.NewDefaultPodBuilder().
 				Annotations(map[string]string{config.ResourceNamePodENI: "new-annotation"}).
