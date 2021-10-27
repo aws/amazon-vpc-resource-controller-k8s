@@ -78,7 +78,12 @@ var _ = Describe("Security Group Per Pod", func() {
 			serverPodLabelVal = "sgp-app"
 
 			serverPort = 80
-			jobSleepSeconds = 0
+			// On creating multiple Jobs on a node, if the Job execution time is low (<5 seconds)
+			// then the Status/IP on the Completed Pod is not updated by kubelet on some occasion.
+			// We use the Status IP and match it with the Annotation from VPC Resource Controller
+			// to ensure the ENI IP is allocated to Pod and not a regular secondary IPv4 Address.
+			// See: https://github.com/kubernetes/kubernetes/issues/39113
+			jobSleepSeconds = 5
 
 			jobs = make(map[string][]*batchV1.Job)
 			ctx = context.TODO()
