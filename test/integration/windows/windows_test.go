@@ -131,7 +131,7 @@ var _ = Describe("Windows Integration Test", func() {
 				})
 			})
 
-			Context("[CANARY] When data is missing", func() {
+			Context("When data is missing", func() {
 				BeforeEach(func() {
 					data = map[string]string{}
 				})

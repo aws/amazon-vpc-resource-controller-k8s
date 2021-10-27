@@ -78,7 +78,7 @@ var _ = Describe("Security Group Per Pod", func() {
 			serverPodLabelVal = "sgp-app"
 
 			serverPort = 80
-			jobSleepSeconds = 0
+			jobSleepSeconds = 5
 
 			jobs = make(map[string][]*batchV1.Job)
 			ctx = context.TODO()
