@@ -8,6 +8,7 @@ set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 INTEGRATION_TEST_DIR="$SCRIPT_DIR/../../test/integration"
+SECONDS=0
 
 echo "Running VPC Resource Controller integration test with the following variables
 KUBE CONFIG: $KUBE_CONFIG_PATH
@@ -19,13 +20,11 @@ if [[ -z "${OS_OVERRIDE}" ]]; then
   OS_OVERRIDE=linux
 fi
 
-GET_CLUSTER_INFO_CMD="aws eks describe-cluster --name $CLUSTER_NAME --region $REGION"
-
-if [[ -z "${ENDPOINT}" ]]; then
-  CLUSTER_INFO=$($GET_CLUSTER_INFO_CMD)
-else
-  CLUSTER_INFO=$($GET_CLUSTER_INFO_CMD --endpoint $ENDPOINT)
+if [[ -n "${ENDPOINT}" ]]; then
+  ENDPOINT_FLAG="--endpoint $ENDPOINT"
 fi
+
+CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION $ENDPOINT_FLAG)
 
 VPC_ID=$(echo $CLUSTER_INFO | jq -r '.cluster.resourcesVpcConfig.vpcId')
 SERVICE_ROLE_ARN=$(echo $CLUSTER_INFO | jq -r '.cluster.roleArn')
@@ -39,8 +38,12 @@ aws iam attach-role-policy \
     --policy-arn arn:aws:iam::aws:policy/AmazonEKSVPCResourceController \
     --role-name "$ROLE_NAME" > /dev/null
 
+echo "Installing stable version of vpc-cni"
+aws eks create-addon --addon-name vpc-cni --cluster-name $CLUSTER_NAME --addon-version v1.7.10-eksbuild.1 $ENDPOINT_FLAG
+
 echo "Enabling Pod ENI on aws-node"
 kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=true
+kubectl rollout status ds -n kube-system aws-node
 
 #Start the test
 echo "Starting the ginkgo test suite" 
@@ -58,5 +61,7 @@ aws iam detach-role-policy \
 
 echo "Disabling Pod ENI on aws-node"
 kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=false
+kubectl rollout status ds -n kube-system aws-node
 
-echo "Successfully finished the test suite"
+
+echo "Successfully ran all tests in $(($SECONDS / 60)) minutes and $(($SECONDS % 60)) seconds"
