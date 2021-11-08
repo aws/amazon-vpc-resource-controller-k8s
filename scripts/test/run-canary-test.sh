@@ -28,6 +28,7 @@ CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION $E
 
 VPC_ID=$(echo $CLUSTER_INFO | jq -r '.cluster.resourcesVpcConfig.vpcId')
 SERVICE_ROLE_ARN=$(echo $CLUSTER_INFO | jq -r '.cluster.roleArn')
+K8S_VERSION=$(echo $CLUSTER_INFO | jq -r '.cluster.version')
 ROLE_NAME=${SERVICE_ROLE_ARN##*/}
  
 echo "VPC ID: $VPC_ID, Service Role ARN: $SERVICE_ROLE_ARN, Role Name: $ROLE_NAME"
@@ -39,7 +40,12 @@ aws iam attach-role-policy \
     --role-name "$ROLE_NAME" > /dev/null
 
 echo "Installing stable version of vpc-cni"
-aws eks create-addon --addon-name vpc-cni --cluster-name $CLUSTER_NAME --addon-version v1.7.10-eksbuild.1 $ENDPOINT_FLAG
+if [[ "$K8S_VERSION" == "1.17" ]]; then
+  kubectl apply -f https://raw.githubusercontent.com/aws/amazon-vpc-cni-k8s/v1.7.10/config/v1.7/aws-k8s-cni.yaml
+else
+   # Addons is supported from 1.18 onwards
+  aws eks create-addon --addon-name vpc-cni --cluster-name $CLUSTER_NAME --addon-version v1.7.10-eksbuild.1 $ENDPOINT_FLAG
+fi
 
 echo "Enabling Pod ENI on aws-node"
 kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=true
