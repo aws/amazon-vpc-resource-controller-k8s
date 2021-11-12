@@ -2,72 +2,136 @@
 
 # This script run integration tests on the EKS VPC Resource Controller
 # This is not intended to run integration tests when controller is running
-# on the data plane for development and testing purposes.
+# on the data plane for development and testing purposes. The scirpt expects
+# an EKS Cluster with atlest 3 Windows and Linux Nodes to be pre-created to
+# run the Canary tests. This scrip is invoked from external sources.
 
 set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 INTEGRATION_TEST_DIR="$SCRIPT_DIR/../../test/integration"
 SECONDS=0
+VPC_CNI_ADDON_NAME="vpc-cni"
 
 echo "Running VPC Resource Controller integration test with the following variables
 KUBE CONFIG: $KUBE_CONFIG_PATH
 CLUSTER_NAME: $CLUSTER_NAME
-REGION: $REGION
-OS_OVERRIDE: $OS_OVERRIDE"
-
-if [[ -z "${OS_OVERRIDE}" ]]; then
-  OS_OVERRIDE=linux
-fi
+REGION: $REGION"
 
 if [[ -n "${ENDPOINT}" ]]; then
   ENDPOINT_FLAG="--endpoint $ENDPOINT"
 fi
 
-CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION $ENDPOINT_FLAG)
+function load_addon_details() {
+  echo "loading $VPC_CNI_ADDON_NAME addon details"
+  DESCRIBE_ADDON_VERSIONS=$(aws eks describe-addon-versions --addon-name $VPC_CNI_ADDON_NAME --kubernetes-version "$K8S_VERSION")
 
-VPC_ID=$(echo $CLUSTER_INFO | jq -r '.cluster.resourcesVpcConfig.vpcId')
-SERVICE_ROLE_ARN=$(echo $CLUSTER_INFO | jq -r '.cluster.roleArn')
-K8S_VERSION=$(echo $CLUSTER_INFO | jq -r '.cluster.version')
-ROLE_NAME=${SERVICE_ROLE_ARN##*/}
- 
-echo "VPC ID: $VPC_ID, Service Role ARN: $SERVICE_ROLE_ARN, Role Name: $ROLE_NAME"
+  LATEST_ADDON_VERSION=$(echo "$DESCRIBE_ADDON_VERSIONS" | jq '.addons[0].addonVersions[0].addonVersion' -r)
+  DEFAULT_ADDON_VERSION=$(echo "$DESCRIBE_ADDON_VERSIONS" | jq -r '.addons[].addonVersions[] | select(.compatibilities[0].defaultVersion == true) | .addonVersion')
+}
 
-# Set up local resources
-echo "Attaching IAM Policy to Cluster Service Role"
-aws iam attach-role-policy \
+function load_cluster_details() {
+  CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION $ENDPOINT_FLAG)
+  VPC_ID=$(echo $CLUSTER_INFO | jq -r '.cluster.resourcesVpcConfig.vpcId')
+  SERVICE_ROLE_ARN=$(echo $CLUSTER_INFO | jq -r '.cluster.roleArn')
+  K8S_VERSION=$(echo $CLUSTER_INFO | jq -r '.cluster.version')
+  ROLE_NAME=${SERVICE_ROLE_ARN##*/}
+
+  echo "VPC ID: $VPC_ID, Service Role ARN: $SERVICE_ROLE_ARN, Role Name: $ROLE_NAME"
+}
+
+function attach_controller_policy_cluster_role() {
+  echo "Attaching IAM Policy to Cluster Service Role"
+  aws iam attach-role-policy \
     --policy-arn arn:aws:iam::aws:policy/AmazonEKSVPCResourceController \
     --role-name "$ROLE_NAME" > /dev/null
+}
 
-echo "Installing stable version of vpc-cni"
-if [[ "$K8S_VERSION" == "1.17" ]]; then
-  kubectl apply -f https://raw.githubusercontent.com/aws/amazon-vpc-cni-k8s/v1.7.10/config/v1.7/aws-k8s-cni.yaml
-else
-   # Addons is supported from 1.18 onwards
-  aws eks create-addon --addon-name vpc-cni --cluster-name $CLUSTER_NAME --addon-version v1.7.10-eksbuild.1 $ENDPOINT_FLAG
-fi
-
-echo "Enabling Pod ENI on aws-node"
-kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=true
-kubectl rollout status ds -n kube-system aws-node
-
-#Start the test
-echo "Starting the ginkgo test suite" 
-
-# running the tests on data plane
-(cd $INTEGRATION_TEST_DIR/perpodsg && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --focus="CANARY" -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
-(cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --focus="CANARY" -v -timeout 20m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
-(cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 GOOS=$OS_OVERRIDE ginkgo --focus="CANARY" -v -timeout 5m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
-
-#Tear down local resources
-echo "Detaching the IAM Policy from Cluster Service Role"
-aws iam detach-role-policy \
+function detach_controller_policy_cluster_role() {
+  echo "Detaching the IAM Policy from Cluster Service Role"
+  aws iam detach-role-policy \
     --policy-arn arn:aws:iam::aws:policy/AmazonEKSVPCResourceController \
     --role-name $ROLE_NAME > /dev/null
+}
 
-echo "Disabling Pod ENI on aws-node"
-kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=false
-kubectl rollout status ds -n kube-system aws-node
+function wait_for_addon_status() {
+  local expected_status=$1
 
+  if [ "$expected_status" =  "DELETED" ]; then
+    while $(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME); do
+      echo "addon is still not deleted"
+      sleep 5
+    done
+    echo "addon deleted"
+    return
+  fi
+
+  while true
+  do
+    STATUS=$(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME | jq -r '.addon.status')
+    if [ "$STATUS" = "$expected_status" ]; then
+      echo "addon status matches expected status"
+      return
+    fi
+    echo "addon status is not equal to $expected_status"
+    sleep 5
+  done
+}
+
+function install_add_on() {
+  local new_addon_version=$1
+
+  if DESCRIBE_ADDON=$(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME); then
+    local current_addon_version=$(echo "$DESCRIBE_ADDON" | jq '.addon.addonVersion' -r)
+    if [ "$new_addon_version" != "$current_addon_version" ]; then
+      echo "deleting the $current_addon_version to install $new_addon_version"
+      aws eks delete-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name "$VPC_CNI_ADDON_NAME"
+      wait_for_addon_status "DELETED"
+    else
+      echo "addon version $current_addon_version already installed"
+      return
+    fi
+  fi
+
+  echo "installing addon $new_addon_version"
+  aws eks create-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME --resolve-conflicts OVERWRITE --addon-version $new_addon_version
+  wait_for_addon_status "ACTIVE"
+}
+
+function set_env_aws_node() {
+  local KEY=$1
+  local VAL=$2
+
+  echo "Setting environment variable $KEY to $VAL on aws-node"
+  kubectl set env daemonset aws-node -n kube-system $KEY=$VAL
+  kubectl rollout status ds -n kube-system aws-node
+}
+
+function run_canary_tests() {
+  (cd $INTEGRATION_TEST_DIR/perpodsg && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+  (cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 25m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+  (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 5m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+}
+
+echo "Starting the ginkgo test suite"
+load_cluster_details
+
+if [[ "$K8S_VERSION" == "1.17" ]]; then
+  kubectl apply -f https://raw.githubusercontent.com/aws/amazon-vpc-cni-k8s/release-1.10/config/master/aws-k8s-cni.yaml
+else
+  # Addons is supported from 1.18 onwards
+  load_addon_details
+  # TODO: v1.7.5 (current default) restarts continiously if IMDS goes out of sync,
+  # the issue is mitigated from v.1.8.0 onwards, once the default addon is updated
+  # to v1.8.0+ we can start using default version.
+  # See: https://github.com/aws/amazon-vpc-cni-k8s/issues/1340
+  install_add_on "$LATEST_ADDON_VERSION"
+fi
+
+attach_controller_policy_cluster_role
+set_env_aws_node "ENABLE_POD_ENI" "true"
+run_canary_tests
+set_env_aws_node "ENABLE_POD_ENI" "false"
+detach_controller_policy_cluster_role
 
 echo "Successfully ran all tests in $(($SECONDS / 60)) minutes and $(($SECONDS % 60)) seconds"

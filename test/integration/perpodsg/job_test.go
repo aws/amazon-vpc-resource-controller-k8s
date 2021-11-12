@@ -196,7 +196,8 @@ var _ = Describe("Security Group Per Pod", func() {
 					testNodeCount = 3
 				})
 
-				It("[CANARY] completed job's networking should be removed", func() {
+				// Add Canary focus once https://github.com/aws/amazon-vpc-cni-k8s/issues/1746 is resolved
+				It("completed job's networking should be removed", func() {
 					VerifyJobNetworkingRemovedOnCompletion(jobs, namespace,
 						jobPodLabelKey, jobPodLabelVal)
 				})

@@ -224,7 +224,7 @@ var _ = Describe("Windows Integration Test", func() {
 			BeforeEach(func() {
 				jobParallelism = 30
 				testerContainerCommands = []string{
-					GetCommandToTestTCPConnection(service.Spec.ClusterIP, service.Spec.Ports[0].Port),
+					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, service.Spec.Ports[0].Port, 5),
 				}
 			})
 
@@ -241,7 +241,7 @@ var _ = Describe("Windows Integration Test", func() {
 			BeforeEach(func() {
 				jobParallelism = 1
 				testerContainerCommands = []string{
-					GetCommandToTestTCPConnection(service.Spec.ClusterIP, 1),
+					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, 1, 1),
 				}
 			})
 
@@ -253,7 +253,7 @@ var _ = Describe("Windows Integration Test", func() {
 		Context("when connecting to internet", func() {
 			BeforeEach(func() {
 				testerContainerCommands = []string{
-					GetCommandToTestHostConnectivity("www.amazon.com", 2),
+					GetCommandToTestHostConnectivity("www.amazon.com", 80, 2),
 				}
 			})
 
@@ -266,7 +266,7 @@ var _ = Describe("Windows Integration Test", func() {
 		Context("when connecting to invalid url", func() {
 			BeforeEach(func() {
 				testerContainerCommands = []string{
-					GetCommandToTestHostConnectivity("www.amazon.zzz", 1),
+					GetCommandToTestHostConnectivity("www.amazon.zzz", 80, 1),
 				}
 			})
 
@@ -317,7 +317,7 @@ var _ = Describe("Windows Integration Test", func() {
 
 			testerContainer = manifest.NewWindowsContainerBuilder().
 				Args([]string{
-					GetCommandToTestTCPConnection(service.Spec.ClusterIP, service.Spec.Ports[0].Port)}).
+					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, service.Spec.Ports[0].Port, 5)}).
 				Build()
 
 			testerJob = manifest.NewWindowsJob().
@@ -374,7 +374,7 @@ var _ = Describe("Windows Integration Test", func() {
 	Describe("when creating pod with same namespace and name", func() {
 		BeforeEach(func() {
 			testerContainerCommands = []string{
-				GetCommandToTestHostConnectivity("www.amazon.com", 2),
+				GetCommandToTestHostConnectivity("www.amazon.com", 80, 2),
 			}
 		})
 
@@ -422,30 +422,24 @@ var _ = Describe("Windows Integration Test", func() {
 	})
 })
 
-// GetCommandToTestTCPConnection checks TCP connection with the given host and port, if the
-// connection fails then the container will exit with non zero exit code which should be used
-// by the test case to fail the test case
-func GetCommandToTestTCPConnection(host string, port int32) string {
-	return fmt.Sprintf("if (-Not (Test-NetConnection %s -Port %d).TcpTestSucceeded)"+
-		" {Write-Output 'connection failed:'; exit 10}", host, port)
-}
-
 // GetCommandToTestHostConnectivity tests the DNS Resolution and the tcp connection to the
 // host
-func GetCommandToTestHostConnectivity(host string, retries int) string {
+func GetCommandToTestHostConnectivity(host string, port int32, retries int) string {
 	return fmt.Sprintf(`
      $Server = "%s"
+     $Port = %d
      $Retries = %d
 
-     While (-Not (Test-NetConnection -ComputerName $Server -CommonTCPPort HTTP).TcpTestSucceeded) {
+     While (-Not (Test-NetConnection -ComputerName $Server -Port $Port).TcpTestSucceeded) {
        if ($Retries -le 0) {
          Write-Warning "maximum number of connection attempts reached, exiting"
          exit 1
        }
        Write-Warning "failed to connect to server $Server, will retry"
+       Start-Sleep -s 1
        $Retries -= 1
      }
-     Write-Output "connection from $env:COMPUTERNAME to $Server succeeded"`, host, retries)
+     Write-Output "connection from $env:COMPUTERNAME to $Server succeeded"`, host, port, retries)
 }
 
 // Install and start the dot net web server, it's light weight so starts pretty quick
@@ -463,5 +457,5 @@ func GetCommandToContinuouslyTestHostConnectivity(host string, tries int, interv
       Start-Sleep -s %d # Sleep for specified interval before testing connection
       %s # The test connection command
       $val++
-    }`, tries, interval, GetCommandToTestHostConnectivity(host, 5))
+    }`, tries, interval, GetCommandToTestHostConnectivity(host, 80, 5))
 }
