@@ -2,7 +2,7 @@
 
 # This script run integration tests on the EKS VPC Resource Controller
 # This is not intended to run integration tests when controller is running
-# on the data plane for development and testing purposes. The scirpt expects
+# on the data plane for development and testing purposes. The script expects
 # an EKS Cluster with atlest 3 Windows and Linux Nodes to be pre-created to
 # run the Canary tests. This scrip is invoked from external sources.
 
