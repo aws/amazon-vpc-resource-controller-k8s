@@ -22,6 +22,12 @@ if [[ -n "${ENDPOINT}" ]]; then
   ENDPOINT_FLAG="--endpoint $ENDPOINT"
 fi
 
+# Default Proxy is not allowed in China Region
+if [[ $REGION == "cn-north-1" || $REGION == "cn-northwest-1" ]]; then
+  go env -w GOPROXY=https://goproxy.cn,direct
+  go env -w GOSUMDB=sum.golang.google.cn
+fi
+
 function load_addon_details() {
   echo "loading $VPC_CNI_ADDON_NAME addon details"
   DESCRIBE_ADDON_VERSIONS=$(aws eks describe-addon-versions --addon-name $VPC_CNI_ADDON_NAME --kubernetes-version "$K8S_VERSION")
