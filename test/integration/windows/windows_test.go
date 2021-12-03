@@ -113,7 +113,7 @@ var _ = Describe("Windows Integration Test", func() {
 			Context("[CANARY] when enable-windows-ipam is True", func() {
 				It("pod should be running and have resourceLimit injected", func() {
 					By("creating pod and waiting for ready")
-					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
 					Expect(err).ToNot(HaveOccurred())
 					verify.WindowsPodHaveResourceLimits(createdPod, true)
 				})
@@ -125,7 +125,7 @@ var _ = Describe("Windows Integration Test", func() {
 				})
 				It("pod should not be running and should not have resource limits", func() {
 					By("creating pod and waiting for timeout")
-					createdPod, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+					createdPod, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
 					Expect(err).To(HaveOccurred())
 					verify.WindowsPodHaveResourceLimits(createdPod, false)
 				})
@@ -137,7 +137,7 @@ var _ = Describe("Windows Integration Test", func() {
 				})
 				It("pod should not be running and should not have resource limits", func() {
 					By("creating pod and wait for timeout")
-					createdPod, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+					createdPod, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
 					Expect(err).To(HaveOccurred())
 					verify.WindowsPodHaveResourceLimits(createdPod, false)
 				})
@@ -158,7 +158,7 @@ var _ = Describe("Windows Integration Test", func() {
 
 					By("creating windows pod and waiting for it to timout")
 					createdPod, err := frameWork.PodManager.
-						CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+						CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
 					Expect(err).To(HaveOccurred())
 					verify.WindowsPodHaveResourceLimits(createdPod, false)
 
@@ -175,7 +175,7 @@ var _ = Describe("Windows Integration Test", func() {
 					Expect(err).ToNot(HaveOccurred())
 
 					createdPod, err = frameWork.PodManager.
-						CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+						CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
 					Expect(err).ToNot(HaveOccurred())
 					verify.WindowsPodHaveResourceLimits(createdPod, true)
 				})
@@ -194,7 +194,7 @@ var _ = Describe("Windows Integration Test", func() {
 			})
 			It("pod should not be running and should not have resource limits", func() {
 				By("creating pod and waiting for timeout")
-				createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.ResourceCreationTimeout)
+				createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
 				Expect(err).To(HaveOccurred())
 				verify.WindowsPodHaveResourceLimits(createdPod, false)
 			})
@@ -224,7 +224,7 @@ var _ = Describe("Windows Integration Test", func() {
 			BeforeEach(func() {
 				jobParallelism = 30
 				testerContainerCommands = []string{
-					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, service.Spec.Ports[0].Port, 5),
+					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, service.Spec.Ports[0].Port, 10),
 				}
 			})
 
@@ -317,7 +317,7 @@ var _ = Describe("Windows Integration Test", func() {
 
 			testerContainer = manifest.NewWindowsContainerBuilder().
 				Args([]string{
-					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, service.Spec.Ports[0].Port, 5)}).
+					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, service.Spec.Ports[0].Port, 10)}).
 				Build()
 
 			testerJob = manifest.NewWindowsJob().
@@ -429,6 +429,7 @@ func GetCommandToTestHostConnectivity(host string, port int32, retries int) stri
      $Server = "%s"
      $Port = %d
      $Retries = %d
+     $RetryInterval = 1
 
      While (-Not (Test-NetConnection -ComputerName $Server -Port $Port).TcpTestSucceeded) {
        if ($Retries -le 0) {
@@ -436,8 +437,10 @@ func GetCommandToTestHostConnectivity(host string, port int32, retries int) stri
          exit 1
        }
        Write-Warning "failed to connect to server $Server, will retry"
-       Start-Sleep -s 1
+       Start-Sleep -s $RetryInterval
        $Retries -= 1
+       # Limit RetryInterval to 20 seconds after it exceeds certain value
+       $RetryInterval = $RetryInterval -lt 20 ? ($RetryInterval*2) : 20
      }
      Write-Output "connection from $env:COMPUTERNAME to $Server succeeded"`, host, port, retries)
 }
@@ -457,5 +460,5 @@ func GetCommandToContinuouslyTestHostConnectivity(host string, tries int, interv
       Start-Sleep -s %d # Sleep for specified interval before testing connection
       %s # The test connection command
       $val++
-    }`, tries, interval, GetCommandToTestHostConnectivity(host, 80, 5))
+    }`, tries, interval, GetCommandToTestHostConnectivity(host, 80, 10))
 }

@@ -130,7 +130,7 @@ var _ = Describe("Windows Integration Stress Tests", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		serverPod, err = frameWork.PodManager.
-			CreateAndWaitTillPodIsRunning(ctx, serverPod, testUtils.ResourceCreationTimeout)
+			CreateAndWaitTillPodIsRunning(ctx, serverPod, testUtils.WindowsPodsCreationTimeout)
 		Expect(err).ToNot(HaveOccurred())
 
 		clientContainer := manifest.NewWindowsContainerBuilder().
