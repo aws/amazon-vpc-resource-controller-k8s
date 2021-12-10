@@ -116,6 +116,9 @@ function set_env_aws_node() {
 }
 
 function run_canary_tests() {
+  # For each component, we want to cover the most important test cases. We also don't want to take more than 30 minutes
+  # per repository as these tests are run sequentially along with tests from other repositories
+  # Currently the overall execution time is ~50 minutes and we will reduce it in future
   (cd $INTEGRATION_TEST_DIR/perpodsg && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
   (cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 27m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
   (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 5m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)

@@ -440,7 +440,7 @@ func GetCommandToTestHostConnectivity(host string, port int32, retries int) stri
        Start-Sleep -s $RetryInterval
        $Retries -= 1
        # Limit RetryInterval to 20 seconds after it exceeds certain value
-       $RetryInterval = $RetryInterval -lt 20 ? ($RetryInterval*2) : 20
+       $RetryInterval = if ($RetryInterval -lt 20) {$RetryInterval*2} else {20}
      }
      Write-Output "connection from $env:COMPUTERNAME to $Server succeeded"`, host, port, retries)
 }
