@@ -143,7 +143,7 @@ function run_inegration_test() {
 
   # Windows Test
   (cd test/integration/windows && \
-  CGO_ENABLED=0 ginkgo "$additional_gingko_params" -v -timeout 60m -- \
+  CGO_ENABLED=0 ginkgo "$additional_gingko_params" -v -timeout 70m -- \
   -cluster-kubeconfig=$KUBE_CONFIG_PATH \
   -cluster-name=$CLUSTER_NAME \
   --aws-region=$AWS_REGION \

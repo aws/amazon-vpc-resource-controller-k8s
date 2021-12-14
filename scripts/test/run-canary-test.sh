@@ -46,9 +46,11 @@ function load_cluster_details() {
   echo "VPC ID: $VPC_ID, Service Role ARN: $SERVICE_ROLE_ARN, Role Name: $ROLE_NAME"
 }
 
+# This operation fails with rate limit exceeded when test is running for multiple K8s
+# version at same time, hence we increase the exponential retries on the aws call
 function attach_controller_policy_cluster_role() {
   echo "Attaching IAM Policy to Cluster Service Role"
-  aws iam attach-role-policy \
+  AWS_MAX_ATTEMPTS=10 aws iam attach-role-policy \
     --policy-arn arn:aws:iam::aws:policy/AmazonEKSVPCResourceController \
     --role-name "$ROLE_NAME" > /dev/null
 }
@@ -114,8 +116,11 @@ function set_env_aws_node() {
 }
 
 function run_canary_tests() {
+  # For each component, we want to cover the most important test cases. We also don't want to take more than 30 minutes
+  # per repository as these tests are run sequentially along with tests from other repositories
+  # Currently the overall execution time is ~50 minutes and we will reduce it in future
   (cd $INTEGRATION_TEST_DIR/perpodsg && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
-  (cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 25m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+  (cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 27m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
   (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 5m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
 }
 
