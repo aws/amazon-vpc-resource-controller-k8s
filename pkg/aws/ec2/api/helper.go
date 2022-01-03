@@ -220,6 +220,8 @@ func (h *ec2APIHelper) DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*e
 	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{
 		NetworkInterfaceIds: nwInterfaceIds,
 	}
+
+	// currently callers of this method only pass individual ENI. If passing multiple ENIs, we should consider using DescribeNetworkInterfacesPages instead.
 	describeNetworkInterfaceOutput, err := h.ec2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
 	if err != nil {
 		return nil, err
@@ -515,36 +517,24 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2.Networ
 		Values: []*string{trunkID},
 	}}
 
-	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}
+	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{
+		Filters:    filters,
+		MaxResults: aws.Int64(50), //using the same page size as in eni cleaner
+	}
 	var nwInterfaces []*ec2.NetworkInterface
-	for {
-		describeNetworkInterfaceOutput, err := h.ec2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
-		if err != nil {
-			return nil, err
-		}
 
-		if describeNetworkInterfaceOutput == nil || describeNetworkInterfaceOutput.NetworkInterfaces == nil ||
-			len(describeNetworkInterfaceOutput.NetworkInterfaces) == 0 {
-			// No more interface associated with the trunk, return the result
-			break
-		}
-
-		// One or more interface associated with the trunk, return the result
-		for _, nwInterface := range describeNetworkInterfaceOutput.NetworkInterfaces {
-			// Only attach the required details to avoid consuming extra memory
+	pageFn := func(output *ec2.DescribeNetworkInterfacesOutput, lastPage bool) (nextPage bool) {
+		for _, nwInterface := range output.NetworkInterfaces {
 			nwInterfaces = append(nwInterfaces, &ec2.NetworkInterface{
 				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
 				TagSet:             nwInterface.TagSet,
 			})
 		}
+		return true
+	}
 
-		if describeNetworkInterfaceOutput.NextToken == nil {
-			break
-		}
-
-		describeNetworkInterfacesInput = &ec2.DescribeNetworkInterfacesInput{
-			NextToken: describeNetworkInterfaceOutput.NextToken,
-		}
+	if err := h.ec2Wrapper.DescribeNetworkInterfacesPages(describeNetworkInterfacesInput, pageFn); err != nil {
+		return nwInterfaces, err
 	}
 
 	return nwInterfaces, nil

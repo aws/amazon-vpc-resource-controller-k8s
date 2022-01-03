@@ -1019,8 +1019,13 @@ func TestEc2APIHelper_GetBranchNetworkInterface_PaginatedResults(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput1).Return(describeTrunkInterfaceOutput1, nil)
-	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput2).Return(describeTrunkInterfaceOutput2, nil)
+	mockWrapper.EXPECT().DescribeNetworkInterfacesPages(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ *ec2.DescribeNetworkInterfacesInput, fn func(*ec2.DescribeNetworkInterfacesOutput, bool) bool) error {
+			assert.Equal(t, true, fn(&ec2.DescribeNetworkInterfacesOutput{
+				NetworkInterfaces: append(describeTrunkInterfaceOutput1.NetworkInterfaces, describeTrunkInterfaceOutput2.NetworkInterfaces...),
+			}, true))
+			return nil
+		})
 
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId)
 	assert.NoError(t, err)

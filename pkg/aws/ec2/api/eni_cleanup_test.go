@@ -85,11 +85,21 @@ func TestENICleaner_cleanUpAvailableENIs(t *testing.T) {
 
 	gomock.InOrder(
 		// Return network interface 1 and 2 in first cycle
-		mockWrapper.EXPECT().DescribeNetworkInterfaces(mockDescribeNetworkInterfaceIp).
-			Return(mockDescribeInterfaceOpWith1And2, nil),
+		mockWrapper.EXPECT().DescribeNetworkInterfacesPages(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ *ec2.DescribeNetworkInterfacesInput, fn func(*ec2.DescribeNetworkInterfacesOutput, bool) bool) error {
+				assert.Equal(t, true, fn(&ec2.DescribeNetworkInterfacesOutput{
+					NetworkInterfaces: mockDescribeInterfaceOpWith1And2.NetworkInterfaces,
+				}, true))
+				return nil
+			}),
 		// Return network interface 1 and 3 in the second cycle
-		mockWrapper.EXPECT().DescribeNetworkInterfaces(mockDescribeNetworkInterfaceIp).
-			Return(mockDescribeInterfaceOpWith1And3, nil),
+		mockWrapper.EXPECT().DescribeNetworkInterfacesPages(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ *ec2.DescribeNetworkInterfacesInput, fn func(*ec2.DescribeNetworkInterfacesOutput, bool) bool) error {
+				assert.Equal(t, true, fn(&ec2.DescribeNetworkInterfacesOutput{
+					NetworkInterfaces: mockDescribeInterfaceOpWith1And3.NetworkInterfaces,
+				}, true))
+				return nil
+			}),
 		// Expect to delete the network interface 1
 		mockWrapper.EXPECT().DeleteNetworkInterface(
 			&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId1}).Return(nil, nil),
