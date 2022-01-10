@@ -313,7 +313,7 @@ func getMockWrapper(ctrl *gomock.Controller) (EC2APIHelper, *mock_api.MockEC2Wra
 	}
 
 	mockWrapper := mock_api.NewMockEC2Wrapper(ctrl)
-	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName)
+	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName, 100)
 
 	return ec2ApiHelper, mockWrapper
 }

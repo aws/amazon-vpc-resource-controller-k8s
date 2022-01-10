@@ -60,17 +60,18 @@ var (
 )
 
 type ec2APIHelper struct {
-	ec2Wrapper EC2Wrapper
+	ec2Wrapper  EC2Wrapper
+	eniPageSize int
 }
 
-func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
+func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string, pageSize int) EC2APIHelper {
 	// Set the key and value of the cluster name tag which will be used to tag all the network interfaces created by
 	// the controller
 	clusterNameTag = &ec2.Tag{
 		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
 		Value: aws.String(config.ClusterNameTagValue),
 	}
-	return &ec2APIHelper{ec2Wrapper: ec2Wrapper}
+	return &ec2APIHelper{ec2Wrapper: ec2Wrapper, eniPageSize: pageSize}
 }
 
 type EC2APIHelper interface {
@@ -519,7 +520,7 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2.Networ
 
 	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{
 		Filters:    filters,
-		MaxResults: aws.Int64(50), //using the same page size as in eni cleaner
+		MaxResults: aws.Int64(int64(h.eniPageSize)), //using the flagged page size
 	}
 	var nwInterfaces []*ec2.NetworkInterface
 

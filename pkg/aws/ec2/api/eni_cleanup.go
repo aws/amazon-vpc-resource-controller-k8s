@@ -35,12 +35,14 @@ type ENICleaner struct {
 	shutdown          bool
 	clusterNameTagKey string
 	ctx               context.Context
+	eniPageSize       int
 }
 
-func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
+func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager, eniPageSize int) error {
 	e.clusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
 	e.availableENIs = make(map[string]struct{})
 	e.ctx = ctx
+	e.eniPageSize = eniPageSize
 
 	return mgr.Add(e)
 }
@@ -92,13 +94,13 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 					config.NetworkInterfaceOwnerVPCCNITagValue}),
 			},
 		},
-		MaxResults: aws.Int64(50),
+		MaxResults: aws.Int64(int64(e.eniPageSize)), // using configurable page size
 	}
 
 	availableENIs := make(map[string]struct{})
 
 	pageFn := func(output *ec2.DescribeNetworkInterfacesOutput, lastPage bool) (nextPage bool) {
-		e.Log.V(2).Info("Paginated Describe ENI call to return pages", "current page size", len(output.NetworkInterfaces))
+		e.Log.V(1).Info("Paginated Describe ENI call to return pages", "current page size", len(output.NetworkInterfaces))
 		for _, eni := range output.NetworkInterfaces {
 			e.deleteNetworkInterface(availableENIs, eni)
 		}
