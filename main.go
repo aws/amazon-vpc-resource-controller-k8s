@@ -123,7 +123,7 @@ func main() {
 	flag.StringVar(&introspectBindAddr, "introspect-bind-addr", ":22775",
 		"Port for serving the introspection API")
 	flag.IntVar(&describeENIPageSize, "describe-eni-page-size", 100,
-		"The page size limiting the number of every page returned from paginated EC2 describe ENI API calls")
+		"The page size limiting the number of items included in the output of EC2 DescribeNetworkInterface per page")
 
 	flag.Parse()
 
