@@ -35,12 +35,14 @@ type ENICleaner struct {
 	shutdown          bool
 	clusterNameTagKey string
 	ctx               context.Context
+	eniPageSize       int
 }
 
-func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
+func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager, eniPageSize int) error {
 	e.clusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
 	e.availableENIs = make(map[string]struct{})
 	e.ctx = ctx
+	e.eniPageSize = eniPageSize
 
 	return mgr.Add(e)
 }
@@ -92,49 +94,45 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 					config.NetworkInterfaceOwnerVPCCNITagValue}),
 			},
 		},
+		MaxResults: aws.Int64(int64(e.eniPageSize)), // using configurable page size
 	}
 
 	availableENIs := make(map[string]struct{})
 
-	for {
-		describeNetworkInterfaceOp, err := e.EC2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfaceIp)
-		if err != nil {
-			e.Log.Error(err, "failed to describe network interfaces, will retry")
-			return
+	pageFn := func(output *ec2.DescribeNetworkInterfacesOutput, lastPage bool) (nextPage bool) {
+		e.Log.V(1).Info("Paginated Describe ENI call to return pages", "current page size", len(output.NetworkInterfaces))
+		for _, eni := range output.NetworkInterfaces {
+			e.deleteNetworkInterface(availableENIs, eni)
 		}
+		return true
+	}
 
-		for _, networkInterface := range describeNetworkInterfaceOp.NetworkInterfaces {
-			if _, exists := e.availableENIs[*networkInterface.NetworkInterfaceId]; exists {
-				// The ENI in available state has been sitting for at least the eni clean up interval and it should
-				// be removed
-				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
-					NetworkInterfaceId: networkInterface.NetworkInterfaceId,
-				})
-				if err != nil {
-					// Log and continue, if the ENI is still present it will be cleaned up in next 2 cycles
-					e.Log.Error(err, "failed to delete the dangling network interface",
-						"id", *networkInterface.NetworkInterfaceId)
-					continue
-				}
-				e.Log.Info("deleted dangling ENI successfully",
-					"eni id", networkInterface.NetworkInterfaceId)
-			} else {
-				// Seeing the ENI for the first time, add it to the new list of available network interfaces
-				availableENIs[*networkInterface.NetworkInterfaceId] = struct{}{}
-				e.Log.V(1).Info("adding eni to to the map of available ENIs, will be removed if present in "+
-					"next run too", "id", *networkInterface.NetworkInterfaceId)
-			}
-		}
-
-		if describeNetworkInterfaceOp.NextToken == nil {
-			break
-		}
-
-		describeNetworkInterfaceIp = &ec2.DescribeNetworkInterfacesInput{
-			NextToken: describeNetworkInterfaceOp.NextToken,
-		}
+	if err := e.EC2Wrapper.DescribeNetworkInterfacesPages(describeNetworkInterfaceIp, pageFn); err != nil {
+		return
 	}
 
 	// Set the available ENIs to the list of ENIs seen in the current cycle
 	e.availableENIs = availableENIs
+}
+
+func (e *ENICleaner) deleteNetworkInterface(availableENIs map[string]struct{}, networkInterface *ec2.NetworkInterface) {
+	if _, exists := e.availableENIs[*networkInterface.NetworkInterfaceId]; exists {
+		// The ENI in available state has been sitting for at least the eni clean up interval and it should
+		// be removed
+		_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+			NetworkInterfaceId: networkInterface.NetworkInterfaceId,
+		})
+		if err != nil {
+			// Log and continue, if the ENI is still present it will be cleaned up in next 2 cycles
+			e.Log.Error(err, "failed to delete the dangling network interface",
+				"id", *networkInterface.NetworkInterfaceId, "error", err)
+		}
+		e.Log.Info("deleted dangling ENI successfully",
+			"eni id", networkInterface.NetworkInterfaceId)
+	} else {
+		// Seeing the ENI for the first time, add it to the new list of available network interfaces
+		availableENIs[*networkInterface.NetworkInterfaceId] = struct{}{}
+		e.Log.V(1).Info("adding eni to to the map of available ENIs, will be removed if present in "+
+			"next run too", "id", *networkInterface.NetworkInterfaceId)
+	}
 }
