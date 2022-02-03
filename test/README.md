@@ -8,6 +8,8 @@ The integration test requires the following setup
 **For Security Group for Pods Test**
 - Have all Nitro Based Instances in your EKS Cluster.
 - Have at least 3 X c5.xlarge instance type or larger in terms of number of ENI/IP allocatable.
+- Add the AmazonEKSVPCResourceController managed policy to the cluster role that is associated with your Amazon EKS cluster. Follow Step 2 in  [Deploy security groups for pods](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html)
+- Enable the CNI plugin to manage network interfaces for pods by setting the ENABLE_POD_ENI variable to true in the aws-node DaemonSet. Follow Step 3 in  [Deploy security groups for pods](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html)
 
 **For Windows Test**
 - Have 1 Linux Operating System worker Node for running coreDNS.
