@@ -37,8 +37,12 @@ type AnnotationValidator struct {
 	Log       logr.Logger
 }
 
+// We are allowing multiple usernames to annotate the Windows/SGP Pod, eventually we will
+// only allow user based authentication and optionally a service account based authentication
+// for users wanting to run the controller for Windows IPAM on AWS Kubernetes.
 const validUserInfo = "system:serviceaccount:kube-system:vpc-resource-controller"
 const newValidUserInfo = "system:serviceaccount:kube-system:eks-vpc-resource-controller"
+const vpcControllerUserName = "eks:vpc-resource-controller"
 
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch
 
@@ -107,7 +111,8 @@ func (a *AnnotationValidator) handleUpdate(req admission.Request) admission.Resp
 		if pod.Annotations[annotationKey] != oldPod.Annotations[annotationKey] {
 			// Checking for two users, as the Service Account used by controller was changed
 			// after first release.
-			if (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) {
+			if (req.UserInfo.Username != validUserInfo) && (req.UserInfo.Username != newValidUserInfo) &&
+				(req.UserInfo.Username != vpcControllerUserName) {
 				logger.Info("denying annotation", "username", req.UserInfo.Username,
 					"annotation key", annotationKey)
 				return admission.Denied("annotation is not set by vpc-resource-controller")
