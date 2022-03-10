@@ -37,12 +37,12 @@ import (
 var (
 	mockConfigMap = &corev1.ConfigMap{
 		TypeMeta:   metav1.TypeMeta{},
-		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: config.VpcCNIConfigMapNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: config.KubeSystemNamespace},
 		Data:       map[string]string{config.EnableWindowsIPAMKey: "true"},
 	}
 	mockConfigMapReq = reconcile.Request{
 		NamespacedName: types.NamespacedName{
-			Namespace: config.VpcCNIConfigMapNamespace,
+			Namespace: config.KubeSystemNamespace,
 			Name:      config.VpcCniConfigMapName,
 		},
 	}

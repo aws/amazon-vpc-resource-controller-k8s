@@ -18,38 +18,39 @@
 package mock_k8s
 
 import (
+	reflect "reflect"
+
 	v1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/apps/v1"
 	v10 "k8s.io/api/core/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
-	reflect "reflect"
 )
 
-// MockK8sWrapper is a mock of K8sWrapper interface
+// MockK8sWrapper is a mock of K8sWrapper interface.
 type MockK8sWrapper struct {
 	ctrl     *gomock.Controller
 	recorder *MockK8sWrapperMockRecorder
 }
 
-// MockK8sWrapperMockRecorder is the mock recorder for MockK8sWrapper
+// MockK8sWrapperMockRecorder is the mock recorder for MockK8sWrapper.
 type MockK8sWrapperMockRecorder struct {
 	mock *MockK8sWrapper
 }
 
-// NewMockK8sWrapper creates a new mock instance
+// NewMockK8sWrapper creates a new mock instance.
 func NewMockK8sWrapper(ctrl *gomock.Controller) *MockK8sWrapper {
 	mock := &MockK8sWrapper{ctrl: ctrl}
 	mock.recorder = &MockK8sWrapperMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockK8sWrapper) EXPECT() *MockK8sWrapperMockRecorder {
 	return m.recorder
 }
 
-// AdvertiseCapacityIfNotSet mocks base method
+// AdvertiseCapacityIfNotSet mocks base method.
 func (m *MockK8sWrapper) AdvertiseCapacityIfNotSet(arg0, arg1 string, arg2 int) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AdvertiseCapacityIfNotSet", arg0, arg1, arg2)
@@ -57,25 +58,25 @@ func (m *MockK8sWrapper) AdvertiseCapacityIfNotSet(arg0, arg1 string, arg2 int) 
 	return ret0
 }
 
-// AdvertiseCapacityIfNotSet indicates an expected call of AdvertiseCapacityIfNotSet
+// AdvertiseCapacityIfNotSet indicates an expected call of AdvertiseCapacityIfNotSet.
 func (mr *MockK8sWrapperMockRecorder) AdvertiseCapacityIfNotSet(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AdvertiseCapacityIfNotSet", reflect.TypeOf((*MockK8sWrapper)(nil).AdvertiseCapacityIfNotSet), arg0, arg1, arg2)
 }
 
-// BroadcastEvent mocks base method
+// BroadcastEvent mocks base method.
 func (m *MockK8sWrapper) BroadcastEvent(arg0 runtime.Object, arg1, arg2, arg3 string) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "BroadcastEvent", arg0, arg1, arg2, arg3)
 }
 
-// BroadcastEvent indicates an expected call of BroadcastEvent
+// BroadcastEvent indicates an expected call of BroadcastEvent.
 func (mr *MockK8sWrapperMockRecorder) BroadcastEvent(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BroadcastEvent", reflect.TypeOf((*MockK8sWrapper)(nil).BroadcastEvent), arg0, arg1, arg2, arg3)
 }
 
-// GetConfigMap mocks base method
+// GetConfigMap mocks base method.
 func (m *MockK8sWrapper) GetConfigMap(arg0, arg1 string) (*v10.ConfigMap, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetConfigMap", arg0, arg1)
@@ -84,13 +85,28 @@ func (m *MockK8sWrapper) GetConfigMap(arg0, arg1 string) (*v10.ConfigMap, error)
 	return ret0, ret1
 }
 
-// GetConfigMap indicates an expected call of GetConfigMap
+// GetConfigMap indicates an expected call of GetConfigMap.
 func (mr *MockK8sWrapperMockRecorder) GetConfigMap(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConfigMap", reflect.TypeOf((*MockK8sWrapper)(nil).GetConfigMap), arg0, arg1)
 }
 
-// GetDeployment mocks base method
+// GetDaemonSet mocks base method.
+func (m *MockK8sWrapper) GetDaemonSet(arg0, arg1 string) (*v1.DaemonSet, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDaemonSet", arg0, arg1)
+	ret0, _ := ret[0].(*v1.DaemonSet)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetDaemonSet indicates an expected call of GetDaemonSet.
+func (mr *MockK8sWrapperMockRecorder) GetDaemonSet(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDaemonSet", reflect.TypeOf((*MockK8sWrapper)(nil).GetDaemonSet), arg0, arg1)
+}
+
+// GetDeployment mocks base method.
 func (m *MockK8sWrapper) GetDeployment(arg0, arg1 string) (*v1.Deployment, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetDeployment", arg0, arg1)
@@ -99,13 +115,13 @@ func (m *MockK8sWrapper) GetDeployment(arg0, arg1 string) (*v1.Deployment, error
 	return ret0, ret1
 }
 
-// GetDeployment indicates an expected call of GetDeployment
+// GetDeployment indicates an expected call of GetDeployment.
 func (mr *MockK8sWrapperMockRecorder) GetDeployment(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDeployment", reflect.TypeOf((*MockK8sWrapper)(nil).GetDeployment), arg0, arg1)
 }
 
-// GetENIConfig mocks base method
+// GetENIConfig mocks base method.
 func (m *MockK8sWrapper) GetENIConfig(arg0 string) (*v1alpha1.ENIConfig, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetENIConfig", arg0)
@@ -114,13 +130,13 @@ func (m *MockK8sWrapper) GetENIConfig(arg0 string) (*v1alpha1.ENIConfig, error) 
 	return ret0, ret1
 }
 
-// GetENIConfig indicates an expected call of GetENIConfig
+// GetENIConfig indicates an expected call of GetENIConfig.
 func (mr *MockK8sWrapperMockRecorder) GetENIConfig(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetENIConfig", reflect.TypeOf((*MockK8sWrapper)(nil).GetENIConfig), arg0)
 }
 
-// GetNode mocks base method
+// GetNode mocks base method.
 func (m *MockK8sWrapper) GetNode(arg0 string) (*v10.Node, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetNode", arg0)
@@ -129,13 +145,13 @@ func (m *MockK8sWrapper) GetNode(arg0 string) (*v10.Node, error) {
 	return ret0, ret1
 }
 
-// GetNode indicates an expected call of GetNode
+// GetNode indicates an expected call of GetNode.
 func (mr *MockK8sWrapperMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNode", reflect.TypeOf((*MockK8sWrapper)(nil).GetNode), arg0)
 }
 
-// ListNodes mocks base method
+// ListNodes mocks base method.
 func (m *MockK8sWrapper) ListNodes() (*v10.NodeList, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListNodes")
@@ -144,7 +160,7 @@ func (m *MockK8sWrapper) ListNodes() (*v10.NodeList, error) {
 	return ret0, ret1
 }
 
-// ListNodes indicates an expected call of ListNodes
+// ListNodes indicates an expected call of ListNodes.
 func (mr *MockK8sWrapperMockRecorder) ListNodes() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListNodes", reflect.TypeOf((*MockK8sWrapper)(nil).ListNodes))

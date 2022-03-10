@@ -18,36 +18,37 @@
 package mock_pool
 
 import (
+	reflect "reflect"
+
 	pool "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	worker "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
-// MockPool is a mock of Pool interface
+// MockPool is a mock of Pool interface.
 type MockPool struct {
 	ctrl     *gomock.Controller
 	recorder *MockPoolMockRecorder
 }
 
-// MockPoolMockRecorder is the mock recorder for MockPool
+// MockPoolMockRecorder is the mock recorder for MockPool.
 type MockPoolMockRecorder struct {
 	mock *MockPool
 }
 
-// NewMockPool creates a new mock instance
+// NewMockPool creates a new mock instance.
 func NewMockPool(ctrl *gomock.Controller) *MockPool {
 	mock := &MockPool{ctrl: ctrl}
 	mock.recorder = &MockPoolMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockPool) EXPECT() *MockPoolMockRecorder {
 	return m.recorder
 }
 
-// AssignResource mocks base method
+// AssignResource mocks base method.
 func (m *MockPool) AssignResource(arg0 string) (string, bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AssignResource", arg0)
@@ -57,13 +58,13 @@ func (m *MockPool) AssignResource(arg0 string) (string, bool, error) {
 	return ret0, ret1, ret2
 }
 
-// AssignResource indicates an expected call of AssignResource
+// AssignResource indicates an expected call of AssignResource.
 func (mr *MockPoolMockRecorder) AssignResource(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignResource", reflect.TypeOf((*MockPool)(nil).AssignResource), arg0)
 }
 
-// FreeResource mocks base method
+// FreeResource mocks base method.
 func (m *MockPool) FreeResource(arg0, arg1 string) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "FreeResource", arg0, arg1)
@@ -72,13 +73,13 @@ func (m *MockPool) FreeResource(arg0, arg1 string) (bool, error) {
 	return ret0, ret1
 }
 
-// FreeResource indicates an expected call of FreeResource
+// FreeResource indicates an expected call of FreeResource.
 func (mr *MockPoolMockRecorder) FreeResource(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FreeResource", reflect.TypeOf((*MockPool)(nil).FreeResource), arg0, arg1)
 }
 
-// GetAssignedResource mocks base method
+// GetAssignedResource mocks base method.
 func (m *MockPool) GetAssignedResource(arg0 string) (string, bool) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetAssignedResource", arg0)
@@ -87,13 +88,13 @@ func (m *MockPool) GetAssignedResource(arg0 string) (string, bool) {
 	return ret0, ret1
 }
 
-// GetAssignedResource indicates an expected call of GetAssignedResource
+// GetAssignedResource indicates an expected call of GetAssignedResource.
 func (mr *MockPoolMockRecorder) GetAssignedResource(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAssignedResource", reflect.TypeOf((*MockPool)(nil).GetAssignedResource), arg0)
 }
 
-// Introspect mocks base method
+// Introspect mocks base method.
 func (m *MockPool) Introspect() pool.IntrospectResponse {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Introspect")
@@ -101,13 +102,13 @@ func (m *MockPool) Introspect() pool.IntrospectResponse {
 	return ret0
 }
 
-// Introspect indicates an expected call of Introspect
+// Introspect indicates an expected call of Introspect.
 func (mr *MockPoolMockRecorder) Introspect() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockPool)(nil).Introspect))
 }
 
-// ProcessCoolDownQueue mocks base method
+// ProcessCoolDownQueue mocks base method.
 func (m *MockPool) ProcessCoolDownQueue() bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ProcessCoolDownQueue")
@@ -115,25 +116,25 @@ func (m *MockPool) ProcessCoolDownQueue() bool {
 	return ret0
 }
 
-// ProcessCoolDownQueue indicates an expected call of ProcessCoolDownQueue
+// ProcessCoolDownQueue indicates an expected call of ProcessCoolDownQueue.
 func (mr *MockPoolMockRecorder) ProcessCoolDownQueue() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ProcessCoolDownQueue", reflect.TypeOf((*MockPool)(nil).ProcessCoolDownQueue))
 }
 
-// ReSync mocks base method
+// ReSync mocks base method.
 func (m *MockPool) ReSync(arg0 []string) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "ReSync", arg0)
 }
 
-// ReSync indicates an expected call of ReSync
+// ReSync indicates an expected call of ReSync.
 func (mr *MockPoolMockRecorder) ReSync(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReSync", reflect.TypeOf((*MockPool)(nil).ReSync), arg0)
 }
 
-// ReconcilePool mocks base method
+// ReconcilePool mocks base method.
 func (m *MockPool) ReconcilePool() *worker.WarmPoolJob {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ReconcilePool")
@@ -141,13 +142,13 @@ func (m *MockPool) ReconcilePool() *worker.WarmPoolJob {
 	return ret0
 }
 
-// ReconcilePool indicates an expected call of ReconcilePool
+// ReconcilePool indicates an expected call of ReconcilePool.
 func (mr *MockPoolMockRecorder) ReconcilePool() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReconcilePool", reflect.TypeOf((*MockPool)(nil).ReconcilePool))
 }
 
-// UpdatePool mocks base method
+// UpdatePool mocks base method.
 func (m *MockPool) UpdatePool(arg0 *worker.WarmPoolJob, arg1 bool) bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UpdatePool", arg0, arg1)
@@ -155,7 +156,7 @@ func (m *MockPool) UpdatePool(arg0 *worker.WarmPoolJob, arg1 bool) bool {
 	return ret0
 }
 
-// UpdatePool indicates an expected call of UpdatePool
+// UpdatePool indicates an expected call of UpdatePool.
 func (mr *MockPoolMockRecorder) UpdatePool(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdatePool", reflect.TypeOf((*MockPool)(nil).UpdatePool), arg0, arg1)

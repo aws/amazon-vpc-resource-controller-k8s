@@ -194,12 +194,17 @@ func main() {
 		SelectorsByObject: cache.SelectorsByObject{
 			&corev1.ConfigMap{}: {Field: fields.Set{
 				"metadata.name":      config.VpcCniConfigMapName,
-				"metadata.namespace": config.VpcCNIConfigMapNamespace,
+				"metadata.namespace": config.KubeSystemNamespace,
 			}.AsSelector()},
 			&appsv1.Deployment{}: {Field: fields.Set{
 				"metadata.name":      config.OldVPCControllerDeploymentName,
-				"metadata.namespace": config.OldVPCControllerDeploymentNS,
+				"metadata.namespace": config.KubeSystemNamespace,
 			}.AsSelector()},
+			&appsv1.DaemonSet{}: {Field: fields.Set{
+				"metadata.name":      config.VpcCNIDaemonSetName,
+				"metadata.namespace": config.KubeSystemNamespace,
+			}.AsSelector(),
+			},
 		},
 	})
 
@@ -358,6 +363,12 @@ func main() {
 		Handler: &webhookcore.PodMutationWebHook{
 			SGPAPI:    sgpAPI,
 			Log:       ctrl.Log.WithName("resource mutation webhook"),
+			Condition: controllerConditions,
+		}})
+
+	webhookServer.Register("/validate-v1-node", &webhook.Admission{
+		Handler: &webhookcore.NodeUpdateWebhook{
+			Log:       ctrl.Log.WithName("node validation webhook"),
 			Condition: controllerConditions,
 		}})
 

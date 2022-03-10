@@ -18,37 +18,38 @@
 package mock_trunk
 
 import (
+	reflect "reflect"
+
 	ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	trunk "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
-	reflect "reflect"
 )
 
-// MockTrunkENI is a mock of TrunkENI interface
+// MockTrunkENI is a mock of TrunkENI interface.
 type MockTrunkENI struct {
 	ctrl     *gomock.Controller
 	recorder *MockTrunkENIMockRecorder
 }
 
-// MockTrunkENIMockRecorder is the mock recorder for MockTrunkENI
+// MockTrunkENIMockRecorder is the mock recorder for MockTrunkENI.
 type MockTrunkENIMockRecorder struct {
 	mock *MockTrunkENI
 }
 
-// NewMockTrunkENI creates a new mock instance
+// NewMockTrunkENI creates a new mock instance.
 func NewMockTrunkENI(ctrl *gomock.Controller) *MockTrunkENI {
 	mock := &MockTrunkENI{ctrl: ctrl}
 	mock.recorder = &MockTrunkENIMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockTrunkENI) EXPECT() *MockTrunkENIMockRecorder {
 	return m.recorder
 }
 
-// CreateAndAssociateBranchENIs mocks base method
+// CreateAndAssociateBranchENIs mocks base method.
 func (m *MockTrunkENI) CreateAndAssociateBranchENIs(arg0 *v1.Pod, arg1 []string, arg2 int) ([]*trunk.ENIDetails, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateAndAssociateBranchENIs", arg0, arg1, arg2)
@@ -57,37 +58,37 @@ func (m *MockTrunkENI) CreateAndAssociateBranchENIs(arg0 *v1.Pod, arg1 []string,
 	return ret0, ret1
 }
 
-// CreateAndAssociateBranchENIs indicates an expected call of CreateAndAssociateBranchENIs
+// CreateAndAssociateBranchENIs indicates an expected call of CreateAndAssociateBranchENIs.
 func (mr *MockTrunkENIMockRecorder) CreateAndAssociateBranchENIs(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAndAssociateBranchENIs", reflect.TypeOf((*MockTrunkENI)(nil).CreateAndAssociateBranchENIs), arg0, arg1, arg2)
 }
 
-// DeleteAllBranchENIs mocks base method
+// DeleteAllBranchENIs mocks base method.
 func (m *MockTrunkENI) DeleteAllBranchENIs() {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "DeleteAllBranchENIs")
 }
 
-// DeleteAllBranchENIs indicates an expected call of DeleteAllBranchENIs
+// DeleteAllBranchENIs indicates an expected call of DeleteAllBranchENIs.
 func (mr *MockTrunkENIMockRecorder) DeleteAllBranchENIs() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAllBranchENIs", reflect.TypeOf((*MockTrunkENI)(nil).DeleteAllBranchENIs))
 }
 
-// DeleteCooledDownENIs mocks base method
+// DeleteCooledDownENIs mocks base method.
 func (m *MockTrunkENI) DeleteCooledDownENIs() {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "DeleteCooledDownENIs")
 }
 
-// DeleteCooledDownENIs indicates an expected call of DeleteCooledDownENIs
+// DeleteCooledDownENIs indicates an expected call of DeleteCooledDownENIs.
 func (mr *MockTrunkENIMockRecorder) DeleteCooledDownENIs() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteCooledDownENIs", reflect.TypeOf((*MockTrunkENI)(nil).DeleteCooledDownENIs))
 }
 
-// InitTrunk mocks base method
+// InitTrunk mocks base method.
 func (m *MockTrunkENI) InitTrunk(arg0 ec2.EC2Instance, arg1 []v1.Pod) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "InitTrunk", arg0, arg1)
@@ -95,13 +96,13 @@ func (m *MockTrunkENI) InitTrunk(arg0 ec2.EC2Instance, arg1 []v1.Pod) error {
 	return ret0
 }
 
-// InitTrunk indicates an expected call of InitTrunk
+// InitTrunk indicates an expected call of InitTrunk.
 func (mr *MockTrunkENIMockRecorder) InitTrunk(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitTrunk", reflect.TypeOf((*MockTrunkENI)(nil).InitTrunk), arg0, arg1)
 }
 
-// Introspect mocks base method
+// Introspect mocks base method.
 func (m *MockTrunkENI) Introspect() trunk.IntrospectResponse {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Introspect")
@@ -109,37 +110,37 @@ func (m *MockTrunkENI) Introspect() trunk.IntrospectResponse {
 	return ret0
 }
 
-// Introspect indicates an expected call of Introspect
+// Introspect indicates an expected call of Introspect.
 func (mr *MockTrunkENIMockRecorder) Introspect() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockTrunkENI)(nil).Introspect))
 }
 
-// PushBranchENIsToCoolDownQueue mocks base method
+// PushBranchENIsToCoolDownQueue mocks base method.
 func (m *MockTrunkENI) PushBranchENIsToCoolDownQueue(arg0 string) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "PushBranchENIsToCoolDownQueue", arg0)
 }
 
-// PushBranchENIsToCoolDownQueue indicates an expected call of PushBranchENIsToCoolDownQueue
+// PushBranchENIsToCoolDownQueue indicates an expected call of PushBranchENIsToCoolDownQueue.
 func (mr *MockTrunkENIMockRecorder) PushBranchENIsToCoolDownQueue(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PushBranchENIsToCoolDownQueue", reflect.TypeOf((*MockTrunkENI)(nil).PushBranchENIsToCoolDownQueue), arg0)
 }
 
-// PushENIsToFrontOfDeleteQueue mocks base method
+// PushENIsToFrontOfDeleteQueue mocks base method.
 func (m *MockTrunkENI) PushENIsToFrontOfDeleteQueue(arg0 *v1.Pod, arg1 []*trunk.ENIDetails) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "PushENIsToFrontOfDeleteQueue", arg0, arg1)
 }
 
-// PushENIsToFrontOfDeleteQueue indicates an expected call of PushENIsToFrontOfDeleteQueue
+// PushENIsToFrontOfDeleteQueue indicates an expected call of PushENIsToFrontOfDeleteQueue.
 func (mr *MockTrunkENIMockRecorder) PushENIsToFrontOfDeleteQueue(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PushENIsToFrontOfDeleteQueue", reflect.TypeOf((*MockTrunkENI)(nil).PushENIsToFrontOfDeleteQueue), arg0, arg1)
 }
 
-// Reconcile mocks base method
+// Reconcile mocks base method.
 func (m *MockTrunkENI) Reconcile(arg0 []v1.Pod) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Reconcile", arg0)
@@ -147,7 +148,7 @@ func (m *MockTrunkENI) Reconcile(arg0 []v1.Pod) error {
 	return ret0
 }
 
-// Reconcile indicates an expected call of Reconcile
+// Reconcile indicates an expected call of Reconcile.
 func (mr *MockTrunkENIMockRecorder) Reconcile(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reconcile", reflect.TypeOf((*MockTrunkENI)(nil).Reconcile), arg0)

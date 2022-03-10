@@ -54,7 +54,14 @@ var (
 	mockDeployment = &appV1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      config.OldVPCControllerDeploymentName,
-			Namespace: config.OldVPCControllerDeploymentNS,
+			Namespace: config.KubeSystemNamespace,
+		},
+	}
+
+	mockDS = &appV1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      config.VpcCNIDaemonSetName,
+			Namespace: config.KubeSystemNamespace,
 		},
 	}
 )
@@ -66,7 +73,7 @@ func getMockK8sWrapperWithClient(ctrl *gomock.Controller) (K8sWrapper, client.Cl
 	_ = v1.AddToScheme(scheme)
 	_ = appV1.AddToScheme(scheme)
 
-	client := fakeClient.NewFakeClientWithScheme(scheme, mockNode, mockDeployment)
+	client := fakeClient.NewFakeClientWithScheme(scheme, mockNode, mockDeployment, mockDS)
 	clientSet := fakeClientSet.NewSimpleClientset(mockNode)
 	mockController := mock_custom.NewMockController(ctrl)
 
@@ -119,11 +126,29 @@ func TestK8sWrapper_AdvertiseCapacity_AlreadySet(t *testing.T) {
 	assert.Equal(t, existingResourceQuantity, capacity.Value())
 }
 
+func TestNewK8sWrapper_GetDaemonSet(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
+	ds, err := wrapper.GetDaemonSet(config.VpcCNIDaemonSetName, config.KubeSystemNamespace)
+
+	assert.NoError(t, err)
+	assert.Equal(t, config.VpcCNIDaemonSetName, ds.Name)
+}
+
+func TestNewK8sWrapper_GetDaemonSet_Err(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
+	_, err := wrapper.GetDaemonSet(config.VpcCNIDaemonSetName, "")
+	assert.NotNil(t, err)
+}
+
 func TestK8sWrapper_GetDeployment(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
 
-	deployment, err := wrapper.GetDeployment(config.OldVPCControllerDeploymentNS,
+	deployment, err := wrapper.GetDeployment(config.KubeSystemNamespace,
 		config.OldVPCControllerDeploymentName)
 	assert.NoError(t, err)
 	assert.Equal(t, deployment.ObjectMeta, mockDeployment.ObjectMeta)

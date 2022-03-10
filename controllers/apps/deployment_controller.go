@@ -39,7 +39,7 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	var isOldControllerDeployed bool
 	// Only process old controller deployment events
 	if req.Name != config.OldVPCControllerDeploymentName ||
-		req.Namespace != config.OldVPCControllerDeploymentNS {
+		req.Namespace != config.KubeSystemNamespace {
 		return ctrl.Result{}, nil
 	}
 

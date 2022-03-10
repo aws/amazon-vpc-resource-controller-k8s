@@ -147,7 +147,7 @@ var _ = Describe("Windows Integration Test", func() {
 				It("pod should fail to create", func() {
 					By("creating a dummy deployment for vpc-resource-controller")
 					oldControllerDeployment := manifest.NewDefaultDeploymentBuilder().
-						Namespace(config.OldVPCControllerDeploymentNS).
+						Namespace(config.KubeSystemNamespace).
 						Name(config.OldVPCControllerDeploymentName).
 						PodLabel("app", "vpc-resource-controller").
 						Replicas(1).

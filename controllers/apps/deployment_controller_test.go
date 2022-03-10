@@ -44,7 +44,7 @@ var (
 	}
 	request = controllerruntime.Request{
 		NamespacedName: types.NamespacedName{
-			Namespace: config.OldVPCControllerDeploymentNS,
+			Namespace: config.KubeSystemNamespace,
 			Name:      config.OldVPCControllerDeploymentName,
 		},
 	}

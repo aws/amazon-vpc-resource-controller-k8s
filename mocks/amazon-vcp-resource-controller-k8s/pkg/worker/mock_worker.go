@@ -18,36 +18,37 @@
 package mock_worker
 
 import (
-	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
-	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 	time "time"
+
+	gomock "github.com/golang/mock/gomock"
+	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-// MockWorker is a mock of Worker interface
+// MockWorker is a mock of Worker interface.
 type MockWorker struct {
 	ctrl     *gomock.Controller
 	recorder *MockWorkerMockRecorder
 }
 
-// MockWorkerMockRecorder is the mock recorder for MockWorker
+// MockWorkerMockRecorder is the mock recorder for MockWorker.
 type MockWorkerMockRecorder struct {
 	mock *MockWorker
 }
 
-// NewMockWorker creates a new mock instance
+// NewMockWorker creates a new mock instance.
 func NewMockWorker(ctrl *gomock.Controller) *MockWorker {
 	mock := &MockWorker{ctrl: ctrl}
 	mock.recorder = &MockWorkerMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockWorker) EXPECT() *MockWorkerMockRecorder {
 	return m.recorder
 }
 
-// StartWorkerPool mocks base method
+// StartWorkerPool mocks base method.
 func (m *MockWorker) StartWorkerPool(arg0 func(interface{}) (reconcile.Result, error)) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "StartWorkerPool", arg0)
@@ -55,31 +56,31 @@ func (m *MockWorker) StartWorkerPool(arg0 func(interface{}) (reconcile.Result, e
 	return ret0
 }
 
-// StartWorkerPool indicates an expected call of StartWorkerPool
+// StartWorkerPool indicates an expected call of StartWorkerPool.
 func (mr *MockWorkerMockRecorder) StartWorkerPool(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartWorkerPool", reflect.TypeOf((*MockWorker)(nil).StartWorkerPool), arg0)
 }
 
-// SubmitJob mocks base method
+// SubmitJob mocks base method.
 func (m *MockWorker) SubmitJob(arg0 interface{}) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "SubmitJob", arg0)
 }
 
-// SubmitJob indicates an expected call of SubmitJob
+// SubmitJob indicates an expected call of SubmitJob.
 func (mr *MockWorkerMockRecorder) SubmitJob(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitJob", reflect.TypeOf((*MockWorker)(nil).SubmitJob), arg0)
 }
 
-// SubmitJobAfter mocks base method
+// SubmitJobAfter mocks base method.
 func (m *MockWorker) SubmitJobAfter(arg0 interface{}, arg1 time.Duration) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "SubmitJobAfter", arg0, arg1)
 }
 
-// SubmitJobAfter indicates an expected call of SubmitJobAfter
+// SubmitJobAfter indicates an expected call of SubmitJobAfter.
 func (mr *MockWorkerMockRecorder) SubmitJobAfter(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitJobAfter", reflect.TypeOf((*MockWorker)(nil).SubmitJobAfter), arg0, arg1)

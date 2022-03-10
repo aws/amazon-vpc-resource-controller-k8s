@@ -18,36 +18,37 @@
 package mock_handler
 
 import (
+	reflect "reflect"
+
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
-	reflect "reflect"
 	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-// MockHandler is a mock of Handler interface
+// MockHandler is a mock of Handler interface.
 type MockHandler struct {
 	ctrl     *gomock.Controller
 	recorder *MockHandlerMockRecorder
 }
 
-// MockHandlerMockRecorder is the mock recorder for MockHandler
+// MockHandlerMockRecorder is the mock recorder for MockHandler.
 type MockHandlerMockRecorder struct {
 	mock *MockHandler
 }
 
-// NewMockHandler creates a new mock instance
+// NewMockHandler creates a new mock instance.
 func NewMockHandler(ctrl *gomock.Controller) *MockHandler {
 	mock := &MockHandler{ctrl: ctrl}
 	mock.recorder = &MockHandlerMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockHandler) EXPECT() *MockHandlerMockRecorder {
 	return m.recorder
 }
 
-// HandleCreate mocks base method
+// HandleCreate mocks base method.
 func (m *MockHandler) HandleCreate(arg0 int, arg1 *v1.Pod) (reconcile.Result, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HandleCreate", arg0, arg1)
@@ -56,13 +57,13 @@ func (m *MockHandler) HandleCreate(arg0 int, arg1 *v1.Pod) (reconcile.Result, er
 	return ret0, ret1
 }
 
-// HandleCreate indicates an expected call of HandleCreate
+// HandleCreate indicates an expected call of HandleCreate.
 func (mr *MockHandlerMockRecorder) HandleCreate(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleCreate", reflect.TypeOf((*MockHandler)(nil).HandleCreate), arg0, arg1)
 }
 
-// HandleDelete mocks base method
+// HandleDelete mocks base method.
 func (m *MockHandler) HandleDelete(arg0 *v1.Pod) (reconcile.Result, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HandleDelete", arg0)
@@ -71,7 +72,7 @@ func (m *MockHandler) HandleDelete(arg0 *v1.Pod) (reconcile.Result, error) {
 	return ret0, ret1
 }
 
-// HandleDelete indicates an expected call of HandleDelete
+// HandleDelete indicates an expected call of HandleDelete.
 func (mr *MockHandlerMockRecorder) HandleDelete(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleDelete", reflect.TypeOf((*MockHandler)(nil).HandleDelete), arg0)

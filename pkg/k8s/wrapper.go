@@ -64,6 +64,7 @@ func prometheusRegister() {
 
 // K8sWrapper represents an interface with all the common operations on K8s objects
 type K8sWrapper interface {
+	GetDaemonSet(namespace, name string) (*appV1.DaemonSet, error)
 	GetNode(nodeName string) (*v1.Node, error)
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
 	GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error)
@@ -94,6 +95,15 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, ctx cont
 		Component: config.ControllerName,
 	})
 	return &k8sWrapper{cacheClient: client, eventRecorder: recorder, context: ctx}
+}
+
+func (k *k8sWrapper) GetDaemonSet(name, namespace string) (*appV1.DaemonSet, error) {
+	ds := &appV1.DaemonSet{}
+	err := k.cacheClient.Get(k.context, types.NamespacedName{
+		Namespace: namespace,
+		Name:      name,
+	}, ds)
+	return ds, err
 }
 
 func (k *k8sWrapper) GetDeployment(namespace string, name string) (*appV1.Deployment, error) {
