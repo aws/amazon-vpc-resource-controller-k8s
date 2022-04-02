@@ -9,7 +9,7 @@
 set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-INTEGRATION_TEST_DIR="$SCRIPT_DIR/../../test/integration"
+GINKGO_TEST_BUILD_DIR="$SCRIPT_DIR/../../build"
 SECONDS=0
 VPC_CNI_ADDON_NAME="vpc-cni"
 
@@ -116,12 +116,19 @@ function set_env_aws_node() {
 }
 
 function run_canary_tests() {
+  if [[ -z "${SKIP_MAKE_TEST_BINARIES}" ]]; then
+    echo "making ginkgo test binaries"
+    (cd $SCRIPT_DIR/../.. && make build-test-binaries)
+  else
+    echo "skipping making ginkgo test binaries"
+  fi
+
   # For each component, we want to cover the most important test cases. We also don't want to take more than 30 minutes
   # per repository as these tests are run sequentially along with tests from other repositories
   # Currently the overall execution time is ~50 minutes and we will reduce it in future
-  (cd $INTEGRATION_TEST_DIR/perpodsg && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
-  (cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 27m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
-  (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 5m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+  (CGO_ENABLED=0 ginkgo --focus="CANARY" $EXTRA_GINKGO_FLAGS -v -timeout 15m $GINKGO_TEST_BUILD_DIR/perpodsg.test -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+  (CGO_ENABLED=0 ginkgo --focus="CANARY" $EXTRA_GINKGO_FLAGS -v -timeout 27m $GINKGO_TEST_BUILD_DIR/windows.test -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+  (CGO_ENABLED=0 ginkgo --focus="CANARY" $EXTRA_GINKGO_FLAGS -v -timeout 5m $GINKGO_TEST_BUILD_DIR/webhook.test -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name  =$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
 }
 
 echo "Starting the ginkgo test suite"

@@ -2,11 +2,15 @@
 IMAGE_NAME=eks/vpc-resource-controller
 REPO=$(AWS_ACCOUNT).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE_NAME)
 GIT_VERSION=$(shell git describe --tags --always)
+MAKEFILE_PATH = $(dir $(realpath -s $(firstword $(MAKEFILE_LIST))))
+
+export GOPROXY = direct
 
 VERSION ?= $(GIT_VERSION)
 IMAGE ?= $(REPO):$(VERSION)
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:trivialVersions=true"
+
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -105,3 +109,8 @@ check_var = \
 __check_var = \
     $(if $(value $1),, \
       $(error Undefined variable $1$(if $2, ($2))))
+
+build-test-binaries:
+	mkdir -p ${MAKEFILE_PATH}build
+	find ${MAKEFILE_PATH} -name '*suite_test.go' -type f  | xargs dirname  | xargs ginkgo build
+	find ${MAKEFILE_PATH} -name "*.test" -print0 | xargs -0 -I {} mv {} ${MAKEFILE_PATH}build
