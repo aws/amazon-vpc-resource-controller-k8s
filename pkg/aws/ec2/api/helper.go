@@ -542,9 +542,7 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2.Networ
 			break
 		}
 
-		describeNetworkInterfacesInput = &ec2.DescribeNetworkInterfacesInput{
-			NextToken: describeNetworkInterfaceOutput.NextToken,
-		}
+		describeNetworkInterfacesInput.NextToken = describeNetworkInterfaceOutput.NextToken
 	}
 
 	return nwInterfaces, nil

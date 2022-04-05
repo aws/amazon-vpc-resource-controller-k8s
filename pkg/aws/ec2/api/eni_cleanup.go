@@ -130,9 +130,7 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 			break
 		}
 
-		describeNetworkInterfaceIp = &ec2.DescribeNetworkInterfacesInput{
-			NextToken: describeNetworkInterfaceOp.NextToken,
-		}
+		describeNetworkInterfaceIp.NextToken = describeNetworkInterfaceOp.NextToken
 	}
 
 	// Set the available ENIs to the list of ENIs seen in the current cycle

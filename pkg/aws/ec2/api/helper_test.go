@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -183,6 +183,10 @@ var (
 		}},
 	}
 	describeTrunkInterfaceInput2 = &ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{{
+			Name:   aws.String("tag:" + config.TrunkENIIDTag),
+			Values: []*string{&trunkInterfaceId},
+		}},
 		NextToken: &tokenID,
 	}
 
