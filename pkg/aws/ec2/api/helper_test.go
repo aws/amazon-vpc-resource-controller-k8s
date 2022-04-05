@@ -313,7 +313,7 @@ func getMockWrapper(ctrl *gomock.Controller) (EC2APIHelper, *mock_api.MockEC2Wra
 	}
 
 	mockWrapper := mock_api.NewMockEC2Wrapper(ctrl)
-	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName, 100)
+	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName)
 
 	return ec2ApiHelper, mockWrapper
 }
@@ -1019,13 +1019,8 @@ func TestEc2APIHelper_GetBranchNetworkInterface_PaginatedResults(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DescribeNetworkInterfacesPages(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ *ec2.DescribeNetworkInterfacesInput, fn func(*ec2.DescribeNetworkInterfacesOutput, bool) bool) error {
-			assert.Equal(t, true, fn(&ec2.DescribeNetworkInterfacesOutput{
-				NetworkInterfaces: append(describeTrunkInterfaceOutput1.NetworkInterfaces, describeTrunkInterfaceOutput2.NetworkInterfaces...),
-			}, true))
-			return nil
-		})
+	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput1).Return(describeTrunkInterfaceOutput1, nil)
+	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput2).Return(describeTrunkInterfaceOutput2, nil)
 
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId)
 	assert.NoError(t, err)

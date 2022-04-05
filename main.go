@@ -87,7 +87,6 @@ func main() {
 	var logLevel string
 	var clusterName string
 	var listPageLimit int
-	var describeENIPageSize int
 	var leaderLeaseDurationSeconds int
 	var leaderLeaseRenewDeadline int
 	var leaderLeaseRetryPeriod int
@@ -122,8 +121,6 @@ func main() {
 	flag.StringVar(&outputPath, "log-file", "stderr", "The path to redirect controller logs")
 	flag.StringVar(&introspectBindAddr, "introspect-bind-addr", ":22775",
 		"Port for serving the introspection API")
-	flag.IntVar(&describeENIPageSize, "describe-eni-page-size", 100,
-		"The page size limiting the number of items included in the output of EC2 DescribeNetworkInterface per page")
 
 	flag.Parse()
 
@@ -248,8 +245,7 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
 	}
-	setupLog.V(1).Info("setting up page size for describe interfaces API calls", "max page size", describeENIPageSize)
-	ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName, describeENIPageSize)
+	ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName)
 
 	sgpAPI := utils.NewSecurityGroupForPodsAPI(
 		mgr.GetClient(),
@@ -307,7 +303,7 @@ func main() {
 		EC2Wrapper:  ec2Wrapper,
 		ClusterName: clusterName,
 		Log:         ctrl.Log.WithName("eni cleaner"),
-	}).SetupWithManager(ctx, mgr, describeENIPageSize); err != nil {
+	}).SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to start eni cleaner")
 		os.Exit(1)
 	}
