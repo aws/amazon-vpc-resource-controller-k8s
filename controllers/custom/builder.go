@@ -24,7 +24,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/runtime/inject"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 type Builder struct {
@@ -42,8 +45,9 @@ type Builder struct {
 	mgr               manager.Manager
 	dataStoreSyncFlag *bool
 
-	log logr.Logger
-	ctx context.Context
+	log          logr.Logger
+	ctx          context.Context
+	watchesInput []watchInput
 }
 
 func (b *Builder) Named(name string) *Builder {
@@ -180,6 +184,11 @@ func (b *Builder) Complete(reconciler Reconciler) error {
 		syncFlag:  b.dataStoreSyncFlag,
 	}
 
+	// Adds watch sources to the controller
+	if err := b.watch(controller); err != nil {
+		b.log.Error(err, "unable to start watches")
+	}
+
 	// Adds the controller to the manager's Runnable
 	return b.mgr.Add(controller)
 }
@@ -201,4 +210,26 @@ func (b *Builder) SetDefaults() {
 	if b.options.ResyncPeriod == 0 {
 		b.options.ResyncPeriod = 30 * time.Minute
 	}
+}
+
+// Watches collects watch sources and adds them to the builder
+func (b *Builder) Watches(src source.Source, eventHandler handler.EventHandler) *Builder {
+	b.watchesInput = append(b.watchesInput, watchInput{
+		src:          src,
+		eventHandler: eventHandler,
+	})
+	return b
+}
+
+// watch injects watch sources into the Manager's shared cache and then adds watch sources to the controller
+func (b *Builder) watch(c *CustomController) error {
+	for _, w := range b.watchesInput {
+		if _, err := inject.CacheInto(b.mgr.GetCache(), w.src); err != nil {
+			return err
+		}
+		if err := c.Watch(b.ctx, w.src, w.eventHandler); err != nil {
+			return err
+		}
+	}
+	return nil
 }

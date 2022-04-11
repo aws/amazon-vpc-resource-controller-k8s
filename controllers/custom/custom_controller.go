@@ -28,6 +28,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 // Converter for converting k8s object and object list used in watches and list operation
@@ -93,8 +96,17 @@ type CustomController struct {
 	config *cache.Config
 	// options is the configurable parameters for creating
 	// the controller
-	options  Options
-	syncFlag *bool
+	options   Options
+	syncFlag  *bool
+	watches   []watchInput
+	Started   bool
+	SetFields func(i interface{}) error
+}
+
+// watchInput contains all the information necessary to start a watch.
+type watchInput struct {
+	src          source.Source
+	eventHandler handler.EventHandler
 }
 
 // Request for Add/Update only contains the Namespace/Name
@@ -127,11 +139,17 @@ func (c *CustomController) Start(ctx context.Context) error {
 		// Wait till cache sync
 		c.WaitForCacheSync(coreController)
 
+		if err := c.startWatches(ctx); err != nil {
+			return err
+		}
+
 		c.log.Info("Starting Workers", "worker count",
 			c.options.MaxConcurrentReconciles)
 		for i := 0; i < c.options.MaxConcurrentReconciles; i++ {
 			go wait.Until(c.worker, time.Second, ctx.Done())
 		}
+
+		c.Started = true
 
 		return nil
 	}()
@@ -221,8 +239,15 @@ func (c *CustomController) processNextWorkItem() bool {
 
 func (c *CustomController) reconcileHandler(obj interface{}) bool {
 	var req Request
+	var normalRequest reconcile.Request
 	var ok bool
-	if req, ok = obj.(Request); !ok {
+
+	// Requests generated through a watch return reconcile.Request
+	// instead of custom.Request, so we must convert it to custom.Request
+	if normalRequest, ok = obj.(reconcile.Request); ok {
+		req.NamespacedName = normalRequest.NamespacedName
+		req.DeletedObject = nil
+	} else if req, ok = obj.(Request); !ok {
 		// As the item in the workqueue is actually invalid, we call
 		// Forget here else we'd go into a loop of attempting to
 		// process a work item that is invalid.
@@ -259,4 +284,36 @@ func (c *CustomController) reconcileHandler(obj interface{}) bool {
 
 	// Return true, don't take a break
 	return true
+}
+
+// Watch adds a new watch source to the list of watches the controller will eventually start
+func (c *CustomController) Watch(ctx context.Context, src source.Source, eventHandler handler.EventHandler) error {
+	if !c.Started {
+		c.watches = append(c.watches, watchInput{src: src, eventHandler: eventHandler})
+		return nil
+	}
+	c.log.Info("Starting EventSource", "source", src)
+	return src.Start(ctx, eventHandler, c.workQueue)
+}
+
+func (c *CustomController) startWatches(ctx context.Context) error {
+	for _, w := range c.watches {
+		if err := w.src.Start(ctx, w.eventHandler, c.workQueue); err != nil {
+			return err
+		}
+	}
+	for _, w := range c.watches {
+		syncingSource, ok := w.src.(source.SyncingSource)
+		if !ok {
+			c.log.Info("is not a valid syncing source")
+		}
+		if err := syncingSource.WaitForSync(ctx); err != nil {
+			err := fmt.Errorf("failed to wait for node caches to sync: %w", err)
+			c.log.Error(err, "Could not wait for Cache to sync")
+			return err
+		}
+	}
+	c.watches = nil
+
+	return nil
 }

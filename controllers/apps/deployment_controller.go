@@ -16,7 +16,7 @@ package apps
 import (
 	"context"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
+	controllers "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"

@@ -24,9 +24,14 @@ import (
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;update;patch
@@ -165,5 +170,17 @@ func (r *PodReconciler) SetupWithManager(ctx context.Context, manager ctrl.Manag
 			PageLimit:               pageLimit,
 			ResyncPeriod:            syncPeriod,
 			MaxConcurrentReconciles: 2,
-		}).Complete(r)
+		}).Watches(&source.Kind{Type: &v1.Node{}},
+		handler.EnqueueRequestsFromMapFunc(func(o client.Object) (requests []reconcile.Request) {
+			// we get pods from optimized cache here to reduce memory requirements
+			pods, err := r.DataStore.ByIndex(pod.NodeNameSpec, o.GetName())
+			if err != nil {
+				r.Log.Error(err, "unable to get pods from cache in response to node event")
+			}
+			for _, p := range pods {
+				pod := p.(*v1.Pod)
+				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}})
+			}
+			return requests
+		})).Complete(r)
 }
