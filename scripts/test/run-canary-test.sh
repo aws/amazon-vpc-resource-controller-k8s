@@ -64,25 +64,40 @@ function detach_controller_policy_cluster_role() {
 
 function wait_for_addon_status() {
   local expected_status=$1
-
+  local retry_attempt=0
   if [ "$expected_status" =  "DELETED" ]; then
-    while $(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME --region $REGION); do
+    while $(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME --region "$REGION"); do
+      if [ $retry_attempt -ge 30 ]; then
+        echo "failed to delete addon, qutting after too many attempts"
+        exit 1
+      fi
       echo "addon is still not deleted"
       sleep 5
+      ((retry_attempt=retry_attempt+1))
     done
     echo "addon deleted"
+    # Even after the addon API Returns an error, if you immediately try to create a new addon it sometimes fails
+    sleep 10
     return
   fi
 
+  retry_attempt=0
   while true
   do
-    STATUS=$(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME --region $REGION | jq -r '.addon.status')
+    STATUS=$(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME --region "$REGION" | jq -r '.addon.status')
     if [ "$STATUS" = "$expected_status" ]; then
       echo "addon status matches expected status"
       return
     fi
+    # We have seen the canary test get stuck, we don't know what causes this but most likely suspect is
+    # the addon update/delete attempts. So adding limited retries.
+    if [ $retry_attempt -ge 30 ]; then
+      echo "failed to get desired add-on status: $STATUS, qutting after too many attempts"
+      exit 1
+    fi
     echo "addon status is not equal to $expected_status"
-    sleep 5
+    sleep 10
+    ((retry_attempt=retry_attempt+1))
   done
 }
 
