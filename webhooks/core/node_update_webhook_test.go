@@ -162,41 +162,6 @@ func TestNodeUpdateWebhook_Handle(t *testing.T) {
 					},
 				},
 			},
-			mockInvocation: func(mock MockNodeUpdateWebhook) {
-				mock.MockCondition.EXPECT().IsPodSGPEnabled().Return(true)
-			},
-		},
-		{
-			name: "[sgp] deny request when expected label/annotations are modified but SGP not enabled",
-			req: []admission.Request{
-				{
-					AdmissionRequest: admissionv1.AdmissionRequest{
-						Operation: admissionv1.Update,
-						UserInfo: v1.UserInfo{
-							Username: awsNodeUsername,
-						},
-						Object: runtime.RawExtension{
-							Raw:    nodeWithHasTrunkAttachedLabelRaw,
-							Object: nodeWithHasTrunkAttachedLabel,
-						},
-						OldObject: runtime.RawExtension{
-							Raw:    oldNodeRaw,
-							Object: oldNode,
-						},
-					},
-				},
-			},
-			want: admission.Response{
-				AdmissionResponse: admissionv1.AdmissionResponse{
-					Allowed: false,
-					Result: &metav1.Status{
-						Code: http.StatusOK,
-					},
-				},
-			},
-			mockInvocation: func(mock MockNodeUpdateWebhook) {
-				mock.MockCondition.EXPECT().IsPodSGPEnabled().Return(false)
-			},
 		},
 		{
 			name: "[sgp] deny request if any non expected field is modified",
@@ -257,9 +222,6 @@ func TestNodeUpdateWebhook_Handle(t *testing.T) {
 						Code: http.StatusOK,
 					},
 				},
-			},
-			mockInvocation: func(mock MockNodeUpdateWebhook) {
-				mock.MockCondition.EXPECT().IsPodSGPEnabled().Return(false)
 			},
 		},
 	}

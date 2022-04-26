@@ -29,11 +29,6 @@ func (a *NodeUpdateWebhook) Handle(_ context.Context, req admission.Request) adm
 		return admission.Allowed("")
 	}
 
-	// Deny all requests if SGP feature is not enabled on aws-node
-	if !a.Condition.IsPodSGPEnabled() {
-		return admission.Denied("SGP is not enabled, node update from aws-node not allowed")
-	}
-
 	logger := a.Log.WithValues("node", req.Name)
 
 	logger.Info("update request received from aws-node")

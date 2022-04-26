@@ -60,20 +60,6 @@ func (mr *MockConditionsMockRecorder) IsOldVPCControllerDeploymentPresent() *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsOldVPCControllerDeploymentPresent", reflect.TypeOf((*MockConditions)(nil).IsOldVPCControllerDeploymentPresent))
 }
 
-// IsPodSGPEnabled mocks base method.
-func (m *MockConditions) IsPodSGPEnabled() bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IsPodSGPEnabled")
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// IsPodSGPEnabled indicates an expected call of IsPodSGPEnabled.
-func (mr *MockConditionsMockRecorder) IsPodSGPEnabled() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsPodSGPEnabled", reflect.TypeOf((*MockConditions)(nil).IsPodSGPEnabled))
-}
-
 // IsWindowsIPAMEnabled mocks base method.
 func (m *MockConditions) IsWindowsIPAMEnabled() bool {
 	m.ctrl.T.Helper()

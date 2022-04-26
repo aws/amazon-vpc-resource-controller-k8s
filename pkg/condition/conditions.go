@@ -42,7 +42,8 @@ type Conditions interface {
 	IsWindowsIPAMEnabled() bool
 	// IsPodSGPEnabled to process events only when Security Group for Pods feature
 	// is enabled by the user
-	IsPodSGPEnabled() bool
+	// IsPodSGPEnabled() bool We need to check if SGP is enabled via ConfigMap + Environment variables
+
 	// IsOldVPCControllerDeploymentPresent returns true if the old controller deployment
 	// is still present on the cluster
 	IsOldVPCControllerDeploymentPresent() bool
@@ -128,6 +129,7 @@ func (c *condition) IsOldVPCControllerDeploymentPresent() bool {
 	return false
 }
 
+// TOOD: Check if SPG is enabled using ConfigMap.
 func (c *condition) IsPodSGPEnabled() bool {
 	daemonSet, err := c.K8sAPI.GetDaemonSet(config.VpcCNIDaemonSetName,
 		config.KubeSystemNamespace)
