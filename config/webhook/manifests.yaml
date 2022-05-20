@@ -14,6 +14,7 @@ webhooks:
       namespace: system
       path: /mutate-v1-pod
   failurePolicy: Ignore
+  matchPolicy: Equivalent
   name: mpod.vpc.k8s.aws
   timeoutSeconds: 5
   rules:
@@ -42,6 +43,7 @@ webhooks:
       namespace: system
       path: /validate-v1-pod
   failurePolicy: Ignore
+  matchPolicy: Equivalent
   name: vpod.vpc.k8s.aws
   timeoutSeconds: 5
   rules:
@@ -54,4 +56,25 @@ webhooks:
     - UPDATE
     resources:
     - pods
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-v1-node
+  failurePolicy: Ignore
+  matchPolicy: Equivalent
+  name: vnode.vpc.k8s.aws
+  timeoutSeconds: 5
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - UPDATE
+    resources:
+    - nodes
   sideEffects: None

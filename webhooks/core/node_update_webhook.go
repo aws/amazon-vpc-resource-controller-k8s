@@ -20,6 +20,8 @@ type NodeUpdateWebhook struct {
 
 const awsNodeUsername = "system:serviceaccount:kube-system:aws-node"
 
+// +kubebuilder:webhook:path=/validate-v1-node,mutating=false,matchPolicy=Equivalent,failurePolicy=ignore,groups="",resources=nodes,verbs=update,versions=v1,name=vnode.vpc.k8s.aws,sideEffects=None,admissionReviewVersions=v1
+
 // Handle allows update request on Node on the expected fields when the request is
 // coming from the aws-node Service Account. It also ensures the updates are allowed only
 // when the Security Group for Pod feature is enabled.
