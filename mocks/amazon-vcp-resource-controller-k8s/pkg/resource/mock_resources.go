@@ -18,36 +18,37 @@
 package mock_resource
 
 import (
+	reflect "reflect"
+
 	handler "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
 	provider "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
-// MockResourceManager is a mock of ResourceManager interface
+// MockResourceManager is a mock of ResourceManager interface.
 type MockResourceManager struct {
 	ctrl     *gomock.Controller
 	recorder *MockResourceManagerMockRecorder
 }
 
-// MockResourceManagerMockRecorder is the mock recorder for MockResourceManager
+// MockResourceManagerMockRecorder is the mock recorder for MockResourceManager.
 type MockResourceManagerMockRecorder struct {
 	mock *MockResourceManager
 }
 
-// NewMockResourceManager creates a new mock instance
+// NewMockResourceManager creates a new mock instance.
 func NewMockResourceManager(ctrl *gomock.Controller) *MockResourceManager {
 	mock := &MockResourceManager{ctrl: ctrl}
 	mock.recorder = &MockResourceManagerMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockResourceManager) EXPECT() *MockResourceManagerMockRecorder {
 	return m.recorder
 }
 
-// GetResourceHandler mocks base method
+// GetResourceHandler mocks base method.
 func (m *MockResourceManager) GetResourceHandler(arg0 string) (handler.Handler, bool) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetResourceHandler", arg0)
@@ -56,13 +57,13 @@ func (m *MockResourceManager) GetResourceHandler(arg0 string) (handler.Handler, 
 	return ret0, ret1
 }
 
-// GetResourceHandler indicates an expected call of GetResourceHandler
+// GetResourceHandler indicates an expected call of GetResourceHandler.
 func (mr *MockResourceManagerMockRecorder) GetResourceHandler(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetResourceHandler", reflect.TypeOf((*MockResourceManager)(nil).GetResourceHandler), arg0)
 }
 
-// GetResourceProviders mocks base method
+// GetResourceProviders mocks base method.
 func (m *MockResourceManager) GetResourceProviders() map[string]provider.ResourceProvider {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetResourceProviders")
@@ -70,7 +71,7 @@ func (m *MockResourceManager) GetResourceProviders() map[string]provider.Resourc
 	return ret0
 }
 
-// GetResourceProviders indicates an expected call of GetResourceProviders
+// GetResourceProviders indicates an expected call of GetResourceProviders.
 func (mr *MockResourceManagerMockRecorder) GetResourceProviders() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetResourceProviders", reflect.TypeOf((*MockResourceManager)(nil).GetResourceProviders))

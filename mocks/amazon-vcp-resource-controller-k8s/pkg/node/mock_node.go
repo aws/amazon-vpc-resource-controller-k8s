@@ -18,36 +18,37 @@
 package mock_node
 
 import (
+	reflect "reflect"
+
 	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	resource "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
-// MockNode is a mock of Node interface
+// MockNode is a mock of Node interface.
 type MockNode struct {
 	ctrl     *gomock.Controller
 	recorder *MockNodeMockRecorder
 }
 
-// MockNodeMockRecorder is the mock recorder for MockNode
+// MockNodeMockRecorder is the mock recorder for MockNode.
 type MockNodeMockRecorder struct {
 	mock *MockNode
 }
 
-// NewMockNode creates a new mock instance
+// NewMockNode creates a new mock instance.
 func NewMockNode(ctrl *gomock.Controller) *MockNode {
 	mock := &MockNode{ctrl: ctrl}
 	mock.recorder = &MockNodeMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockNode) EXPECT() *MockNodeMockRecorder {
 	return m.recorder
 }
 
-// DeleteResources mocks base method
+// DeleteResources mocks base method.
 func (m *MockNode) DeleteResources(arg0 resource.ResourceManager, arg1 api.EC2APIHelper) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DeleteResources", arg0, arg1)
@@ -55,13 +56,13 @@ func (m *MockNode) DeleteResources(arg0 resource.ResourceManager, arg1 api.EC2AP
 	return ret0
 }
 
-// DeleteResources indicates an expected call of DeleteResources
+// DeleteResources indicates an expected call of DeleteResources.
 func (mr *MockNodeMockRecorder) DeleteResources(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteResources", reflect.TypeOf((*MockNode)(nil).DeleteResources), arg0, arg1)
 }
 
-// InitResources mocks base method
+// InitResources mocks base method.
 func (m *MockNode) InitResources(arg0 resource.ResourceManager, arg1 api.EC2APIHelper) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "InitResources", arg0, arg1)
@@ -69,13 +70,13 @@ func (m *MockNode) InitResources(arg0 resource.ResourceManager, arg1 api.EC2APIH
 	return ret0
 }
 
-// InitResources indicates an expected call of InitResources
+// InitResources indicates an expected call of InitResources.
 func (mr *MockNodeMockRecorder) InitResources(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitResources", reflect.TypeOf((*MockNode)(nil).InitResources), arg0, arg1)
 }
 
-// IsManaged mocks base method
+// IsManaged mocks base method.
 func (m *MockNode) IsManaged() bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "IsManaged")
@@ -83,13 +84,13 @@ func (m *MockNode) IsManaged() bool {
 	return ret0
 }
 
-// IsManaged indicates an expected call of IsManaged
+// IsManaged indicates an expected call of IsManaged.
 func (mr *MockNodeMockRecorder) IsManaged() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsManaged", reflect.TypeOf((*MockNode)(nil).IsManaged))
 }
 
-// IsReady mocks base method
+// IsReady mocks base method.
 func (m *MockNode) IsReady() bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "IsReady")
@@ -97,25 +98,25 @@ func (m *MockNode) IsReady() bool {
 	return ret0
 }
 
-// IsReady indicates an expected call of IsReady
+// IsReady indicates an expected call of IsReady.
 func (mr *MockNodeMockRecorder) IsReady() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsReady", reflect.TypeOf((*MockNode)(nil).IsReady))
 }
 
-// UpdateCustomNetworkingSpecs mocks base method
+// UpdateCustomNetworkingSpecs mocks base method.
 func (m *MockNode) UpdateCustomNetworkingSpecs(arg0 string, arg1 []string) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "UpdateCustomNetworkingSpecs", arg0, arg1)
 }
 
-// UpdateCustomNetworkingSpecs indicates an expected call of UpdateCustomNetworkingSpecs
+// UpdateCustomNetworkingSpecs indicates an expected call of UpdateCustomNetworkingSpecs.
 func (mr *MockNodeMockRecorder) UpdateCustomNetworkingSpecs(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateCustomNetworkingSpecs", reflect.TypeOf((*MockNode)(nil).UpdateCustomNetworkingSpecs), arg0, arg1)
 }
 
-// UpdateResources mocks base method
+// UpdateResources mocks base method.
 func (m *MockNode) UpdateResources(arg0 resource.ResourceManager, arg1 api.EC2APIHelper) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UpdateResources", arg0, arg1)
@@ -123,7 +124,7 @@ func (m *MockNode) UpdateResources(arg0 resource.ResourceManager, arg1 api.EC2AP
 	return ret0
 }
 
-// UpdateResources indicates an expected call of UpdateResources
+// UpdateResources indicates an expected call of UpdateResources.
 func (mr *MockNodeMockRecorder) UpdateResources(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateResources", reflect.TypeOf((*MockNode)(nil).UpdateResources), arg0, arg1)

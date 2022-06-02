@@ -94,7 +94,7 @@ func New(options Options) *Framework {
 	return &Framework{
 		K8sClient:         k8sClient,
 		ec2Client:         ec2,
-		PodManager:        pod.NewManager(k8sClient),
+		PodManager:        pod.NewManager(k8sClient, k8sSchema, config),
 		DeploymentManager: deployment.NewManager(k8sClient),
 		EC2Manager:        ec2Manager.NewManager(ec2, options.AWSVPCID),
 		NSManager:         namespace.NewManager(k8sClient),

@@ -85,7 +85,7 @@ func TestCondition_IsWindowsIPAMEnabled(t *testing.T) {
 			name:     "old controller deployment not deleted",
 			expected: false,
 			mock: func(mock *mock_k8s.MockK8sWrapper) {
-				mock.EXPECT().GetDeployment(config.OldVPCControllerDeploymentNS,
+				mock.EXPECT().GetDeployment(config.KubeSystemNamespace,
 					config.OldVPCControllerDeploymentName).Return(deployment, nil)
 			},
 		},
@@ -93,7 +93,7 @@ func TestCondition_IsWindowsIPAMEnabled(t *testing.T) {
 			name:     "getting old controller deployment returns error other than is not found",
 			expected: false,
 			mock: func(mock *mock_k8s.MockK8sWrapper) {
-				mock.EXPECT().GetDeployment(config.OldVPCControllerDeploymentNS,
+				mock.EXPECT().GetDeployment(config.KubeSystemNamespace,
 					config.OldVPCControllerDeploymentName).Return(nil, otherErr)
 			},
 		},
@@ -101,64 +101,64 @@ func TestCondition_IsWindowsIPAMEnabled(t *testing.T) {
 			name:     "get configmap returns error",
 			expected: false,
 			mock: func(mock *mock_k8s.MockK8sWrapper) {
-				mock.EXPECT().GetDeployment(config.OldVPCControllerDeploymentNS,
+				mock.EXPECT().GetDeployment(config.KubeSystemNamespace,
 					config.OldVPCControllerDeploymentName).Return(nil, notFoundErr)
 
 				mock.EXPECT().GetConfigMap(config.VpcCniConfigMapName,
-					config.VpcCNIConfigMapNamespace).Return(nil, otherErr)
+					config.KubeSystemNamespace).Return(nil, otherErr)
 			},
 		},
 		{
 			name:     "configmap with no data",
 			expected: false,
 			mock: func(mock *mock_k8s.MockK8sWrapper) {
-				mock.EXPECT().GetDeployment(config.OldVPCControllerDeploymentNS,
+				mock.EXPECT().GetDeployment(config.KubeSystemNamespace,
 					config.OldVPCControllerDeploymentName).Return(nil, notFoundErr)
 
 				noData := vpcCNIConfig.DeepCopy()
 				noData.Data = nil
 
 				mock.EXPECT().GetConfigMap(config.VpcCniConfigMapName,
-					config.VpcCNIConfigMapNamespace).Return(noData, nil)
+					config.KubeSystemNamespace).Return(noData, nil)
 			},
 		},
 		{
 			name:     "configmap with flag set to false",
 			expected: false,
 			mock: func(mock *mock_k8s.MockK8sWrapper) {
-				mock.EXPECT().GetDeployment(config.OldVPCControllerDeploymentNS,
+				mock.EXPECT().GetDeployment(config.KubeSystemNamespace,
 					config.OldVPCControllerDeploymentName).Return(nil, notFoundErr)
 
 				falseData := vpcCNIConfig.DeepCopy()
 				falseData.Data[config.EnableWindowsIPAMKey] = "false"
 
 				mock.EXPECT().GetConfigMap(config.VpcCniConfigMapName,
-					config.VpcCNIConfigMapNamespace).Return(falseData, nil)
+					config.KubeSystemNamespace).Return(falseData, nil)
 			},
 		},
 		{
 			name:     "configmap with flag set to non boolean value",
 			expected: false,
 			mock: func(mock *mock_k8s.MockK8sWrapper) {
-				mock.EXPECT().GetDeployment(config.OldVPCControllerDeploymentNS,
+				mock.EXPECT().GetDeployment(config.KubeSystemNamespace,
 					config.OldVPCControllerDeploymentName).Return(nil, notFoundErr)
 
 				nonParsable := vpcCNIConfig.DeepCopy()
 				nonParsable.Data[config.EnableWindowsIPAMKey] = "trued"
 
 				mock.EXPECT().GetConfigMap(config.VpcCniConfigMapName,
-					config.VpcCNIConfigMapNamespace).Return(nonParsable, nil)
+					config.KubeSystemNamespace).Return(nonParsable, nil)
 			},
 		},
 		{
 			name:     "configmap with flag set to true",
 			expected: true,
 			mock: func(mock *mock_k8s.MockK8sWrapper) {
-				mock.EXPECT().GetDeployment(config.OldVPCControllerDeploymentNS,
+				mock.EXPECT().GetDeployment(config.KubeSystemNamespace,
 					config.OldVPCControllerDeploymentName).Return(nil, notFoundErr)
 
 				mock.EXPECT().GetConfigMap(config.VpcCniConfigMapName,
-					config.VpcCNIConfigMapNamespace).Return(vpcCNIConfig, nil)
+					config.KubeSystemNamespace).Return(vpcCNIConfig, nil)
 			},
 		},
 	}
@@ -175,5 +175,27 @@ func TestCondition_IsWindowsIPAMEnabled(t *testing.T) {
 
 			assert.Equal(t, conditions.IsWindowsIPAMEnabled(), test.expected)
 		})
+	}
+}
+
+func getAwsNodeDaemonSet(podENIEnabled string) *appsv1.DaemonSet {
+	return &appsv1.DaemonSet{
+		Spec: appsv1.DaemonSetSpec{
+			Template: v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name: "aws-node",
+							Env: []v1.EnvVar{
+								{
+									Name:  "ENABLE_POD_ENI",
+									Value: podENIEnabled,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 }

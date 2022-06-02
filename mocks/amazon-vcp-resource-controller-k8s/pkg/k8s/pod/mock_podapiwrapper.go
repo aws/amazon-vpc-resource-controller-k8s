@@ -19,36 +19,37 @@ package mock_pod
 
 import (
 	context "context"
+	reflect "reflect"
+
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
 	types "k8s.io/apimachinery/pkg/types"
-	reflect "reflect"
 )
 
-// MockPodClientAPIWrapper is a mock of PodClientAPIWrapper interface
+// MockPodClientAPIWrapper is a mock of PodClientAPIWrapper interface.
 type MockPodClientAPIWrapper struct {
 	ctrl     *gomock.Controller
 	recorder *MockPodClientAPIWrapperMockRecorder
 }
 
-// MockPodClientAPIWrapperMockRecorder is the mock recorder for MockPodClientAPIWrapper
+// MockPodClientAPIWrapperMockRecorder is the mock recorder for MockPodClientAPIWrapper.
 type MockPodClientAPIWrapperMockRecorder struct {
 	mock *MockPodClientAPIWrapper
 }
 
-// NewMockPodClientAPIWrapper creates a new mock instance
+// NewMockPodClientAPIWrapper creates a new mock instance.
 func NewMockPodClientAPIWrapper(ctrl *gomock.Controller) *MockPodClientAPIWrapper {
 	mock := &MockPodClientAPIWrapper{ctrl: ctrl}
 	mock.recorder = &MockPodClientAPIWrapperMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockPodClientAPIWrapper) EXPECT() *MockPodClientAPIWrapperMockRecorder {
 	return m.recorder
 }
 
-// AnnotatePod mocks base method
+// AnnotatePod mocks base method.
 func (m *MockPodClientAPIWrapper) AnnotatePod(arg0, arg1 string, arg2 types.UID, arg3, arg4 string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AnnotatePod", arg0, arg1, arg2, arg3, arg4)
@@ -56,13 +57,13 @@ func (m *MockPodClientAPIWrapper) AnnotatePod(arg0, arg1 string, arg2 types.UID,
 	return ret0
 }
 
-// AnnotatePod indicates an expected call of AnnotatePod
+// AnnotatePod indicates an expected call of AnnotatePod.
 func (mr *MockPodClientAPIWrapperMockRecorder) AnnotatePod(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AnnotatePod", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).AnnotatePod), arg0, arg1, arg2, arg3, arg4)
 }
 
-// GetPod mocks base method
+// GetPod mocks base method.
 func (m *MockPodClientAPIWrapper) GetPod(arg0, arg1 string) (*v1.Pod, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetPod", arg0, arg1)
@@ -71,13 +72,13 @@ func (m *MockPodClientAPIWrapper) GetPod(arg0, arg1 string) (*v1.Pod, error) {
 	return ret0, ret1
 }
 
-// GetPod indicates an expected call of GetPod
+// GetPod indicates an expected call of GetPod.
 func (mr *MockPodClientAPIWrapperMockRecorder) GetPod(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPod", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).GetPod), arg0, arg1)
 }
 
-// GetPodFromAPIServer mocks base method
+// GetPodFromAPIServer mocks base method.
 func (m *MockPodClientAPIWrapper) GetPodFromAPIServer(arg0 context.Context, arg1, arg2 string) (*v1.Pod, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetPodFromAPIServer", arg0, arg1, arg2)
@@ -86,13 +87,13 @@ func (m *MockPodClientAPIWrapper) GetPodFromAPIServer(arg0 context.Context, arg1
 	return ret0, ret1
 }
 
-// GetPodFromAPIServer indicates an expected call of GetPodFromAPIServer
+// GetPodFromAPIServer indicates an expected call of GetPodFromAPIServer.
 func (mr *MockPodClientAPIWrapperMockRecorder) GetPodFromAPIServer(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPodFromAPIServer", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).GetPodFromAPIServer), arg0, arg1, arg2)
 }
 
-// GetRunningPodsOnNode mocks base method
+// GetRunningPodsOnNode mocks base method.
 func (m *MockPodClientAPIWrapper) GetRunningPodsOnNode(arg0 string) ([]v1.Pod, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetRunningPodsOnNode", arg0)
@@ -101,13 +102,13 @@ func (m *MockPodClientAPIWrapper) GetRunningPodsOnNode(arg0 string) ([]v1.Pod, e
 	return ret0, ret1
 }
 
-// GetRunningPodsOnNode indicates an expected call of GetRunningPodsOnNode
+// GetRunningPodsOnNode indicates an expected call of GetRunningPodsOnNode.
 func (mr *MockPodClientAPIWrapperMockRecorder) GetRunningPodsOnNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRunningPodsOnNode", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).GetRunningPodsOnNode), arg0)
 }
 
-// ListPods mocks base method
+// ListPods mocks base method.
 func (m *MockPodClientAPIWrapper) ListPods(arg0 string) (*v1.PodList, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListPods", arg0)
@@ -116,7 +117,7 @@ func (m *MockPodClientAPIWrapper) ListPods(arg0 string) (*v1.PodList, error) {
 	return ret0, ret1
 }
 
-// ListPods indicates an expected call of ListPods
+// ListPods indicates an expected call of ListPods.
 func (mr *MockPodClientAPIWrapperMockRecorder) ListPods(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPods", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).ListPods), arg0)

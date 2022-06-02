@@ -35,7 +35,7 @@ const (
 	FargatePodIdentifierLabelKey = "eks.amazonaws.com/fargate-profile"
 )
 
-// +kubebuilder:webhook:path=/mutate-v1-pod,mutating=true,failurePolicy=ignore,groups="",resources=pods,verbs=create,versions=v1,name=mpod.vpc.k8s.aws,sideEffects=None,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/mutate-v1-pod,mutating=true,matchPolicy=Equivalent,failurePolicy=ignore,groups="",resources=pods,verbs=create,versions=v1,name=mpod.vpc.k8s.aws,sideEffects=None,admissionReviewVersions=v1
 
 // PodResourceInjector injects resources into Pods
 type PodMutationWebHook struct {

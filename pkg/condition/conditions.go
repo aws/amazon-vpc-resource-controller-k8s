@@ -42,7 +42,8 @@ type Conditions interface {
 	IsWindowsIPAMEnabled() bool
 	// IsPodSGPEnabled to process events only when Security Group for Pods feature
 	// is enabled by the user
-	IsPodSGPEnabled() bool
+	// IsPodSGPEnabled() bool We need to check if SGP is enabled via ConfigMap + Environment variables
+
 	// IsOldVPCControllerDeploymentPresent returns true if the old controller deployment
 	// is still present on the cluster
 	IsOldVPCControllerDeploymentPresent() bool
@@ -92,7 +93,7 @@ func (c *condition) IsWindowsIPAMEnabled() bool {
 	}
 
 	// Return false if configmap not present/any errors
-	vpcCniConfigMap, err := c.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.VpcCNIConfigMapNamespace)
+	vpcCniConfigMap, err := c.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
 
 	if err == nil && vpcCniConfigMap.Data != nil {
 		if val, ok := vpcCniConfigMap.Data[config.EnableWindowsIPAMKey]; ok {
@@ -115,7 +116,7 @@ func (c *condition) IsWindowsIPAMEnabled() bool {
 // possibility of using label selectors to watch for both deployments. However, Old and
 // new WebHook running together should not have side effects on the existing Pods.
 func (c *condition) IsOldVPCControllerDeploymentPresent() bool {
-	oldController, err := c.K8sAPI.GetDeployment(config.OldVPCControllerDeploymentNS,
+	oldController, err := c.K8sAPI.GetDeployment(config.KubeSystemNamespace,
 		config.OldVPCControllerDeploymentName)
 	if err == nil {
 		c.log.V(1).Info("old controller deployment is present",
@@ -128,7 +129,33 @@ func (c *condition) IsOldVPCControllerDeploymentPresent() bool {
 	return false
 }
 
-// TODO: Add implementation later
+// TOOD: Check if SPG is enabled using ConfigMap.
 func (c *condition) IsPodSGPEnabled() bool {
-	panic("implement me")
+	daemonSet, err := c.K8sAPI.GetDaemonSet(config.VpcCNIDaemonSetName,
+		config.KubeSystemNamespace)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			c.log.Info("aws-node ds is not present")
+			return false
+		}
+		c.log.Error(err, "failed to get aws-node")
+		return false
+	}
+
+	var isSGPEnabled bool
+	for _, container := range daemonSet.Spec.Template.Spec.Containers {
+		if container.Name == "aws-node" {
+			for _, env := range container.Env {
+				if env.Name == "ENABLE_POD_ENI" {
+					isSGPEnabled, err = strconv.ParseBool(env.Value)
+					if err != nil {
+						c.log.Error(err, "failed to parse ENABLE_POD_ENI", "value", env.Value)
+						return false
+					}
+					break
+				}
+			}
+		}
+	}
+	return isSGPEnabled
 }

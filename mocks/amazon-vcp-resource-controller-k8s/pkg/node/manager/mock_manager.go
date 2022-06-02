@@ -18,35 +18,36 @@
 package mock_manager
 
 import (
+	reflect "reflect"
+
 	node "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	gomock "github.com/golang/mock/gomock"
-	reflect "reflect"
 )
 
-// MockManager is a mock of Manager interface
+// MockManager is a mock of Manager interface.
 type MockManager struct {
 	ctrl     *gomock.Controller
 	recorder *MockManagerMockRecorder
 }
 
-// MockManagerMockRecorder is the mock recorder for MockManager
+// MockManagerMockRecorder is the mock recorder for MockManager.
 type MockManagerMockRecorder struct {
 	mock *MockManager
 }
 
-// NewMockManager creates a new mock instance
+// NewMockManager creates a new mock instance.
 func NewMockManager(ctrl *gomock.Controller) *MockManager {
 	mock := &MockManager{ctrl: ctrl}
 	mock.recorder = &MockManagerMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockManager) EXPECT() *MockManagerMockRecorder {
 	return m.recorder
 }
 
-// AddNode mocks base method
+// AddNode mocks base method.
 func (m *MockManager) AddNode(arg0 string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AddNode", arg0)
@@ -54,13 +55,13 @@ func (m *MockManager) AddNode(arg0 string) error {
 	return ret0
 }
 
-// AddNode indicates an expected call of AddNode
+// AddNode indicates an expected call of AddNode.
 func (mr *MockManagerMockRecorder) AddNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddNode", reflect.TypeOf((*MockManager)(nil).AddNode), arg0)
 }
 
-// DeleteNode mocks base method
+// DeleteNode mocks base method.
 func (m *MockManager) DeleteNode(arg0 string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DeleteNode", arg0)
@@ -68,13 +69,13 @@ func (m *MockManager) DeleteNode(arg0 string) error {
 	return ret0
 }
 
-// DeleteNode indicates an expected call of DeleteNode
+// DeleteNode indicates an expected call of DeleteNode.
 func (mr *MockManagerMockRecorder) DeleteNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteNode", reflect.TypeOf((*MockManager)(nil).DeleteNode), arg0)
 }
 
-// GetNode mocks base method
+// GetNode mocks base method.
 func (m *MockManager) GetNode(arg0 string) (node.Node, bool) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetNode", arg0)
@@ -83,13 +84,13 @@ func (m *MockManager) GetNode(arg0 string) (node.Node, bool) {
 	return ret0, ret1
 }
 
-// GetNode indicates an expected call of GetNode
+// GetNode indicates an expected call of GetNode.
 func (mr *MockManagerMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNode", reflect.TypeOf((*MockManager)(nil).GetNode), arg0)
 }
 
-// UpdateNode mocks base method
+// UpdateNode mocks base method.
 func (m *MockManager) UpdateNode(arg0 string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UpdateNode", arg0)
@@ -97,7 +98,7 @@ func (m *MockManager) UpdateNode(arg0 string) error {
 	return ret0
 }
 
-// UpdateNode indicates an expected call of UpdateNode
+// UpdateNode indicates an expected call of UpdateNode.
 func (mr *MockManagerMockRecorder) UpdateNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateNode", reflect.TypeOf((*MockManager)(nil).UpdateNode), arg0)

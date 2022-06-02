@@ -18,34 +18,35 @@
 package mock_condition
 
 import (
-	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
+
+	gomock "github.com/golang/mock/gomock"
 )
 
-// MockConditions is a mock of Conditions interface
+// MockConditions is a mock of Conditions interface.
 type MockConditions struct {
 	ctrl     *gomock.Controller
 	recorder *MockConditionsMockRecorder
 }
 
-// MockConditionsMockRecorder is the mock recorder for MockConditions
+// MockConditionsMockRecorder is the mock recorder for MockConditions.
 type MockConditionsMockRecorder struct {
 	mock *MockConditions
 }
 
-// NewMockConditions creates a new mock instance
+// NewMockConditions creates a new mock instance.
 func NewMockConditions(ctrl *gomock.Controller) *MockConditions {
 	mock := &MockConditions{ctrl: ctrl}
 	mock.recorder = &MockConditionsMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockConditions) EXPECT() *MockConditionsMockRecorder {
 	return m.recorder
 }
 
-// IsOldVPCControllerDeploymentPresent mocks base method
+// IsOldVPCControllerDeploymentPresent mocks base method.
 func (m *MockConditions) IsOldVPCControllerDeploymentPresent() bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "IsOldVPCControllerDeploymentPresent")
@@ -53,27 +54,13 @@ func (m *MockConditions) IsOldVPCControllerDeploymentPresent() bool {
 	return ret0
 }
 
-// IsOldVPCControllerDeploymentPresent indicates an expected call of IsOldVPCControllerDeploymentPresent
+// IsOldVPCControllerDeploymentPresent indicates an expected call of IsOldVPCControllerDeploymentPresent.
 func (mr *MockConditionsMockRecorder) IsOldVPCControllerDeploymentPresent() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsOldVPCControllerDeploymentPresent", reflect.TypeOf((*MockConditions)(nil).IsOldVPCControllerDeploymentPresent))
 }
 
-// IsPodSGPEnabled mocks base method
-func (m *MockConditions) IsPodSGPEnabled() bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IsPodSGPEnabled")
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// IsPodSGPEnabled indicates an expected call of IsPodSGPEnabled
-func (mr *MockConditionsMockRecorder) IsPodSGPEnabled() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsPodSGPEnabled", reflect.TypeOf((*MockConditions)(nil).IsPodSGPEnabled))
-}
-
-// IsWindowsIPAMEnabled mocks base method
+// IsWindowsIPAMEnabled mocks base method.
 func (m *MockConditions) IsWindowsIPAMEnabled() bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "IsWindowsIPAMEnabled")
@@ -81,19 +68,19 @@ func (m *MockConditions) IsWindowsIPAMEnabled() bool {
 	return ret0
 }
 
-// IsWindowsIPAMEnabled indicates an expected call of IsWindowsIPAMEnabled
+// IsWindowsIPAMEnabled indicates an expected call of IsWindowsIPAMEnabled.
 func (mr *MockConditionsMockRecorder) IsWindowsIPAMEnabled() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsWindowsIPAMEnabled", reflect.TypeOf((*MockConditions)(nil).IsWindowsIPAMEnabled))
 }
 
-// WaitTillPodDataStoreSynced mocks base method
+// WaitTillPodDataStoreSynced mocks base method.
 func (m *MockConditions) WaitTillPodDataStoreSynced() {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "WaitTillPodDataStoreSynced")
 }
 
-// WaitTillPodDataStoreSynced indicates an expected call of WaitTillPodDataStoreSynced
+// WaitTillPodDataStoreSynced indicates an expected call of WaitTillPodDataStoreSynced.
 func (mr *MockConditionsMockRecorder) WaitTillPodDataStoreSynced() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitTillPodDataStoreSynced", reflect.TypeOf((*MockConditions)(nil).WaitTillPodDataStoreSynced))

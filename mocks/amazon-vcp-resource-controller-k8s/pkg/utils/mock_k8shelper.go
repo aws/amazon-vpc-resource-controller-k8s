@@ -18,35 +18,36 @@
 package mock_utils
 
 import (
+	reflect "reflect"
+
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
-	reflect "reflect"
 )
 
-// MockSecurityGroupForPodsAPI is a mock of SecurityGroupForPodsAPI interface
+// MockSecurityGroupForPodsAPI is a mock of SecurityGroupForPodsAPI interface.
 type MockSecurityGroupForPodsAPI struct {
 	ctrl     *gomock.Controller
 	recorder *MockSecurityGroupForPodsAPIMockRecorder
 }
 
-// MockSecurityGroupForPodsAPIMockRecorder is the mock recorder for MockSecurityGroupForPodsAPI
+// MockSecurityGroupForPodsAPIMockRecorder is the mock recorder for MockSecurityGroupForPodsAPI.
 type MockSecurityGroupForPodsAPIMockRecorder struct {
 	mock *MockSecurityGroupForPodsAPI
 }
 
-// NewMockSecurityGroupForPodsAPI creates a new mock instance
+// NewMockSecurityGroupForPodsAPI creates a new mock instance.
 func NewMockSecurityGroupForPodsAPI(ctrl *gomock.Controller) *MockSecurityGroupForPodsAPI {
 	mock := &MockSecurityGroupForPodsAPI{ctrl: ctrl}
 	mock.recorder = &MockSecurityGroupForPodsAPIMockRecorder{mock}
 	return mock
 }
 
-// EXPECT returns an object that allows the caller to indicate expected use
+// EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockSecurityGroupForPodsAPI) EXPECT() *MockSecurityGroupForPodsAPIMockRecorder {
 	return m.recorder
 }
 
-// GetMatchingSecurityGroupForPods mocks base method
+// GetMatchingSecurityGroupForPods mocks base method.
 func (m *MockSecurityGroupForPodsAPI) GetMatchingSecurityGroupForPods(arg0 *v1.Pod) ([]string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMatchingSecurityGroupForPods", arg0)
@@ -55,7 +56,7 @@ func (m *MockSecurityGroupForPodsAPI) GetMatchingSecurityGroupForPods(arg0 *v1.P
 	return ret0, ret1
 }
 
-// GetMatchingSecurityGroupForPods indicates an expected call of GetMatchingSecurityGroupForPods
+// GetMatchingSecurityGroupForPods indicates an expected call of GetMatchingSecurityGroupForPods.
 func (mr *MockSecurityGroupForPodsAPIMockRecorder) GetMatchingSecurityGroupForPods(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMatchingSecurityGroupForPods", reflect.TypeOf((*MockSecurityGroupForPodsAPI)(nil).GetMatchingSecurityGroupForPods), arg0)

@@ -14,9 +14,11 @@
 package pod
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -26,8 +28,14 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
 
 type Manager interface {
@@ -38,14 +46,22 @@ type Manager interface {
 	GetENIDetailsFromPodAnnotation(podAnnotation map[string]string) ([]*trunk.ENIDetails, error)
 	GetPodsWithLabel(context context.Context, namespace string, labelKey string, labelValue string) ([]v1.Pod, error)
 	PatchPod(context context.Context, oldPod *v1.Pod, newPod *v1.Pod) error
+	PodExec(namespace string, name string, command []string) (string, string, error)
 }
 
 type defaultManager struct {
 	k8sClient client.Client
+	k8sSchema *runtime.Scheme
+	config    *rest.Config
 }
 
-func NewManager(k8sClient client.Client) Manager {
-	return &defaultManager{k8sClient: k8sClient}
+func NewManager(k8sClient client.Client, k8sSchema *runtime.Scheme,
+	config *rest.Config) Manager {
+	return &defaultManager{
+		k8sClient: k8sClient,
+		k8sSchema: k8sSchema,
+		config:    config,
+	}
 }
 
 func (d *defaultManager) CreateAndWaitTillPodIsRunning(context context.Context, pod *v1.Pod, timeOut time.Duration) (*v1.Pod, error) {
@@ -172,4 +188,56 @@ func isPodCompleted(pod *v1.Pod) bool {
 
 func isPodFailed(pod *v1.Pod) bool {
 	return pod.Status.Phase == v1.PodFailed
+}
+
+func (d *defaultManager) PodExec(namespace string, name string, command []string) (string, string, error) {
+	restClient, err := d.getRestClientForPod(namespace, name)
+	if err != nil {
+		return "", "", err
+	}
+
+	execOptions := &v1.PodExecOptions{
+		Stdout:  true,
+		Stderr:  true,
+		Command: command,
+	}
+
+	restClient.Get()
+	req := restClient.Post().
+		Resource("pods").
+		Name(name).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(execOptions, runtime.NewParameterCodec(d.k8sSchema))
+
+	exec, err := remotecommand.NewSPDYExecutor(d.config, http.MethodPost, req.URL())
+	if err != nil {
+		return "", "", err
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = exec.Stream(remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+
+	return stdout.String(), stderr.String(), err
+}
+
+func (d *defaultManager) getRestClientForPod(namespace string, name string) (rest.Interface, error) {
+	pod := &v1.Pod{}
+
+	err := d.k8sClient.Get(context.Background(), types.NamespacedName{
+		Namespace: namespace,
+		Name:      name,
+	}, pod)
+	if err != nil {
+		return nil, err
+	}
+
+	gkv, err := apiutil.GVKForObject(pod, d.k8sSchema)
+	if err != nil {
+		return nil, err
+	}
+	return apiutil.RESTClientForGVK(gkv, false, d.config, serializer.NewCodecFactory(d.k8sSchema))
 }

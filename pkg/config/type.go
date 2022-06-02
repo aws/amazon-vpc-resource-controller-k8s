@@ -67,9 +67,8 @@ const (
 	VpcCniConfigMapName     = "amazon-vpc-cni"
 	EnableWindowsIPAMKey    = "enable-windows-ipam"
 	// Since LeaderElectionNamespace and VpcCniConfigMapName may be different in the future
-	VpcCNIConfigMapNamespace = "kube-system"
-
-	OldVPCControllerDeploymentNS   = "kube-system"
+	KubeSystemNamespace            = "kube-system"
+	VpcCNIDaemonSetName            = "aws-node"
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
 )
 

@@ -182,20 +182,6 @@ func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfaces(arg0 interface{}
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNetworkInterfaces", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeNetworkInterfaces), arg0)
 }
 
-// DescribeNetworkInterfacesPages mocks base method.
-func (m *MockEC2Wrapper) DescribeNetworkInterfacesPages(arg0 *ec2.DescribeNetworkInterfacesInput, arg1 func(*ec2.DescribeNetworkInterfacesOutput, bool) bool) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeNetworkInterfacesPages", arg0, arg1)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// DescribeNetworkInterfacesPages indicates an expected call of DescribeNetworkInterfacesPages.
-func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfacesPages(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNetworkInterfacesPages", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeNetworkInterfacesPages), arg0, arg1)
-}
-
 // DescribeSubnets mocks base method.
 func (m *MockEC2Wrapper) DescribeSubnets(arg0 *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
 	m.ctrl.T.Helper()

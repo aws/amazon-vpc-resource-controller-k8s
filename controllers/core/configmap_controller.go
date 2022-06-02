@@ -49,7 +49,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	logger := r.Log.WithValues("configmap", req.NamespacedName)
 
 	// only update nodes on amazon-vpc-cni updates, return here for other updates
-	if req.Name != config.VpcCniConfigMapName || req.Namespace != config.VpcCNIConfigMapNamespace {
+	if req.Name != config.VpcCniConfigMapName || req.Namespace != config.KubeSystemNamespace {
 		return ctrl.Result{}, nil
 	}
 	configmap := &corev1.ConfigMap{}

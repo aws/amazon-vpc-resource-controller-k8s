@@ -55,7 +55,6 @@ type EC2Wrapper interface {
 	DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
-	DescribeNetworkInterfacesPages(input *ec2.DescribeNetworkInterfacesInput, fn func(*ec2.DescribeNetworkInterfacesOutput, bool) bool) error
 }
 
 var (
@@ -291,20 +290,6 @@ var (
 		},
 	)
 
-	ec2DescribeNetworkInterfacesPagesAPICallCnt = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "ec2_describe_network_interfaces_pages_api_req_count",
-			Help: "The number of calls made to ec2 for describing a network interface with pagination",
-		},
-	)
-
-	ec2DescribeNetworkInterfacesPagesAPIErrCnt = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "ec2_describe_network_interfaces_pages_api_err_count",
-			Help: "The number of errors encountered while describing a network interface with pagination",
-		},
-	)
-
 	prometheusRegistered = false
 )
 
@@ -340,10 +325,7 @@ func prometheusRegister() {
 			ec2describeTrunkInterfaceAssociationAPIErrCnt,
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
-			ec2APICallLatencies,
-			ec2DescribeNetworkInterfacesPagesAPICallCnt,
-			ec2DescribeNetworkInterfacesPagesAPIErrCnt,
-		)
+			ec2APICallLatencies)
 
 		prometheusRegistered = true
 	}
@@ -743,22 +725,4 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkIn
 	}
 
 	return output, err
-}
-
-func (e *ec2Wrapper) DescribeNetworkInterfacesPages(input *ec2.DescribeNetworkInterfacesInput, fn func(*ec2.DescribeNetworkInterfacesOutput, bool) bool) error {
-	start := time.Now()
-	// describeNetworkInterfacesOutput, err := e.userServiceClient.DescribeNetworkInterfaces(input)
-	err := e.userServiceClient.DescribeNetworkInterfacesPages(input, fn)
-	ec2APICallLatencies.WithLabelValues("describe_network_interfaces_pages").Observe(timeSinceMs(start))
-
-	// Metric updates
-	ec2APICallCnt.Inc()
-	ec2DescribeNetworkInterfacesPagesAPICallCnt.Inc()
-
-	if err != nil {
-		ec2APIErrCnt.Inc()
-		ec2DescribeNetworkInterfacesPagesAPIErrCnt.Inc()
-	}
-
-	return err
 }
