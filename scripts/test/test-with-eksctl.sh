@@ -129,7 +129,7 @@ function set_pod_eni_flag_on_ipamd() {
   kubectl rollout status daemonset aws-node -n kube-system
 }
 
-function run_inegration_test() {
+function run_integration_test() {
   local additional_gingko_params=$1
 
   # SGP Tests
@@ -244,7 +244,7 @@ trap 'clean_up' EXIT
 kubectl cordon -l kubernetes.io/os=windows
 
 # Install the stable version of VPC CNI
-sh "$SCRIPTS_DIR/install-vpc-cni.sh" "v1.7.10"
+sh "$SCRIPTS_DIR/install-vpc-cni.sh" "1.11"
 
 # Install Cert Manager which is used for generating the
 # certificates for the Webhooks
@@ -290,14 +290,14 @@ sleep 60
 # Run Ginko Test for Security Group for Pods and skip all the local tests as
 # they require restarts and it will lead to leader lease being switched and the
 # next validation step failing
-run_inegration_test "--skip=LOCAL"
+run_integration_test "--skip=LOCAL"
 
 # Verify the leader lease didn't transition during the execution of test cases
 verify_leader_lease_didnt_change
 
 # Run Local Ginko Test that require multiple restarts of controller for negative
 # scenarios testing
-run_inegration_test "--focus=LOCAL"
+run_integration_test "--focus=LOCAL"
 
 # Revert back to initial state after the test
 set_pod_eni_flag_on_ipamd "false"
