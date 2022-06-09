@@ -5,7 +5,7 @@
 set -eo pipefail
 
 SCRIPTS_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
-DEFAULT_VPC_CNI_VERSION="v1.7.10"
+DEFAULT_VPC_CNI_VERSION="1.11"
 
 source "$SCRIPTS_DIR/lib/k8s.sh"
 source "$SCRIPTS_DIR/lib/common.sh"
@@ -20,9 +20,8 @@ fi
 install() {
 
   echo "installing vpc cni $__vpc_cni_version"
-  __minor_version=$(echo $__vpc_cni_version | cut -d\. -f1-2)
-  __vpc_cni_url="https://raw.githubusercontent.com/aws/amazon-vpc-cni-k8s/$__vpc_cni_version/config/$__minor_version/aws-k8s-cni.yaml"
-
+  # install the latest patch version for the release
+  __vpc_cni_url="https://raw.githubusercontent.com/aws/amazon-vpc-cni-k8s/release-$__vpc_cni_version/config/master/aws-k8s-cni.yaml"
   kubectl apply -f $__vpc_cni_url
   echo "ok.."
 }
