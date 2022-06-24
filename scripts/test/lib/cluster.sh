@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+LIB_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+
+source "$LIB_DIR"/k8s.sh
+
 function load_cluster_details() {
   CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION $ENDPOINT_FLAG)
   VPC_ID=$(echo $CLUSTER_INFO | jq -r '.cluster.resourcesVpcConfig.vpcId')
@@ -32,5 +36,5 @@ function set_env_aws_node() {
 
   echo "Setting environment variable $KEY to $VAL on aws-node"
   kubectl set env daemonset aws-node -n kube-system $KEY=$VAL
-  kubectl rollout status ds -n kube-system aws-node
+  check_ds_rollout "aws-node" "kube-system"
 }
