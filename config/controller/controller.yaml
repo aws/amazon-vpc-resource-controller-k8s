@@ -25,6 +25,7 @@ spec:
           - --cluster-name=CLUSTER_NAME
           - --role-arn=USER_ROLE_ARN
           - --enable-leader-election
+          - --metrics-addr=:8443
         image: controller:latest
         name: controller
         resources:
@@ -42,6 +43,13 @@ spec:
             scheme: HTTP
           initialDelaySeconds: 30
           timeoutSeconds: 10
+        ports:
+          - containerPort: 9443
+            name: webhook-server
+            protocol: TCP
+          - containerPort: 8443
+            name: metrics
+            protocol: TCP
       terminationGracePeriodSeconds: 10
       nodeSelector:
         kubernetes.io/os: linux

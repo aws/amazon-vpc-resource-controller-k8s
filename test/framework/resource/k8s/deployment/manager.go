@@ -28,6 +28,9 @@ type Manager interface {
 	CreateAndWaitUntilDeploymentReady(ctx context.Context, dp *appsv1.Deployment) (*appsv1.Deployment, error)
 	DeleteAndWaitUntilDeploymentDeleted(ctx context.Context, dp *appsv1.Deployment) error
 	ScaleDeploymentAndWaitTillReady(ctx context.Context, namespace string, name string, replicas int32) error
+	UpdateDeploymentImage(ctx context.Context, namespace string, name string, imageReplacement string) error
+	GetDeployment(ctx context.Context, namespace string, name string) (*appsv1.Deployment, error)
+	PatchDeployment(ctx context.Context, newDeployment *appsv1.Deployment, oldDeployment *appsv1.Deployment) error
 }
 
 func NewManager(k8sClient client.Client) Manager {
@@ -77,9 +80,7 @@ func (m *defaultManager) DeleteAndWaitUntilDeploymentDeleted(ctx context.Context
 }
 
 func (m *defaultManager) ScaleDeploymentAndWaitTillReady(ctx context.Context, namespace string, name string, replicas int32) error {
-	deployment := &appsv1.Deployment{}
-	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
-	err := m.k8sClient.Get(ctx, namespacedName, deployment)
+	deployment, err := m.GetDeployment(ctx, namespace, name)
 	if err != nil {
 		return err
 	}
@@ -92,7 +93,7 @@ func (m *defaultManager) ScaleDeploymentAndWaitTillReady(ctx context.Context, na
 	}
 
 	return wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
-		if err := m.k8sClient.Get(ctx, namespacedName, deploymentCopy); err != nil {
+		if err := m.k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, deploymentCopy); err != nil {
 			return false, err
 		}
 		if deploymentCopy.Status.AvailableReplicas == replicas &&
@@ -101,4 +102,41 @@ func (m *defaultManager) ScaleDeploymentAndWaitTillReady(ctx context.Context, na
 		}
 		return false, nil
 	}, ctx.Done())
+}
+
+func (m *defaultManager) UpdateDeploymentImage(ctx context.Context, namespace string, name string, imageReplacement string) error {
+	deployment, err := m.GetDeployment(ctx, namespace, name)
+
+	if err != nil {
+		return err
+	}
+	deploymentCopy := deployment.DeepCopy()
+	deploymentCopy.Spec.Template.Spec.Containers[0].Image = imageReplacement
+	if err = m.k8sClient.Patch(ctx, deploymentCopy, client.MergeFrom(deployment)); err != nil {
+		return err
+	}
+
+	return wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
+		if err := m.k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, deploymentCopy); err != nil {
+			return false, err
+		}
+		if deploymentCopy.Status.UnavailableReplicas == 0 {
+			return true, nil
+		}
+		return false, nil
+	}, ctx.Done())
+}
+
+func (m *defaultManager) GetDeployment(ctx context.Context, namespace string, name string) (*appsv1.Deployment, error) {
+	deployment := &appsv1.Deployment{}
+	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
+	err := m.k8sClient.Get(ctx, namespacedName, deployment)
+	if err != nil {
+		return nil, err
+	}
+	return deployment, nil
+}
+
+func (m *defaultManager) PatchDeployment(ctx context.Context, newDeployment *appsv1.Deployment, oldDeployment *appsv1.Deployment) error {
+	return m.k8sClient.Patch(ctx, newDeployment, client.MergeFrom(oldDeployment))
 }

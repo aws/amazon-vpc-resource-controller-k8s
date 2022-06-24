@@ -105,5 +105,6 @@ func New(options Options) *Framework {
 		ControllerManager: controller.NewManager(k8sClient),
 		RBACManager:       rbac.NewManager(k8sClient),
 		ConfigMapManager:  configmap.NewManager(k8sClient),
+		Options:           options,
 	}
 }

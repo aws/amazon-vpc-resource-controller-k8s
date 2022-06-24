@@ -27,10 +27,11 @@ func init() {
 }
 
 type Options struct {
-	KubeConfig  string
-	ClusterName string
-	AWSRegion   string
-	AWSVPCID    string
+	KubeConfig           string
+	ClusterName          string
+	AWSRegion            string
+	AWSVPCID             string
+	ReleasedImageVersion string
 }
 
 func (options *Options) BindFlags() {
@@ -38,6 +39,7 @@ func (options *Options) BindFlags() {
 	flag.StringVar(&options.ClusterName, "cluster-name", "", `Kubernetes cluster name (required)`)
 	flag.StringVar(&options.AWSRegion, "aws-region", "", `AWS Region for the kubernetes cluster`)
 	flag.StringVar(&options.AWSVPCID, "aws-vpc-id", "", `AWS VPC ID for the kubernetes cluster`)
+	flag.StringVar(&options.ReleasedImageVersion, "latest-released-rc-image-tag", "v1.1.3", `VPC RC latest released image`)
 }
 
 func (options *Options) Validate() error {
@@ -52,6 +54,9 @@ func (options *Options) Validate() error {
 	}
 	if len(options.AWSVPCID) == 0 {
 		return errors.Errorf("%s must be set!", "aws-vpc-id")
+	}
+	if len(options.ReleasedImageVersion) == 0 {
+		return errors.Errorf("%s must be set!", "latest-released-rc-image-tag")
 	}
 	return nil
 }

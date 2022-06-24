@@ -59,7 +59,7 @@ func GetNewPodWithLeaderLease(ctx context.Context, manager Manager) string {
 }
 
 func ScaleControllerDeployment(ctx context.Context, deploymentManager deployment.Manager, replica int) {
-	By(fmt.Sprintf("scaling down the controller deployment to %d", replica))
+	By(fmt.Sprintf("scaling the controller deployment to %d", replica))
 	err := deploymentManager.ScaleDeploymentAndWaitTillReady(ctx,
 		Namespace,
 		DeploymentName,
