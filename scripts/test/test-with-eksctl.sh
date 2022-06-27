@@ -71,6 +71,7 @@ check_is_installed ginkgo
 check_is_installed eksctl
 check_is_installed kubectl
 check_is_installed kustomize
+check_is_installed jq
 
 CLUSTER_NAME=$(add_suffix "$CLUSTER_NAME")
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity | jq .Account -r)}"
@@ -147,7 +148,7 @@ function run_integration_test() {
   -cluster-kubeconfig=$KUBE_CONFIG_PATH \
   -cluster-name=$CLUSTER_NAME \
   --aws-region=$AWS_REGION \
-  --aws-vpc-id $VPC_ID) || TEST_FAILED=true
+  --aws-vpc-id=$VPC_ID) || TEST_FAILED=true
 
   # SGP + Windows Webhook Test
   (cd test/integration/webhook && \
@@ -155,7 +156,28 @@ function run_integration_test() {
   -cluster-kubeconfig=$KUBE_CONFIG_PATH \
   -cluster-name=$CLUSTER_NAME \
   --aws-region=$AWS_REGION \
-  --aws-vpc-id $VPC_ID) || TEST_FAILED=true
+  --aws-vpc-id=$VPC_ID) || TEST_FAILED=true
+
+  if [[ $additional_gingko_params == "--focus=LOCAL" ]]; then
+    # SGP + Metrics for Regression Test
+    ng=$(aws eks list-nodegroups --cluster-name $CLUSTER_NAME --query 'nodegroups[0]' --output text)
+    asg_name=$(aws eks describe-nodegroup --nodegroup-name $ng --cluster-name $CLUSTER_NAME --query 'nodegroup.resources.autoScalingGroups[?amiType=='AL2_x86_64'].name' --output text)
+    asg_config=$(aws eks describe-nodegroup --nodegroup-name $ng --cluster-name $CLUSTER_NAME --query 'nodegroup.scalingConfig')
+    max_size=$(echo $asg_config | jq '.maxSize')
+    min_size=$(echo $asg_config | jq '.minSize')
+    desired_size=$(echo $asg_config | jq '.desiredSize')
+    # We need a larger group of nodes to test the regression of controllers
+    aws autoscaling update-auto-scaling-group --auto-scaling-group-name $asg_name --max-size=150 --desired-capacity=100 --min-size=0
+    sleep 300
+    (cd test/integration/metrics && \
+    CGO_ENABLED=0 ginkgo "$additional_gingko_params" -v -timeout 20m -- \
+    -cluster-kubeconfig=$KUBE_CONFIG_PATH \
+    -cluster-name=$CLUSTER_NAME \
+    --aws-region=$AWS_REGION \
+    --aws-vpc-id=$VPC_ID \
+    --latest-released-rc-image-tag=v1.1.3 ) || TEST_FAILED=true
+    aws autoscaling update-auto-scaling-group --auto-scaling-group-name $asg_name --max-size=$max_size --desired-capacity=$desired_size --min-size=$min_size
+  fi
 }
 
 function verify_controller_has_lease() {
