@@ -9,7 +9,7 @@
 set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-INTEGRATION_TEST_DIR="$SCRIPT_DIR/../../test/integration"
+GINKGO_TEST_BUILD_DIR="$SCRIPT_DIR/../../build"
 SECONDS=0
 VPC_CNI_ADDON_NAME="vpc-cni"
 
@@ -40,25 +40,40 @@ function load_addon_details() {
 
 function wait_for_addon_status() {
   local expected_status=$1
-
+  local retry_attempt=0
   if [ "$expected_status" =  "DELETED" ]; then
-    while $(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME --region $REGION); do
+    while $(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME --region "$REGION"); do
+      if [ $retry_attempt -ge 30 ]; then
+        echo "failed to delete addon, qutting after too many attempts"
+        exit 1
+      fi
       echo "addon is still not deleted"
       sleep 5
+      ((retry_attempt=retry_attempt+1))
     done
     echo "addon deleted"
+    # Even after the addon API Returns an error, if you immediately try to create a new addon it sometimes fails
+    sleep 10
     return
   fi
 
+  retry_attempt=0
   while true
   do
-    STATUS=$(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME --region $REGION | jq -r '.addon.status')
+    STATUS=$(aws eks describe-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name $VPC_CNI_ADDON_NAME --region "$REGION" | jq -r '.addon.status')
     if [ "$STATUS" = "$expected_status" ]; then
       echo "addon status matches expected status"
       return
     fi
+    # We have seen the canary test get stuck, we don't know what causes this but most likely suspect is
+    # the addon update/delete attempts. So adding limited retries.
+    if [ $retry_attempt -ge 30 ]; then
+      echo "failed to get desired add-on status: $STATUS, qutting after too many attempts"
+      exit 1
+    fi
     echo "addon status is not equal to $expected_status"
-    sleep 5
+    sleep 10
+    ((retry_attempt=retry_attempt+1))
   done
 }
 
@@ -83,12 +98,19 @@ function install_add_on() {
 }
 
 function run_canary_tests() {
+  if [[ -z "${SKIP_MAKE_TEST_BINARIES}" ]]; then
+    echo "making ginkgo test binaries"
+    (cd $SCRIPT_DIR/../.. && make build-test-binaries)
+  else
+    echo "skipping making ginkgo test binaries"
+  fi
+
   # For each component, we want to cover the most important test cases. We also don't want to take more than 30 minutes
   # per repository as these tests are run sequentially along with tests from other repositories
   # Currently the overall execution time is ~50 minutes and we will reduce it in future
-  (cd $INTEGRATION_TEST_DIR/perpodsg && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
-  (cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 27m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
-  (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 ginkgo --focus="CANARY" -v -timeout 5m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+  (CGO_ENABLED=0 ginkgo --focus="CANARY" $EXTRA_GINKGO_FLAGS -v -timeout 15m $GINKGO_TEST_BUILD_DIR/perpodsg.test -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+  (CGO_ENABLED=0 ginkgo --focus="CANARY" $EXTRA_GINKGO_FLAGS -v -timeout 27m $GINKGO_TEST_BUILD_DIR/windows.test -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
+  (CGO_ENABLED=0 ginkgo --focus="CANARY" $EXTRA_GINKGO_FLAGS -v -timeout 5m $GINKGO_TEST_BUILD_DIR/webhook.test -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name  =$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID)
 }
 
 echo "Starting the ginkgo test suite"
