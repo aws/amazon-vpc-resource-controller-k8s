@@ -107,6 +107,26 @@ type WarmPoolJob struct {
 	NodeName string
 }
 
+// IPAM represents the job for a resource handler for IPAM resources
+type IPAMJob struct {
+	// Operation is the type of operation on IPAM
+	Operations Operations
+	// Resources can hold the resource to delete or the created resources
+	Resources []IPAMResourceInfo
+	// ResourceCount is the number of resource to be created
+	ResourceCount int
+	// NodeName is the name of the node
+	NodeName string
+}
+
+// Resource Info for IPAM
+type IPAMResourceInfo struct {
+	// IPv4 Address
+	ResourceID string
+	// IP prefix origin
+	PrefixOrigin string
+}
+
 // NewWarmPoolCreateJob returns a job on warm pool of resource
 func NewWarmPoolCreateJob(nodeName string, count int) *WarmPoolJob {
 	return &WarmPoolJob{
@@ -136,6 +156,32 @@ func NewWarmPoolDeleteJob(nodeName string, resourcesToDelete []string) *WarmPool
 func NewWarmProcessDeleteQueueJob(nodeName string) *WarmPoolJob {
 	return &WarmPoolJob{
 		Operations: OperationProcessDeleteQueue,
+		NodeName:   nodeName,
+	}
+}
+
+func NewIPAMDeleteJob(nodeName string, resourcesToDelete []IPAMResourceInfo) *IPAMJob {
+	return &IPAMJob{
+		Operations:    OperationDeleted,
+		NodeName:      nodeName,
+		Resources:     resourcesToDelete,
+		ResourceCount: len(resourcesToDelete),
+	}
+}
+
+// NewWarmPoolCreateJob returns a job on warm pool of resource
+func NewIPAMCreateJob(nodeName string, count int) *IPAMJob {
+	return &IPAMJob{
+		Operations:    OperationCreate,
+		NodeName:      nodeName,
+		ResourceCount: count,
+	}
+}
+
+// NewWarmPoolReSyncJob returns a job to re-sync the warm pool with upstream
+func NewIPAMReSyncJob(nodeName string) *IPAMJob {
+	return &IPAMJob{
+		Operations: OperationReSyncPool,
 		NodeName:   nodeName,
 	}
 }
