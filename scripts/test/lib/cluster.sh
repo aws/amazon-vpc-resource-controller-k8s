@@ -4,6 +4,10 @@ LIB_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 source "$LIB_DIR"/k8s.sh
 
+if [[ -n "${ENDPOINT}" ]]; then
+  ENDPOINT_FLAG="--endpoint $ENDPOINT"
+fi
+
 function load_cluster_details() {
   CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION $ENDPOINT_FLAG)
   VPC_ID=$(echo $CLUSTER_INFO | jq -r '.cluster.resourcesVpcConfig.vpcId')
