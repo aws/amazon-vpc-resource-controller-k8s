@@ -20,10 +20,6 @@ KUBE CONFIG: $KUBE_CONFIG_PATH
 CLUSTER_NAME: $CLUSTER_NAME
 REGION: $REGION"
 
-if [[ -n "${ENDPOINT}" ]]; then
-  ENDPOINT_FLAG="--endpoint $ENDPOINT"
-fi
-
 # Default Proxy is not allowed in China Region
 if [[ $REGION == "cn-north-1" || $REGION == "cn-northwest-1" ]]; then
   go env -w GOPROXY=https://goproxy.cn,direct

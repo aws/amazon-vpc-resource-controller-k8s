@@ -158,16 +158,15 @@ function run_integration_test() {
   --aws-region=$AWS_REGION \
   --aws-vpc-id=$VPC_ID) || TEST_FAILED=true
 
+  # SGP + Metrics for Regression Test
   if [[ $additional_gingko_params == "--focus=LOCAL" ]]; then
-    # SGP + Metrics for Regression Test
-    ng=$(aws eks list-nodegroups --cluster-name $CLUSTER_NAME --query 'nodegroups[0]' --output text)
-    asg_name=$(aws eks describe-nodegroup --nodegroup-name $ng --cluster-name $CLUSTER_NAME --query 'nodegroup.resources.autoScalingGroups[?amiType=='AL2_x86_64'].name' --output text)
-    asg_config=$(aws eks describe-nodegroup --nodegroup-name $ng --cluster-name $CLUSTER_NAME --query 'nodegroup.scalingConfig')
-    max_size=$(echo $asg_config | jq '.maxSize')
-    min_size=$(echo $asg_config | jq '.minSize')
-    desired_size=$(echo $asg_config | jq '.desiredSize')
     # We need a larger group of nodes to test the regression of controllers
-    aws autoscaling update-auto-scaling-group --auto-scaling-group-name $asg_name --max-size=150 --desired-capacity=100 --min-size=0
+    ng=$(eksctl get nodegroup --cluster=$CLUSTER_NAME --output=json | jq '.[0]')
+    ng_name=$(echo $ng | jq -r '.Name')
+    desired_size=$(echo $ng | jq '.DesiredCapacity')
+    max_size=$(echo $ng | jq '.MaxSize')
+    min_size=$(echo $ng | jq '.MinSize')
+    eksctl scale nodegroup --cluster=$CLUSTER_NAME --name=$ng_name --nodes=100 --nodes-min=0 --nodes-max=150
     sleep 300
     (cd test/integration/metrics && \
     CGO_ENABLED=0 ginkgo "$additional_gingko_params" -v -timeout 20m -- \
@@ -176,7 +175,7 @@ function run_integration_test() {
     --aws-region=$AWS_REGION \
     --aws-vpc-id=$VPC_ID \
     --latest-released-rc-image-tag=v1.1.3 ) || TEST_FAILED=true
-    aws autoscaling update-auto-scaling-group --auto-scaling-group-name $asg_name --max-size=$max_size --desired-capacity=$desired_size --min-size=$min_size
+    eksctl scale nodegroup --cluster=$CLUSTER_NAME --name=$ng_name --nodes=$desired_size --nodes-min=$min_size --nodes-max=$max_size
   fi
 }
 
