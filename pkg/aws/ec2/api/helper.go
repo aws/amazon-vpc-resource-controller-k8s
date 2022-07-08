@@ -517,7 +517,7 @@ func (h *ec2APIHelper) AssignIPv4PrefixesAndWaitTillReady(eniID string, count in
 	var assignedIPPrefixes []string
 
 	input := &ec2.AssignPrivateIpAddressesInput{
-		NetworkInterfaceId:             &eniID,
+		NetworkInterfaceId: &eniID,
 		Ipv4PrefixCount: aws.Int64(int64(count)),
 	}
 
@@ -580,7 +580,7 @@ func (h *ec2APIHelper) AssignIPv4PrefixesAndWaitTillReady(eniID string, count in
 func (h *ec2APIHelper) UnassignPrivateIpPrefixes(eniID string, ipPrefixes []string) error {
 	unassignPrivateIpAddressesInput := &ec2.UnassignPrivateIpAddressesInput{
 		NetworkInterfaceId: &eniID,
-		Ipv4Prefixes: aws.StringSlice(ipPrefixes),
+		Ipv4Prefixes:       aws.StringSlice(ipPrefixes),
 	}
 	_, err := h.ec2Wrapper.UnassignPrivateIPAddresses(unassignPrivateIpAddressesInput)
 	return err

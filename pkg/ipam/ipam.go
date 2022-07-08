@@ -21,7 +21,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/ipam/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/go-logr/logr"
@@ -76,6 +79,9 @@ type ipam struct {
 	// reSyncRequired is set if the upstream and pool are possibly out of sync due to
 	// errors in creating/deleting resources
 	reSyncRequired bool
+
+	// ENI Manager
+	eniManager eni.ENIManager
 }
 
 type prefixInfo struct {
@@ -110,6 +116,56 @@ func NewResourceIPAM(log logr.Logger, poolConfig *config.WarmPoolConfig, usedRes
 		nodeName:       nodeName,
 	}
 	return ipam
+}
+
+func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) error {
+	nodeName := instance.Name()
+
+	eniManager := eni.NewENIManager(instance)
+	presentPrefixes, err := eniManager.InitResources(apiWrapper.EC2API)
+	if err != nil {
+		return err
+	}
+
+	pods, err := apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
+	if err != nil {
+		return err
+	}
+
+	// Mapping IPs to prefixes
+	ipToResourceInfoMapping := make(map[string]worker.IPAMResourceInfo)
+
+	// Create mapping for current IPs and prefixes
+	for _, prefix := range presentPrefixes {
+		allPossibleIPs, _ := DeconstructPrefix(prefix)
+		for _, ip := range allPossibleIPs {
+			ipToResourceInfoMapping[ip] = worker.IPAMResourceInfo{ResourceID: ip, PrefixOrigin: prefix}
+		}
+	}
+
+	podToResourceMap := make(map[string]worker.IPAMResourceInfo)
+
+	usedIPSet := map[string]worker.IPAMResourceInfo{}
+	for _, pod := range pods {
+		annotation, present := pod.Annotations[config.ResourceNameIPAddress]
+		if !present {
+			continue
+		}
+		podToResourceMap[string(pod.UID)] = ipToResourceInfoMapping[annotation]
+		usedIPSet[annotation] = ipToResourceInfoMapping[annotation]
+	}
+
+	warmResources := []worker.IPAMResourceInfo{}
+
+	for _, resourceInfo := range ipToResourceInfoMapping {
+		_, present := usedIPSet[resourceInfo.ResourceID]
+		if !present {
+			warmResources = append(warmResources, resourceInfo)
+		}
+	}
+
+	i.log.Info("initialized the resource provider for resource IPv4")
+	return nil
 }
 
 // ReSync syncs state of upstream with the local pool. If local resources have additional
