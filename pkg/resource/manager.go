@@ -69,7 +69,8 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 
 		var resourceHandler handler.Handler
 		var resourceProvider provider.ResourceProvider
-
+		
+		ctrl.Log.Info("successfully prefix provider")
 		if resourceName == config.ResourceNameIPAddress {
 			// Checking for prefix delegation
 			enablePrefixDelegationMap, err := wrapper.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
@@ -79,18 +80,19 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 			if err == nil && enablePrefixDelegationMap.Data != nil {
 				if val, ok := enablePrefixDelegationMap.Data["ENABLE_PREFIX_DELEGATION"]; ok {
 					enablePrefixDelegation, err := strconv.ParseBool(val)
+					ctrl.Log.Info("Parsed value", "Enable prefix delegation value", enablePrefixDelegation)
 					if err == nil && enablePrefixDelegation {
 						ctrl.Log.Info("successfully prefix provider")
 						resourceProvider = prefix.NewIPv4PrefixProvider(ctrl.Log.WithName("ipv4 prefix provider"),
 							wrapper, workers, resourceConfig)
 						resourceHandler = handler.NewIpamResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
 							resourceName, resourceProvider, ctx)
-					} else {
-						resourceProvider = ip.NewIPv4Provider(ctrl.Log.WithName("ipv4 provider"),
-							wrapper, workers, resourceConfig)
-						resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
-							resourceName, resourceProvider, ctx)
 					}
+				} else {
+					resourceProvider = ip.NewIPv4Provider(ctrl.Log.WithName("ipv4 provider"),
+						wrapper, workers, resourceConfig)
+					resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
+						resourceName, resourceProvider, ctx)
 				}
 			}
 		} else if resourceName == config.ResourceNamePodENI {
