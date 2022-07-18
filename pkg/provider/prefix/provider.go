@@ -11,7 +11,7 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package ip
+package prefix
 
 import (
 	"fmt"
@@ -21,9 +21,10 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/ipam"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/ipam/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/go-logr/logr"
@@ -48,7 +49,7 @@ type ipv4PrefixProvider struct {
 // InstanceResource contains the instance's ENI manager and the resource pool
 type ResourceProviderAndIPAM struct {
 	eniManager   eni.ENIManager
-	resourcePool pool.Pool // Change to IPAM
+	resourceIpam ipam.Ipam // Change to IPAM
 }
 
 func NewIPv4PrefixProvider(log logr.Logger, apiWrapper api.Wrapper,
@@ -62,54 +63,60 @@ func NewIPv4PrefixProvider(log logr.Logger, apiWrapper api.Wrapper,
 	}
 }
 
-func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
+func (i *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 
 	// Init IPAM to resync
+	nodeCapacity := getCapacity(instance.Type(), instance.Os())
 
+	ipamPool := ipam.NewResourceIPAM(i.log.WithName("ipv4 prefix resource pool").
+		WithValues("node name", instance.Name()), i.config, make(map[string]worker.IPAMResourceInfo),
+		[]worker.IPAMResourceInfo{}, []string{}, map[string]int{}, instance.Name(), nodeCapacity)
+
+	ipamPool.InitIPAM(instance, i.apiWrapper)
 	// Submit the async job to periodically process the delete queue
-	p.SubmitAsyncJob(worker.NewWarmProcessDeleteQueueJob(nodeName))
+	i.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
 	return nil
 }
 
-func (p *ipv4PrefixProvider) DeInitResource(instance ec2.EC2Instance) error {
+func (i *ipv4PrefixProvider) DeInitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
-	p.deleteInstanceProviderAndPool(nodeName)
+	i.deleteInstanceProviderAndPool(nodeName)
 
 	return nil
 }
 
 // UpdateResourceCapacity updates the resource capacity based on the type of instance
-func (p *ipv4PrefixProvider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
+func (i *ipv4PrefixProvider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	instanceType := instance.Type()
 	instanceName := instance.Name()
 	os := instance.Os()
 
 	capacity := getCapacity(instanceType, os)
 
-	err := p.apiWrapper.K8sAPI.AdvertiseCapacityIfNotSet(instance.Name(), config.ResourceNameIPAddress, capacity)
+	err := i.apiWrapper.K8sAPI.AdvertiseCapacityIfNotSet(instance.Name(), config.ResourceNameIPAddress, capacity)
 	if err != nil {
 		return err
 	}
-	p.log.V(1).Info("advertised capacity",
+	i.log.V(1).Info("advertised capacity",
 		"instance", instanceName, "instance type", instanceType, "os", os, "capacity", capacity)
 
 	return nil
 }
 
-func (p *ipv4PrefixProvider) ProcessDeleteQueue(job *worker.WarmPoolJob) (ctrl.Result, error) {
-	resourceProviderAndPool, isPresent := p.getInstanceProviderAndPool(job.NodeName)
+func (i *ipv4PrefixProvider) ProcessDeleteQueue(job *worker.WarmPoolJob) (ctrl.Result, error) {
+	resourceProviderAndPool, isPresent := i.getInstanceProviderAndPool(job.NodeName)
 	if !isPresent {
-		p.log.Info("forgetting the delete queue processing job", "node", job.NodeName)
+		i.log.Info("forgetting the delete queue processing job", "node", job.NodeName)
 		return ctrl.Result{}, nil
 	}
 	// TODO: For efficiency run only when required in next release
-	resourceProviderAndPool.resourcePool.ProcessCoolDownQueue()
+	resourceProviderAndPool.resourceIpam.ProcessCoolDownQueue()
 
 	// After the cool down queue is processed check if we need to do reconciliation
-	job = resourceProviderAndPool.resourcePool.ReconcilePool()
+	job = resourceProviderAndPool.resourceIpam.ReconcilePool()
 	if job.Operations != worker.OperationReconcileNotRequired {
-		p.SubmitAsyncJob(job)
+		i.SubmitAsyncJob(job)
 	}
 
 	// Re submit the job to execute after cool down period has ended
@@ -117,27 +124,27 @@ func (p *ipv4PrefixProvider) ProcessDeleteQueue(job *worker.WarmPoolJob) (ctrl.R
 }
 
 // SubmitAsyncJob submits an asynchronous job to the worker pool
-func (p *ipv4PrefixProvider) SubmitAsyncJob(job interface{}) {
-	p.workerPool.SubmitJob(job)
+func (i *ipv4PrefixProvider) SubmitAsyncJob(job interface{}) {
+	i.workerPool.SubmitJob(job)
 }
 
 // ProcessAsyncJob processes the job, the function should be called using the worker pool in order to be processed
 // asynchronously
-func (p *ipv4PrefixProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error) {
-	warmPoolJob, isValid := job.(*worker.WarmPoolJob)
+func (i *ipv4PrefixProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error) {
+	ipamJob, isValid := job.(*worker.WarmPoolJob)
 	if !isValid {
 		return ctrl.Result{}, fmt.Errorf("invalid job type")
 	}
 
-	switch warmPoolJob.Operations {
+	switch ipamJob.Operations {
 	case worker.OperationCreate:
-		p.CreatePrivateIPv4PrefixAndUpdatePool(warmPoolJob)
+		i.CreatePrivateIPv4PrefixAndUpdatePool(ipamJob)
 	case worker.OperationDeleted:
-		p.DeletePrivateIPv4AndUpdatePool(warmPoolJob)
+		i.DeletePrivateIPv4AndUpdatePool(ipamJob)
 	case worker.OperationReSyncPool:
-		p.ReSyncPool(warmPoolJob)
+		i.ReSyncPool(ipamJob)
 	case worker.OperationProcessDeleteQueue:
-		return p.ProcessDeleteQueue(warmPoolJob)
+		return i.ProcessDeleteQueue(ipamJob)
 	}
 
 	return ctrl.Result{}, nil
@@ -145,84 +152,81 @@ func (p *ipv4PrefixProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, erro
 
 // CreatePrivateIPv4AndUpdatePool executes the Create IPv4 workflow by assigning the desired number of IPv4 address
 // provided in the warm pool job
-func (p *ipv4PrefixProvider) CreatePrivateIPv4PrefixAndUpdatePool(job *worker.WarmPoolJob) {
-	instanceResource, found := p.getInstanceProviderAndPool(job.NodeName)
+func (i *ipv4PrefixProvider) CreatePrivateIPv4PrefixAndUpdatePool(job *worker.WarmPoolJob) {
+	instanceResource, found := i.getInstanceProviderAndPool(job.NodeName)
 	if !found {
-		p.log.Error(fmt.Errorf("cannot find the instance provider and pool form the cache"), "node", job.NodeName)
+		i.log.Error(fmt.Errorf("cannot find the instance provider and pool form the cache"), "node", job.NodeName)
 		return
 	}
 	didSucceed := true
 
 	// Get ENI to create IPV4 prefix [Change feature]
-	ips, err := instanceResource.eniManager.CreateIPV4Address(job.ResourceCount, p.apiWrapper.EC2API, p.log)
+	prefixes, didSucceed := instanceResource.resourceIpam.AllocatePrefix(job.ResourceCount, i.apiWrapper)
 
-	if err != nil {
-		p.log.Error(err, "failed to create all/some of the IPv4 addresses", "created ips", ips)
-		didSucceed = false
-	}
-	job.Resources = ips
-	p.updatePoolAndReconcileIfRequired(instanceResource.resourcePool, job, didSucceed)
+	job.Resources = prefixes
+
+	i.updatePoolAndReconcileIfRequired(instanceResource.resourceIpam, job, didSucceed)
 }
 
-func (p *ipv4PrefixProvider) ReSyncPool(job *worker.WarmPoolJob) {
-	providerAndPool, found := p.instanceProviderAndPool[job.NodeName]
+func (i *ipv4PrefixProvider) ReSyncPool(job *worker.WarmPoolJob) {
+	providerAndPool, found := i.instanceProviderAndPool[job.NodeName]
 	if !found {
-		p.log.Error(fmt.Errorf("instance provider not found"), "node is not initialized",
+		i.log.Error(fmt.Errorf("instance provider not found"), "node is not initialized",
 			"name", job.NodeName)
 		return
 	}
 
-	resources, err := providerAndPool.eniManager.InitResources(p.apiWrapper.EC2API)
+	resources, err := providerAndPool.eniManager.InitResources(i.apiWrapper.EC2API)
 	if err != nil {
-		p.log.Error(err, "failed to get init resources for the node",
+		i.log.Error(err, "failed to get init resources for the node",
 			"name", job.NodeName)
 		return
 	}
 
-	providerAndPool.resourcePool.ReSync(resources)
+	providerAndPool.resourceIpam.ReSync(resources)
 }
 
 // DeletePrivateIPv4AndUpdatePool executes the Delete IPv4 workflow for the list of IPs provided in the warm pool job
-func (p *ipv4PrefixProvider) DeletePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
-	instanceResource, found := p.getInstanceProviderAndPool(job.NodeName)
+func (i *ipv4PrefixProvider) DeletePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
+	instanceResource, found := i.getInstanceProviderAndPool(job.NodeName)
 	if !found {
-		p.log.Error(fmt.Errorf("cannot find the instance provider and pool form the cache"), "node", job.NodeName)
+		i.log.Error(fmt.Errorf("cannot find the instance provider and pool form the cache"), "node", job.NodeName)
 		return
 	}
 	didSucceed := true
-	failedIPs, err := instanceResource.eniManager.DeleteIPV4Address(job.Resources, p.apiWrapper.EC2API, p.log)
+	failedIPs, err := instanceResource.eniManager.DeleteIPV4Prefix(job.Resources, i.apiWrapper.EC2API, i.log)
 	if err != nil {
-		p.log.Error(err, "failed to delete all/some of the IPv4 addresses", "failed ips", failedIPs)
+		i.log.Error(err, "failed to delete all/some of the IPv4 addresses", "failed ips", failedIPs)
 		didSucceed = false
 	}
 	job.Resources = failedIPs
-	p.updatePoolAndReconcileIfRequired(instanceResource.resourcePool, job, didSucceed)
+	i.updatePoolAndReconcileIfRequired(instanceResource.resourceIpam, job, didSucceed)
 }
 
 // updatePoolAndReconcileIfRequired updates the resource pool and reconcile again and submit a new job if required
-func (p *ipv4PrefixProvider) updatePoolAndReconcileIfRequired(resourcePool pool.Pool, job *worker.WarmPoolJob, didSucceed bool) {
+func (i *ipv4PrefixProvider) updatePoolAndReconcileIfRequired(resourceIpam ipam.Ipam, job *worker.WarmPoolJob, didSucceed bool) {
 	// Update the pool to add the created/failed resource to the warm pool and decrement the pending count
-	shouldReconcile := resourcePool.UpdatePool(job, didSucceed)
+	shouldReconcile := resourceIpam.UpdatePool(job, didSucceed)
 
 	if shouldReconcile {
-		job := resourcePool.ReconcilePool()
+		job := resourceIpam.ReconcilePool()
 		if job.Operations != worker.OperationReconcileNotRequired {
-			p.SubmitAsyncJob(job)
+			i.SubmitAsyncJob(job)
 		}
 	}
 }
 
 // putInstanceProviderAndPool stores the node's instance provider and pool to the cache
-func (p *ipv4PrefixProvider) putInstanceProviderAndPool(nodeName string, resourcePool pool.Pool, manager eni.ENIManager) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+func (i *ipv4PrefixProvider) putInstanceProviderAndPool(nodeName string, resourceIpam ipam.Ipam, manager eni.ENIManager) {
+	i.lock.Lock()
+	defer i.lock.Unlock()
 
 	resource := ResourceProviderAndIPAM{
 		eniManager:   manager,
-		resourcePool: resourcePool,
+		resourceIpam: resourceIpam,
 	}
 
-	p.instanceProviderAndPool[nodeName] = resource
+	i.instanceProviderAndPool[nodeName] = resource
 }
 
 // getInstanceProviderAndPool returns the node's instance provider and pool from the cache
@@ -251,49 +255,54 @@ func getCapacity(instanceType string, instanceOs string) int {
 	}
 	var capacity int
 	if instanceOs == config.OSWindows {
-		capacity = limits.IPv4PerInterface - 1
+		capacity = (limits.IPv4PerInterface - 1) * 16
 	} else {
-		capacity = (limits.IPv4PerInterface - 1) * limits.Interface
+		capacity = (limits.IPv4PerInterface - 1) * 16 * limits.Interface
 	}
 
 	return capacity
 }
 
 // GetPool returns the warm pool for the IPv4 resources
-func (p *ipv4PrefixProvider) GetPool(nodeName string) (pool.Pool, bool) {
-	providerAndPool, exists := p.getInstanceProviderAndPool(nodeName)
+func (i *ipv4PrefixProvider) GetPool(nodeName string) (pool.Pool, bool) {
+	return nil, false
+}
+
+// GetIPAM returns the IPAM for the IPv4 prefix resources
+func (i *ipv4PrefixProvider) GetIPAM(nodeName string) (ipam.Ipam, bool) {
+	providerAndPool, exists := i.getInstanceProviderAndPool(nodeName)
 	if !exists {
 		return nil, false
 	}
-	return providerAndPool.resourcePool, true
+	return providerAndPool.resourceIpam, true
 }
 
 // IsInstanceSupported returns true for windows node as IP as extended resource is only supported by windows node now
-func (p *ipv4PrefixProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
+func (i *ipv4PrefixProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
 	if instance.Os() == config.OSWindows {
 		return true
 	}
 	return false
 }
 
-func (p *ipv4PrefixProvider) Introspect() interface{} {
-	p.lock.RLock()
-	defer p.lock.RUnlock()
+func (i *ipv4PrefixProvider) Introspect() interface{} {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
 
-	response := make(map[string]pool.IntrospectResponse)
-	for nodeName, resource := range p.instanceProviderAndPool {
-		response[nodeName] = resource.resourcePool.Introspect()
+	response := make(map[string]ipam.IntrospectResponse)
+	for nodeName, resource := range i.instanceProviderAndPool {
+		response[nodeName] = resource.resourceIpam.Introspect()
 	}
 	return response
 }
 
-func (p *ipv4PrefixProvider) IntrospectNode(nodeName string) interface{} {
-	p.lock.RLock()
-	defer p.lock.RUnlock()
+func (i *ipv4PrefixProvider) IntrospectNode(nodeName string) interface{} {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
 
-	resource, found := p.instanceProviderAndPool[nodeName]
+	resource, found := i.instanceProviderAndPool[nodeName]
 	if !found {
 		return struct{}{}
 	}
-	return resource.resourcePool.Introspect()
+	return resource.resourceIpam.Introspect()
 }

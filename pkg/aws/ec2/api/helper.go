@@ -518,7 +518,7 @@ func (h *ec2APIHelper) AssignIPv4PrefixesAndWaitTillReady(eniID string, count in
 
 	input := &ec2.AssignPrivateIpAddressesInput{
 		NetworkInterfaceId: &eniID,
-		Ipv4PrefixCount: aws.Int64(int64(count)),
+		Ipv4PrefixCount:    aws.Int64(int64(count)),
 	}
 
 	assignPrivateIPOutput, err := h.ec2Wrapper.AssignPrivateIPAddresses(input)

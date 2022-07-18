@@ -56,6 +56,15 @@ func (m *MockEC2APIHelper) AssignIPv4AddressesAndWaitTillReady(arg0 string, arg1
 	return ret0, ret1
 }
 
+// AssignIPv4PrefixesAndWaitTillReady mocks base method.
+func (m *MockEC2APIHelper) AssignIPv4PrefixesAndWaitTillReady(arg0 string, arg1 int) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AssignIPv4PrefixesAndWaitTillReady", arg0, arg1)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
 // AssignIPv4AddressesAndWaitTillReady indicates an expected call of AssignIPv4AddressesAndWaitTillReady.
 func (mr *MockEC2APIHelperMockRecorder) AssignIPv4AddressesAndWaitTillReady(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
@@ -272,6 +281,14 @@ func (mr *MockEC2APIHelperMockRecorder) SetDeleteOnTermination(arg0, arg1 interf
 func (m *MockEC2APIHelper) UnassignPrivateIpAddresses(arg0 string, arg1 []string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UnassignPrivateIpAddresses", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UnassignPrivateIpPrefixes mocks base method.
+func (m *MockEC2APIHelper) UnassignPrivateIpPrefixes(arg0 string, arg1 []string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UnassignPrivateIpPrefixes", arg0, arg1)
 	ret0, _ := ret[0].(error)
 	return ret0
 }

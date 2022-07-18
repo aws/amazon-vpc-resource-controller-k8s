@@ -16,6 +16,7 @@ package resource
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -23,6 +24,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/prefix"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -69,10 +71,25 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 		var resourceProvider provider.ResourceProvider
 
 		if resourceName == config.ResourceNameIPAddress {
-			resourceProvider = ip.NewIPv4Provider(ctrl.Log.WithName("ipv4 provider"),
-				wrapper, workers, resourceConfig)
-			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
-				resourceName, resourceProvider, ctx)
+			// Checking for prefix delegation
+			enablePrefixDelegationMap, err := wrapper.K8sAPI.GetConfigMap("ENABLE_PREFIX_DELEGATION", config.KubeSystemNamespace)
+
+			if err == nil && enablePrefixDelegationMap.Data != nil {
+				if val, ok := enablePrefixDelegationMap.Data[config.EnableWindowsIPAMKey]; ok {
+					enablePrefixDelegation, err := strconv.ParseBool(val)
+					if err == nil && enablePrefixDelegation {
+						resourceProvider = prefix.NewIPv4PrefixProvider(ctrl.Log.WithName("ipv4 provider"),
+							wrapper, workers, resourceConfig)
+						resourceHandler = handler.NewIpamResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
+							resourceName, resourceProvider, ctx)
+					} else {
+						resourceProvider = ip.NewIPv4Provider(ctrl.Log.WithName("ipv4 provider"),
+							wrapper, workers, resourceConfig)
+						resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
+							resourceName, resourceProvider, ctx)
+					}
+				}
+			}
 		} else if resourceName == config.ResourceNamePodENI {
 			resourceProvider = branch.NewBranchENIProvider(ctrl.Log.WithName("branch eni provider"),
 				wrapper, workers, resourceConfig, ctx)

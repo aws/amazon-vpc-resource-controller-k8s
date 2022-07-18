@@ -21,6 +21,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/ipam"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
@@ -313,6 +314,11 @@ func (p *ipv4Provider) GetPool(nodeName string) (pool.Pool, bool) {
 		return nil, false
 	}
 	return providerAndPool.resourcePool, true
+}
+
+// GetIPAM
+func (p *ipv4Provider) GetIPAM(nodeName string) (ipam.Ipam, bool) {
+	return nil, false
 }
 
 // IsInstanceSupported returns true for windows node as IP as extended resource is only supported by windows node now

@@ -18,11 +18,11 @@
 package mock_provider
 
 import (
-	reflect "reflect"
-
 	ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/ipam"
 	pool "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	gomock "github.com/golang/mock/gomock"
+	reflect "reflect"
 	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -68,6 +68,15 @@ func (m *MockResourceProvider) GetPool(arg0 string) (pool.Pool, bool) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetPool", arg0)
 	ret0, _ := ret[0].(pool.Pool)
+	ret1, _ := ret[1].(bool)
+	return ret0, ret1
+}
+
+// GetIPAM
+func (m *MockResourceProvider) GetIPAM(arg0 string) (ipam.Ipam, bool) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetIPAM", arg0)
+	ret0, _ := ret[0].(ipam.Ipam)
 	ret1, _ := ret[1].(bool)
 	return ret0, ret1
 }

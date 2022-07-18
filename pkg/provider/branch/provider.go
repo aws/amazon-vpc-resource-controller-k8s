@@ -25,6 +25,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/ipam"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
@@ -456,6 +457,11 @@ func (b *branchENIProvider) getTrunkFromCache(nodeName string) (trunkENI trunk.T
 
 // GetPool is not supported for Branch ENI
 func (b *branchENIProvider) GetPool(_ string) (pool.Pool, bool) {
+	return nil, false
+}
+
+// GetIPAM
+func (b *branchENIProvider) GetIPAM(nodeName string) (ipam.Ipam, bool) {
 	return nil, false
 }
 

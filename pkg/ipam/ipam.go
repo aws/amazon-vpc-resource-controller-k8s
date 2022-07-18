@@ -41,12 +41,14 @@ var (
 )
 
 type Ipam interface {
+	AllocatePrefix(numberOfPrefixes int, apiWrapper api.Wrapper) (resources []string, success bool)
 	AssignResource(requesterID string) (resourceDetail worker.IPAMResourceInfo, shouldReconcile bool, err error)
 	FreeResource(requesterID string, resourceID string) (shouldReconcile bool, err error)
 	GetAssignedResource(requesterID string) (resourceDetail worker.IPAMResourceInfo, ownsResource bool)
 	UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldReconcile bool)
-	ReSync(resources []worker.IPAMResourceInfo)
-	ReconcilePool() *worker.IPAMJob
+	InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resourcesAvailable []worker.IPAMResourceInfo, err error)
+	ReSync(resources []string)
+	ReconcilePool() *worker.WarmPoolJob
 	ProcessCoolDownQueue() bool
 	Introspect() IntrospectResponse
 }
@@ -118,18 +120,18 @@ func NewResourceIPAM(log logr.Logger, poolConfig *config.WarmPoolConfig, usedRes
 	return ipam
 }
 
-func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) error {
+func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resourcesAvailable []worker.IPAMResourceInfo, err error) {
 	nodeName := instance.Name()
 
 	eniManager := eni.NewENIManager(instance)
 	presentPrefixes, err := eniManager.InitResources(apiWrapper.EC2API)
 	if err != nil {
-		return err
+		return []worker.IPAMResourceInfo{}, err
 	}
 
 	pods, err := apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
 	if err != nil {
-		return err
+		return []worker.IPAMResourceInfo{}, err
 	}
 
 	// Mapping IPs to prefixes
@@ -156,16 +158,18 @@ func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) error 
 	}
 
 	warmResources := []worker.IPAMResourceInfo{}
+	allResources := []worker.IPAMResourceInfo{}
 
 	for _, resourceInfo := range ipToResourceInfoMapping {
 		_, present := usedIPSet[resourceInfo.ResourceID]
 		if !present {
 			warmResources = append(warmResources, resourceInfo)
 		}
+		allResources = append(allResources, resourceInfo)
 	}
 
-	i.log.Info("initialized the resource provider for resource IPv4")
-	return nil
+	i.log.Info("initialized the resource provider for resource IPv4 prefixes")
+	return allResources, nil
 }
 
 // ReSync syncs state of upstream with the local pool. If local resources have additional
@@ -173,9 +177,26 @@ func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) error 
 // upstream has additional resources which are not present locally, these resources are added
 // to the IPAM. During ReSync all Create/Delete operations on the Pool should be halted
 // but Assign/Free on the Pool can be allowed.
-func (i *ipam) ReSync(upstreamResource []worker.IPAMResourceInfo) {
+func (i *ipam) ReSync(upstreamResource []string) {
 	i.lock.Lock()
 	defer i.lock.Unlock()
+
+	allResources := []worker.IPAMResourceInfo{}
+
+	// Mapping IPs to prefixes
+	ipToResourceInfoMapping := make(map[string]worker.IPAMResourceInfo)
+
+	// Create mapping for current IPs and prefixes
+	for _, prefix := range upstreamResource {
+		allPossibleIPs, _ := DeconstructPrefix(prefix)
+		for _, ip := range allPossibleIPs {
+			ipToResourceInfoMapping[ip] = worker.IPAMResourceInfo{ResourceID: ip, PrefixOrigin: prefix}
+		}
+	}
+
+	for _, resourceInfo := range ipToResourceInfoMapping {
+		allResources = append(allResources, resourceInfo)
+	}
 
 	// This is possible if two Re-Sync were requested at same time
 	if !i.reSyncRequired {
@@ -199,10 +220,10 @@ func (i *ipam) ReSync(upstreamResource []worker.IPAMResourceInfo) {
 	localResources = append(localResources, i.warmResources...)
 
 	// resources that are present upstream but missing in the pool
-	newResources := Difference(upstreamResource, localResources)
+	newResources := Difference(allResources, localResources)
 
 	// resources that are deleted from upstream but still present in the pool
-	deletedResources := Difference(localResources, upstreamResource)
+	deletedResources := Difference(localResources, allResources)
 
 	if len(newResources) == 0 && len(deletedResources) == 0 {
 		i.log.Info("local and upstream state is in sync")
@@ -394,7 +415,7 @@ func (i *ipam) ProcessCoolDownQueue() (needFurtherProcessing bool) {
 
 // reconcilePoolIfRequired reconciles the IPAM to make it reach it's desired state by submitting either create or delete
 // request to the IPAM
-func (i *ipam) ReconcilePool() *worker.IPAMJob {
+func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
@@ -422,17 +443,17 @@ func (i *ipam) ReconcilePool() *worker.IPAMJob {
 		// and pool could change during re-sync
 		if i.pendingCreate != 0 || i.pendingDelete != 0 {
 			i.log.Info("cannot re-sync as there are pending add/delete request")
-			return &worker.IPAMJob{
+			return &worker.WarmPoolJob{
 				Operations: worker.OperationReconcileNotRequired,
 			}
 		}
 		i.log.Info("submitting request re-sync the pool")
-		return worker.NewIPAMReSyncJob(i.nodeName)
+		return worker.NewWarmPoolReSyncJob(i.nodeName)
 	}
 
 	if len(i.usedResources)+i.pendingCreate+i.pendingDelete+len(i.coolDownQueue) == i.capacity {
 		log.V(1).Info("cannot reconcile, at max capacity")
-		return &worker.IPAMJob{Operations: worker.OperationReconcileNotRequired}
+		return &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}
 	}
 
 	// Consider pending create as well so we don't create multiple subsequent create request
@@ -443,7 +464,7 @@ func (i *ipam) ReconcilePool() *worker.IPAMJob {
 		// The maximum number of resources that can be created
 		canCreateUpto := i.capacity - totalCreatedResources
 		if canCreateUpto == 0 {
-			return &worker.IPAMJob{Operations: worker.OperationReconcileNotRequired}
+			return &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}
 		}
 
 		// Need to add to IPAM
@@ -459,7 +480,7 @@ func (i *ipam) ReconcilePool() *worker.IPAMJob {
 
 		log.Info("created job to add resources to IPAM", "requested count", deviation)
 
-		return worker.NewIPAMCreateJob(i.nodeName, deviation)
+		return worker.NewWarmPoolCreateJob(i.nodeName, deviation)
 
 	} else if -deviation > i.warmPoolConfig.MaxDeviation {
 		// Need to delete from IPAM
@@ -472,6 +493,7 @@ func (i *ipam) ReconcilePool() *worker.IPAMJob {
 			prefixesToRemove = len(freePrefixes)
 		}
 
+		var prefixesRemoved []string
 		var resourceToDelete []worker.IPAMResourceInfo
 		for j := 0; j < prefixesToRemove; j++ {
 			for k := 0; k < len(i.warmResources); k++ {
@@ -479,6 +501,7 @@ func (i *ipam) ReconcilePool() *worker.IPAMJob {
 					resourceToDelete = append(resourceToDelete, i.warmResources[k])
 				}
 			}
+			prefixesRemoved = append(prefixesRemoved, freePrefixes[j])
 		}
 
 		var newWarmResources []worker.IPAMResourceInfo
@@ -497,12 +520,12 @@ func (i *ipam) ReconcilePool() *worker.IPAMJob {
 
 		log.Info("created job to delete resources from IPAM", "resources to delete", resourceToDelete)
 
-		return worker.NewIPAMDeleteJob(i.nodeName, resourceToDelete)
+		return worker.NewWarmPoolDeleteJob(i.nodeName, prefixesRemoved)
 	}
 
 	log.V(1).Info("no need for reconciliation")
 
-	return &worker.IPAMJob{Operations: worker.OperationReconcileNotRequired}
+	return &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}
 }
 
 func (i *ipam) Introspect() IntrospectResponse {
@@ -519,6 +542,16 @@ func (i *ipam) Introspect() IntrospectResponse {
 		WarmResources:    i.warmResources,
 		CoolingResources: i.coolDownQueue,
 	}
+}
+
+func (i *ipam) AllocatePrefix(numberOfPrefixes int, apiWrapper api.Wrapper) (resources []string, success bool) {
+	didSucceed := true
+	prefixes, err := i.eniManager.CreateIPV4Prefix(numberOfPrefixes, apiWrapper.EC2API, i.log)
+	if err != nil {
+		i.log.Error(err, "failed to create all/some of the IPv4 addresses", "created ips", prefixes)
+		didSucceed = false
+	}
+	return prefixes, didSucceed
 }
 
 // Difference returns a-b, elements present in a and not in b
