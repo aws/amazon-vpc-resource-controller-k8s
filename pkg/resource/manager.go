@@ -74,10 +74,13 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 			// Checking for prefix delegation
 			enablePrefixDelegationMap, err := wrapper.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
 
+			ctrl.Log.Info("successfully read config map")
+			
 			if err == nil && enablePrefixDelegationMap.Data != nil {
 				if val, ok := enablePrefixDelegationMap.Data["ENABLE_PREFIX_DELEGATION"]; ok {
 					enablePrefixDelegation, err := strconv.ParseBool(val)
 					if err == nil && enablePrefixDelegation {
+						ctrl.Log.Info("successfully prefix provider")
 						resourceProvider = prefix.NewIPv4PrefixProvider(ctrl.Log.WithName("ipv4 prefix provider"),
 							wrapper, workers, resourceConfig)
 						resourceHandler = handler.NewIpamResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
