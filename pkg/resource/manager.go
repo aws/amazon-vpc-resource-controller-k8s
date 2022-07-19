@@ -74,7 +74,8 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 			// Checking for prefix delegation
 			vpcCniConfigMap, err := wrapper.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
 
-			ctrl.Log.Info("successfully read config map", "Prefix Delegation Map", vpcCniConfigMap.Data, "Error", err)
+			ctrl.Log.Info("Read config map", "Prefix Delegation Map", vpcCniConfigMap, "Error", err)
+			ctrl.Log.Info(config.VpcCniConfigMapName, "Name space", config.KubeSystemNamespace)
 			
 			if err == nil && vpcCniConfigMap.Data != nil {
 				if val, ok := vpcCniConfigMap.Data["enable-prefix-delegation"]; ok {
