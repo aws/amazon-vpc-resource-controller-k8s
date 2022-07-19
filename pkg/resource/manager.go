@@ -70,15 +70,14 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 		var resourceHandler handler.Handler
 		var resourceProvider provider.ResourceProvider
 		
-		ctrl.Log.Info("successfully prefix provider")
 		if resourceName == config.ResourceNameIPAddress {
 			// Checking for prefix delegation
-			enablePrefixDelegationMap, err := wrapper.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
+			vpcCniConfigMap, err := wrapper.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
 
-			ctrl.Log.Info("successfully read config map", "Prefix Delegation Map", enablePrefixDelegationMap.Data, "Error", err)
+			ctrl.Log.Info("successfully read config map", "Prefix Delegation Map", vpcCniConfigMap.Data, "Error", err)
 			
-			if err == nil && enablePrefixDelegationMap.Data != nil {
-				if val, ok := enablePrefixDelegationMap.Data["ENABLE_PREFIX_DELEGATION"]; ok {
+			if err == nil && vpcCniConfigMap.Data != nil {
+				if val, ok := vpcCniConfigMap.Data["enable-prefix-delegation"]; ok {
 					enablePrefixDelegation, err := strconv.ParseBool(val)
 					ctrl.Log.Info("Parsed value", "Enable prefix delegation value", enablePrefixDelegation)
 					if err == nil && enablePrefixDelegation {
