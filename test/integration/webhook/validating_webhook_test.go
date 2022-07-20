@@ -14,6 +14,14 @@
 package webhook
 
 import (
+	"fmt"
+	"github.com/pkg/errors"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -22,12 +30,11 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	v1 "k8s.io/api/rbac/v1"
 )
 
 // TODO: Add integration test for Windows when ConfigMap feature is implemented.
-var _ = Describe("when doing pod operations from non vpc-resource-controller user", func() {
-	Context("[CANARY] when updating annotations", func() {
+var _ = Describe("validating webhook test cases", func() {
+	Context("[CANARY] when modifying existing pod", func() {
 		It("should fail on updating pod sgp annotation", func() {
 			newPod := pod.DeepCopy()
 			newPod.Annotations[config.ResourceNamePodENI] = "updated-annotation"
@@ -85,138 +92,191 @@ var _ = Describe("when doing pod operations from non vpc-resource-controller use
 		})
 	})
 
-	Context("[CANARY] when updating node", func() {
-		labelKey := "k8s-app"
-		labelCNIValue := "aws-node"
-		labelProxyValue := "kube-proxy"
-		cmdCurl := []string{
-			"curl",
-			"-o",
-			"kubectl",
-			"https://s3.us-west-2.amazonaws.com/amazon-eks/1.22.6/2022-03-09/bin/linux/amd64/kubectl",
-		}
-		cmdChMod := []string{
-			"chmod", "+x", "./kubectl",
-		}
-
-		var awsNodeOldRules []v1.PolicyRule
-		var kubeProxyOldRules []v1.PolicyRule
-		It("should successfully update clusterroles", func() {
-			awsNodeOldRules = PatchClusterRole("aws-node", nil, "nodes", []string{"get", "list", "watch", "update", "patch"})
-			kubeProxyOldRules = PatchClusterRole("system:node-proxier", nil, "nodes", []string{"get", "list", "watch", "update", "patch"})
-		})
-
-		It("should fail on updating node with unauthorized taint from aws-node", func() {
-			awsNodePods, err := frameWork.PodManager.GetPodsWithLabel(ctx, config.KubeSystemNamespace, labelKey, labelCNIValue)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(awsNodePods).ToNot(BeEmpty())
-
+	Context("[CANARY] when modifying existing node", func() {
+		var existingNodeNameToMutate string
+		var k8sClientToMutateNode client.Client
+		BeforeEach(func() {
 			nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(nodes.Items).ToNot(BeEmpty())
+			existingNodeNameToMutate = nodes.Items[0].Name
+		})
 
-			awsNodePodName := awsNodePods[0].ObjectMeta.Name
-			targetNode := awsNodePods[1].Spec.NodeName
-			cmdTaint := []string{
-				"./kubectl",
-				"taint",
-				"no",
-				targetNode,
-				"key1=value1:NoSchedule",
-			}
+		When("with aws-node credentials", func() {
+			BeforeEach(func() {
+				k8sSchema := runtime.NewScheme()
+				clientgoscheme.AddToScheme(k8sSchema)
+				restCfgWithAWSNode, err := frameWork.SAManager.BuildRestConfigWithServiceAccount(ctx, types.NamespacedName{Namespace: config.KubeSystemNamespace, Name: "aws-node"})
+				Expect(err).NotTo(HaveOccurred())
+				k8sClientToMutateNode, err = client.New(restCfgWithAWSNode, client.Options{Scheme: k8sSchema})
+				Expect(err).NotTo(HaveOccurred())
+			})
 
-			cmdLabel := []string{
-				"./kubectl",
-				"label",
-				"no",
-				targetNode,
-				"test=true",
-			}
+			It("should succeed update node with vpc.amazonaws.com/eniConfig label", func() {
+				var originalNodeLabels map[string]string
+				By(fmt.Sprintf("update node %s with %s label", existingNodeNameToMutate, config.CustomNetworkingLabel), func() {
+					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+						existingNodeToMutate := &corev1.Node{}
+						if err := k8sClientToMutateNode.Get(ctx, types.NamespacedName{Name: existingNodeNameToMutate}, existingNodeToMutate); err != nil {
+							return err
+						}
+						originalNodeLabels = existingNodeToMutate.Labels
+						nodeCopy := existingNodeToMutate.DeepCopy()
+						nodeCopy.Labels[config.CustomNetworkingLabel] = "dummy-value"
+						return k8sClientToMutateNode.Update(ctx, nodeCopy)
+					})
+					Expect(err).NotTo(HaveOccurred())
+				})
 
-			for i, cmd := range [][]string{cmdCurl, cmdChMod, cmdTaint, cmdLabel} {
-				stdout, stderr, err := frameWork.PodManager.PodExec(config.KubeSystemNamespace, awsNodePodName, cmd)
-				if i > 1 {
+				By(fmt.Sprintf("restore node %s with original labels", existingNodeNameToMutate), func() {
+					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+						existingNodeToMutate := &corev1.Node{}
+						if err := k8sClientToMutateNode.Get(ctx, types.NamespacedName{Name: existingNodeNameToMutate}, existingNodeToMutate); err != nil {
+							return err
+						}
+						nodeCopy := existingNodeToMutate.DeepCopy()
+						nodeCopy.Labels = originalNodeLabels
+						return k8sClientToMutateNode.Update(ctx, nodeCopy)
+					})
+					Expect(err).NotTo(HaveOccurred())
+				})
+			})
+
+			It("should fail update node with dummy-label label", func() {
+				By(fmt.Sprintf("update node %s with %s label", existingNodeNameToMutate, "dummy-label"), func() {
+					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+						existingNodeToMutate := &corev1.Node{}
+						if err := k8sClientToMutateNode.Get(ctx, types.NamespacedName{Name: existingNodeNameToMutate}, existingNodeToMutate); err != nil {
+							return err
+						}
+						nodeCopy := existingNodeToMutate.DeepCopy()
+						nodeCopy.Labels["dummy-label"] = "dummy-value"
+						return k8sClientToMutateNode.Update(ctx, nodeCopy)
+					})
 					Expect(err).To(HaveOccurred())
-					Expect(stdout).To(BeEmpty())
-					Expect(stderr).To(ContainSubstring("denied the request"))
-				} else {
-					Expect(err).ToNot(HaveOccurred())
-				}
-			}
+					Expect(err).Should(MatchError(errors.New("admission webhook \"vnode.vpc.k8s.aws\" denied the request: aws-node can only update limited fields on the Node Object")))
+				})
+			})
+
+			It("should fail update node with dummy-key taint", func() {
+				By(fmt.Sprintf("update node %s with %s taint", existingNodeNameToMutate, "dummy-key"), func() {
+					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+						existingNodeToMutate := &corev1.Node{}
+						if err := k8sClientToMutateNode.Get(ctx, types.NamespacedName{Name: existingNodeNameToMutate}, existingNodeToMutate); err != nil {
+							return err
+						}
+						nodeCopy := existingNodeToMutate.DeepCopy()
+						nodeCopy.Spec.Taints = append(nodeCopy.Spec.Taints, corev1.Taint{
+							Key:    "dummy-key",
+							Value:  "dummy-value",
+							Effect: corev1.TaintEffectPreferNoSchedule,
+						})
+						return k8sClientToMutateNode.Update(ctx, nodeCopy)
+					})
+					Expect(err).To(HaveOccurred())
+					Expect(err).Should(MatchError(errors.New("admission webhook \"vnode.vpc.k8s.aws\" denied the request: aws-node can only update limited fields on the Node Object")))
+				})
+			})
 		})
 
-		It("Should succeed on updating node with labels from non aws-node", func() {
-			kubeProxyPods, err := frameWork.PodManager.GetPodsWithLabel(ctx, config.KubeSystemNamespace, labelKey, labelProxyValue)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(kubeProxyPods).ToNot(BeEmpty())
+		When("with framework credentials", func() {
+			BeforeEach(func() {
+				k8sClientToMutateNode = frameWork.K8sClient
+			})
 
-			nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(nodes.Items).ToNot(BeEmpty())
-			kubeProxyPodName := kubeProxyPods[0].ObjectMeta.Name
-			cmdUpdateApt := []string{
-				"apt", "update",
-			}
-			cmdInstallCurl := []string{
-				"apt", "install", "curl", "-y",
-			}
-			targetNode := kubeProxyPods[1].Spec.NodeName
-			cmdLabel := []string{
-				"./kubectl",
-				"label",
-				"no",
-				targetNode,
-				"test=true",
-			}
+			It("should succeed update node with vpc.amazonaws.com/eniConfig label", func() {
+				var originalNodeLabels map[string]string
+				By(fmt.Sprintf("update node %s with %s label", existingNodeNameToMutate, config.CustomNetworkingLabel), func() {
+					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+						existingNodeToMutate := &corev1.Node{}
+						if err := k8sClientToMutateNode.Get(ctx, types.NamespacedName{Name: existingNodeNameToMutate}, existingNodeToMutate); err != nil {
+							return err
+						}
+						originalNodeLabels = existingNodeToMutate.Labels
+						nodeCopy := existingNodeToMutate.DeepCopy()
+						nodeCopy.Labels[config.CustomNetworkingLabel] = "dummy-value"
+						return k8sClientToMutateNode.Update(ctx, nodeCopy)
+					})
+					Expect(err).NotTo(HaveOccurred())
+				})
 
-			for i, cmd := range [][]string{cmdUpdateApt, cmdInstallCurl, cmdCurl, cmdChMod, cmdLabel} {
-				stdout, stderr, err := frameWork.PodManager.PodExec(config.KubeSystemNamespace, kubeProxyPodName, cmd)
-				Expect(err).ToNot(HaveOccurred())
-				if i == 4 {
-					Expect(stdout).To(ContainSubstring("labeled"))
-					Expect(stderr).To(BeEmpty())
-				}
-			}
+				By(fmt.Sprintf("restore node %s with original labels", existingNodeNameToMutate), func() {
+					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+						existingNodeToMutate := &corev1.Node{}
+						if err := k8sClientToMutateNode.Get(ctx, types.NamespacedName{Name: existingNodeNameToMutate}, existingNodeToMutate); err != nil {
+							return err
+						}
+						nodeCopy := existingNodeToMutate.DeepCopy()
+						nodeCopy.Labels = originalNodeLabels
+						return k8sClientToMutateNode.Update(ctx, nodeCopy)
+					})
+					Expect(err).NotTo(HaveOccurred())
+				})
+			})
 
-			// remove the test label from the node
-			cmdLabel = []string{
-				"./kubectl",
-				"label",
-				"no",
-				targetNode,
-				"test-",
-			}
-			stdout, stderr, err := frameWork.PodManager.PodExec(config.KubeSystemNamespace, kubeProxyPodName, cmdLabel)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(stdout).To(ContainSubstring("labeled"))
-			Expect(stderr).To(BeEmpty())
-		})
+			It("should succeed update node with dummy-label label", func() {
+				var originalNodeLabels map[string]string
+				By(fmt.Sprintf("update node %s with %s label", existingNodeNameToMutate, "dummy-label"), func() {
+					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+						existingNodeToMutate := &corev1.Node{}
+						if err := k8sClientToMutateNode.Get(ctx, types.NamespacedName{Name: existingNodeNameToMutate}, existingNodeToMutate); err != nil {
+							return err
+						}
+						originalNodeLabels = existingNodeToMutate.Labels
+						nodeCopy := existingNodeToMutate.DeepCopy()
+						nodeCopy.Labels["dummy-label"] = "dummy-value"
+						return k8sClientToMutateNode.Update(ctx, nodeCopy)
+					})
+					Expect(err).NotTo(HaveOccurred())
+				})
 
-		It("Should succeed on restoring clusterroles", func() {
-			awsNodeOldRules = PatchClusterRole("aws-node", awsNodeOldRules, "nodes", []string{"get", "list", "watch", "update", "patch"})
-			kubeProxyOldRules = PatchClusterRole("system:node-proxier", kubeProxyOldRules, "nodes", []string{"get", "list", "watch", "update", "patch"})
+				By(fmt.Sprintf("restore node %s with original labels", existingNodeNameToMutate), func() {
+					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+						existingNodeToMutate := &corev1.Node{}
+						if err := k8sClientToMutateNode.Get(ctx, types.NamespacedName{Name: existingNodeNameToMutate}, existingNodeToMutate); err != nil {
+							return err
+						}
+						nodeCopy := existingNodeToMutate.DeepCopy()
+						nodeCopy.Labels = originalNodeLabels
+						return k8sClientToMutateNode.Update(ctx, nodeCopy)
+					})
+					Expect(err).NotTo(HaveOccurred())
+				})
+			})
+
+			It("should succeed update node with dummy-key taint", func() {
+				var originalNodeTaints []corev1.Taint
+				By(fmt.Sprintf("update node %s with %s taint", existingNodeNameToMutate, "dummy-key"), func() {
+					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+						existingNodeToMutate := &corev1.Node{}
+						if err := k8sClientToMutateNode.Get(ctx, types.NamespacedName{Name: existingNodeNameToMutate}, existingNodeToMutate); err != nil {
+							return err
+						}
+						originalNodeTaints = existingNodeToMutate.Spec.Taints
+						nodeCopy := existingNodeToMutate.DeepCopy()
+						nodeCopy.Spec.Taints = append(nodeCopy.Spec.Taints, corev1.Taint{
+							Key:    "dummy-key",
+							Value:  "dummy-value",
+							Effect: corev1.TaintEffectPreferNoSchedule,
+						})
+						return k8sClientToMutateNode.Update(ctx, nodeCopy)
+					})
+					Expect(err).NotTo(HaveOccurred())
+				})
+
+				By(fmt.Sprintf("restore node %s with original taints", existingNodeNameToMutate), func() {
+					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+						existingNodeToMutate := &corev1.Node{}
+						if err := k8sClientToMutateNode.Get(ctx, types.NamespacedName{Name: existingNodeNameToMutate}, existingNodeToMutate); err != nil {
+							return err
+						}
+						nodeCopy := existingNodeToMutate.DeepCopy()
+						nodeCopy.Spec.Taints = originalNodeTaints
+						return k8sClientToMutateNode.Update(ctx, nodeCopy)
+					})
+					Expect(err).NotTo(HaveOccurred())
+				})
+			})
 		})
 	})
 })
-
-func PatchClusterRole(roleName string, rules []v1.PolicyRule, resourceName string, verbs []string) []v1.PolicyRule {
-	role, err := frameWork.RBACManager.GetClusterRole(roleName)
-	Expect(err).ToNot(HaveOccurred())
-	newRole := role.DeepCopy()
-
-	if rules != nil {
-		newRole.Rules = rules
-	} else {
-		for i, rule := range newRole.Rules {
-			for _, resource := range rule.Resources {
-				if resource == resourceName {
-					rule.Verbs = verbs
-				}
-			}
-			newRole.Rules[i] = rule
-		}
-	}
-	err = frameWork.RBACManager.PatchClusterRole(newRole)
-	Expect(err).ToNot(HaveOccurred())
-	return role.Rules
-}

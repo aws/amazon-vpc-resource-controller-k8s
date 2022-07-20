@@ -26,6 +26,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/rbac"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/service"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/serviceaccount"
 	sgpManager "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -46,6 +47,7 @@ type Framework struct {
 	DeploymentManager deployment.Manager
 	PodManager        pod.Manager
 	EC2Manager        ec2Manager.Manager
+	SAManager         serviceaccount.Manager
 	NSManager         namespace.Manager
 	SGPManager        sgpManager.Manager
 	SVCManager        service.Manager
@@ -97,6 +99,7 @@ func New(options Options) *Framework {
 		PodManager:        pod.NewManager(k8sClient, k8sSchema, config),
 		DeploymentManager: deployment.NewManager(k8sClient),
 		EC2Manager:        ec2Manager.NewManager(ec2, options.AWSVPCID),
+		SAManager:         serviceaccount.NewManager(k8sClient, config),
 		NSManager:         namespace.NewManager(k8sClient),
 		SGPManager:        sgpManager.NewManager(k8sClient),
 		SVCManager:        service.NewManager(k8sClient),
