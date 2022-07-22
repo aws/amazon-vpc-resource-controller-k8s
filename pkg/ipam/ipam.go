@@ -46,7 +46,7 @@ type Ipam interface {
 	FreeResource(requesterID string, resourceID string) (shouldReconcile bool, err error)
 	GetAssignedResource(requesterID string) (resourceDetail worker.IPAMResourceInfo, ownsResource bool)
 	UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldReconcile bool)
-	InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resourcesAvailable []worker.IPAMResourceInfo, err error)
+	InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resourcesAvailable []worker.IPAMResourceInfo, eniManager eni.ENIManager, err error)
 	ReSync(resources []string)
 	ReconcilePool() *worker.WarmPoolJob
 	ProcessCoolDownQueue() bool
@@ -120,18 +120,20 @@ func NewResourceIPAM(log logr.Logger, poolConfig *config.WarmPoolConfig, usedRes
 	return ipam
 }
 
-func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resourcesAvailable []worker.IPAMResourceInfo, err error) {
+func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resourcesAvailable []worker.IPAMResourceInfo, initEniManager eni.ENIManager, err error) {
 	nodeName := instance.Name()
 
 	eniManager := eni.NewENIManager(instance)
 	presentPrefixes, err := eniManager.InitResources(apiWrapper.EC2API)
 	if err != nil {
-		return []worker.IPAMResourceInfo{}, err
+		i.log.Error(err, "Error initalizing eni manager")
+		return []worker.IPAMResourceInfo{}, nil, err
 	}
 
 	pods, err := apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
 	if err != nil {
-		return []worker.IPAMResourceInfo{}, err
+		i.log.Error(err, "Error getting pods on node")
+		return []worker.IPAMResourceInfo{}, nil, err
 	}
 
 	// Mapping IPs to prefixes
@@ -169,7 +171,7 @@ func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resou
 	}
 
 	i.log.Info("initialized the resource provider for resource IPv4 prefixes")
-	return allResources, nil
+	return allResources, eniManager, nil
 }
 
 // ReSync syncs state of upstream with the local pool. If local resources have additional

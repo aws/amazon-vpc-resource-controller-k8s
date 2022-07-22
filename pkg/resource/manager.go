@@ -16,14 +16,14 @@ package resource
 import (
 	"context"
 	"fmt"
-	"strconv"
+	//	"strconv"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip"
+	//	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/prefix"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
@@ -69,33 +69,33 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 
 		var resourceHandler handler.Handler
 		var resourceProvider provider.ResourceProvider
-		
+
 		if resourceName == config.ResourceNameIPAddress {
-			// Checking for prefix delegation
-			vpcCniConfigMap, err := wrapper.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
+			// 	// Checking for prefix delegation
+			// 	vpcCniConfigMap, err := wrapper.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
 
-			ctrl.Log.Info("Read config map", "Prefix Delegation Map %+v\n", vpcCniConfigMap, "Error", err)
+			// 	fmt.Print("Prefix Delegation Map %+v\n", vpcCniConfigMap)
 
-			ctrl.Log.Info(config.VpcCniConfigMapName, "Name space", config.KubeSystemNamespace)
+			// 	ctrl.Log.Info(config.VpcCniConfigMapName, "Name space", config.KubeSystemNamespace)
 
-			if err == nil && vpcCniConfigMap.Data != nil {
-				if val, ok := vpcCniConfigMap.Data["enable-prefix-delegation"]; ok {
-					enablePrefixDelegation, err := strconv.ParseBool(val)
-					ctrl.Log.Info("Parsed value", "Enable prefix delegation value", enablePrefixDelegation)
-					if err == nil && enablePrefixDelegation {
-						ctrl.Log.Info("successfully prefix provider")
-						resourceProvider = prefix.NewIPv4PrefixProvider(ctrl.Log.WithName("ipv4 prefix provider"),
-							wrapper, workers, resourceConfig)
-						resourceHandler = handler.NewIpamResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
-							resourceName, resourceProvider, ctx)
-					}
-				} else {
-					resourceProvider = ip.NewIPv4Provider(ctrl.Log.WithName("ipv4 provider"),
-						wrapper, workers, resourceConfig)
-					resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
-						resourceName, resourceProvider, ctx)
-				}
-			}
+			// 	if err == nil && vpcCniConfigMap.Data != nil {
+			// 		if val, ok := vpcCniConfigMap.Data["enable-prefix-delegation"]; ok {
+			// 			enablePrefixDelegation, err := strconv.ParseBool(val)
+			// 			ctrl.Log.Info("Parsed value", "Enable prefix delegation value", enablePrefixDelegation)
+			// 			if err == nil && enablePrefixDelegation {
+			// 				ctrl.Log.Info("successfully prefix provider")
+			resourceProvider = prefix.NewIPv4PrefixProvider(ctrl.Log.WithName("ipv4 prefix provider"),
+				wrapper, workers, resourceConfig)
+			resourceHandler = handler.NewIpamResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
+				resourceName, resourceProvider, ctx)
+			// 	}
+			// 	} else {
+			// 		resourceProvider = ip.NewIPv4Provider(ctrl.Log.WithName("ipv4 provider"),
+			// 			wrapper, workers, resourceConfig)
+			// 		resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
+			// 			resourceName, resourceProvider, ctx)
+			// 	}
+			// }
 		} else if resourceName == config.ResourceNamePodENI {
 			resourceProvider = branch.NewBranchENIProvider(ctrl.Log.WithName("branch eni provider"),
 				wrapper, workers, resourceConfig, ctx)

@@ -73,7 +73,19 @@ func (i *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 		WithValues("node name", instance.Name()), i.config, make(map[string]worker.IPAMResourceInfo),
 		[]worker.IPAMResourceInfo{}, []string{}, map[string]int{}, instance.Name(), nodeCapacity)
 
-	ipamPool.InitIPAM(instance, i.apiWrapper)
+	_, eniManager, err := ipamPool.InitIPAM(instance, i.apiWrapper)
+
+	if err != nil {
+		i.log.Error(err, "Failed to initialize IPAM")
+	}
+
+	// Reconcile pool after starting up and submit the async job
+	job := ipamPool.ReconcilePool()
+	if job.Operations != worker.OperationReconcileNotRequired {
+		i.SubmitAsyncJob(job)
+	}
+
+	i.putInstanceProviderAndPool(nodeName, ipamPool, eniManager)
 	// Submit the async job to periodically process the delete queue
 	i.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
 	return nil
