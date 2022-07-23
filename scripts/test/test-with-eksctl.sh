@@ -290,17 +290,17 @@ sleep 60
 # Run Ginko Test for Security Group for Pods and skip all the local tests as
 # they require restarts and it will lead to leader lease being switched and the
 # next validation step failing
-run_integration_test "--skip=LOCAL"
+# run_integration_test "--skip=LOCAL"
 
 # Verify the leader lease didn't transition during the execution of test cases
 verify_leader_lease_didnt_change
 
 # Run Local Ginko Test that require multiple restarts of controller for negative
 # scenarios testing
-run_integration_test "--focus=LOCAL"
+# run_integration_test "--focus=LOCAL"
 
 # Revert back to initial state after the test
-set_pod_eni_flag_on_ipamd "false"
+# set_pod_eni_flag_on_ipamd "false"
 
 # If any of the test failed, exit with non zero exit code
 if [ $TEST_FAILED = true ]; then
