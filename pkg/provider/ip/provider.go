@@ -89,7 +89,7 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 	}
 
 	warmResources := difference(presentIPs, usedIPSet)
-
+	
 	nodeCapacity := getCapacity(instance.Type(), instance.Os())
 	resourcePool := pool.NewResourcePool(p.log.WithName("ipv4 resource pool").
 		WithValues("node name", instance.Name()), p.config, podToResourceMap,

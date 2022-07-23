@@ -173,7 +173,7 @@ func (w *ipamResourceHandler) HandleDelete(pod *v1.Pod) (ctrl.Result, error) {
 func (w *ipamResourceHandler) getResourceIPAM(nodeName string) (ipam.Ipam, error) {
 	resourceIpam, found := w.resourceProvider.GetIPAM(nodeName)
 	if !found {
-		return nil, fmt.Errorf("failed to find the resource pool %s for node %s",
+		return nil, fmt.Errorf("failed to find the resource IPAM %s for node %s",
 			w.resourceName, nodeName)
 	}
 
