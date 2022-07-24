@@ -80,7 +80,6 @@ func (i *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	}
 
 	// Reconcile pool after starting up and submit the async job
-	i.log.Info(err, "Failed to initialize IPAM")
 	job := ipamPool.ReconcilePool()
 	if job.Operations != worker.OperationReconcileNotRequired {
 		i.SubmitAsyncJob(job)
