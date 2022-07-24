@@ -420,7 +420,7 @@ func (i *ipam) ProcessCoolDownQueue() (needFurtherProcessing bool) {
 func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 	i.lock.Lock()
 	defer i.lock.Unlock()
-
+	
 	// Total created resources includes all the resources for the instance that are not yet deleted
 	totalCreatedResources := len(i.warmResources) + len(i.usedResources) + len(i.coolDownQueue) +
 		i.pendingCreate + i.pendingDelete

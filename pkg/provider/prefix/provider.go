@@ -80,6 +80,7 @@ func (i *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	}
 
 	// Reconcile pool after starting up and submit the async job
+	i.log.Info(err, "Failed to initialize IPAM")
 	job := ipamPool.ReconcilePool()
 	if job.Operations != worker.OperationReconcileNotRequired {
 		i.SubmitAsyncJob(job)
@@ -172,6 +173,9 @@ func (i *ipv4PrefixProvider) CreatePrivateIPv4PrefixAndUpdatePool(job *worker.Wa
 	}
 	didSucceed := true
 
+	i.log.Info("Logging Debug")
+	i.log.Info("Resource count", "Amount", job.ResourceCount)
+	i.log.Info("API Wrapper", "API", i.apiWrapper)
 	// Get ENI to create IPV4 prefix [Change feature]
 	prefixes, didSucceed := instanceResource.resourceIpam.AllocatePrefix(job.ResourceCount, i.apiWrapper)
 
