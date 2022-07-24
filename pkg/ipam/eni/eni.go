@@ -66,7 +66,7 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, err
 		if nwInterface.Ipv4Prefixes != nil {
 			eni := &eni{
 				remainingCapacity: ipLimit,
-				eniID:             *nwInterface.NetworkInterfaceId,
+				eniID: *nwInterface.NetworkInterfaceId,
 			}
 			for _, ip := range nwInterface.Ipv4Prefixes {
 				availPrefixes = append(availPrefixes, *ip.Ipv4Prefix)
@@ -92,6 +92,7 @@ func (e *eniManager) CreateIPV4Prefix(required int, ec2APIHelper api.EC2APIHelpe
 	// Loop till we reach the last available ENI and list of assigned IPv4 addresses is less than the required IPv4 addresses
 	for index := 0; index < len(e.attachedENIs) && len(assignedIPv4Prefixes) < required; index++ {
 		remainingCapacity := e.attachedENIs[index].remainingCapacity
+		fmt.Println("Remaining capacity", remainingCapacity)
 		if remainingCapacity > 0 {
 			canAssign := 0
 			// Number of IPs wanted is the number of IPs required minus the number of IPs assigned till now.
@@ -102,10 +103,13 @@ func (e *eniManager) CreateIPV4Prefix(required int, ec2APIHelper api.EC2APIHelpe
 			} else {
 				canAssign = want
 			}
+			fmt.Println("Want", remainingCapacity)
 			// Assign the IPv4 Addresses from this ENI
 			assignedPrefixes, err := ec2APIHelper.AssignIPv4PrefixesAndWaitTillReady(e.attachedENIs[index].eniID, canAssign)
 			if err != nil && len(assignedPrefixes) == 0 {
 				// Return the list of IPs that were actually created along with the error
+				log.Error(err, "failed to assign all the requested prefixes",
+					"requested", want, "got", len(assignedPrefixes))
 				return assignedPrefixes, err
 			} else if err != nil {
 				// Just log and continue processing the assigned IPs

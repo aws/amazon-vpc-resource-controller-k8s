@@ -518,7 +518,7 @@ func (h *ec2APIHelper) AssignIPv4PrefixesAndWaitTillReady(eniID string, count in
 
 	input := &ec2.AssignPrivateIpAddressesInput{
 		NetworkInterfaceId: &eniID,
-		Ipv4PrefixCount:    aws.Int64(int64(count)),
+		Ipv4PrefixCount: aws.Int64(int64(count)),
 	}
 
 	assignPrivateIPOutput, err := h.ec2Wrapper.AssignPrivateIPAddresses(input)
@@ -528,7 +528,7 @@ func (h *ec2APIHelper) AssignIPv4PrefixesAndWaitTillReady(eniID string, count in
 
 	if assignPrivateIPOutput != nil && assignPrivateIPOutput.AssignedIpv4Prefixes != nil &&
 		len(assignPrivateIPOutput.AssignedIpv4Prefixes) == 0 {
-		return assignedIPPrefixes, fmt.Errorf("failed ot create %v ip address to eni %s", count, eniID)
+		return assignedIPPrefixes, fmt.Errorf("failed to create %v ip address to eni %s", count, eniID)
 	}
 
 	ErrIPNotAttachedYet := fmt.Errorf("private IPv4 prefix is not attached yet")
@@ -545,7 +545,7 @@ func (h *ec2APIHelper) AssignIPv4PrefixesAndWaitTillReady(eniID string, count in
 			interfaces, err := h.DescribeNetworkInterfaces([]*string{&eniID})
 			// Re initialize the slice so we don't add IPs multiple time
 			assignedIPPrefixes = []string{}
-			if err == nil && len(interfaces) == 1 && interfaces[0].Ipv4Prefixes != nil {
+			if err == nil && len(interfaces) == 1 && interfaces[0].PrivateIpAddresses != nil {
 				// Get the map of IP prefixes returned by the describe network interface call
 				ipAddress := map[string]bool{}
 				for _, ipAddr := range interfaces[0].Ipv4Prefixes {
