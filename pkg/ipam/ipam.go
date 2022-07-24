@@ -550,11 +550,9 @@ func (i *ipam) Introspect() IntrospectResponse {
 func (i *ipam) AllocatePrefix(numberOfPrefixes int, apiWrapper api.Wrapper) (resources []string, success bool) {
 	didSucceed := true
 	fmt.Println("# of prefixes", numberOfPrefixes)
-	fmt.Println("EC2 wrapper", "Wrapper", apiWrapper.EC2API)
-	fmt.Println("EC2 wrapper", "Wrapper", apiWrapper.EC2API)
 	prefixes, err := i.eniManager.CreateIPV4Prefix(numberOfPrefixes, apiWrapper.EC2API, i.log)
 	if err != nil {
-		i.log.Error(err, "failed to create all/some of the IPv4 addresses", "created ips", prefixes)
+		i.log.Error(err, "failed to create all/some of the IPv4 prefixes", "created prefixes", prefixes)
 		didSucceed = false
 	}
 	return prefixes, didSucceed
