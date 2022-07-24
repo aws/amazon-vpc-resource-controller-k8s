@@ -63,7 +63,7 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, err
 	ipLimit := limits.IPv4PerInterface
 	var availPrefixes []string
 	for _, nwInterface := range nwInterfaces {
-		if nwInterface.Ipv4Prefixes != nil {
+		if nwInterface.PrivateIpAddresses != nil {
 			eni := &eni{
 				remainingCapacity: ipLimit,
 				eniID: *nwInterface.NetworkInterfaceId,
