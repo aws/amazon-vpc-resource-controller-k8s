@@ -129,42 +129,42 @@ func (e *eniManager) CreateIPV4Prefix(required int, ec2APIHelper api.EC2APIHelpe
 		}
 	}
 
-	// List of secondary IPs supported minus the primary IP
-	ipLimit := vpc.Limits[e.instance.Type()].IPv4PerInterface - 1
-	eniLimit := vpc.Limits[e.instance.Type()].Interface
+	// // List of secondary IPs supported minus the primary IP
+	// ipLimit := vpc.Limits[e.instance.Type()].IPv4PerInterface - 1
+	// eniLimit := vpc.Limits[e.instance.Type()].Interface
 
-	// If the existing ENIs could not assign the required IPs, loop till the new ENIs can assign the required
-	// number of IPv4 Addresses
-	for len(assignedIPv4Prefixes) < required &&
-		len(e.attachedENIs) < eniLimit {
+	// // If the existing ENIs could not assign the required IPs, loop till the new ENIs can assign the required
+	// // number of IPv4 Addresses
+	// for len(assignedIPv4Prefixes) < required &&
+	// 	len(e.attachedENIs) < eniLimit {
 
-		deviceIndex, err := e.instance.GetHighestUnusedDeviceIndex()
-		if err != nil {
-			// TODO: Refresh device index for linux nodes only
-			return assignedIPv4Prefixes, err
-		}
-		want := required - len(assignedIPv4Prefixes)
-		if want > ipLimit {
-			want = ipLimit
-		}
-		nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
-			aws.String(e.instance.SubnetID()), e.instance.InstanceSecurityGroup(), nil, aws.Int64(deviceIndex),
-			&ENIDescription, nil, want)
-		if err != nil {
-			// TODO: Check if any clean up is required here for linux nodes only?
-			return assignedIPv4Prefixes, err
-		}
-		eni := &eni{
-			remainingCapacity: ipLimit - want,
-			eniID:             *nwInterface.NetworkInterfaceId,
-		}
-		e.attachedENIs = append(e.attachedENIs, eni)
-		for _, assignedPrefix := range nwInterface.Ipv4Prefixes {
-			assignedIPv4Prefixes = append(assignedIPv4Prefixes, *assignedPrefix.Ipv4Prefix)
-			// Also add the mapping from IP to ENI
-			e.ipPrefixToENIMap[*assignedPrefix.Ipv4Prefix] = eni
-		}
-	}
+	// 	deviceIndex, err := e.instance.GetHighestUnusedDeviceIndex()
+	// 	if err != nil {
+	// 		// TODO: Refresh device index for linux nodes only
+	// 		return assignedIPv4Prefixes, err
+	// 	}
+	// 	want := required - len(assignedIPv4Prefixes)
+	// 	if want > ipLimit {
+	// 		want = ipLimit
+	// 	}
+	// 	nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
+	// 		aws.String(e.instance.SubnetID()), e.instance.InstanceSecurityGroup(), nil, aws.Int64(deviceIndex),
+	// 		&ENIDescription, nil, want)
+	// 	if err != nil {
+	// 		// TODO: Check if any clean up is required here for linux nodes only?
+	// 		return assignedIPv4Prefixes, err
+	// 	}
+	// 	eni := &eni{
+	// 		remainingCapacity: ipLimit - want,
+	// 		eniID:             *nwInterface.NetworkInterfaceId,
+	// 	}
+	// 	e.attachedENIs = append(e.attachedENIs, eni)
+	// 	for _, assignedPrefix := range nwInterface.Ipv4Prefixes {
+	// 		assignedIPv4Prefixes = append(assignedIPv4Prefixes, *assignedPrefix.Ipv4Prefix)
+	// 		// Also add the mapping from IP to ENI
+	// 		e.ipPrefixToENIMap[*assignedPrefix.Ipv4Prefix] = eni
+	// 	}
+	// }
 
 	var err error
 	// This can happen if the subnet doesn't have remaining IPs

@@ -297,6 +297,8 @@ func (i *ipam) AssignResource(requesterID string) (resourceDetail worker.IPAMRes
 	i.warmResources = i.warmResources[1:]
 
 	/// Add the resource in the used resource key-value pair
+	fmt.Println("RequesterID", requesterID)
+	fmt.Println("Resource Detail", resourceDetail)
 	i.usedResources[requesterID] = resourceDetail
 	i.prefixUsage[resourceDetail.PrefixOrigin]++
 
