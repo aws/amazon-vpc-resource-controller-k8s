@@ -70,7 +70,7 @@ func (i *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeCapacity := getCapacity(instance.Type(), instance.Os())
 
 	ipamPool := ipam.NewResourceIPAM(i.log.WithName("ipv4 prefix resource pool").
-		WithValues("node name", instance.Name()), i.config, make(map[string]worker.IPAMResourceInfo),
+		WithValues("node name", instance.Name()), i.config, map[string]worker.IPAMResourceInfo{},
 		[]worker.IPAMResourceInfo{}, []string{}, map[string]int{}, instance.Name(), nodeCapacity)
 
 	_, eniManager, err := ipamPool.InitIPAM(instance, i.apiWrapper)
@@ -86,7 +86,7 @@ func (i *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	if job.Operations != worker.OperationReconcileNotRequired {
 		i.SubmitAsyncJob(job)
 	}
-	
+
 	// Submit the async job to periodically process the delete queue
 	i.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
 	return nil
