@@ -513,13 +513,14 @@ func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 
 		var newWarmResources []worker.IPAMResourceInfo
 		k := 0
-		for j := 0; j < len(i.warmResources); j++ {
+		for j := 0; j < len(i.warmResources) && k < len(resourceToDelete); j++ {
 			if i.warmResources[j].ResourceID != resourceToDelete[k].ResourceID {
 				newWarmResources = append(newWarmResources, i.warmResources[j])
 			} else {
 				k++
 			}
 		}
+
 		i.warmResources = newWarmResources
 		// Increment pending to the number of resource being deleted, once successfully deleted the count can be decremented
 		i.pendingDelete += deviation
