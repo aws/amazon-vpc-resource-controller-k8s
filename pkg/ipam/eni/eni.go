@@ -66,7 +66,7 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, err
 		if nwInterface.PrivateIpAddresses != nil {
 			eni := &eni{
 				remainingCapacity: ipLimit,
-				eniID: *nwInterface.NetworkInterfaceId,
+				eniID:             *nwInterface.NetworkInterfaceId,
 			}
 			for _, ip := range nwInterface.Ipv4Prefixes {
 				availPrefixes = append(availPrefixes, *ip.Ipv4Prefix)

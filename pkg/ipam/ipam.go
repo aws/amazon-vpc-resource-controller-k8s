@@ -114,7 +114,7 @@ func NewResourceIPAM(log logr.Logger, poolConfig *config.WarmPoolConfig, usedRes
 		warmPoolConfig: poolConfig,
 		usedResources:  usedResources,
 		warmResources:  warmResources,
-		prefixUsage: prefixUsage,
+		prefixUsage:    prefixUsage,
 		capacity:       capacity,
 		nodeName:       nodeName,
 	}
@@ -513,15 +513,16 @@ func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 
 		var newWarmResources []worker.IPAMResourceInfo
 		k := 0
-		for j := 0; j < len(i.warmResources) && k < len(resourceToDelete); j++ {
-			if i.warmResources[j].ResourceID != resourceToDelete[k].ResourceID {
-				newWarmResources = append(newWarmResources, i.warmResources[j])
-			} else {
-				k++
+		if len(resourceToDelete) == 0 {
+			for j := 0; j < len(i.warmResources) && k < len(resourceToDelete); j++ {
+				if i.warmResources[j].ResourceID != resourceToDelete[k].ResourceID {
+					newWarmResources = append(newWarmResources, i.warmResources[j])
+				} else {
+					k++
+				}
 			}
+			i.warmResources = newWarmResources
 		}
-
-		i.warmResources = newWarmResources
 		// Increment pending to the number of resource being deleted, once successfully deleted the count can be decremented
 		i.pendingDelete += deviation
 		// Submit the job to delete resources
@@ -594,7 +595,7 @@ func DeconstructPrefix(inputPrefix string) (warmResourceBundle []string, err err
 
 	availableIPs := make([]string, 0)
 	for i := 0; i < 16; i++ {
-		var newIP = ipAddress[0] + "." + ipAddress[1] + "." + ipAddress[2] + "." + strconv.Itoa(hostNumber)
+		var newIP = ipAddress[0] + "." + ipAddress[1] + "." + ipAddress[2] + "." + strconv.Itoa(hostNumber) + "/28"
 		availableIPs = append(availableIPs, newIP)
 		hostNumber++
 	}
