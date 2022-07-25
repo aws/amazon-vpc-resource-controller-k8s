@@ -114,6 +114,7 @@ func NewResourceIPAM(log logr.Logger, poolConfig *config.WarmPoolConfig, usedRes
 		warmPoolConfig: poolConfig,
 		usedResources:  usedResources,
 		warmResources:  warmResources,
+		prefixUsage: prefixUsage,
 		capacity:       capacity,
 		nodeName:       nodeName,
 	}
