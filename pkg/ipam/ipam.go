@@ -150,8 +150,8 @@ func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resou
 		}
 	}
 
-	podToResourceMap := make(map[string]worker.IPAMResourceInfo)
-
+	// Remap pod to IP
+	podToResourceMap := map[string]worker.IPAMResourceInfo{}
 	usedIPSet := map[string]worker.IPAMResourceInfo{}
 	for _, pod := range pods {
 		annotation, present := pod.Annotations[config.ResourceNameIPAddress]
@@ -161,17 +161,21 @@ func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resou
 		podToResourceMap[string(pod.UID)] = ipToResourceInfoMapping[annotation]
 		usedIPSet[annotation] = ipToResourceInfoMapping[annotation]
 	}
+	i.usedResources = podToResourceMap
+	i.log.Info("Remapped pod and IP association", "Pod Mapping", i.usedResources)
 
-	warmResources := []worker.IPAMResourceInfo{}
+	// Remap warm resources
+	tempWarmResources := []worker.IPAMResourceInfo{}
 	allResources := []worker.IPAMResourceInfo{}
-
 	for _, resourceInfo := range ipToResourceInfoMapping {
 		_, present := usedIPSet[resourceInfo.ResourceID]
 		if !present {
-			warmResources = append(warmResources, resourceInfo)
+			tempWarmResources = append(tempWarmResources, resourceInfo)
 		}
 		allResources = append(allResources, resourceInfo)
 	}
+	i.warmResources = tempWarmResources
+	i.log.Info("Remapped warm resource", "Warm resources", i.warmResources)
 
 	i.log.Info("initialized the resource provider for resource IPv4 prefixes")
 	return allResources, eniManager, nil
@@ -298,9 +302,6 @@ func (i *ipam) AssignResource(requesterID string) (resourceDetail worker.IPAMRes
 	i.warmResources = i.warmResources[1:]
 
 	/// Add the resource in the used resource key-value pair
-	fmt.Println("(*********** ASSIGNING POD ****************)", requesterID)
-	fmt.Println("RequesterID", requesterID)
-	fmt.Println("Resource Detail", resourceDetail)
 	i.usedResources[requesterID] = resourceDetail
 	i.prefixUsage[resourceDetail.PrefixOrigin]++
 

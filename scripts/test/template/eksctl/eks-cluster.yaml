@@ -16,6 +16,6 @@ nodeGroups:
         - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
   - name: windows-instance
     amiFamily: WindowsServer2019FullContainer
-    instanceType: c5.4xlarge # Larger instance type since the Pod density on Windows node is less
+    instanceType: m5a.4xlarge # Larger instance type since the Pod density on Windows node is less
     desiredCapacity: 1
 
