@@ -25,6 +25,12 @@ const (
 	IPv4DefaultMaxDev  = 1
 	IPv4DefaultResSize = 0
 
+	// Default Configuration for IPv4 prefix resource type
+	IPv4PrefixDefaultWorker  = 2
+	IPv4PrefixDefaultWPSize  = 16
+	IPv4PrefixDefaultMaxDev  = 8
+	IPv4PrefixDefaultResSize = 0
+
 	// EC2 API QPS for user service client
 	UserServiceClientQPS      = 6
 	UserServiceClientQPSBurst = 8
@@ -41,7 +47,7 @@ const (
 // LoadResourceConfig returns the Resource Configuration for all resources managed by the VPC Resource Controller. Currently
 // returns the default resource configuration and later can return the configuration from a ConfigMap.
 func LoadResourceConfig() map[string]ResourceConfig {
-	return getDefaultResourceConfig()
+	return getIpamResourceConfig()
 }
 
 // getDefaultResourceConfig returns the default Resource Configuration.
@@ -63,6 +69,36 @@ func getDefaultResourceConfig() map[string]ResourceConfig {
 		DesiredSize:  IPv4DefaultWPSize,
 		MaxDeviation: IPv4DefaultMaxDev,
 		ReservedSize: IPv4DefaultResSize,
+	}
+	ipV4Config := ResourceConfig{
+		Name:           ResourceNameIPAddress,
+		WorkerCount:    IPv4DefaultWorker,
+		SupportedOS:    map[string]bool{OSWindows: true, OSLinux: false},
+		WarmPoolConfig: &ipV4WarmPoolConfig,
+	}
+	config[ResourceNameIPAddress] = ipV4Config
+
+	return config
+}
+
+
+func getIpamResourceConfig() map[string]ResourceConfig {
+	config := make(map[string]ResourceConfig)
+
+	// Create default configuration for Pod ENI Resource
+	podENIConfig := ResourceConfig{
+		Name:           ResourceNamePodENI,
+		WorkerCount:    PodENIDefaultWorker,
+		SupportedOS:    map[string]bool{OSWindows: false, OSLinux: true},
+		WarmPoolConfig: nil,
+	}
+	config[ResourceNamePodENI] = podENIConfig
+
+	// Create default configuration for IPv4 Resource
+	ipV4WarmPoolConfig := WarmPoolConfig{
+		DesiredSize:  IPv4PrefixDefaultWPSize,
+		MaxDeviation: IPv4PrefixDefaultMaxDev,
+		ReservedSize: IPv4PrefixDefaultResSize,
 	}
 	ipV4Config := ResourceConfig{
 		Name:           ResourceNameIPAddress,

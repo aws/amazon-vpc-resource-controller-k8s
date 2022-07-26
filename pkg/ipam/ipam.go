@@ -487,11 +487,12 @@ func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 
 		// Increment the pending to the size of deviation, once we get async response on creation success we can decrement
 		// pending
-		i.pendingCreate += deviation
+		prefixesToAdd := int(math.Ceil(float64(deviation / 16)))
+		i.pendingCreate += prefixesToAdd
 
-		log.Info("created job to add resources to IPAM", "requested count", deviation)
+		log.Info("created job to add resources to IPAM", "requested count", prefixesToAdd)
 
-		return worker.NewWarmPoolCreateJob(i.nodeName, deviation)
+		return worker.NewWarmPoolCreateJob(i.nodeName, prefixesToAdd)
 
 	} else if -deviation > i.warmPoolConfig.MaxDeviation {
 		// Need to delete from IPAM
