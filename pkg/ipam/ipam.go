@@ -385,9 +385,9 @@ func (i *ipam) UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldRecon
 	}
 
 	if job.Operations == worker.OperationCreate {
-		i.pendingCreate -= job.ResourceCount
+		i.pendingCreate -= job.ResourceCount * 16
 	} else if job.Operations == worker.OperationDeleted {
-		i.pendingDelete -= job.ResourceCount
+		i.pendingDelete -= job.ResourceCount * 16
 	}
 
 	log.V(1).Info("processed job response", "job", job, "pending create",
@@ -488,13 +488,13 @@ func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 		// Increment the pending to the size of deviation, once we get async response on creation success we can decrement
 		// pending
 		prefixesToAdd := int(math.Ceil(float64(deviation / 16)))
-		i.pendingCreate += prefixesToAdd*16
+		i.pendingCreate += prefixesToAdd * 16
 
 		log.Info("created job to add resources to IPAM", "requested count", prefixesToAdd)
 
 		return worker.NewWarmPoolCreateJob(i.nodeName, prefixesToAdd)
 
-	} else if -deviation > i.warmPoolConfig.MaxDeviation {
+	} else if -deviation > i.warmPoolConfig.MaxDeviation && len(freePrefixes) > 0 {
 		// Need to delete from IPAM
 		deviation = -deviation
 
@@ -529,8 +529,8 @@ func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 			i.warmResources = newWarmResources
 		}
 		// Increment pending to the number of resource being deleted, once successfully deleted the count can be decremented
-		i.pendingDelete += prefixesToRemove*16
-		
+		i.pendingDelete += len(prefixesRemoved) * 16
+
 		// Submit the job to delete resources
 		log.Info("created job to delete resources from IPAM", "resources to delete", resourceToDelete)
 
