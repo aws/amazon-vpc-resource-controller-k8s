@@ -210,12 +210,11 @@ func (i *ipv4PrefixProvider) DeletePrivateIPv4AndUpdatePool(job *worker.WarmPool
 		return
 	}
 	didSucceed := true
-	failedIPs, err := instanceResource.eniManager.DeleteIPV4Prefix(job.Resources, i.apiWrapper.EC2API, i.log)
-	if err != nil {
-		i.log.Error(err, "failed to delete all/some of the IPv4 addresses", "failed ips", failedIPs)
+	failedPrefixes, err := instanceResource.resourceIpam.DeAllocatePrefix(job.Resources, i.apiWrapper)
+	if err == true {
 		didSucceed = false
 	}
-	job.Resources = failedIPs
+	job.Resources = failedPrefixes
 	i.updatePoolAndReconcileIfRequired(instanceResource.resourceIpam, job, didSucceed)
 }
 

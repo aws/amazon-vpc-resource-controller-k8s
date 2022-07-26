@@ -42,6 +42,7 @@ var (
 
 type Ipam interface {
 	AllocatePrefix(numberOfPrefixes int, apiWrapper api.Wrapper) (resources []string, success bool)
+	DeAllocatePrefix(prefixes []string, apiWrapper api.Wrapper) (resources []string, success bool)
 	AssignResource(requesterID string) (resourceDetail worker.IPAMResourceInfo, shouldReconcile bool, err error)
 	FreeResource(requesterID string, resourceID string) (shouldReconcile bool, err error)
 	GetAssignedResource(requesterID string) (resourceDetail worker.IPAMResourceInfo, ownsResource bool)
@@ -555,8 +556,18 @@ func (i *ipam) Introspect() IntrospectResponse {
 
 func (i *ipam) AllocatePrefix(numberOfPrefixes int, apiWrapper api.Wrapper) (resources []string, success bool) {
 	didSucceed := true
-	fmt.Println("# of prefixes", numberOfPrefixes)
 	prefixes, err := i.eniManager.CreateIPV4Prefix(numberOfPrefixes, apiWrapper.EC2API, i.log)
+	if err != nil {
+		i.log.Error(err, "failed to create all/some of the IPv4 prefixes", "created prefixes", prefixes)
+		didSucceed = false
+	}
+	return prefixes, didSucceed
+}
+
+func (i *ipam) DeAllocatePrefix(prefixes []string, apiWrapper api.Wrapper) (resources []string, success bool) {
+	didSucceed := true
+	i.log.Info("Prefixes being deleted", prefixes)
+	prefixes, err := i.eniManager.DeleteIPV4Prefix(prefixes, apiWrapper.EC2API, i.log)
 	if err != nil {
 		i.log.Error(err, "failed to create all/some of the IPv4 prefixes", "created prefixes", prefixes)
 		didSucceed = false
