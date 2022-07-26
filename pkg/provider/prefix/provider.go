@@ -173,9 +173,6 @@ func (i *ipv4PrefixProvider) CreatePrivateIPv4PrefixAndUpdatePool(job *worker.Wa
 	}
 	didSucceed := true
 
-	i.log.Info("Logging Debug")
-	i.log.Info("Resource count", "Amount", job.ResourceCount)
-	i.log.Info("API Wrapper", "API", i.apiWrapper)
 	// Get ENI to create IPV4 prefix [Change feature]
 	prefixes, didSucceed := instanceResource.resourceIpam.AllocatePrefix(job.ResourceCount, i.apiWrapper)
 
@@ -270,9 +267,9 @@ func getCapacity(instanceType string, instanceOs string) int {
 	}
 	var capacity int
 	if instanceOs == config.OSWindows {
-		capacity = (limits.IPv4PerInterface - 1) * 16
+		capacity = (limits.IPv4PerInterface - 1) * 15
 	} else {
-		capacity = (limits.IPv4PerInterface - 1) * 16 * limits.Interface
+		capacity = (limits.IPv4PerInterface - 1) * 15 * limits.Interface
 	}
 
 	return capacity

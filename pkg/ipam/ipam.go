@@ -385,9 +385,9 @@ func (i *ipam) UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldRecon
 	}
 
 	if job.Operations == worker.OperationCreate {
-		i.pendingCreate -= job.ResourceCount * 16
+		i.pendingCreate -= job.ResourceCount * 15
 	} else if job.Operations == worker.OperationDeleted {
-		i.pendingDelete -= job.ResourceCount * 16
+		i.pendingDelete -= job.ResourceCount * 15
 	}
 
 	log.V(1).Info("processed job response", "job", job, "pending create",
@@ -487,8 +487,8 @@ func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 
 		// Increment the pending to the size of deviation, once we get async response on creation success we can decrement
 		// pending
-		prefixesToAdd := int(math.Ceil(float64(deviation / 16)))
-		i.pendingCreate += prefixesToAdd * 16
+		prefixesToAdd := int(math.Ceil(float64(deviation / 15)))
+		i.pendingCreate += prefixesToAdd * 15
 
 		log.Info("created job to add resources to IPAM", "requested count", prefixesToAdd)
 
@@ -499,7 +499,7 @@ func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 		deviation = -deviation
 
 		// Amount of unused prefixes to remove
-		prefixesToRemove := int(math.Ceil(float64(deviation / 16)))
+		prefixesToRemove := int(math.Ceil(float64(deviation / 15)))
 
 		if prefixesToRemove > len(freePrefixes) {
 			prefixesToRemove = len(freePrefixes)
@@ -529,7 +529,7 @@ func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 			i.warmResources = newWarmResources
 		}
 		// Increment pending to the number of resource being deleted, once successfully deleted the count can be decremented
-		i.pendingDelete += len(prefixesRemoved) * 16
+		i.pendingDelete += len(prefixesRemoved) * 15
 
 		// Submit the job to delete resources
 		log.Info("created job to delete resources from IPAM", "resources to delete", resourceToDelete)
@@ -614,7 +614,7 @@ func DeconstructPrefix(inputPrefix string) (warmResourceBundle []string, err err
 	}
 
 	availableIPs := make([]string, 0)
-	for i := 0; i < 16; i++ {
+	for i := 0; i < 15; i++ {
 		var newIP = ipAddress[0] + "." + ipAddress[1] + "." + ipAddress[2] + "." + strconv.Itoa(hostNumber) + "/28"
 		availableIPs = append(availableIPs, newIP)
 		hostNumber++
