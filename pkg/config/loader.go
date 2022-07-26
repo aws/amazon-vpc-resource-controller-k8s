@@ -28,7 +28,7 @@ const (
 	// Default Configuration for IPv4 prefix resource type
 	IPv4PrefixDefaultWorker  = 2
 	IPv4PrefixDefaultWPSize  = 16
-	IPv4PrefixDefaultMaxDev  = 8
+	IPv4PrefixDefaultMaxDev  = 13
 	IPv4PrefixDefaultResSize = 0
 
 	// EC2 API QPS for user service client
