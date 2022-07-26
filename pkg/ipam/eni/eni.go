@@ -189,7 +189,8 @@ func (e *eniManager) DeleteIPV4Prefix(ipList []string, ec2APIHelper api.EC2APIHe
 
 	groupedPrefixes := e.groupPrefixPerENI(ipList)
 	for eni, prefixes := range groupedPrefixes {
-		log.Info("Unassigning from", "eni", eni.eniID, "IPv4 addresses", prefixes)
+		log.Info("Prefixes of", "Prefix", prefixes)
+		log.Info("Unassigning from", "eni", eni.eniID)
 		err := ec2APIHelper.UnassignPrivateIpPrefixes(eni.eniID, prefixes)
 		if err != nil {
 			errors = append(errors, err)

@@ -324,6 +324,7 @@ func (i *ipam) FreeResource(requesterID string, resourceID string) (shouldReconc
 	defer i.lock.Unlock()
 
 	actualResourceID, isAssigned := i.usedResources[requesterID]
+
 	if !isAssigned {
 		return false, ErrResourceDoesntExist
 	}
@@ -332,6 +333,8 @@ func (i *ipam) FreeResource(requesterID string, resourceID string) (shouldReconc
 		return false, ErrIncorrectResourceOwner
 	}
 
+	// Decrement prefix usage
+	i.prefixUsage[actualResourceID.PrefixOrigin]--
 	delete(i.usedResources, requesterID)
 
 	// Put the resource in cool down queue
@@ -501,8 +504,8 @@ func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 			prefixesToRemove = len(freePrefixes)
 		}
 
-		var prefixesRemoved []string
-		var resourceToDelete []worker.IPAMResourceInfo
+		prefixesRemoved := []string{}
+		resourceToDelete := []worker.IPAMResourceInfo{}
 		for j := 0; j < prefixesToRemove; j++ {
 			for k := 0; k < len(i.warmResources); k++ {
 				if i.warmResources[k].PrefixOrigin == freePrefixes[j] {
@@ -566,7 +569,12 @@ func (i *ipam) AllocatePrefix(numberOfPrefixes int, apiWrapper api.Wrapper) (res
 
 func (i *ipam) DeAllocatePrefix(prefixes []string, apiWrapper api.Wrapper) (resources []string, success bool) {
 	didSucceed := true
-	i.log.Info("Prefixes being deleted", prefixes)
+
+	if len(prefixes) == 0 {
+		return prefixes, didSucceed
+	}
+
+	i.log.Info("Prefixes being deleted", "Prefixes", prefixes)
 	prefixes, err := i.eniManager.DeleteIPV4Prefix(prefixes, apiWrapper.EC2API, i.log)
 	if err != nil {
 		i.log.Error(err, "failed to create all/some of the IPv4 prefixes", "created prefixes", prefixes)
