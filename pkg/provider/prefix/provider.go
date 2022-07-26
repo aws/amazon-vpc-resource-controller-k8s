@@ -88,7 +88,7 @@ func (i *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	}
 
 	// Submit the async job to periodically process the delete queue
-	i.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
+	i.SubmitAsyncJob(worker.NewWarmProcessDeleteQueueJob(nodeName))
 	return nil
 }
 
