@@ -529,9 +529,9 @@ func (i *ipam) ReconcilePool() *worker.WarmPoolJob {
 			i.warmResources = newWarmResources
 		}
 		// Increment pending to the number of resource being deleted, once successfully deleted the count can be decremented
-		i.pendingDelete += deviation*16
+		i.pendingDelete += prefixesToRemove*16
+		
 		// Submit the job to delete resources
-
 		log.Info("created job to delete resources from IPAM", "resources to delete", resourceToDelete)
 
 		return worker.NewWarmPoolDeleteJob(i.nodeName, prefixesRemoved)
