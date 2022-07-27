@@ -167,7 +167,9 @@ func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resou
 	}
 	i.usedResources = podToResourceMap
 	i.log.Info("Remapped pod and IP association", "Pod Mapping", i.usedResources)
-
+	i.log.Info("Remapped prefix usage", "Prefix Usage", i.prefixUsage)
+	i.log.Info("Remapped prefix allocation list", "Allocation list", i.allocatedPrefix)
+	
 	// Remap warm resources
 	tempWarmResources := []worker.IPAMResourceInfo{}
 	allResources := []worker.IPAMResourceInfo{}
