@@ -81,7 +81,6 @@ func getDefaultResourceConfig() map[string]ResourceConfig {
 	return config
 }
 
-
 func getIpamResourceConfig() map[string]ResourceConfig {
 	config := make(map[string]ResourceConfig)
 

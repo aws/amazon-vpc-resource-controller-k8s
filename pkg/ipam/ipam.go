@@ -111,13 +111,14 @@ type IntrospectResponse struct {
 func NewResourceIPAM(log logr.Logger, poolConfig *config.WarmPoolConfig, usedResources map[string]worker.IPAMResourceInfo,
 	warmResources []worker.IPAMResourceInfo, allocatedPrefix []string, prefixUsage map[string]int, nodeName string, capacity int) Ipam {
 	ipam := &ipam{
-		log:            log,
-		warmPoolConfig: poolConfig,
-		usedResources:  usedResources,
-		warmResources:  warmResources,
-		prefixUsage:    prefixUsage,
-		capacity:       capacity,
-		nodeName:       nodeName,
+		log:             log,
+		warmPoolConfig:  poolConfig,
+		usedResources:   usedResources,
+		warmResources:   warmResources,
+		allocatedPrefix: allocatedPrefix,
+		prefixUsage:     prefixUsage,
+		capacity:        capacity,
+		nodeName:        nodeName,
 	}
 	return ipam
 }
@@ -142,15 +143,17 @@ func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resou
 	// Mapping IPs to prefixes
 	ipToResourceInfoMapping := make(map[string]worker.IPAMResourceInfo)
 
-	// Create mapping for current IPs and prefixes
+	// Create mapping for current IPs and prefixes. Also update prefix tracking
 	for _, prefix := range presentPrefixes {
 		allPossibleIPs, _ := DeconstructPrefix(prefix)
+		i.allocatedPrefix = append(i.allocatedPrefix, prefix)
+		i.prefixUsage[prefix] = 0
 		for _, ip := range allPossibleIPs {
 			ipToResourceInfoMapping[ip] = worker.IPAMResourceInfo{ResourceID: ip, PrefixOrigin: prefix}
 		}
 	}
 
-	// Remap pod to IP
+	// Remap pod to IP. Also updates prefix tracking
 	podToResourceMap := map[string]worker.IPAMResourceInfo{}
 	usedIPSet := map[string]worker.IPAMResourceInfo{}
 	for _, pod := range pods {
@@ -160,6 +163,7 @@ func (i *ipam) InitIPAM(instance ec2.EC2Instance, apiWrapper api.Wrapper) (resou
 		}
 		podToResourceMap[string(pod.UID)] = ipToResourceInfoMapping[annotation]
 		usedIPSet[annotation] = ipToResourceInfoMapping[annotation]
+		i.prefixUsage[ipToResourceInfoMapping[annotation].PrefixOrigin]++
 	}
 	i.usedResources = podToResourceMap
 	i.log.Info("Remapped pod and IP association", "Pod Mapping", i.usedResources)
@@ -559,6 +563,7 @@ func (i *ipam) Introspect() IntrospectResponse {
 	}
 }
 
+// Assign prefix to ENI
 func (i *ipam) AllocatePrefix(numberOfPrefixes int, apiWrapper api.Wrapper) (resources []string, success bool) {
 	didSucceed := true
 	prefixes, err := i.eniManager.CreateIPV4Prefix(numberOfPrefixes, apiWrapper.EC2API, i.log)
@@ -569,6 +574,7 @@ func (i *ipam) AllocatePrefix(numberOfPrefixes int, apiWrapper api.Wrapper) (res
 	return prefixes, didSucceed
 }
 
+// Unassign prefix to ENI
 func (i *ipam) DeAllocatePrefix(prefixes []string, apiWrapper api.Wrapper) (resources []string, success bool) {
 	didSucceed := true
 
@@ -600,7 +606,7 @@ func Difference(a, b []worker.IPAMResourceInfo) (diff []worker.IPAMResourceInfo)
 	return
 }
 
-// Deconstruction of prefix Input: 10.0.0.0/28 | Output: {10.0.0.0/28: [10.0.0.1, 10.0.0.2, 10.0.0.3, 10.0.0.4...]}
+// Deconstruction of prefix Input: 10.0.0.0/28 | Output: {10.0.0.0/28: [10.0.0.0/28, 10.0.0.1/28, 10.0.0.2/28, 10.0.0.3/28, 10.0.0.4/28...]}
 func DeconstructPrefix(inputPrefix string) (warmResourceBundle []string, err error) {
 	// Remove masking #
 	var segmentedIP = strings.Split(inputPrefix, "/")

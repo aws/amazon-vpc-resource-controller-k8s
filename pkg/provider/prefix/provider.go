@@ -69,7 +69,7 @@ func (i *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	// Init IPAM to resync
 	nodeCapacity := getCapacity(instance.Type(), instance.Os())
 
-	ipamPool := ipam.NewResourceIPAM(i.log.WithName("ipv4 prefix resource pool").
+	ipamPool := ipam.NewResourceIPAM(i.log.WithName("ipv4 prefix IPAM").
 		WithValues("node name", instance.Name()), i.config, map[string]worker.IPAMResourceInfo{},
 		[]worker.IPAMResourceInfo{}, []string{}, map[string]int{}, instance.Name(), nodeCapacity)
 
@@ -163,7 +163,7 @@ func (i *ipv4PrefixProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, erro
 	return ctrl.Result{}, nil
 }
 
-// CreatePrivateIPv4AndUpdatePool executes the Create IPv4 workflow by assigning the desired number of IPv4 address
+// CreatePrivateIPv4PrefidxAndUpdatePool executes the Create IPv4 workflow by assigning the desired number of IPv4 address
 // provided in the warm pool job
 func (i *ipv4PrefixProvider) CreatePrivateIPv4PrefixAndUpdatePool(job *worker.WarmPoolJob) {
 	instanceResource, found := i.getInstanceProviderAndPool(job.NodeName)
@@ -173,7 +173,7 @@ func (i *ipv4PrefixProvider) CreatePrivateIPv4PrefixAndUpdatePool(job *worker.Wa
 	}
 	didSucceed := true
 
-	// Get ENI to create IPV4 prefix [Change feature]
+	// Get ENI to create IPV4 prefix
 	prefixes, didSucceed := instanceResource.resourceIpam.AllocatePrefix(job.ResourceCount, i.apiWrapper)
 
 	job.Resources = prefixes
