@@ -15,7 +15,6 @@ package webhook
 
 import (
 	"fmt"
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -151,10 +150,11 @@ var _ = Describe("validating webhook test cases", func() {
 						}
 						nodeCopy := existingNodeToMutate.DeepCopy()
 						nodeCopy.Labels["dummy-label"] = "dummy-value"
+						fmt.Println(existingNodeToMutate.Labels, nodeCopy.Labels)
 						return k8sClientToMutateNode.Update(ctx, nodeCopy)
 					})
 					Expect(err).To(HaveOccurred())
-					Expect(err).Should(MatchError(errors.New("admission webhook \"vnode.vpc.k8s.aws\" denied the request: aws-node can only update limited fields on the Node Object")))
+					Expect(err.Error()).To(Equal("admission webhook \"vnode.vpc.k8s.aws\" denied the request: aws-node can only update limited fields on the Node Object"))
 				})
 			})
 
@@ -174,7 +174,7 @@ var _ = Describe("validating webhook test cases", func() {
 						return k8sClientToMutateNode.Update(ctx, nodeCopy)
 					})
 					Expect(err).To(HaveOccurred())
-					Expect(err).Should(MatchError(errors.New("admission webhook \"vnode.vpc.k8s.aws\" denied the request: aws-node can only update limited fields on the Node Object")))
+					Expect(err.Error()).To(Equal("admission webhook \"vnode.vpc.k8s.aws\" denied the request: aws-node can only update limited fields on the Node Object"))
 				})
 			})
 		})
