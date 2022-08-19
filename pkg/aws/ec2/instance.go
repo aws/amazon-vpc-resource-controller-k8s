@@ -123,7 +123,7 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		i.deviceIndexes[*index] = true
 
 		// Load the Security group of the primary network interface
-		if i.instanceSecurityGroups == nil && *nwInterface.PrivateIpAddress == *instance.PrivateIpAddress {
+		if i.instanceSecurityGroups == nil && (nwInterface.PrivateIpAddress != nil && instance.PrivateIpAddress != nil && *nwInterface.PrivateIpAddress == *instance.PrivateIpAddress) {
 			i.primaryENIID = *nwInterface.NetworkInterfaceId
 			// TODO: Group can change, should be refreshed each time we want to use this
 			for _, group := range nwInterface.Groups {
