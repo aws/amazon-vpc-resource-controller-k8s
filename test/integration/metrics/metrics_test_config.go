@@ -26,8 +26,9 @@ type TestMetric struct {
 
 // NewTestingMetrics is used to add more metrics and monitoring thresholds for regression tests.
 // To add another metrics
-//   1, add the metrics name into constant variable
-//   2, add expected upper threshold into this map
+//
+//	1, add the metrics name into constant variable
+//	2, add expected upper threshold into this map
 func NewTestingMetrics() map[string]TestMetric {
 	return map[string]TestMetric{
 		describeENICallCount: {

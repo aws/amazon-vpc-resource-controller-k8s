@@ -478,7 +478,7 @@ func TestTrunkENI_DeleteCooledDownENIs_NotCooledDown(t *testing.T) {
 	assert.Equal(t, 2, len(trunkENI.deleteQueue))
 }
 
-//TestTrunkENI_DeleteCooledDownENIs_NoDeletionTimeStamp tests that ENIs are deleted if they don't have any deletion timestamp
+// TestTrunkENI_DeleteCooledDownENIs_NoDeletionTimeStamp tests that ENIs are deleted if they don't have any deletion timestamp
 func TestTrunkENI_DeleteCooledDownENIs_NoDeletionTimeStamp(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
