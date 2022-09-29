@@ -69,14 +69,15 @@ type Options struct {
 // This Controller can be used for any type of K8s object, but is used for Pod Objects
 // in this repository. There are two reasons why we are using a wrapper over the low level
 // controllers instead of using controllers from controller-runtime.
-// 1. We don't want to cache the entire Pod Object because of Memory constraints.
-//    We need specific details from metadata and Pod Spec. To do this we intercept
-//    the request at List; and watch, optimize it before it's stored in cache.
-//    Long term plan is to use MetaData only cache or disable Pod caching altogether
-// 2. We want the Deleted Object when Pod is Terminating. Pod Networking should only be deleted
-//    once the Pod has deleted or all containers have exited.
-//    Long term plan is to consider migrating to using finalizers and delete only when
-//    all containers have exited.
+//  1. We don't want to cache the entire Pod Object because of Memory constraints.
+//     We need specific details from metadata and Pod Spec. To do this we intercept
+//     the request at List; and watch, optimize it before it's stored in cache.
+//     Long term plan is to use MetaData only cache or disable Pod caching altogether
+//  2. We want the Deleted Object when Pod is Terminating. Pod Networking should only be deleted
+//     once the Pod has deleted or all containers have exited.
+//     Long term plan is to consider migrating to using finalizers and delete only when
+//     all containers have exited.
+//
 // In future, we may be able to switch to upstream controller for reconciling Pods if the
 // long term solutions are in place
 type CustomController struct {

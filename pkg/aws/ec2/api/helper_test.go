@@ -611,7 +611,7 @@ func TestEc2APIHelper_DescribeNetworkInterfaces_Error(t *testing.T) {
 }
 
 // TestEc2APIHelper_DescribeTrunkInterfaceAssociation tests that the describe trunk interface association returns
-/// no errors under valid input
+// no errors under valid input
 func TestEc2APIHelper_DescribeTrunkInterfaceAssociation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
