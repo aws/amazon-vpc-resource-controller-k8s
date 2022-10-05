@@ -19,7 +19,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
@@ -185,7 +187,7 @@ func (p *podClientAPIWrapper) GetPod(namespace string, name string) (*v1.Pod, er
 		return nil, err
 	}
 	if !exists {
-		return nil, fmt.Errorf("failed to find pod %s", nsName)
+		return nil, apierrors.NewNotFound(schema.GroupResource{}, nsName)
 	}
 	return obj.(*v1.Pod), nil
 }
