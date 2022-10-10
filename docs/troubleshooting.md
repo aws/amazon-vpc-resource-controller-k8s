@@ -230,12 +230,15 @@ If the Pod is still stuck in `ContainerCreating` you can,
 ## List of Common Issues  
 
 ### PSP Blocking Controller Annotations
-If you have a PSP that blocks annotation to Pod, you will have to allow annotation from the following Service Account
+If you have a PSP that blocks annotation to Pod, you will have to allow annotation from the following User `eks:vpc-resource-controller`
 ```
 subjects:
   - kind: Group
     apiGroup: rbac.authorization.k8s.io
     name: system:authenticated
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: eks:vpc-resource-controller
   - kind: ServiceAccount
     name: eks-vpc-resource-controller
 ```
