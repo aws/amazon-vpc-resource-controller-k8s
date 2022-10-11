@@ -236,9 +236,9 @@ subjects:
   - kind: Group
     apiGroup: rbac.authorization.k8s.io
     name: system:authenticated
-  - apiGroup: rbac.authorization.k8s.io
-    kind: User
+  - kind: User
     name: eks:vpc-resource-controller
+    apiGroup: rbac.authorization.k8s.io
   - kind: ServiceAccount
     name: eks-vpc-resource-controller
 ```
