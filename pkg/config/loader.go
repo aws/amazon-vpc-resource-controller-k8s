@@ -14,10 +14,12 @@
 package config
 
 const (
+	// TODO: Should we always do this max retry no matter why it fails
+	// such deleted pods will also be retried 5 times, which could be an issue for large pods loads and high churning rate.
 	WorkQueueDefaultMaxRetries = 5
 
 	// Default Configuration for Pod ENI resource type
-	PodENIDefaultWorker = 2
+	PodENIDefaultWorker = 7
 
 	// Default Configuration for IPv4 resource type
 	IPv4DefaultWorker  = 2
@@ -26,12 +28,16 @@ const (
 	IPv4DefaultResSize = 0
 
 	// EC2 API QPS for user service client
-	UserServiceClientQPS      = 6
+	// Tested: 15 + 20 limits
+	// Tested: 15 + 8 limits (not seeing significant degradation from 15+20)
+	// Tested: 12 + 8 limits (not seeing significant degradation from 15+8)
+	// Larger number seems not make latency better than 12+8
+	UserServiceClientQPS      = 12
 	UserServiceClientQPSBurst = 8
 
 	// EC2 API QPS for instance service client
-	InstanceServiceClientQPS   = 2
-	InstanceServiceClientBurst = 3
+	InstanceServiceClientQPS   = 5
+	InstanceServiceClientBurst = 7
 
 	// API Server QPS
 	DefaultAPIServerQPS   = 10

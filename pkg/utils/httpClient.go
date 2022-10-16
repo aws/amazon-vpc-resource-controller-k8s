@@ -23,6 +23,7 @@ import (
 // NewRateLimitedClient returns a new HTTP client with rate limiter.
 func NewRateLimitedClient(qps int, burst int) (*http.Client, error) {
 	if qps == 0 {
+		fmt.Printf("Creating a default rate limited http client with QPS = %d, Burst = %d\n", qps, burst)
 		return http.DefaultClient, nil
 	}
 	if burst < 1 {

@@ -278,7 +278,7 @@ func main() {
 		ctrl.Log.WithName("controller conditions"), k8sApi)
 
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
-		3, 1, ctrl.Log.WithName("node async workers"), ctx)
+		10, 1, ctrl.Log.WithName("node async workers"), ctx)
 	nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager,
 		apiWrapper, nodeManagerWorkers, controllerConditions)
 	if err != nil {
