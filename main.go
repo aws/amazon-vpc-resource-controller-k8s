@@ -292,6 +292,7 @@ func main() {
 		Log:             ctrl.Log.WithName("controllers").WithName("Pod Reconciler"),
 		ResourceManager: resourceManager,
 		NodeManager:     nodeManager,
+		K8sAPI:          k8sApi,
 		DataStore:       dataStore,
 		DataStoreSynced: hasPodDataStoreSynced,
 	}).SetupWithManager(ctx, mgr, clientSet, listPageLimit, syncPeriod); err != nil {
