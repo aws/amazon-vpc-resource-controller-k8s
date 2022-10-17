@@ -80,7 +80,7 @@ function install_add_on() {
     local current_addon_version=$(echo "$DESCRIBE_ADDON" | jq '.addon.addonVersion' -r)
     if [ "$new_addon_version" != "$current_addon_version" ]; then
       echo "deleting the $current_addon_version to install $new_addon_version"
-      aws eks delete-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name "$VPC_CNI_ADDON_NAME" --region $$REGION
+      aws eks delete-addon $ENDPOINT_FLAG --cluster-name "$CLUSTER_NAME" --addon-name "$VPC_CNI_ADDON_NAME" --region $REGION
       wait_for_addon_status "DELETED"
     else
       echo "addon version $current_addon_version already installed"
