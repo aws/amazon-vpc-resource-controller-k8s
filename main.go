@@ -216,7 +216,7 @@ func main() {
 		RetryPeriod:                &retryPeriod,
 		LeaderElectionID:           config.LeaderElectionKey,
 		LeaderElectionNamespace:    config.LeaderElectionNamespace,
-		LeaderElectionResourceLock: resourcelock.ConfigMapsResourceLock,
+		LeaderElectionResourceLock: resourcelock.LeasesResourceLock,
 		HealthProbeBindAddress:     ":61779", // the liveness endpoint is default to "/healthz"
 		NewCache:                   newCache,
 	})
