@@ -29,7 +29,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/google/uuid"
-	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	appsV1 "k8s.io/api/apps/v1"
 	batchV1 "k8s.io/api/batch/v1"

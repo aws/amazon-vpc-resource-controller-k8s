@@ -67,7 +67,7 @@ func getMockPool(poolConfig *config.WarmPoolConfig, usedResources map[string]str
 }
 
 func TestPool_NewResourcePool(t *testing.T) {
-	pool := NewResourcePool(zap.New(), poolConfig, usedResources, warmPoolResources, nodeName, 5)
+	pool := NewResourcePool(nil, poolConfig, usedResources, warmPoolResources, nodeName, 5)
 	assert.NotNil(t, pool)
 }
 

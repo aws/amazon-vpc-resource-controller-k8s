@@ -213,7 +213,7 @@ func getMockTrunk() trunkENI {
 }
 
 func TestNewTrunkENI(t *testing.T) {
-	trunkENI := NewTrunkENI(zap.New(), nil, nil)
+	trunkENI := NewTrunkENI(nil, nil, nil)
 	assert.NotNil(t, trunkENI)
 }
 

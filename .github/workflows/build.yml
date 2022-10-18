@@ -1,0 +1,25 @@
+name: build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+
+jobs:
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Setup Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.16
+    - name: Checkout Repository
+      uses: actions/checkout@v2
+    - name: Check Source Code Formatting
+      run: make check-format
+    - name: Make Controller Binary
+      run: make controller
+    - name: Check Binary Runs
+      run: ./bin/controller -h
