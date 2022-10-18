@@ -89,8 +89,8 @@ func NewControllerManagedBy(ctx context.Context, mgr manager.Manager) *Builder {
 // Complete adds the controller to manager's Runnable. The Controller
 // runnable will start when the manager starts
 func (b *Builder) Complete(reconciler Reconciler) error {
-	if b.log.GetSink() == nil {
-		return fmt.Errorf("need to set the sink for the logger")
+	if b.log == nil {
+		return fmt.Errorf("need to set the logger")
 	}
 	if b.converter == nil {
 		return fmt.Errorf("converter not provided, " +

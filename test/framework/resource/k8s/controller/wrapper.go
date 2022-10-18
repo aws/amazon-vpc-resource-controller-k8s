@@ -22,7 +22,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/rbac"
 
-	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	v1 "k8s.io/api/rbac/v1"
 )
