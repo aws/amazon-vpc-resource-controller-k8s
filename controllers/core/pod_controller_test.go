@@ -249,6 +249,7 @@ func TestPodReconcile_Reconcile_NodeDeletedFromCache(t *testing.T) {
 	assert.Equal(t, result, controllerruntime.Result{})
 }
 
+// test not cached node which is also not existing in cluster
 func TestPodReconcile_Reconcile_NodeDeletedFromCluster(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -257,16 +258,53 @@ func TestPodReconcile_Reconcile_NodeDeletedFromCluster(t *testing.T) {
 
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(nil, false)
 	mock.MockK8sAPI.EXPECT().GetNode(mockNodeName).Return(nil, errors.New("Resource not found")).AnyTimes()
-	// mock.MockNode.EXPECT().IsManaged().Return(true)
 	mock.MockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mock.MockHandler, true)
 	mock.MockHandler.EXPECT().HandleDelete(mockPod).Return(reconcile.Result{}, nil)
 	mock.MockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
 
-	// delReq := custom.Request{
-	// 	DeletedObject: mockPod,
-	// }
+	result, err := mock.PodReconciler.Reconcile(mockReq)
+	assert.NoError(t, err)
+	assert.Equal(t, result, controllerruntime.Result{})
+}
+
+// test node in cache and managed but deleted in cluster, which should be rare case and pod should be ignored from retry
+func TestPodReconcile_Reconcile_ManagedNodeDeletedFromCluster(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+
+	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
+	mock.MockK8sAPI.EXPECT().GetNode(mockNodeName).Return(nil, errors.New("Resource not found")).AnyTimes()
+	mock.MockNode.EXPECT().IsManaged().Return(true)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mock.MockHandler, true)
+	mock.MockHandler.EXPECT().HandleDelete(mockPod).Return(reconcile.Result{}, nil)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
 
 	result, err := mock.PodReconciler.Reconcile(mockReq)
+	assert.NoError(t, err)
+	assert.Equal(t, result, controllerruntime.Result{})
+}
+
+// test pod delete event and node is managed in cache but no longer existing in cluster, which should be a rare case and the pod should be ignored
+func TestPodReconcile_Reconcile_PodDeletedManagedNodeDeletedFromCluster(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+
+	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
+	mock.MockK8sAPI.EXPECT().GetNode(mockNodeName).Return(nil, errors.New("Resource not found")).AnyTimes()
+	mock.MockNode.EXPECT().IsManaged().Return(true)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mock.MockHandler, true)
+	mock.MockHandler.EXPECT().HandleDelete(mockPod).Return(reconcile.Result{}, nil)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
+
+	delReq := custom.Request{
+		DeletedObject: mockPod,
+	}
+
+	result, err := mock.PodReconciler.Reconcile(delReq)
 	assert.NoError(t, err)
 	assert.Equal(t, result, controllerruntime.Result{})
 }
