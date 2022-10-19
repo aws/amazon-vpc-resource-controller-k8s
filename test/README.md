@@ -59,11 +59,11 @@ The Integration test suite provides the following focuses.
    ```
    cd test/integration
    echo "Running Validation Webhook Tests"
-   (cd webhook && CGO_ENABLED=0 GOOS=$OS ginkgo -v -timeout 10m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id $VPC_ID)
+   (cd webhook && CGO_ENABLED=0 GOOS=$OS ginkgo -v --timeout 10m -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id=$VPC_ID)
    echo "Running Security Group for Pods Integration Tests"
-   (cd perpodsg && CGO_ENABLED=0 GOOS=$OS ginkgo -v -timeout 40m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id $VPC_ID)
+   (cd perpodsg && CGO_ENABLED=0 GOOS=$OS ginkgo -v --timeout 40m -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id=$VPC_ID)
    echo "Running Windows Integration Tests"
-   (cd windows && CGO_ENABLED=0 GOOS=$OS ginkgo -v -timeout 40m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id $VPC_ID)
+   (cd windows && CGO_ENABLED=0 GOOS=$OS ginkgo -v --timeout 40m -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id=$VPC_ID)
    ```
 
 #### Running Integration tests on Controller running on EKS Control Plane
