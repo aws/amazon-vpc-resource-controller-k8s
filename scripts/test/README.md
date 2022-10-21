@@ -1,5 +1,6 @@
 ## Integration Script
 The Integration test script creates an eksctl cluster and runs the Ginkgo Integration tests on the current build from the repository.
+
 ### Usage
 The Integration test script will **fail to run** on accounts that is not allowlisted for ENI Trunking feature. The test script is currently used in **CI Setup** for the repository `amazon-vpc-resource-controller-k8s`.
 
@@ -31,6 +32,12 @@ K8S_VERSION=<k8s-Version>
   ```
   ./scripts/test/delete-cluster.sh
   ```
+
+### Integration Test Scripts
+`run-canary-test.sh` runs integration tests against an existing cluster with the "CANARY" focus.
+`run-integration-tests.sh` runs non-local integration tests against an existing cluster.
+
+To run the above scripts against a cluster without sufficient Windows nodes, the "SKIP_WINDOWS_TEST" environment variable can be passed.
 
 ### Design
 
