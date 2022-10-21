@@ -105,7 +105,11 @@ function run_canary_tests() {
   # per repository as these tests are run sequentially along with tests from other repositories
   # Currently the overall execution time is ~50 minutes and we will reduce it in future
   (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 15m $GINKGO_TEST_BUILD_DIR/perpodsg.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
-  (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 30m $GINKGO_TEST_BUILD_DIR/windows.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
+  if [[ -z "${SKIP_WINDOWS_TEST}" ]]; then
+    (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 30m $GINKGO_TEST_BUILD_DIR/windows.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
+  else
+    echo "skipping Windows tests"
+  fi
   (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 5m $GINKGO_TEST_BUILD_DIR/webhook.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
 }
 
