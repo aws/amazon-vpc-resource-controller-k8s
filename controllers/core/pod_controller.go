@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
@@ -39,6 +40,7 @@ type PodReconciler struct {
 	ResourceManager resource.ResourceManager
 	// Manager manages all the nodes on the cluster
 	NodeManager manager.Manager
+	K8sAPI      k8s.K8sWrapper
 	// DataStore is the cache with memory optimized Pod Objects
 	DataStore       cache.Indexer
 	DataStoreSynced *bool
@@ -91,21 +93,30 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 	// has initialized (or it will be stuck till the next re-sync period or Pod update).
 	// Once the Pod has been initialized if it's managed then wait till the asynchronous
 	// operation on the Node has been performed and node is ready to server requests.
-	node, found := r.NodeManager.GetNode(pod.Spec.NodeName)
-	if !found {
-		logger.V(1).Info("pod's node is not yet initialized by the manager, will retry")
-		return PodRequeueRequest, nil
-	} else if !node.IsManaged() {
-		logger.V(1).Info("pod's node is not managed, skipping pod event")
+	node, foundInCache := r.NodeManager.GetNode(pod.Spec.NodeName)
+
+	nodeDeletedInCluster := false
+	if !isDeleteEvent && r.isNodeExistingInCluster(pod, logger) {
+		if !foundInCache {
+			logger.V(1).Info("pod's node is not yet initialized by the manager, will retry", "Requested", request.NamespacedName.String(), "Cached pod name", pod.ObjectMeta.Name, "Cached pod namespace", pod.ObjectMeta.Namespace)
+			return PodRequeueRequest, nil
+		} else if !node.IsManaged() {
+			logger.V(1).Info("pod's node is not managed, skipping pod event", "Requested", request.NamespacedName.String(), "Cached pod name", pod.ObjectMeta.Name, "Cached pod namespace", pod.ObjectMeta.Namespace)
+			return ctrl.Result{}, nil
+		} else if !node.IsReady() {
+			logger.V(1).Info("pod's node is not ready to handle request yet, will retry", "Requested", request.NamespacedName.String(), "Cached pod name", pod.ObjectMeta.Name, "Cached pod namespace", pod.ObjectMeta.Namespace)
+			return PodRequeueRequest, nil
+		}
+	} else if foundInCache && !node.IsManaged() {
 		return ctrl.Result{}, nil
-	} else if !node.IsReady() {
-		logger.V(1).Info("pod's node is not ready to handle request yet, will retry")
-		return PodRequeueRequest, nil
+	} else if !isDeleteEvent {
+		nodeDeletedInCluster = true
 	}
+
 	// Get the aggregate level resource, vpc controller doesn't support allocating
 	// container level resources
 	aggregateResources := getAggregateResources(pod)
-
+	logger.V(1).Info("Pod controller logs local variables", "isDeleteEvent", isDeleteEvent, "hasPodCompleted", hasPodCompleted, "nodeDeletedInCluster", nodeDeletedInCluster)
 	// For each resource, if a handler can allocate/de-allocate a resource then delegate the
 	// allocation/de-allocation task to the respective handler
 	for resourceName, totalCount := range aggregateResources {
@@ -116,7 +127,7 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 
 		var err error
 		var result ctrl.Result
-		if isDeleteEvent || hasPodCompleted {
+		if isDeleteEvent || hasPodCompleted || nodeDeletedInCluster {
 			result, err = resourceHandler.HandleDelete(pod)
 		} else {
 			result, err = resourceHandler.HandleCreate(int(totalCount), pod)
@@ -130,6 +141,14 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *PodReconciler) isNodeExistingInCluster(pod *v1.Pod, logger logr.Logger) bool {
+	if _, err := r.K8sAPI.GetNode(pod.Spec.NodeName); err != nil {
+		logger.V(1).Info("The requested pod's node has been deleted from the cluster", "PodName", pod.ObjectMeta.Name, "PodNamespace", pod.ObjectMeta.Namespace, "NodeName", pod.Spec.NodeName)
+		return false
+	}
+	return true
 }
 
 // getAggregateResources computes the aggregate resources across all containers for each resource type

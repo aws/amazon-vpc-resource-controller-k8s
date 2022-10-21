@@ -14,13 +14,15 @@
 package controllers
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
+	mock_handler "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
+	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
+	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 
 	"github.com/golang/mock/gomock"
@@ -86,6 +88,7 @@ var (
 
 type Mock struct {
 	MockNodeManager     *mock_manager.MockManager
+	MockK8sAPI          *mock_k8s.MockK8sWrapper
 	MockResourceManager *mock_resource.MockResourceManager
 	MockNode            *mock_node.MockNode
 	PodReconciler       *PodReconciler
@@ -97,6 +100,7 @@ func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
 	mockNodeManager := mock_manager.NewMockManager(ctrl)
 	mockResourceManager := mock_resource.NewMockResourceManager(ctrl)
 	mockNode := mock_node.NewMockNode(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
 
 	converter := pod.PodConverter{}
 	mockIndexer := cache.NewIndexer(converter.Indexer, pod.NodeNameIndexer())
@@ -104,6 +108,7 @@ func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
 
 	return Mock{
 		MockNodeManager:     mockNodeManager,
+		MockK8sAPI:          mockK8sWrapper,
 		MockResourceManager: mockResourceManager,
 		MockNode:            mockNode,
 		MockHandler:         mockHandler,
@@ -111,6 +116,7 @@ func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
 			Log:             zap.New(),
 			ResourceManager: mockResourceManager,
 			NodeManager:     mockNodeManager,
+			K8sAPI:          mockK8sWrapper,
 			DataStore:       mockIndexer,
 		},
 	}
@@ -125,6 +131,7 @@ func TestPodReconciler_Reconcile_Create(t *testing.T) {
 	mock := NewMock(ctrl, mockPod)
 
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
+	mock.MockK8sAPI.EXPECT().GetNode(mockNodeName).Return(nil, nil)
 	mock.MockNode.EXPECT().IsManaged().Return(true)
 	mock.MockNode.EXPECT().IsReady().Return(true)
 	mock.MockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mock.MockHandler, true)
@@ -146,7 +153,6 @@ func TestPodReconciler_Reconcile_Delete(t *testing.T) {
 
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.MockNode.EXPECT().IsManaged().Return(true)
-	mock.MockNode.EXPECT().IsReady().Return(true)
 	mock.MockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mock.MockHandler, true)
 	mock.MockHandler.EXPECT().HandleDelete(mockPod).Return(reconcile.Result{}, nil)
 	mock.MockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
@@ -168,6 +174,7 @@ func TestPodReconciler_Reconcile_NonManaged(t *testing.T) {
 	mock := NewMock(ctrl, mockPod)
 
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
+	mock.MockK8sAPI.EXPECT().GetNode(mockNodeName).Return(nil, nil)
 	mock.MockNode.EXPECT().IsManaged().Return(false)
 
 	result, err := mock.PodReconciler.Reconcile(mockReq)
@@ -199,6 +206,7 @@ func TestPodReconciler_Reconcile_NodeNotReady(t *testing.T) {
 	mock := NewMock(ctrl, mockPod)
 
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
+	mock.MockK8sAPI.EXPECT().GetNode(mockNodeName).Return(nil, nil)
 	mock.MockNode.EXPECT().IsManaged().Return(true)
 	mock.MockNode.EXPECT().IsReady().Return(false)
 
@@ -214,8 +222,89 @@ func TestPodReconcile_Reconcile_NodeNotInitialized(t *testing.T) {
 	mock := NewMock(ctrl, mockPod)
 
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(nil, false)
+	mock.MockK8sAPI.EXPECT().GetNode(mockNodeName).Return(nil, nil)
 
 	result, err := mock.PodReconciler.Reconcile(mockReq)
 	assert.Equal(t, result, PodRequeueRequest)
 	assert.NoError(t, err)
+}
+
+func TestPodReconcile_Reconcile_NodeDeletedFromCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+
+	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(nil, false)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mock.MockHandler, true)
+	mock.MockHandler.EXPECT().HandleDelete(mockPod).Return(reconcile.Result{}, nil)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
+
+	delReq := custom.Request{
+		DeletedObject: mockPod,
+	}
+
+	result, err := mock.PodReconciler.Reconcile(delReq)
+	assert.NoError(t, err)
+	assert.Equal(t, result, controllerruntime.Result{})
+}
+
+// test not cached node which is also not existing in cluster
+func TestPodReconcile_Reconcile_NodeDeletedFromCluster(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+
+	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(nil, false)
+	mock.MockK8sAPI.EXPECT().GetNode(mockNodeName).Return(nil, errors.New("Resource not found")).AnyTimes()
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mock.MockHandler, true)
+	mock.MockHandler.EXPECT().HandleDelete(mockPod).Return(reconcile.Result{}, nil)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
+
+	result, err := mock.PodReconciler.Reconcile(mockReq)
+	assert.NoError(t, err)
+	assert.Equal(t, result, controllerruntime.Result{})
+}
+
+// test node in cache and managed but deleted in cluster, which should be rare case and pod should be ignored from retry
+func TestPodReconcile_Reconcile_ManagedNodeDeletedFromCluster(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+
+	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
+	mock.MockK8sAPI.EXPECT().GetNode(mockNodeName).Return(nil, errors.New("Resource not found")).AnyTimes()
+	mock.MockNode.EXPECT().IsManaged().Return(true)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mock.MockHandler, true)
+	mock.MockHandler.EXPECT().HandleDelete(mockPod).Return(reconcile.Result{}, nil)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
+
+	result, err := mock.PodReconciler.Reconcile(mockReq)
+	assert.NoError(t, err)
+	assert.Equal(t, result, controllerruntime.Result{})
+}
+
+// test pod delete event and node is managed in cache but no longer existing in cluster, which should be a rare case and the pod should be ignored
+func TestPodReconcile_Reconcile_PodDeletedManagedNodeDeletedFromCluster(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+
+	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
+	mock.MockK8sAPI.EXPECT().GetNode(mockNodeName).Return(nil, errors.New("Resource not found")).AnyTimes()
+	mock.MockNode.EXPECT().IsManaged().Return(true)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockResourceName).Return(mock.MockHandler, true)
+	mock.MockHandler.EXPECT().HandleDelete(mockPod).Return(reconcile.Result{}, nil)
+	mock.MockResourceManager.EXPECT().GetResourceHandler(mockUnsupportedResourceName).Return(nil, false)
+
+	delReq := custom.Request{
+		DeletedObject: mockPod,
+	}
+
+	result, err := mock.PodReconciler.Reconcile(delReq)
+	assert.NoError(t, err)
+	assert.Equal(t, result, controllerruntime.Result{})
 }
