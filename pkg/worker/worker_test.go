@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
@@ -99,4 +101,31 @@ func TestWorker_SubmitJob_RequeueOnError(t *testing.T) {
 
 	// expected invocation = max requeue + the first invocation
 	assert.Equal(t, maxRequeue+1, invoked)
+}
+
+func TestWorker_SubmitJob_NotRequeueOnError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	workerFunc := func(job interface{}) (result ctrl.Result, err error) {
+		invoked := job.(*int)
+		*invoked++
+
+		return ctrl.Result{}, errors.NewNotFound(schema.GroupResource{}, "testedNSName")
+	}
+
+	w := GetMockWorkerPool(ctx)
+	err := w.StartWorkerPool(workerFunc)
+	assert.NoError(t, err)
+
+	var invoked = 0
+	w.SubmitJob(&invoked)
+
+	time.Sleep((mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Millisecond * time.Duration(maxRequeue))
+
+	// expected invocation = max requeue + the first invocation
+	actualInqueue := 1
+	// invoked should be only incremented once
+	assert.NotEqual(t, maxRequeue, actualInqueue)
+	assert.Equal(t, actualInqueue, invoked)
 }

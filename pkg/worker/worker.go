@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -49,6 +50,13 @@ var (
 		prometheus.CounterOpts{
 			Name: "jobs_failed_count",
 			Help: "The number of jobs that failed to complete after retries",
+		}, []string{"resource"},
+	)
+
+	jobsNotFoundCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "jobs_resource_not_found_count",
+			Help: "The number of jobs whose resources were not found",
 		}, []string{"resource"},
 	)
 )
@@ -105,7 +113,8 @@ func prometheusRegister() {
 		metrics.Registry.MustRegister(
 			jobsSubmittedCount,
 			jobsCompletedCount,
-			jobsFailedCount)
+			jobsFailedCount,
+			jobsNotFoundCount)
 
 		prometheusRegistered = true
 	}
@@ -149,6 +158,12 @@ func (w *worker) processNextItem() (cont bool) {
 			log.Error(err, "exceeded maximum retries", "max retries", w.maxRetriesOnErr)
 			w.queue.Forget(job)
 			jobsFailedCount.WithLabelValues(w.resourceName).Inc()
+			return
+		} else if apierrors.IsNotFound(err) {
+			//similar to upstream https://github.com/kubernetes-sigs/controller-runtime/issues/377#issue-426207628
+			log.Error(err, "won't requeue a not found errored job", "job", job)
+			w.queue.Forget(job)
+			jobsNotFoundCount.WithLabelValues(w.resourceName).Inc()
 			return
 		}
 		log.Error(err, "re-queuing job", "retry count", w.queue.NumRequeues(job))
