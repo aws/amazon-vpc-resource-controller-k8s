@@ -78,6 +78,9 @@ func init() {
 // +kubebuilder:rbac:groups=crd.k8s.amazonaws.com,resources=eniconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies,verbs=get;list;watch
 
+// Migration to leases based leader election
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,namespace=kube-system,verbs=create
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,namespace=kube-system,resourceNames=cp-vpc-resource-controller,verbs=get;update
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -216,7 +219,7 @@ func main() {
 		RetryPeriod:                &retryPeriod,
 		LeaderElectionID:           config.LeaderElectionKey,
 		LeaderElectionNamespace:    config.LeaderElectionNamespace,
-		LeaderElectionResourceLock: resourcelock.ConfigMapsResourceLock,
+		LeaderElectionResourceLock: resourcelock.ConfigMapsLeasesResourceLock,
 		HealthProbeBindAddress:     ":61779", // the liveness endpoint is default to "/healthz"
 		NewCache:                   newCache,
 	})

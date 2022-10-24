@@ -29,3 +29,18 @@ rules:
   - events
   verbs:
   - create
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+- apiGroups:
+  - coordination.k8s.io
+  resourceNames:
+  - cp-vpc-resource-controller
+  resources:
+  - leases
+  verbs:
+  - get
+  - update
