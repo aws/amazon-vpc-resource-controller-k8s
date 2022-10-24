@@ -30,13 +30,17 @@ rules:
   verbs:
   - create
 - apiGroups:
-    - coordination.k8s.io
+  - coordination.k8s.io
   resources:
-    - leases
+  - leases
   verbs:
-    - get
-    - list
-    - watch
-    - create
-    - update
-    - patch
+  - create
+- apiGroups:
+  - coordination.k8s.io
+  resourceNames:
+  - cp-vpc-resource-controller
+  resources:
+  - leases
+  verbs:
+  - get
+  - update
