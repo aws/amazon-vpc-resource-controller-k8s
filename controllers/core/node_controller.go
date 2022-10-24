@@ -30,8 +30,10 @@ import (
 
 // MaxConcurrentReconciles is the number of go routines that can invoke
 // Reconcile in parallel. Since Node Reconciler, performs local operation
-// on cache only a single go routine is sufficient
-const MaxConcurrentReconciles = 1
+// on cache only a single go routine should be sufficient. Using more than
+// one routines to help high rate churn and larger nodes groups restarting
+// when the controller has to be restarted for various reasons.
+const MaxConcurrentReconciles = 3
 
 // NodeReconciler reconciles a Node object
 type NodeReconciler struct {

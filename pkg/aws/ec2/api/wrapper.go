@@ -354,6 +354,7 @@ func NewEC2Wrapper(roleARN string, log logr.Logger) (EC2Wrapper, error) {
 	// Role ARN is passed, assume the role ARN to make EC2 API Calls
 	if roleARN != "" {
 		// Create the instance service client with low QPS, it will be only used fro associate branch to trunk calls
+		log.Info("Creating INSTANCE service client with configured QPS", "QPS", config.InstanceServiceClientQPS, "Burst", config.InstanceServiceClientBurst)
 		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(config.InstanceServiceClientQPS,
 			config.InstanceServiceClientBurst, instanceSession)
 		if err != nil {
@@ -362,6 +363,7 @@ func NewEC2Wrapper(roleARN string, log logr.Logger) (EC2Wrapper, error) {
 		ec2Wrapper.instanceServiceClient = instanceServiceClient
 
 		// Create the user service client with higher QPS, this will be used to make rest of the EC2 API Calls
+		log.Info("Creating USER service client with configured QPS", "QPS", config.UserServiceClientQPS, "Burst", config.UserServiceClientQPSBurst)
 		userServiceClient, err := ec2Wrapper.getClientUsingAssumedRole(*instanceSession.Config.Region, roleARN,
 			config.UserServiceClientQPS, config.UserServiceClientQPSBurst)
 		if err != nil {
@@ -371,6 +373,7 @@ func NewEC2Wrapper(roleARN string, log logr.Logger) (EC2Wrapper, error) {
 	} else {
 		// Role ARN is not provided, assuming that instance service client is whitelisted for ENI branching and use
 		// the instance service client as the user service client with higher QPS.
+		log.Info("Creating INSTANCE service client with configured USER Service QPS", "QPS", config.InstanceServiceClientQPS, "Burst", config.InstanceServiceClientBurst)
 		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(config.UserServiceClientQPS,
 			config.UserServiceClientQPSBurst, instanceSession)
 		if err != nil {
