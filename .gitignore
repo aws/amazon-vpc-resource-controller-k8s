@@ -10,6 +10,9 @@ bin
 # Test build files
 scripts/test/build/
 
+# Internal only file
+scripts/gen_vpc_limits.go
+
 # Test binary, build with `go test -c`
 *.test
 
