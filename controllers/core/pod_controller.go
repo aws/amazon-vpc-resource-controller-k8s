@@ -46,7 +46,10 @@ type PodReconciler struct {
 	DataStoreSynced *bool
 }
 
-var PodRequeueRequest = ctrl.Result{Requeue: true, RequeueAfter: time.Second}
+var (
+	PodRequeueRequest          = ctrl.Result{Requeue: true, RequeueAfter: time.Second}
+	MaxPodConcurrentReconciles = 4
+)
 
 // Reconcile handles create/update/delete event by delegating the request to the  handler
 // if the resource is supported by the controller.
@@ -171,7 +174,7 @@ func getAggregateResources(pod *v1.Pod) map[string]int64 {
 // will be started and the Pod events will be sent to Reconcile function
 func (r *PodReconciler) SetupWithManager(ctx context.Context, manager ctrl.Manager,
 	clientSet *kubernetes.Clientset, pageLimit int, syncPeriod time.Duration) error {
-	r.Log.Info("The pod controller is using MaxConcurrentReconciles 4")
+	r.Log.Info("The pod controller is using MaxConcurrentReconciles", "Routines", MaxPodConcurrentReconciles)
 	return custom.NewControllerManagedBy(ctx, manager).
 		WithLogger(r.Log.WithName("custom pod controller")).
 		UsingDataStore(r.DataStore).
@@ -183,6 +186,6 @@ func (r *PodReconciler) SetupWithManager(ctx context.Context, manager ctrl.Manag
 		Options(custom.Options{
 			PageLimit:               pageLimit,
 			ResyncPeriod:            syncPeriod,
-			MaxConcurrentReconciles: 4,
+			MaxConcurrentReconciles: MaxPodConcurrentReconciles,
 		}).Complete(r)
 }
