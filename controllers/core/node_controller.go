@@ -28,12 +28,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 )
 
-// MaxConcurrentReconciles is the number of go routines that can invoke
+// MaxNodeConcurrentReconciles is the number of go routines that can invoke
 // Reconcile in parallel. Since Node Reconciler, performs local operation
 // on cache only a single go routine should be sufficient. Using more than
 // one routines to help high rate churn and larger nodes groups restarting
 // when the controller has to be restarted for various reasons.
-const MaxConcurrentReconciles = 3
+const MaxNodeConcurrentReconciles = 3
 
 // NodeReconciler reconciles a Node object
 type NodeReconciler struct {
@@ -92,6 +92,6 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
-		WithOptions(controller.Options{MaxConcurrentReconciles: MaxConcurrentReconciles}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: MaxNodeConcurrentReconciles}).
 		Complete(r)
 }
