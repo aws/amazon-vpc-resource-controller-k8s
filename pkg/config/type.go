@@ -29,7 +29,7 @@ const (
 	ResourceNameIPAddress = VPCResourcePrefix + "PrivateIPv4Address"
 )
 
-// K8s Pod Labels
+// K8s Labels
 const (
 	// ControllerName is the name of the VPC Resource Controller
 	ControllerName = "vpc-resource-controller"
@@ -70,6 +70,17 @@ const (
 	KubeSystemNamespace            = "kube-system"
 	VpcCNIDaemonSetName            = "aws-node"
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
+)
+
+// Events metadata
+// They are used to identify valid events emitted from authorized agents
+const (
+	VpcCNINodeEventReason             = "AwsNodeNotificationToRc"
+	VpcCNIReportingAgent              = "aws-node"
+	VpcCNINodeEventActionForTrunk     = "NeedTrunk"
+	VpcCNINodeEventActionForEniConfig = "NeedEniConfig"
+	TrunkNotAttached                  = "vpc.amazonaws.com/has-trunk-attached=false"
+	TrunkAttached                     = "vpc.amazonaws.com/has-trunk-attached=true"
 )
 
 var (

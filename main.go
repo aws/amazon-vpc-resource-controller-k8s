@@ -345,6 +345,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&corecontroller.EventReconciler{
+		Log:    ctrl.Log.WithName("Controllers").WithName("Event"),
+		Scheme: mgr.GetScheme(),
+		K8sAPI: k8sApi,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Event")
+		os.Exit(1)
+	}
+
 	if err = (&resource.IntrospectHandler{
 		Log:             ctrl.Log.WithName("introspect"),
 		BindAddress:     introspectBindAddr,

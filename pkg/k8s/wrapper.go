@@ -22,6 +22,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	appV1 "k8s.io/api/apps/v1"
+	apiv1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -72,6 +73,8 @@ type K8sWrapper interface {
 	BroadcastEvent(obj runtime.Object, reason string, message string, eventType string)
 	GetConfigMap(configMapName string, configMapNamespace string) (*v1.ConfigMap, error)
 	ListNodes() (*v1.NodeList, error)
+	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) error
+	ListEvents(ops []client.ListOption) (*apiv1.EventList, error)
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -183,4 +186,22 @@ func (k *k8sWrapper) ListNodes() (*v1.NodeList, error) {
 	nodeList := &v1.NodeList{}
 	err := k.cacheClient.List(k.context, nodeList)
 	return nodeList, err
+}
+
+func (k *k8sWrapper) AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) error {
+	if node.Labels[labelKey] == labelValue {
+		return nil
+	} else {
+		newNode := node.DeepCopy()
+		newNode.Labels[labelKey] = labelValue
+		return k.cacheClient.Status().Patch(k.context, newNode, client.MergeFrom(node))
+	}
+}
+
+func (k *k8sWrapper) ListEvents(ops []client.ListOption) (*apiv1.EventList, error) {
+	events := &apiv1.EventList{}
+	if err := k.cacheClient.List(k.context, events, ops...); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
