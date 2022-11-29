@@ -64,10 +64,26 @@ var (
 		[]string{"operation"},
 	)
 
+	eventControllerSGPEventsFailureCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "failed_security_group_pod_events_reconciled_by_event_controller",
+			Help: "The number of SGP events that were reconcile by the controller but failed on label node",
+		},
+		[]string{"operation"},
+	)
+
 	eventControllerCNEventsCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "custom_networking_events_reconciled_by_event_controller",
 			Help: "The number of custom networking events that were reconcile by the controller",
+		},
+		[]string{"operation"},
+	)
+
+	eventControllerCNEventsFailureCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "failed_custom_networking_events_reconciled_by_event_controller",
+			Help: "The number of custom networking events that were reconcile by the controller but failed on label node",
 		},
 		[]string{"operation"},
 	)
@@ -99,6 +115,8 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(eventControllerEventFailureCount)
 		metrics.Registry.MustRegister(eventControllerCNEventsCount)
 		metrics.Registry.MustRegister(eventReconcileOperationLatency)
+		metrics.Registry.MustRegister(eventControllerSGPEventsFailureCount)
+		metrics.Registry.MustRegister(eventControllerCNEventsFailureCount)
 		prometheusRegistered = true
 	}
 }
@@ -138,14 +156,24 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				return ctrl.Result{}, nil
 			} else {
 				if r.isEventToManageNode(event) && r.isValidEventForSGP(event) {
-					r.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, "true")
+					if err = r.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, "true"); err != nil {
+						// by returning an error, we request that our controller will get Reconcile() called again
+						// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
+						eventControllerSGPEventsFailureCount.WithLabelValues("trunk_label_failed").Inc()
+						return ctrl.Result{}, err
+					}
 					eventControllerSGPEventsCount.WithLabelValues("trunk_labelled").Inc()
 					r.Log.Info("Lable node with trunk label as true", "Node", node.Name, "Label", config.HasTrunkAttachedLabel)
 				}
 				if r.isValidEventForCustomNetworking(event) {
 					configKey, configName := parseEventMsg(event.Message)
 					if configKey == config.CustomNetworkingLabel {
-						r.K8sAPI.AddLabelToManageNode(node, config.CustomNetworkingLabel, configName)
+						if err = r.K8sAPI.AddLabelToManageNode(node, config.CustomNetworkingLabel, configName); err != nil {
+							// by returning an error, we request that our controller will get Reconcile() called again
+							// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
+							eventControllerCNEventsFailureCount.WithLabelValues("eniconfig_label_failed").Inc()
+							return ctrl.Result{}, err
+						}
 						eventControllerCNEventsCount.WithLabelValues("eniconfig_labelled").Inc()
 						r.Log.Info("Label node with eniconfig label with configured name", "Node", node.Name, "Label", config.CustomNetworkingLabel)
 					}

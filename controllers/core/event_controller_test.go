@@ -15,6 +15,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -139,20 +140,30 @@ func NewEventControllerMock(ctrl *gomock.Controller, mockObjects ...runtime.Obje
 
 func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 	var events = []struct {
-		eventList          *corev1.EventList
-		isValidEventForSGP bool
+		eventList             *corev1.EventList
+		isValidEventForSGP    bool
+		successfullyLabelNode bool
 	}{
 		{
 			eventList: &corev1.EventList{
 				Items: append([]corev1.Event{}, *oldSgpEvent),
 			},
-			isValidEventForSGP: false,
+			isValidEventForSGP:    false,
+			successfullyLabelNode: false,
 		},
 		{
 			eventList: &corev1.EventList{
 				Items: append([]corev1.Event{}, *newSgpEvent),
 			},
-			isValidEventForSGP: true,
+			isValidEventForSGP:    true,
+			successfullyLabelNode: true,
+		},
+		{
+			eventList: &corev1.EventList{
+				Items: append([]corev1.Event{}, *newSgpEvent),
+			},
+			isValidEventForSGP:    true,
+			successfullyLabelNode: false,
 		},
 	}
 
@@ -172,11 +183,22 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 		if e.isValidEventForSGP {
 			// if the event is older, these func are not expected to be called.
 			mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeName).Return(eventNode, nil).AnyTimes()
-			mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, "true").Return(nil)
+			if e.successfullyLabelNode {
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, "true").Return(nil)
+			} else {
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, "true").Return(errors.New("sgp-test"))
+			}
 		}
 		res, err := mock.Reconciler.Reconcile(context.TODO(), sgpEventReconcileRequest)
 
-		assert.NoError(t, err)
+		if e.successfullyLabelNode {
+			assert.NoError(t, err)
+		} else if e.isValidEventForSGP && !e.successfullyLabelNode {
+			assert.Error(t, err)
+			assert.EqualError(t, err, "sgp-test")
+		} else {
+			assert.NoError(t, err)
+		}
 		assert.Equal(t, res, reconcile.Result{})
 	}
 }
@@ -193,18 +215,28 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 	var events = []struct {
 		eventList                       *corev1.EventList
 		isValidEventForCustomNetworking bool
+		successfullyLabelNode           bool
 	}{
 		{
 			eventList: &corev1.EventList{
 				Items: append([]corev1.Event{}, *oldEniConfigEvent),
 			},
 			isValidEventForCustomNetworking: false,
+			successfullyLabelNode:           false,
 		},
 		{
 			eventList: &corev1.EventList{
 				Items: append([]corev1.Event{}, *newEniConfigEvent),
 			},
 			isValidEventForCustomNetworking: true,
+			successfullyLabelNode:           true,
+		},
+		{
+			eventList: &corev1.EventList{
+				Items: append([]corev1.Event{}, *newEniConfigEvent),
+			},
+			isValidEventForCustomNetworking: true,
+			successfullyLabelNode:           false,
 		},
 	}
 
@@ -215,12 +247,23 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 		if e.isValidEventForCustomNetworking {
 			// if the event is older, these func are not expected to be called.
 			mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeName).Return(eventNode, nil)
-			mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.CustomNetworkingLabel, "testConfig").Return(nil)
+			if e.successfullyLabelNode {
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.CustomNetworkingLabel, "testConfig").Return(nil)
+			} else {
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.CustomNetworkingLabel, "testConfig").Return(errors.New("custom-networking-test"))
+			}
 		}
 
 		res, err := mock.Reconciler.Reconcile(context.TODO(), eniConfigEventReconcileRequest)
 
-		assert.NoError(t, err)
+		if e.successfullyLabelNode {
+			assert.NoError(t, err)
+		} else if e.isValidEventForCustomNetworking && !e.successfullyLabelNode {
+			assert.Error(t, err)
+			assert.EqualError(t, err, "custom-networking-test")
+		} else {
+			assert.NoError(t, err)
+		}
 		assert.Equal(t, res, reconcile.Result{})
 	}
 }
