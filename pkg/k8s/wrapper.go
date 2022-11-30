@@ -23,7 +23,9 @@ import (
 
 	appV1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -147,6 +149,18 @@ func (k *k8sWrapper) AdvertiseCapacityIfNotSet(nodeName string, resourceName str
 		node := &v1.Node{}
 		if err := k.cacheClient.Get(k.context, request, node); err != nil {
 			return err
+		}
+
+		// in case if the node is returned without initialized Capacity map for any reason
+		// we need to handle the nil map gracefully and retry
+		// metav1.Status{Reason: metav1.StatusReasonConflict} is an error that is retriable regarding
+		// https://github.com/kubernetes/client-go/blob/v0.21.3/util/retry/util.go#L103-L105
+		if node.Status.Capacity == nil {
+			return &errors.StatusError{
+				ErrStatus: metav1.Status{
+					Reason: metav1.StatusReasonConflict,
+				},
+			}
 		}
 
 		existingCapacity := node.Status.Capacity[v1.ResourceName(resourceName)]
