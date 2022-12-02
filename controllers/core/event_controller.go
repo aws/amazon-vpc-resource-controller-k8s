@@ -174,7 +174,7 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					}
 					if labelled {
 						eventControllerSGPEventsCount.WithLabelValues(SGPEventsCountMetrics).Inc()
-						r.Log.Info("Lable node with trunk label as true", "Node", node.Name, "Label", config.HasTrunkAttachedLabel)
+						r.Log.Info("Label node with trunk label as true", "Node", node.Name, "Label", config.HasTrunkAttachedLabel)
 					}
 				}
 				if r.isValidEventForCustomNetworking(event) {
