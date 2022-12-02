@@ -24,7 +24,8 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	eventsv1 "k8s.io/api/events/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,70 +50,70 @@ var (
 		},
 	}
 
-	oldSgpEvent = &corev1.Event{
-		ObjectMeta: v1.ObjectMeta{
+	oldSgpEvent = &eventsv1.Event{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:              mockSGPEventName,
 			Namespace:         config.KubeSystemNamespace,
-			CreationTimestamp: v1.Time{Time: time.Now().Add(-time.Minute * 3)},
+			CreationTimestamp: metav1.Time{Time: time.Now().Add(-time.Minute * 3)},
 		},
-		InvolvedObject: corev1.ObjectReference{
+		Regarding: corev1.ObjectReference{
+			Kind: EventRegardingKind,
 			Name: mockEventNodeName,
-			UID:  types.UID(mockEventNodeName),
 		},
 		ReportingController: config.VpcCNIReportingAgent,
 		Reason:              config.VpcCNINodeEventReason,
-		Message:             config.TrunkNotAttached,
+		Note:                config.TrunkNotAttached,
 		Action:              config.VpcCNINodeEventActionForTrunk,
 	}
-	newSgpEvent = &corev1.Event{
-		ObjectMeta: v1.ObjectMeta{
+	newSgpEvent = &eventsv1.Event{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:              mockSGPEventName,
 			Namespace:         config.KubeSystemNamespace,
-			CreationTimestamp: v1.Time{Time: time.Now().Add(-time.Minute * 1)},
+			CreationTimestamp: metav1.Time{Time: time.Now().Add(-time.Minute * 1)},
 		},
-		InvolvedObject: corev1.ObjectReference{
+		Regarding: corev1.ObjectReference{
+			Kind: EventRegardingKind,
 			Name: mockEventNodeName,
-			UID:  types.UID(mockEventNodeName),
 		},
 		ReportingController: config.VpcCNIReportingAgent,
 		Reason:              config.VpcCNINodeEventReason,
-		Message:             config.TrunkNotAttached,
+		Note:                config.TrunkNotAttached,
 		Action:              config.VpcCNINodeEventActionForTrunk,
 	}
-	oldEniConfigEvent = &corev1.Event{
-		ObjectMeta: v1.ObjectMeta{
+	oldEniConfigEvent = &eventsv1.Event{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:              mockCNEventName,
 			Namespace:         config.KubeSystemNamespace,
-			CreationTimestamp: v1.Time{Time: time.Now().Add(-time.Minute * 3)},
+			CreationTimestamp: metav1.Time{Time: time.Now().Add(-time.Minute * 3)},
 		},
-		InvolvedObject: corev1.ObjectReference{
+		Regarding: corev1.ObjectReference{
+			Kind: EventRegardingKind,
 			Name: mockEventNodeName,
-			UID:  types.UID(mockEventNodeName),
 		},
 		ReportingController: config.VpcCNIReportingAgent,
 		Reason:              config.VpcCNINodeEventReason,
 		Action:              config.VpcCNINodeEventActionForEniConfig,
-		Message:             config.CustomNetworkingLabel + "=testConfig",
+		Note:                config.CustomNetworkingLabel + "=testConfig",
 	}
-	newEniConfigEvent = &corev1.Event{
-		ObjectMeta: v1.ObjectMeta{
+	newEniConfigEvent = &eventsv1.Event{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:              mockCNEventName,
 			Namespace:         config.KubeSystemNamespace,
-			CreationTimestamp: v1.Time{Time: time.Now().Add(-time.Minute * 1)},
+			CreationTimestamp: metav1.Time{Time: time.Now().Add(-time.Minute * 1)},
 		},
-		InvolvedObject: corev1.ObjectReference{
+		Regarding: corev1.ObjectReference{
+			Kind: EventRegardingKind,
 			Name: mockEventNodeName,
-			UID:  types.UID(mockEventNodeName),
 		},
 		ReportingController: config.VpcCNIReportingAgent,
 		Reason:              config.VpcCNINodeEventReason,
 		Action:              config.VpcCNINodeEventActionForEniConfig,
-		Message:             config.CustomNetworkingLabel + "=testConfig",
+		Note:                config.CustomNetworkingLabel + "=testConfig",
 	}
 
 	eventNode = &corev1.Node{
-		TypeMeta: v1.TypeMeta{},
-		ObjectMeta: v1.ObjectMeta{
+		TypeMeta: metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{
 			Name:   mockEventNodeName,
 			Labels: map[string]string{config.NodeLabelOS: config.OSLinux, config.HasTrunkAttachedLabel: "true"},
 		},
@@ -126,7 +127,7 @@ type EventMock struct {
 
 func NewEventControllerMock(ctrl *gomock.Controller, mockObjects ...runtime.Object) EventMock {
 	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
+	_ = eventsv1.AddToScheme(scheme)
 	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
 	return EventMock{
 		MockK8sAPI: mockK8sAPI,
@@ -140,27 +141,27 @@ func NewEventControllerMock(ctrl *gomock.Controller, mockObjects ...runtime.Obje
 
 func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 	var events = []struct {
-		eventList             *corev1.EventList
+		eventList             *eventsv1.EventList
 		isValidEventForSGP    bool
 		successfullyLabelNode bool
 	}{
 		{
-			eventList: &corev1.EventList{
-				Items: append([]corev1.Event{}, *oldSgpEvent),
+			eventList: &eventsv1.EventList{
+				Items: append([]eventsv1.Event{}, *oldSgpEvent),
 			},
 			isValidEventForSGP:    false,
 			successfullyLabelNode: false,
 		},
 		{
-			eventList: &corev1.EventList{
-				Items: append([]corev1.Event{}, *newSgpEvent),
+			eventList: &eventsv1.EventList{
+				Items: append([]eventsv1.Event{}, *newSgpEvent),
 			},
 			isValidEventForSGP:    true,
 			successfullyLabelNode: true,
 		},
 		{
-			eventList: &corev1.EventList{
-				Items: append([]corev1.Event{}, *newSgpEvent),
+			eventList: &eventsv1.EventList{
+				Items: append([]eventsv1.Event{}, *newSgpEvent),
 			},
 			isValidEventForSGP:    true,
 			successfullyLabelNode: false,
@@ -184,9 +185,9 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 			// if the event is older, these func are not expected to be called.
 			mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeName).Return(eventNode, nil).AnyTimes()
 			if e.successfullyLabelNode {
-				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, "true").Return(nil)
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, "true").Return(true, nil)
 			} else {
-				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, "true").Return(errors.New("sgp-test"))
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, "true").Return(false, errors.New("sgp-test"))
 			}
 		}
 		res, err := mock.Reconciler.Reconcile(context.TODO(), sgpEventReconcileRequest)
@@ -213,27 +214,27 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 	}
 
 	var events = []struct {
-		eventList                       *corev1.EventList
+		eventList                       *eventsv1.EventList
 		isValidEventForCustomNetworking bool
 		successfullyLabelNode           bool
 	}{
 		{
-			eventList: &corev1.EventList{
-				Items: append([]corev1.Event{}, *oldEniConfigEvent),
+			eventList: &eventsv1.EventList{
+				Items: append([]eventsv1.Event{}, *oldEniConfigEvent),
 			},
 			isValidEventForCustomNetworking: false,
 			successfullyLabelNode:           false,
 		},
 		{
-			eventList: &corev1.EventList{
-				Items: append([]corev1.Event{}, *newEniConfigEvent),
+			eventList: &eventsv1.EventList{
+				Items: append([]eventsv1.Event{}, *newEniConfigEvent),
 			},
 			isValidEventForCustomNetworking: true,
 			successfullyLabelNode:           true,
 		},
 		{
-			eventList: &corev1.EventList{
-				Items: append([]corev1.Event{}, *newEniConfigEvent),
+			eventList: &eventsv1.EventList{
+				Items: append([]eventsv1.Event{}, *newEniConfigEvent),
 			},
 			isValidEventForCustomNetworking: true,
 			successfullyLabelNode:           false,
@@ -248,9 +249,9 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 			// if the event is older, these func are not expected to be called.
 			mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeName).Return(eventNode, nil)
 			if e.successfullyLabelNode {
-				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.CustomNetworkingLabel, "testConfig").Return(nil)
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.CustomNetworkingLabel, "testConfig").Return(true, nil)
 			} else {
-				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.CustomNetworkingLabel, "testConfig").Return(errors.New("custom-networking-test"))
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.CustomNetworkingLabel, "testConfig").Return(false, errors.New("custom-networking-test"))
 			}
 		}
 

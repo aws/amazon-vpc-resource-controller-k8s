@@ -24,6 +24,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/apps/v1"
 	v10 "k8s.io/api/core/v1"
+	v11 "k8s.io/api/events/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	client "sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -52,11 +53,12 @@ func (m *MockK8sWrapper) EXPECT() *MockK8sWrapperMockRecorder {
 }
 
 // AddLabelToManageNode mocks base method.
-func (m *MockK8sWrapper) AddLabelToManageNode(arg0 *v10.Node, arg1, arg2 string) error {
+func (m *MockK8sWrapper) AddLabelToManageNode(arg0 *v10.Node, arg1, arg2 string) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AddLabelToManageNode", arg0, arg1, arg2)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // AddLabelToManageNode indicates an expected call of AddLabelToManageNode.
@@ -167,10 +169,10 @@ func (mr *MockK8sWrapperMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
 }
 
 // ListEvents mocks base method.
-func (m *MockK8sWrapper) ListEvents(arg0 []client.ListOption) (*v10.EventList, error) {
+func (m *MockK8sWrapper) ListEvents(arg0 []client.ListOption) (*v11.EventList, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListEvents", arg0)
-	ret0, _ := ret[0].(*v10.EventList)
+	ret0, _ := ret[0].(*v11.EventList)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

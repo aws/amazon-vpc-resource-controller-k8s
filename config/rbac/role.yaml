@@ -12,10 +12,8 @@ rules:
   - events
   verbs:
   - create
-  - list
   - patch
   - update
-  - watch
 - apiGroups:
   - ""
   resources:
@@ -55,6 +53,16 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - vpcresources.k8s.aws

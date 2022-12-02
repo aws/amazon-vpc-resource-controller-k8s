@@ -30,16 +30,27 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 )
 
 const (
-	MaxEventConcurrentReconciles = 4
-	EventCreatedPastMinutes      = 2
-	EventFilterKey               = "reportingComponent"
+	MaxEventConcurrentReconciles  = 4
+	EventCreatedPastMinutes       = 2
+	EventFilterKey                = "reportingComponent"
+	LoggerName                    = "event"
+	TotalEventsCountMetrics       = "reconcile"
+	EventFailureCountMetrics      = "failing_list"
+	SGPEventsFailureCountMetrics  = "trunk_label_failed"
+	SGPEventsCountMetrics         = "trunk_labelled"
+	CNEventsFailureCountMetrics   = "eniconfig_label_failed"
+	CNEventsCountMetrics          = "eniconfig_labelled"
+	ReconcileEventsLatencyMetrics = "reconcile_events"
+	LabelOperation                = "operation"
+	LabelTime                     = "time"
+	EventRegardingKind            = "Node"
 )
 
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;update;patch;list;watch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;update;patch;list;watch
 
 type EventReconciler struct {
 	Log    logr.Logger
@@ -53,7 +64,7 @@ var (
 			Name: "total_events_reconciled_by_event_controller",
 			Help: "The number of events that were reconcile by the controller",
 		},
-		[]string{"operation"},
+		[]string{LabelOperation},
 	)
 
 	eventControllerSGPEventsCount = prometheus.NewCounterVec(
@@ -61,7 +72,7 @@ var (
 			Name: "security_group_pod_events_reconciled_by_event_controller",
 			Help: "The number of SGP events that were reconcile by the controller",
 		},
-		[]string{"operation"},
+		[]string{LabelOperation},
 	)
 
 	eventControllerSGPEventsFailureCount = prometheus.NewCounterVec(
@@ -69,7 +80,7 @@ var (
 			Name: "failed_security_group_pod_events_reconciled_by_event_controller",
 			Help: "The number of SGP events that were reconcile by the controller but failed on label node",
 		},
-		[]string{"operation"},
+		[]string{LabelOperation},
 	)
 
 	eventControllerCNEventsCount = prometheus.NewCounterVec(
@@ -77,7 +88,7 @@ var (
 			Name: "custom_networking_events_reconciled_by_event_controller",
 			Help: "The number of custom networking events that were reconcile by the controller",
 		},
-		[]string{"operation"},
+		[]string{LabelOperation},
 	)
 
 	eventControllerCNEventsFailureCount = prometheus.NewCounterVec(
@@ -85,7 +96,7 @@ var (
 			Name: "failed_custom_networking_events_reconciled_by_event_controller",
 			Help: "The number of custom networking events that were reconcile by the controller but failed on label node",
 		},
-		[]string{"operation"},
+		[]string{LabelOperation},
 	)
 
 	eventControllerEventFailureCount = prometheus.NewCounterVec(
@@ -93,7 +104,7 @@ var (
 			Name: "failed_get_events__by_event_controller",
 			Help: "The number of failures on getting events by the controller",
 		},
-		[]string{"operation"},
+		[]string{LabelOperation},
 	)
 
 	eventReconcileOperationLatency = prometheus.NewHistogramVec(
@@ -101,11 +112,10 @@ var (
 			Name: "event_reconcile_operation_latency",
 			Help: "Event controller reconcile events latency in ms",
 		},
-		[]string{"time"},
+		[]string{LabelTime},
 	)
 
 	prometheusRegistered = false
-	reconcileEvents      = "reconcile_events"
 )
 
 func PrometheusRegister() {
@@ -125,9 +135,9 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	start := time.Now()
 	var err error
 
-	logger := r.Log.WithValues("event", req.Name)
+	logger := r.Log.WithValues(LoggerName, req.Name)
 
-	eventControllerTotalEventsCount.WithLabelValues("reconcile").Inc()
+	eventControllerTotalEventsCount.WithLabelValues(TotalEventsCountMetrics).Inc()
 
 	ops := []client.ListOption{
 		client.MatchingFields{
@@ -138,70 +148,75 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	events, err := r.K8sAPI.ListEvents(ops)
 	if err != nil {
 		logger.Error(err, "List events failed")
-		eventControllerEventFailureCount.WithLabelValues("failing_list").Inc()
+		eventControllerEventFailureCount.WithLabelValues(EventFailureCountMetrics).Inc()
 		return ctrl.Result{}, err
 	}
 
 	for _, event := range events.Items {
 		// only check and process events were created in the past EventCreatedPastMinutes minutes
-		if !event.GetCreationTimestamp().After(time.Now().Add(-time.Minute * EventCreatedPastMinutes)) {
+		if !event.GetCreationTimestamp().After(time.Now().Add(-time.Minute*EventCreatedPastMinutes)) || event.Regarding.Kind != EventRegardingKind {
 			continue
 		}
 		if r.isValidEventForSGP(event) || r.isValidEventForCustomNetworking(event) {
-			nodeName := string(event.InvolvedObject.UID)
-
+			nodeName := event.Regarding.Name
 			if node, err := r.K8sAPI.GetNode(nodeName); err != nil {
 				// if not found the node, we don't requeue and just wait VPC CNI to send another request
 				r.Log.V(1).Info("Event reconciler didn't find the node and wait for next request for the node", "Node", node.Name)
 				return ctrl.Result{}, nil
 			} else {
 				if r.isEventToManageNode(event) && r.isValidEventForSGP(event) {
-					if err = r.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, "true"); err != nil {
+					labelled, err := r.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, config.BooleanTrue)
+					if err != nil {
 						// by returning an error, we request that our controller will get Reconcile() called again
 						// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
-						eventControllerSGPEventsFailureCount.WithLabelValues("trunk_label_failed").Inc()
+						eventControllerSGPEventsFailureCount.WithLabelValues(SGPEventsFailureCountMetrics).Inc()
 						return ctrl.Result{}, err
 					}
-					eventControllerSGPEventsCount.WithLabelValues("trunk_labelled").Inc()
-					r.Log.Info("Lable node with trunk label as true", "Node", node.Name, "Label", config.HasTrunkAttachedLabel)
+					if labelled {
+						eventControllerSGPEventsCount.WithLabelValues(SGPEventsCountMetrics).Inc()
+						r.Log.Info("Lable node with trunk label as true", "Node", node.Name, "Label", config.HasTrunkAttachedLabel)
+					}
 				}
 				if r.isValidEventForCustomNetworking(event) {
-					configKey, configName := parseEventMsg(event.Message)
+					configKey, configName := parseEventMsg(event.Note)
 					if configKey == config.CustomNetworkingLabel {
-						if err = r.K8sAPI.AddLabelToManageNode(node, config.CustomNetworkingLabel, configName); err != nil {
+						labelled, err := r.K8sAPI.AddLabelToManageNode(node, config.CustomNetworkingLabel, configName)
+						if err != nil {
 							// by returning an error, we request that our controller will get Reconcile() called again
 							// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
-							eventControllerCNEventsFailureCount.WithLabelValues("eniconfig_label_failed").Inc()
+							eventControllerCNEventsFailureCount.WithLabelValues(CNEventsFailureCountMetrics).Inc()
 							return ctrl.Result{}, err
 						}
-						eventControllerCNEventsCount.WithLabelValues("eniconfig_labelled").Inc()
-						r.Log.Info("Label node with eniconfig label with configured name", "Node", node.Name, "Label", config.CustomNetworkingLabel)
+						if labelled {
+							eventControllerCNEventsCount.WithLabelValues(CNEventsCountMetrics).Inc()
+							r.Log.Info("Label node with eniconfig label with configured name", "Node", node.Name, "Label", config.CustomNetworkingLabel)
+						}
 					}
 				}
 			}
 		}
 	}
-	eventReconcileOperationLatency.WithLabelValues(reconcileEvents).Observe(float64(time.Since(start).Milliseconds()))
+	eventReconcileOperationLatency.WithLabelValues(ReconcileEventsLatencyMetrics).Observe(float64(time.Since(start).Milliseconds()))
 	return ctrl.Result{}, nil
 }
 
-func (r *EventReconciler) isValidEventForSGP(event corev1.Event) bool {
+func (r *EventReconciler) isValidEventForSGP(event eventsv1.Event) bool {
 	return event.ReportingController == config.VpcCNIReportingAgent &&
 		event.Reason == config.VpcCNINodeEventReason && event.Action == config.VpcCNINodeEventActionForTrunk
 }
 
-func (r *EventReconciler) isValidEventForCustomNetworking(event corev1.Event) bool {
+func (r *EventReconciler) isValidEventForCustomNetworking(event eventsv1.Event) bool {
 	return event.ReportingController == config.VpcCNIReportingAgent &&
 		event.Reason == config.VpcCNINodeEventReason && event.Action == config.VpcCNINodeEventActionForEniConfig
 }
 
-func (r *EventReconciler) isEventToManageNode(event corev1.Event) bool {
-	return event.Message == config.TrunkNotAttached || event.Message == config.TrunkAttached
+func (r *EventReconciler) isEventToManageNode(event eventsv1.Event) bool {
+	return event.Note == config.TrunkNotAttached || event.Note == config.TrunkAttached
 }
 
 func (r *EventReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Event{}, EventFilterKey, func(raw client.Object) []string {
-		event := raw.(*corev1.Event)
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &eventsv1.Event{}, EventFilterKey, func(raw client.Object) []string {
+		event := raw.(*eventsv1.Event)
 		return []string{event.ReportingController}
 	}); err != nil {
 		return err
@@ -210,7 +225,7 @@ func (r *EventReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Log.Info("Event manager is using settings", "ConcurrentReconciles", MaxEventConcurrentReconciles, "MinutesInPast", EventCreatedPastMinutes)
 	PrometheusRegister()
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Event{}).
+		For(&eventsv1.Event{}).
 		WithEventFilter(predicate.Funcs{
 			DeleteFunc:  func(de event.DeleteEvent) bool { return false },
 			UpdateFunc:  func(ue event.UpdateEvent) bool { return false },
