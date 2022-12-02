@@ -21,8 +21,9 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/prometheus/client_golang/prometheus"
 
-	appV1 "k8s.io/api/apps/v1"
+	appv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -64,14 +65,16 @@ func prometheusRegister() {
 
 // K8sWrapper represents an interface with all the common operations on K8s objects
 type K8sWrapper interface {
-	GetDaemonSet(namespace, name string) (*appV1.DaemonSet, error)
+	GetDaemonSet(namespace, name string) (*appv1.DaemonSet, error)
 	GetNode(nodeName string) (*v1.Node, error)
 	AdvertiseCapacityIfNotSet(nodeName string, resourceName string, capacity int) error
 	GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error)
-	GetDeployment(namespace string, name string) (*appV1.Deployment, error)
+	GetDeployment(namespace string, name string) (*appv1.Deployment, error)
 	BroadcastEvent(obj runtime.Object, reason string, message string, eventType string)
 	GetConfigMap(configMapName string, configMapNamespace string) (*v1.ConfigMap, error)
 	ListNodes() (*v1.NodeList, error)
+	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error)
+	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -97,8 +100,8 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, ctx cont
 	return &k8sWrapper{cacheClient: client, eventRecorder: recorder, context: ctx}
 }
 
-func (k *k8sWrapper) GetDaemonSet(name, namespace string) (*appV1.DaemonSet, error) {
-	ds := &appV1.DaemonSet{}
+func (k *k8sWrapper) GetDaemonSet(name, namespace string) (*appv1.DaemonSet, error) {
+	ds := &appv1.DaemonSet{}
 	err := k.cacheClient.Get(k.context, types.NamespacedName{
 		Namespace: namespace,
 		Name:      name,
@@ -106,8 +109,8 @@ func (k *k8sWrapper) GetDaemonSet(name, namespace string) (*appV1.DaemonSet, err
 	return ds, err
 }
 
-func (k *k8sWrapper) GetDeployment(namespace string, name string) (*appV1.Deployment, error) {
-	deployment := &appV1.Deployment{}
+func (k *k8sWrapper) GetDeployment(namespace string, name string) (*appv1.Deployment, error) {
+	deployment := &appv1.Deployment{}
 	err := k.cacheClient.Get(k.context, types.NamespacedName{
 		Namespace: namespace,
 		Name:      name,
@@ -183,4 +186,23 @@ func (k *k8sWrapper) ListNodes() (*v1.NodeList, error) {
 	nodeList := &v1.NodeList{}
 	err := k.cacheClient.List(k.context, nodeList)
 	return nodeList, err
+}
+
+func (k *k8sWrapper) AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error) {
+	if node.Labels[labelKey] == labelValue {
+		return false, nil
+	} else {
+		newNode := node.DeepCopy()
+		newNode.Labels[labelKey] = labelValue
+		err := k.cacheClient.Status().Patch(k.context, newNode, client.MergeFrom(node))
+		return err == nil, err
+	}
+}
+
+func (k *k8sWrapper) ListEvents(ops []client.ListOption) (*eventsv1.EventList, error) {
+	events := &eventsv1.EventList{}
+	if err := k.cacheClient.List(k.context, events, ops...); err != nil {
+		return nil, err
+	}
+	return events, nil
 }

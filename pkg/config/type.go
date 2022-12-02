@@ -29,7 +29,7 @@ const (
 	ResourceNameIPAddress = VPCResourcePrefix + "PrivateIPv4Address"
 )
 
-// K8s Pod Labels
+// K8s Labels
 const (
 	// ControllerName is the name of the VPC Resource Controller
 	ControllerName = "vpc-resource-controller"
@@ -37,6 +37,8 @@ const (
 	HasTrunkAttachedLabel = "vpc.amazonaws.com/has-trunk-attached"
 	// CustomNetworkingLabel is the label with the name of ENIConfig to be used by the node for custom networking
 	CustomNetworkingLabel = "vpc.amazonaws.com/eniConfig"
+	BooleanTrue           = "true"
+	BooleanFalse          = "false"
 	// NodeLabelOS is the Kubernetes Operating System label
 	NodeLabelOS = "kubernetes.io/os"
 	// NodeLabelOS is the Kubernetes Operating System label used before k8s version 1.16
@@ -70,6 +72,17 @@ const (
 	KubeSystemNamespace            = "kube-system"
 	VpcCNIDaemonSetName            = "aws-node"
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
+)
+
+// Events metadata
+// They are used to identify valid events emitted from authorized agents
+const (
+	VpcCNINodeEventReason             = "AwsNodeNotificationToRc"
+	VpcCNIReportingAgent              = "aws-node"
+	VpcCNINodeEventActionForTrunk     = "NeedTrunk"
+	VpcCNINodeEventActionForEniConfig = "NeedEniConfig"
+	TrunkNotAttached                  = "vpc.amazonaws.com/has-trunk-attached=false"
+	TrunkAttached                     = "vpc.amazonaws.com/has-trunk-attached=true"
 )
 
 var (
