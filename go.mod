@@ -3,6 +3,7 @@ module github.com/aws/amazon-vpc-resource-controller-k8s
 go 1.16
 
 require (
+	github.com/allegro/bigcache/v3 v3.1.0
 	github.com/aws/amazon-vpc-cni-k8s v1.9.0
 	github.com/aws/aws-sdk-go v1.40.43
 	github.com/go-logr/logr v0.4.0

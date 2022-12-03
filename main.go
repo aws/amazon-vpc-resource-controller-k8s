@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/allegro/bigcache/v3"
 	crdv1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/apps"
@@ -311,12 +313,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	config := bigcache.Config{
+		Shards:           config.InstancesCacheShards,
+		LifeWindow:       config.InstancesCacheTTL,
+		HardMaxCacheSize: config.InstancesCacheMaxSize,
+	}
+	nodeEventCache, err := bigcache.New(context.Background(), config)
+	if err != nil {
+		setupLog.Error(err, "Initializing node cache failed")
+	}
+
 	if err = (&corecontroller.NodeReconciler{
-		Client:     mgr.GetClient(),
-		Log:        ctrl.Log.WithName("controllers").WithName("Node"),
-		Scheme:     mgr.GetScheme(),
-		Manager:    nodeManager,
-		Conditions: controllerConditions,
+		Client:         mgr.GetClient(),
+		Log:            ctrl.Log.WithName("controllers").WithName("Node"),
+		Scheme:         mgr.GetScheme(),
+		Manager:        nodeManager,
+		Conditions:     controllerConditions,
+		NodeEventCache: nodeEventCache,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
 		os.Exit(1)
@@ -344,11 +357,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&corecontroller.EventReconciler{
-		Log:    ctrl.Log.WithName("Controllers").WithName("Event"),
-		Scheme: mgr.GetScheme(),
-		K8sAPI: k8sApi,
-	}).SetupWithManager(mgr); err != nil {
+	if err = (corecontroller.NewEventReconciler(
+		ctrl.Log.WithName("Controllers").WithName("Event"),
+		mgr.GetScheme(),
+		k8sApi, nodeEventCache).SetupWithManager(mgr)); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Event")
 		os.Exit(1)
 	}

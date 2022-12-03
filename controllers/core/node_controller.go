@@ -17,6 +17,7 @@ import (
 	"context"
 	goErr "errors"
 
+	bigcache "github.com/allegro/bigcache/v3"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 
@@ -39,10 +40,11 @@ const MaxNodeConcurrentReconciles = 3
 // NodeReconciler reconciles a Node object
 type NodeReconciler struct {
 	client.Client
-	Log        logr.Logger
-	Scheme     *runtime.Scheme
-	Manager    manager.Manager
-	Conditions condition.Conditions
+	Log            logr.Logger
+	Scheme         *runtime.Scheme
+	Manager        manager.Manager
+	Conditions     condition.Conditions
+	NodeEventCache *bigcache.BigCache
 }
 
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
@@ -67,7 +69,9 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
 		if errors.IsNotFound(err) {
-			_, found := r.Manager.GetNode(req.Name)
+			cachedNode, found := r.Manager.GetNode(req.Name)
+			// delete the not found node instance id from node event cache for housekeeping
+			r.deleteNodeFromNodeEventCache(cachedNode.GetNodeInstanceID())
 			if found {
 				err := r.Manager.DeleteNode(req.Name)
 				if err != nil {
@@ -91,6 +95,14 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	return ctrl.Result{}, err
+}
+
+func (r *NodeReconciler) deleteNodeFromNodeEventCache(nodeId string) {
+	if err := r.NodeEventCache.Delete(nodeId); err != nil {
+		r.Log.Error(err, "node controller removing node from node event cache failed")
+	} else {
+		r.Log.V(1).Info("node controller removed the node from node event cache successfully", "InstanceId", nodeId)
+	}
 }
 
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {

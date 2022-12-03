@@ -31,6 +31,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	eventsv1 "k8s.io/api/events/v1"
+
+	bigcache "github.com/allegro/bigcache/v3"
 )
 
 const (
@@ -47,6 +49,12 @@ const (
 	ReconcileEventsLatencyMetrics = "reconcile_events"
 	LabelOperation                = "operation"
 	LabelTime                     = "time"
+	LabelCacheHit                 = "cache_hit"
+	LabelCacheMiss                = "cache_miss"
+	LabelCacheSetErr              = "cache_set_error"
+	CacheHitMetricsValue          = "NODE_CACHED"
+	CacheMissMetricsValue         = "NODE_NOT_CACHED"
+	CacheErrMetricsValue          = "NODE_CACHE_ERROR"
 	EventRegardingKind            = "Node"
 )
 
@@ -56,7 +64,15 @@ type EventReconciler struct {
 	Log    logr.Logger
 	Scheme *runtime.Scheme
 	K8sAPI k8s.K8sWrapper
+	cache  *bigcache.BigCache
 }
+
+type Feature int
+
+const (
+	EnableSGP Feature = iota
+	EnableCN
+)
 
 var (
 	eventControllerTotalEventsCount = prometheus.NewCounterVec(
@@ -115,8 +131,32 @@ var (
 		[]string{LabelTime},
 	)
 
+	eventControllerEventNodeCacheSize = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "event_reconcile_node_cache_size",
+			Help: "Event controller node cache size",
+		},
+	)
+
+	eventControllerEventNodeCacheOpsCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "event_reconcile_node_cache_operations",
+			Help: "The number of ops on retrieving node from cache",
+		},
+		[]string{LabelCacheHit, LabelCacheMiss, LabelCacheSetErr},
+	)
+
 	prometheusRegistered = false
 )
+
+func NewEventReconciler(log logr.Logger, scheme *runtime.Scheme, k8sAPI k8s.K8sWrapper, nodeCache *bigcache.BigCache) *EventReconciler {
+	return &EventReconciler{
+		Log:    log,
+		Scheme: scheme,
+		K8sAPI: k8sAPI,
+		cache:  nodeCache,
+	}
+}
 
 func PrometheusRegister() {
 	if !prometheusRegistered {
@@ -127,6 +167,8 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(eventReconcileOperationLatency)
 		metrics.Registry.MustRegister(eventControllerSGPEventsFailureCount)
 		metrics.Registry.MustRegister(eventControllerCNEventsFailureCount)
+		metrics.Registry.MustRegister(eventControllerEventNodeCacheSize)
+		metrics.Registry.MustRegister(eventControllerEventNodeCacheOpsCount)
 		prometheusRegistered = true
 	}
 }
@@ -157,35 +199,64 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if !event.GetCreationTimestamp().After(time.Now().Add(-time.Minute*EventCreatedPastMinutes)) || event.Regarding.Kind != EventRegardingKind {
 			continue
 		}
-		if r.isValidEventForSGP(event) || r.isValidEventForCustomNetworking(event) {
+		eventForSGP := r.isValidEventForSGP(event)
+		eventForCN := r.isValidEventForCustomNetworking(event)
+		if eventForSGP || eventForCN {
 			nodeName := event.Regarding.Name
+			// use instance ID as cache key since they are guaranteed regionally unique
+			hostID := string(event.Regarding.UID)
+
+			// index 0 is the flag for SecurityGroupForPod, index 1 is the flag for Custom Networking
+			cacheValue := []byte{0, 0}
+			// changing to 1 indicates the event for the regarding feature
+			if eventForSGP {
+				cacheValue[EnableSGP] = 1
+			} else {
+				cacheValue[EnableCN] = 1
+			}
+
+			// use cache to avoid unnecessary calls to API server/ClientCache and node controller cache
+			// due to using List, the redundant call number can be large
+			if hitValue, cacheErr := r.cache.Get(hostID); cacheErr == nil {
+				if (eventForSGP && hitValue[EnableSGP] == 1) || (eventForCN && hitValue[EnableCN] == 1) {
+					eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{CacheHitMetricsValue, "", ""}...).Inc()
+					logger.V(1).Info("Node has been processed and found in cache, will skip this event", "NodeName", nodeName, "InstanceID", hostID)
+					continue
+				}
+			}
+			// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
 			if node, err := r.K8sAPI.GetNode(nodeName); err != nil {
 				// if not found the node, we don't requeue and just wait VPC CNI to send another request
 				r.Log.V(1).Info("Event reconciler didn't find the node and wait for next request for the node", "Node", node.Name)
 				return ctrl.Result{}, nil
 			} else {
-				if r.isEventToManageNode(event) && r.isValidEventForSGP(event) {
+				eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", CacheMissMetricsValue, ""}...).Inc()
+				eventControllerEventNodeCacheSize.Set(float64(r.cache.Len()))
+				if r.isEventToManageNode(event) && eventForSGP {
 					// make the label value to false that indicates the node is ok to be proceeded by providers
 					// provider will decide if the node can be attached with trunk interface
 					labelled, err := r.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, config.BooleanFalse)
 					if err != nil {
 						// by returning an error, we request that our controller will get Reconcile() called again
-						// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
+						// TODO: we can consider let VPC CNI re-send event instead of requeueing the request
 						eventControllerSGPEventsFailureCount.WithLabelValues(SGPEventsFailureCountMetrics).Inc()
 						return ctrl.Result{}, err
 					}
 					if labelled {
 						eventControllerSGPEventsCount.WithLabelValues(SGPEventsCountMetrics).Inc()
-						r.Log.V(1).Info("Label node with trunk label", "Node", node.Name, "Label", config.HasTrunkAttachedLabel)
+						r.Log.Info("Label node with trunk label as false", "Node", node.Name, "InstanceID", hostID, "Label", config.HasTrunkAttachedLabel)
 					}
+					// We don't process labelled == false because when labelled == false but err == nil, meaning the key value pair is present in labels
+					// but the cache missed the instance for some reason, we want to go ahead to add the instance into cache
 				}
-				if r.isValidEventForCustomNetworking(event) {
+
+				if eventForCN {
 					configKey, configName := parseEventMsg(event.Note)
 					if configKey == config.CustomNetworkingLabel {
 						labelled, err := r.K8sAPI.AddLabelToManageNode(node, config.CustomNetworkingLabel, configName)
 						if err != nil {
-							// by returning an error, we request that our controller will get Reconcile() called again
-							// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
+							// by returning an error, we request Reconcile() being called again
+							// TODO: we can consider let VPC CNI re-send event instead of requeueing the request
 							eventControllerCNEventsFailureCount.WithLabelValues(CNEventsFailureCountMetrics).Inc()
 							return ctrl.Result{}, err
 						}
@@ -193,7 +264,16 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 							eventControllerCNEventsCount.WithLabelValues(CNEventsCountMetrics).Inc()
 							r.Log.V(1).Info("Label node with eniconfig label with configured name", "Node", node.Name, "Label", config.CustomNetworkingLabel)
 						}
+						// We don't process labelled == false because when labelled == false but err == nil, meaning the key value pair is present in labels
+						// but the cache missed the instance for some reason, we want to go ahead to add the instance into cache
 					}
+				}
+				// Only update cache after necessary labelling succeeds
+				if cacheErr := r.cache.Set(hostID, cacheValue); cacheErr != nil {
+					eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", "", CacheErrMetricsValue}...).Inc()
+					logger.Error(err, "Adding new node name to event controller cache failed")
+				} else {
+					logger.Info("Added a new node into event cache", "NodeName", nodeName, "InstanceID", hostID, "CacheSize", r.cache.Len())
 				}
 			}
 		}
