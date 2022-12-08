@@ -17,13 +17,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/controllers/custom"
+	mock_custom "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	appV1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -67,13 +68,13 @@ var (
 )
 
 // getMockK8sWrapper returns the mock wrapper interface
-func getMockK8sWrapperWithClient(ctrl *gomock.Controller) (K8sWrapper, client.Client,
+func getMockK8sWrapperWithClient(ctrl *gomock.Controller, objs []runtime.Object) (K8sWrapper, client.Client,
 	*mock_custom.MockController) {
 	scheme := runtime.NewScheme()
 	_ = v1.AddToScheme(scheme)
 	_ = appV1.AddToScheme(scheme)
 
-	client := fakeClient.NewFakeClientWithScheme(scheme, mockNode, mockDeployment, mockDS)
+	client := fakeClient.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
 	clientSet := fakeClientSet.NewSimpleClientset(mockNode)
 	mockController := mock_custom.NewMockController(ctrl)
 
@@ -83,7 +84,7 @@ func getMockK8sWrapperWithClient(ctrl *gomock.Controller) (K8sWrapper, client.Cl
 // TestK8sWrapper_AdvertiseCapacity tests that the capacity is advertised to the k8s node
 func TestK8sWrapper_AdvertiseCapacity(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	wrapper, k8sClient, _ := getMockK8sWrapperWithClient(ctrl)
+	wrapper, k8sClient, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockNode, mockDeployment, mockDS})
 
 	// Make node copy and ensure that the advertised capacity is 0
 	testNode := mockNode.DeepCopy()
@@ -108,17 +109,37 @@ func TestK8sWrapper_AdvertiseCapacity(t *testing.T) {
 // TestK8sWrapper_AdvertiseCapacity_Err tests that error is thrown when an error is encountered on the advertise resource
 func TestK8sWrapper_AdvertiseCapacity_Err(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockNode, mockDeployment, mockDS})
 
 	deletedNodeName := "deleted-node"
 	err := wrapper.AdvertiseCapacityIfNotSet(deletedNodeName, mockResourceName, 10)
 	assert.NotNil(t, err)
 }
 
+// TestK8sWrapper_AdvertiseCapacity_Node_Nil_Capacity tests when a node is returned with nil capacity map. Referring to issue #144
+// https://github.com/aws/amazon-vpc-resource-controller-k8s/issues/144
+func TestK8sWrapper_AdvertiseCapacity_Node_Nil_Capacity(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mockErrNode := &v1.Node{
+		TypeMeta: metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+		},
+		Spec: v1.NodeSpec{},
+		Status: v1.NodeStatus{
+			Capacity: nil,
+		},
+	}
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockErrNode})
+	err := wrapper.AdvertiseCapacityIfNotSet(nodeName, mockResourceName, 10)
+	assert.NotNil(t, err)
+	assert.True(t, errors.IsConflict(err))
+}
+
 // TestK8sWrapper_AdvertiseCapacity_AlreadySet tests that if capacity of node is already set no error is thrown.
 func TestK8sWrapper_AdvertiseCapacity_AlreadySet(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockNode, mockDeployment, mockDS})
 	err := wrapper.AdvertiseCapacityIfNotSet(nodeName, existingResource, 5)
 
 	capacity := mockNode.Status.Capacity[v1.ResourceName(existingResource)]
@@ -129,7 +150,7 @@ func TestK8sWrapper_AdvertiseCapacity_AlreadySet(t *testing.T) {
 func TestNewK8sWrapper_GetDaemonSet(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockNode, mockDeployment, mockDS})
 	ds, err := wrapper.GetDaemonSet(config.VpcCNIDaemonSetName, config.KubeSystemNamespace)
 
 	assert.NoError(t, err)
@@ -139,14 +160,14 @@ func TestNewK8sWrapper_GetDaemonSet(t *testing.T) {
 func TestNewK8sWrapper_GetDaemonSet_Err(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockNode, mockDeployment, mockDS})
 	_, err := wrapper.GetDaemonSet(config.VpcCNIDaemonSetName, "")
 	assert.NotNil(t, err)
 }
 
 func TestK8sWrapper_GetDeployment(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockNode, mockDeployment, mockDS})
 
 	deployment, err := wrapper.GetDeployment(config.KubeSystemNamespace,
 		config.OldVPCControllerDeploymentName)
@@ -156,7 +177,7 @@ func TestK8sWrapper_GetDeployment(t *testing.T) {
 
 func TestK8sWrapper_GetDeployment_Err(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockNode, mockDeployment, mockDS})
 
 	_, err := wrapper.GetDeployment("default",
 		config.OldVPCControllerDeploymentName)
