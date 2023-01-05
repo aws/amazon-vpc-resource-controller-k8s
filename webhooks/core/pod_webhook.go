@@ -22,10 +22,12 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 )
 
@@ -43,6 +45,25 @@ type PodMutationWebHook struct {
 	SGPAPI    utils.SecurityGroupForPodsAPI
 	Log       logr.Logger
 	Condition condition.Conditions
+}
+
+func NewPodMutationWebHook(
+	sgpAPI utils.SecurityGroupForPodsAPI,
+	log logr.Logger,
+	condition condition.Conditions,
+	healthzHandler *rcHealthz.HealthzHandler,
+) *PodMutationWebHook {
+	podWebhook := &PodMutationWebHook{
+		SGPAPI:    sgpAPI,
+		Log:       log,
+		Condition: condition,
+	}
+	// add health check on subpath for pod mutation webhook
+	healthzHandler.AddControllersHealthCheckers(
+		map[string]healthz.Checker{"health-pod-mutating-webhook": rcHealthz.SimplePing("pod mutating webhook", log)},
+	)
+
+	return podWebhook
 }
 
 type PodType string

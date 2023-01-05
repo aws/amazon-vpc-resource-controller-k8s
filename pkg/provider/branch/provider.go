@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -25,16 +26,19 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	"github.com/google/uuid"
 
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
@@ -94,6 +98,7 @@ type branchENIProvider struct {
 	// apiWrapper
 	apiWrapper api.Wrapper
 	ctx        context.Context
+	checker    healthz.Checker
 }
 
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
@@ -102,13 +107,15 @@ func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
 	prometheusRegister()
 	trunk.PrometheusRegister()
 
-	return &branchENIProvider{
+	provider := &branchENIProvider{
 		apiWrapper:    wrapper,
 		log:           logger,
 		workerPool:    worker,
 		trunkENICache: make(map[string]trunk.TrunkENI),
 		ctx:           ctx,
 	}
+	provider.checker = provider.check()
+	return provider
 }
 
 // prometheusRegister registers prometheus metrics
@@ -485,4 +492,27 @@ func (b *branchENIProvider) IntrospectNode(nodeName string) interface{} {
 		return struct{}{}
 	}
 	return trunkENI.Introspect()
+}
+
+func (b *branchENIProvider) check() healthz.Checker {
+	b.log.Info("Branch provider's healthz subpath was added")
+	return func(req *http.Request) error {
+		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
+			var ping interface{}
+			// check on job queue
+			b.SubmitAsyncJob(ping)
+			// check on trunk cache map
+			testNodeName := "test-node" + uuid.New().String()
+			trunk, found := b.getTrunkFromCache(testNodeName)
+			b.log.V(1).Info("healthz check vulnerable site on locks around trunk map", "TestTrunk", trunk, "FoundInCache", found)
+			b.log.V(1).Info("***** health check on branch ENI provider tested SubmitAsyncJob *****")
+			c <- nil
+		}, b.log)
+
+		return err
+	}
+}
+
+func (b *branchENIProvider) GetHealthChecker() healthz.Checker {
+	return b.checker
 }

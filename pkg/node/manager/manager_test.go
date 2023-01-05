@@ -26,6 +26,7 @@ import (
 	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 
 	"github.com/golang/mock/gomock"
@@ -71,6 +72,8 @@ var (
 
 	unManagedNode = node.NewUnManagedNode(zap.New(), nodeName, instanceID, config.OSLinux)
 	managedNode   = node.NewManagedNode(zap.New(), nodeName, instanceID, config.OSLinux)
+
+	healthzHandler = healthz.NewHealthzHandler(5)
 )
 
 type AsyncJobMatcher struct {
@@ -144,7 +147,7 @@ func Test_GetNewManager(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(nil)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.NoError(t, err)
@@ -158,7 +161,7 @@ func Test_GetNewManager_Error(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(mockError)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.Error(t, err, mockError)

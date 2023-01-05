@@ -23,6 +23,7 @@ import (
 	ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	pool "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	gomock "github.com/golang/mock/gomock"
+	healthz "sigs.k8s.io/controller-runtime/pkg/healthz"
 	reconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -61,6 +62,20 @@ func (m *MockResourceProvider) DeInitResource(arg0 ec2.EC2Instance) error {
 func (mr *MockResourceProviderMockRecorder) DeInitResource(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeInitResource", reflect.TypeOf((*MockResourceProvider)(nil).DeInitResource), arg0)
+}
+
+// GetHealthChecker mocks base method.
+func (m *MockResourceProvider) GetHealthChecker() healthz.Checker {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetHealthChecker")
+	ret0, _ := ret[0].(healthz.Checker)
+	return ret0
+}
+
+// GetHealthChecker indicates an expected call of GetHealthChecker.
+func (mr *MockResourceProviderMockRecorder) GetHealthChecker() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHealthChecker", reflect.TypeOf((*MockResourceProvider)(nil).GetHealthChecker))
 }
 
 // GetPool mocks base method.

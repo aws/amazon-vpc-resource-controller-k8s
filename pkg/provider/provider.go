@@ -17,6 +17,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 // ResourceProvider is the provider interface that each resource managed by the controller has to implement
@@ -39,4 +40,6 @@ type ResourceProvider interface {
 	Introspect() interface{}
 	// IntrospectNode allows introspection of a node for the given resource
 	IntrospectNode(node string) interface{}
+	// GetHealthChecker provider a health check subpath for pinging provider
+	GetHealthChecker() healthz.Checker
 }

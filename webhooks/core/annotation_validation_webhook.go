@@ -20,10 +20,12 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 
 	"github.com/go-logr/logr"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
@@ -35,6 +37,23 @@ type AnnotationValidator struct {
 	decoder   *admission.Decoder
 	Condition condition.Conditions
 	Log       logr.Logger
+	Checker   healthz.Checker
+}
+
+func NewAnnotationValidator(condition condition.Conditions, log logr.Logger, healthzHandler *rcHealthz.HealthzHandler) *AnnotationValidator {
+	annotationValidator := &AnnotationValidator{
+		Condition: condition,
+		Log:       log,
+	}
+
+	// add health check on subpath for pod annotation validating webhook
+	healthzHandler.AddControllersHealthCheckers(
+		map[string]healthz.Checker{
+			"health-annotation-validating-webhook": rcHealthz.SimplePing("pod annotation validating webhook", log),
+		},
+	)
+
+	return annotationValidator
 }
 
 // We are allowing multiple usernames to annotate the Windows/SGP Pod, eventually we will

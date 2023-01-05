@@ -22,6 +22,7 @@ import (
 
 	node "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	gomock "github.com/golang/mock/gomock"
+	healthz "sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 // MockManager is a mock of Manager interface.
@@ -73,6 +74,20 @@ func (m *MockManager) DeleteNode(arg0 string) error {
 func (mr *MockManagerMockRecorder) DeleteNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteNode", reflect.TypeOf((*MockManager)(nil).DeleteNode), arg0)
+}
+
+// GetChecker mocks base method.
+func (m *MockManager) GetChecker() healthz.Checker {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetChecker")
+	ret0, _ := ret[0].(healthz.Checker)
+	return ret0
+}
+
+// GetChecker indicates an expected call of GetChecker.
+func (mr *MockManagerMockRecorder) GetChecker() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetChecker", reflect.TypeOf((*MockManager)(nil).GetChecker))
 }
 
 // GetNode mocks base method.

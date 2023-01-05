@@ -19,6 +19,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/go-logr/logr"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 // ConfigMapReconciler reconciles a ConfigMap object
@@ -38,6 +40,7 @@ type ConfigMapReconciler struct {
 	K8sAPI                k8s.K8sWrapper
 	Condition             condition.Conditions
 	curWinIPAMEnabledCond bool
+	Context               context.Context
 }
 
 //+kubebuilder:rbac:groups=core,resources=configmaps,namespace=kube-system,resourceNames=amazon-vpc-cni,verbs=get;list;watch
@@ -84,7 +87,12 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHealthz.HealthzHandler) error {
+	// add health check on subpath for CM controller
+	healthzHandler.AddControllersHealthCheckers(
+		map[string]healthz.Checker{"health-cm-controller": r.check()},
+	)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.ConfigMap{}).
 		Complete(r)
@@ -109,4 +117,10 @@ func UpdateNodesOnConfigMapChanges(k8sAPI k8s.K8sWrapper, nodeManager manager.Ma
 		return fmt.Errorf("failed to update one or more nodes %v", errList)
 	}
 	return nil
+}
+
+func (r *ConfigMapReconciler) check() healthz.Checker {
+	r.Log.Info("ConfigMap controller's healthz subpath was added")
+	// We can revisit this to use PingWithTimeout() instead if we have concerns on this controller.
+	return rcHealthz.SimplePing("configmap controller", r.Log)
 }

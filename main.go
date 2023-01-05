@@ -29,6 +29,7 @@ import (
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
@@ -52,7 +53,6 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	// +kubebuilder:scaffold:imports
 )
@@ -96,6 +96,7 @@ func main() {
 	var outputPath string
 	var introspectBindAddr string
 	var leaseOnly bool
+	var healthCheckTimeout int
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080",
 		"The address the metric endpoint binds to.")
@@ -123,6 +124,8 @@ func main() {
 	flag.IntVar(&listPageLimit, "page-limit", 100,
 		"The page size limiting the number of response for list operation to API Server")
 	flag.StringVar(&outputPath, "log-file", "stderr", "The path to redirect controller logs")
+	flag.IntVar(&healthCheckTimeout, "health-check-timeout", 10,
+		"How long healthz check waits before failing the attempt")
 	flag.StringVar(&introspectBindAddr, "introspect-bind-addr", ":22775",
 		"Port for serving the introspection API")
 	flag.BoolVar(&leaseOnly, "lease-only", false, "Controller uses lease only for leader election")
@@ -235,17 +238,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	healthzHandler := rcHealthz.NewHealthzHandler(healthCheckTimeout)
+	// add root health ping on manager in general
+	healthzHandler.AddControllerHealthChecker("health-root-manager-ping", rcHealthz.SimplePing("root manager", setupLog))
+
 	clientSet, err := kubernetes.NewForConfig(kubeConfig)
 	if err != nil {
 		setupLog.Error(err, "failed to create client set")
-		os.Exit(1)
-	}
-
-	// Add liveness probe
-	err = mgr.AddHealthzCheck("health-ping", healthz.Ping)
-	setupLog.Info("adding health check for controller")
-	if err != nil {
-		setupLog.Error(err, "unable add a health check")
 		os.Exit(1)
 	}
 
@@ -276,7 +275,8 @@ func main() {
 	}
 
 	supportedResources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
-	resourceManager, err := resource.NewResourceManager(ctx, supportedResources, apiWrapper)
+	resourceManager, err := resource.NewResourceManager(
+		ctx, supportedResources, apiWrapper, ctrl.Log.WithName("managers").WithName("resource"), healthzHandler)
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init resources", "resources", supportedResources)
 		os.Exit(1)
@@ -289,7 +289,8 @@ func main() {
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
 		10, 1, ctrl.Log.WithName("node async workers"), ctx)
 	nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager,
-		apiWrapper, nodeManagerWorkers, controllerConditions)
+		apiWrapper, nodeManagerWorkers, controllerConditions, healthzHandler)
+
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init node manager")
 		os.Exit(1)
@@ -297,85 +298,67 @@ func main() {
 
 	// IMPORTANT: The Pod Reconciler must be the first controller to Run. The controller
 	// will not allow any other controller to run till the cache has synced.
-	if err = (&corecontroller.PodReconciler{
+	if err := (&corecontroller.PodReconciler{
 		Log:             ctrl.Log.WithName("controllers").WithName("Pod Reconciler"),
 		ResourceManager: resourceManager,
 		NodeManager:     nodeManager,
 		K8sAPI:          k8sApi,
 		DataStore:       dataStore,
 		Condition:       controllerConditions,
-	}).SetupWithManager(ctx, mgr, clientSet, listPageLimit, syncPeriod); err != nil {
+	}).SetupWithManager(ctx, mgr, clientSet, listPageLimit, syncPeriod, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "pod")
 		os.Exit(1)
 	}
 
-	if err = (&ec2API.ENICleaner{
+	if err := (&ec2API.ENICleaner{
 		EC2Wrapper:  ec2Wrapper,
 		ClusterName: clusterName,
 		Log:         ctrl.Log.WithName("eni cleaner"),
-	}).SetupWithManager(ctx, mgr); err != nil {
+	}).SetupWithManager(ctx, mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to start eni cleaner")
 		os.Exit(1)
 	}
 
-	// config := bigcache.Config{
-	// 	Shards:           config.InstancesCacheShards,
-	// 	LifeWindow:       config.InstancesCacheTTL,
-	// 	HardMaxCacheSize: config.InstancesCacheMaxSize,
-	// }
-	// nodeEventCache, err := bigcache.New(context.Background(), config)
-	if err != nil {
-		setupLog.Error(err, "Initializing node cache failed")
-	}
-
-	if err = (&corecontroller.NodeReconciler{
+	if err := (&corecontroller.NodeReconciler{
 		Client:     mgr.GetClient(),
 		Log:        ctrl.Log.WithName("controllers").WithName("Node"),
 		Scheme:     mgr.GetScheme(),
 		Manager:    nodeManager,
 		Conditions: controllerConditions,
-		// NodeEventCache: nodeEventCache,
-	}).SetupWithManager(mgr); err != nil {
+		Context:    ctx,
+	}).SetupWithManager(mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
 		os.Exit(1)
 	}
 
-	if err = (&corecontroller.ConfigMapReconciler{
+	if err := (&corecontroller.ConfigMapReconciler{
 		Client:      mgr.GetClient(),
 		Log:         ctrl.Log.WithName("controllers").WithName("ConfigMap"),
 		Scheme:      mgr.GetScheme(),
 		NodeManager: nodeManager,
 		K8sAPI:      k8sApi,
 		Condition:   controllerConditions,
-	}).SetupWithManager(mgr); err != nil {
+		Context:     ctx,
+	}).SetupWithManager(mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ConfigMap")
 		os.Exit(1)
 	}
 
-	if err = (&apps.DeploymentReconciler{
+	if err := (&apps.DeploymentReconciler{
 		Log:         ctrl.Log.WithName("controllers").WithName("Deployment"),
 		NodeManager: nodeManager,
 		K8sAPI:      k8sApi,
 		Condition:   controllerConditions,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Deployment")
 		os.Exit(1)
 	}
 
-	// Disable Event controller for now due to known possible performance impacts on etcd servers
-	// if err = (corecontroller.NewEventReconciler(
-	// 	ctrl.Log.WithName("Controllers").WithName("Event"),
-	// 	mgr.GetScheme(),
-	// 	k8sApi, nodeEventCache).SetupWithManager(mgr)); err != nil {
-	// 	setupLog.Error(err, "unable to create controller", "controller", "Event")
-	// 	os.Exit(1)
-	// }
-
-	if err = (&resource.IntrospectHandler{
+	if err := (&resource.IntrospectHandler{
 		Log:             ctrl.Log.WithName("introspect"),
 		BindAddress:     introspectBindAddr,
 		ResourceManager: resourceManager,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create introspect API")
 		os.Exit(1)
 	}
@@ -385,25 +368,31 @@ func main() {
 	webhookServer := mgr.GetWebhookServer()
 
 	setupLog.Info("registering webhooks to the webhook server")
+	podMutationWebhook := webhookcore.NewPodMutationWebHook(
+		sgpAPI, ctrl.Log.WithName("resource mutating webhook"), controllerConditions, healthzHandler)
 	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{
-		Handler: &webhookcore.PodMutationWebHook{
-			SGPAPI:    sgpAPI,
-			Log:       ctrl.Log.WithName("resource mutation webhook"),
-			Condition: controllerConditions,
-		}})
+		Handler: podMutationWebhook,
+	})
 
+	nodeValidateWebhook := webhookcore.NewNodeUpdateWebhook(
+		controllerConditions, ctrl.Log.WithName("node validating webhook"), healthzHandler)
 	webhookServer.Register("/validate-v1-node", &webhook.Admission{
-		Handler: &webhookcore.NodeUpdateWebhook{
-			Log:       ctrl.Log.WithName("node validation webhook"),
-			Condition: controllerConditions,
-		}})
+		Handler: nodeValidateWebhook})
 
 	// Validating webhook for pod.
+	annotationValidator := webhookcore.NewAnnotationValidator(
+		controllerConditions, ctrl.Log.WithName("annotation validating webhook"), healthzHandler)
 	webhookServer.Register("/validate-v1-pod", &webhook.Admission{
-		Handler: &webhookcore.AnnotationValidator{
-			Log:       ctrl.Log.WithName("annotation validation webhook"),
-			Condition: controllerConditions,
-		}})
+		Handler: annotationValidator})
+
+	// Enabled each controllers' health check and aggregate them to endpoint /healthz
+	// curl localhost:61779/healthz?verbose can list all controllers' healthy status
+	err = healthzHandler.AddControllersHealthStatusChecksToManager(mgr)
+	setupLog.Info("adding health check for controllers")
+	if err != nil {
+		setupLog.Error(err, "unable add health check to all controllers")
+		os.Exit(1)
+	}
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctx); err != nil {

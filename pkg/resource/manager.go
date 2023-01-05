@@ -20,16 +20,26 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	"github.com/go-logr/logr"
 
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+)
+
+var (
+	managerHealthCheckSubpath        = "health-resource-manager"
+	branchProviderHealthCheckSubpath = "health-branch-provider"
+	ipv4ProviderHealthCheckSubpath   = "health-ipv4-provider"
 )
 
 type Manager struct {
 	resource map[string]Resource
+	log      logr.Logger
 }
 
 type Resource struct {
@@ -42,11 +52,16 @@ type ResourceManager interface {
 	GetResourceHandler(resourceName string) (handler.Handler, bool)
 }
 
-func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api.Wrapper) (ResourceManager, error) {
+func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api.Wrapper, log logr.Logger, healthzHandler *rcHealthz.HealthzHandler) (ResourceManager, error) {
 	// Load that static configuration of the resource
 	resourceConfig := config.LoadResourceConfig()
 
 	resources := make(map[string]Resource)
+
+	healthCheckers := make(map[string]healthz.Checker)
+
+	// add manager subpath into health checker map first
+	healthCheckers[managerHealthCheckSubpath] = rcHealthz.SimplePing("resource manager", log)
 
 	// For each supported resource, initialize the resource provider and handler
 	for _, resourceName := range resourceNames {
@@ -56,14 +71,14 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 			return nil, fmt.Errorf("failed to find resource configuration %s", resourceName)
 		}
 
-		ctrl.Log.Info("initializing resource", "resource name",
+		log.Info("initializing resource", "resource name",
 			resourceName, "resource count", resourceConfig.WorkerCount)
 
 		workers := worker.NewDefaultWorkerPool(
 			resourceConfig.Name,
 			resourceConfig.WorkerCount,
 			config.WorkQueueDefaultMaxRetries,
-			ctrl.Log.WithName(fmt.Sprintf("%s-%s", resourceName, "worker")), ctx)
+			log.WithName(fmt.Sprintf("%s-%s", resourceName, "worker")), ctx)
 
 		var resourceHandler handler.Handler
 		var resourceProvider provider.ResourceProvider
@@ -71,11 +86,13 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 		if resourceName == config.ResourceNameIPAddress {
 			resourceProvider = ip.NewIPv4Provider(ctrl.Log.WithName("ipv4 provider"),
 				wrapper, workers, resourceConfig)
+			healthCheckers[ipv4ProviderHealthCheckSubpath] = resourceProvider.GetHealthChecker()
 			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
 				resourceName, resourceProvider, ctx)
 		} else if resourceName == config.ResourceNamePodENI {
 			resourceProvider = branch.NewBranchENIProvider(ctrl.Log.WithName("branch eni provider"),
 				wrapper, workers, resourceConfig, ctx)
+			healthCheckers[branchProviderHealthCheckSubpath] = resourceProvider.GetHealthChecker()
 			resourceHandler = handler.NewOnDemandHandler(ctrl.Log.WithName(resourceName),
 				resourceName, resourceProvider)
 		} else {
@@ -92,12 +109,16 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 			ResourceProvider: resourceProvider,
 		}
 
-		ctrl.Log.Info("successfully initialized resource handler and provider",
+		log.Info("successfully initialized resource handler and provider",
 			"resource name", resourceName)
 	}
 
+	// add health check on subpath for resource manager which includes providers as well
+	healthzHandler.AddControllersHealthCheckers(healthCheckers)
+
 	return &Manager{
 		resource: resources,
+		log:      log,
 	}, nil
 }
 

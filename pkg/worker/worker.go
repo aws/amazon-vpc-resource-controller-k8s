@@ -126,6 +126,12 @@ func (w *worker) SetWorkerFunc(workerFunc func(interface{}) (ctrl.Result, error)
 
 // SubmitJob adds the job to the rate limited queue
 func (w *worker) SubmitJob(job interface{}) {
+	// in theory, only health check endpoint should send a nil job to test periodically
+	if job == nil {
+		queueLen := w.queue.Len()
+		w.Log.V(1).Info("For informational / health check purpose only to check worker queue availability", "WorkerQueueLen", queueLen)
+		return
+	}
 	w.queue.Add(job)
 	jobsSubmittedCount.WithLabelValues(w.resourceName).Inc()
 }

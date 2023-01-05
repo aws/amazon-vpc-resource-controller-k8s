@@ -15,20 +15,25 @@ package controllers
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
+	"github.com/google/uuid"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;update;patch
@@ -71,7 +76,7 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 			return ctrl.Result{}, nil
 		}
 		if !exists {
-			r.Log.Info("pod doesn't exists in the cache anymore",
+			r.Log.V(1).Info("pod doesn't exists in the cache anymore",
 				"namespace name", request.NamespacedName.String())
 			return ctrl.Result{}, nil
 		}
@@ -174,9 +179,10 @@ func getAggregateResources(pod *v1.Pod) map[string]int64 {
 // list of runnable. After Manager acquire the lease the pod controller runnable
 // will be started and the Pod events will be sent to Reconcile function
 func (r *PodReconciler) SetupWithManager(ctx context.Context, manager ctrl.Manager,
-	clientSet *kubernetes.Clientset, pageLimit int, syncPeriod time.Duration) error {
+	clientSet *kubernetes.Clientset, pageLimit int, syncPeriod time.Duration, healthzHandler *rcHealthz.HealthzHandler) error {
 	r.Log.Info("The pod controller is using MaxConcurrentReconciles", "Routines", MaxPodConcurrentReconciles)
-	return custom.NewControllerManagedBy(ctx, manager).
+
+	customChecker, err := custom.NewControllerManagedBy(ctx, manager).
 		WithLogger(r.Log.WithName("custom pod controller")).
 		UsingDataStore(r.DataStore).
 		WithClientSet(clientSet).
@@ -188,4 +194,36 @@ func (r *PodReconciler) SetupWithManager(ctx context.Context, manager ctrl.Manag
 		ResyncPeriod:            syncPeriod,
 		MaxConcurrentReconciles: MaxPodConcurrentReconciles,
 	}).UsingConditions(r.Condition).Complete(r)
+
+	// add health check on subpath for pod and pod customized controllers
+	healthzHandler.AddControllersHealthCheckers(
+		map[string]healthz.Checker{
+			"health-pod-controller":        r.check(),
+			"health-custom-pod-controller": customChecker,
+		},
+	)
+
+	return err
+}
+
+func (r *PodReconciler) check() healthz.Checker {
+	r.Log.Info("Pod controller's healthz subpath was added")
+	// more meaningful ping
+	return func(req *http.Request) error {
+		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
+			pingRequest := &custom.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: v1.NamespaceDefault,
+					Name:      uuid.New().String(),
+				},
+				DeletedObject: nil,
+			}
+			// calling reconcile will test pod cache
+			_, rErr := r.Reconcile(*pingRequest)
+			r.Log.V(1).Info("***** pod controller healthz endpoint tested reconcile *****")
+			c <- rErr
+		}, r.Log)
+
+		return err
+	}
 }

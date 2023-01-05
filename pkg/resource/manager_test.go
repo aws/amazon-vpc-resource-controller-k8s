@@ -17,17 +17,21 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
+	mock_handler "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 type Mock struct {
 	Handler *mock_handler.MockHandler
 	Wrapper api.Wrapper
 }
+
+var healthzHandler = healthz.NewHealthzHandler(5)
 
 func NewMock(controller *gomock.Controller) Mock {
 	return Mock{
@@ -43,7 +47,7 @@ func Test_NewResourceManager(t *testing.T) {
 	mock := NewMock(ctrl)
 	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
 
-	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper)
+	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper, zap.New(zap.UseDevMode(true)), healthzHandler)
 	assert.NoError(t, err)
 
 	_, ok := manger.GetResourceHandler(config.ResourceNamePodENI)
