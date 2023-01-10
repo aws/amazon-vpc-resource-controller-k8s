@@ -20,12 +20,12 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/utils"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
+	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	mock_pod "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
+	mock_trunk "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk"
+	mock_utils "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/utils"
+	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -291,6 +291,31 @@ func TestBranchENIProvider_GetResourceCapacity_NotSupported(t *testing.T) {
 
 	err := provider.UpdateResourceCapacity(mockInstance)
 	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_NotSupported_LabelNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8sWrapper := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+
+	supportedInstanceType := "t3.medium"
+	node := &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   NodeName,
+			Labels: map[string]string{config.HasTrunkAttachedLabel: config.BooleanFalse},
+		},
+	}
+
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().Os().Return("linux")
+	mockInstance.EXPECT().Type().Return(supportedInstanceType)
+	mockK8sWrapper.EXPECT().GetNode(NodeName).Return(node, nil)
+	mockK8sWrapper.EXPECT().AddLabelToManageNode(node, config.HasTrunkAttachedLabel, config.NotSupportedEc2Type).Return(true, nil)
+
+	supported := provider.IsInstanceSupported(mockInstance)
+	assert.False(t, supported)
 }
 
 // TestBranchENIProvider_CreateAndAnnotateResources tests that create is invoked equal to the number of resources to

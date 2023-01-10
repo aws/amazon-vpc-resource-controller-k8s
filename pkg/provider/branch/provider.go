@@ -462,13 +462,25 @@ func (b *branchENIProvider) GetPool(_ string) (pool.Pool, bool) {
 // IsInstanceSupported returns true for linux node as pod eni is only supported for linux worker node
 func (b *branchENIProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
 	limits, found := vpc.Limits[instance.Type()]
-	if !found {
-		return false
+	supported := found && instance.Os() == config.OSLinux && limits.IsTrunkingCompatible
+
+	if !supported {
+		// since VPC CNI will not send events for nodes that are labelled as notsupported, this API will not be called too many times.
+		if node, err := b.apiWrapper.K8sAPI.GetNode(instance.Name()); err != nil {
+			b.log.Error(err, "couldn't get the node when checking if the node is supported for trunk interface", "NodeName", instance.Name())
+		} else {
+			if node.Labels != nil {
+				if _, ok := node.Labels[config.HasTrunkAttachedLabel]; ok {
+					updated, err := b.apiWrapper.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, config.NotSupportedEc2Type)
+					if !updated || err != nil {
+						b.log.Info("failed to update unsupported node label to non-supported", "NodeName", instance.Name(), "Error", err)
+					}
+				}
+			}
+		}
 	}
-	if instance.Os() == config.OSLinux && limits.IsTrunkingCompatible {
-		return true
-	}
-	return false
+
+	return supported
 }
 
 func (b *branchENIProvider) Introspect() interface{} {
