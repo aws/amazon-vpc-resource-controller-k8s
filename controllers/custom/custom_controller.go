@@ -16,9 +16,9 @@ package custom
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -83,9 +83,6 @@ type Options struct {
 type CustomController struct {
 	// workQueue to store create/update/delete events
 	workQueue workqueue.RateLimitingInterface
-	// mu is the mutex to allow the controller to sync before
-	// other controller start
-	mu sync.Mutex
 	// log for custom controller
 	log logr.Logger
 	// Reconciler will be called on all the K8s object events
@@ -94,8 +91,8 @@ type CustomController struct {
 	config *cache.Config
 	// options is the configurable parameters for creating
 	// the controller
-	options  Options
-	syncFlag *bool
+	options    Options
+	conditions condition.Conditions
 }
 
 // Request for Add/Update only contains the Namespace/Name
@@ -113,13 +110,10 @@ type Request struct {
 func (c *CustomController) Start(ctx context.Context) error {
 	// This is important to allow the data store to be synced
 	// Before the other controller starts
-	c.mu.Lock()
 	// Shut down the queue so the worker can stop
 	defer c.workQueue.ShutDown()
 
 	err := func() error {
-		defer c.mu.Unlock()
-
 		coreController := cache.New(c.config)
 
 		c.log.Info("starting custom controller")
@@ -152,7 +146,8 @@ func (c *CustomController) WaitForCacheSync(controller cache.Controller) {
 		c.log.Info("waiting for controller to sync")
 		time.Sleep(time.Second * 5)
 	}
-	*c.syncFlag = true
+	c.conditions.SetPodDataStoreSyncStatus(true)
+
 	c.log.Info("cache has synced successfully")
 }
 

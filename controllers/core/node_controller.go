@@ -15,6 +15,7 @@ package controllers
 
 import (
 	"context"
+	goErr "errors"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
@@ -54,7 +55,9 @@ type NodeReconciler struct {
 // from Un-Managed to Managed and vice-versa in which case the Node Manager updates it's
 // status accordingly
 func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.Conditions.WaitTillPodDataStoreSynced()
+	if !r.Conditions.GetPodDataStoreSyncStatus() {
+		return ctrl.Result{Requeue: true}, goErr.New("pod datastore hasn't been synced, node controller need wait to retry")
+	}
 
 	node := &corev1.Node{}
 	var err error

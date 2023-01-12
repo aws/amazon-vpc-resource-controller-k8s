@@ -15,6 +15,7 @@ package condition
 
 import (
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -26,17 +27,15 @@ import (
 )
 
 type condition struct {
-	hasDataStoreSynced *bool
+	hasDataStoreSynced bool
 	log                logr.Logger
 	K8sAPI             k8s.K8sWrapper
+	lock               sync.Mutex
 }
 
 const CheckDataStoreSyncedInterval = time.Second * 10
 
 type Conditions interface {
-	// WaitTillPodDataStoreSynced waits till the Pod Data Store has synced
-	// using the custom controller
-	WaitTillPodDataStoreSynced()
 	// IsWindowsIPAMEnabled to process events only when Windows IPAM is enabled
 	// by the user
 	IsWindowsIPAMEnabled() bool
@@ -47,6 +46,12 @@ type Conditions interface {
 	// IsOldVPCControllerDeploymentPresent returns true if the old controller deployment
 	// is still present on the cluster
 	IsOldVPCControllerDeploymentPresent() bool
+
+	// GetPodDataStoreSyncStatus is used to get Pod Datastore sync status
+	GetPodDataStoreSyncStatus() bool
+
+	// SetPodDataStoreSyncStatus is used to set Pod Datastore sync status
+	SetPodDataStoreSyncStatus(synced bool)
 }
 
 var (
@@ -69,21 +74,13 @@ func prometheusRegister() {
 	prometheusRegistered = true
 }
 
-func NewControllerConditions(dataStoreSyncFlag *bool, log logr.Logger, k8sApi k8s.K8sWrapper) Conditions {
+func NewControllerConditions(log logr.Logger, k8sApi k8s.K8sWrapper) Conditions {
 	prometheusRegister()
 	conditionWindowsIPAMEnabled.Set(0)
 
 	return &condition{
-		hasDataStoreSynced: dataStoreSyncFlag,
-		log:                log,
-		K8sAPI:             k8sApi,
-	}
-}
-
-func (c *condition) WaitTillPodDataStoreSynced() {
-	for !*c.hasDataStoreSynced {
-		c.log.Info("waiting for controller to sync")
-		time.Sleep(CheckDataStoreSyncedInterval)
+		log:    log,
+		K8sAPI: k8sApi,
 	}
 }
 
@@ -158,4 +155,17 @@ func (c *condition) IsPodSGPEnabled() bool {
 		}
 	}
 	return isSGPEnabled
+}
+
+func (c *condition) GetPodDataStoreSyncStatus() bool {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	return c.hasDataStoreSynced
+}
+
+func (c *condition) SetPodDataStoreSyncStatus(synced bool) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.hasDataStoreSynced = synced
 }

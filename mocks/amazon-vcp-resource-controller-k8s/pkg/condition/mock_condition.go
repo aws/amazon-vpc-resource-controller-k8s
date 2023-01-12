@@ -46,6 +46,20 @@ func (m *MockConditions) EXPECT() *MockConditionsMockRecorder {
 	return m.recorder
 }
 
+// GetPodDataStoreSyncStatus mocks base method.
+func (m *MockConditions) GetPodDataStoreSyncStatus() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPodDataStoreSyncStatus")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// GetPodDataStoreSyncStatus indicates an expected call of GetPodDataStoreSyncStatus.
+func (mr *MockConditionsMockRecorder) GetPodDataStoreSyncStatus() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPodDataStoreSyncStatus", reflect.TypeOf((*MockConditions)(nil).GetPodDataStoreSyncStatus))
+}
+
 // IsOldVPCControllerDeploymentPresent mocks base method.
 func (m *MockConditions) IsOldVPCControllerDeploymentPresent() bool {
 	m.ctrl.T.Helper()
@@ -74,14 +88,14 @@ func (mr *MockConditionsMockRecorder) IsWindowsIPAMEnabled() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsWindowsIPAMEnabled", reflect.TypeOf((*MockConditions)(nil).IsWindowsIPAMEnabled))
 }
 
-// WaitTillPodDataStoreSynced mocks base method.
-func (m *MockConditions) WaitTillPodDataStoreSynced() {
+// SetPodDataStoreSyncStatus mocks base method.
+func (m *MockConditions) SetPodDataStoreSyncStatus(arg0 bool) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "WaitTillPodDataStoreSynced")
+	m.ctrl.Call(m, "SetPodDataStoreSyncStatus", arg0)
 }
 
-// WaitTillPodDataStoreSynced indicates an expected call of WaitTillPodDataStoreSynced.
-func (mr *MockConditionsMockRecorder) WaitTillPodDataStoreSynced() *gomock.Call {
+// SetPodDataStoreSyncStatus indicates an expected call of SetPodDataStoreSyncStatus.
+func (mr *MockConditionsMockRecorder) SetPodDataStoreSyncStatus(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitTillPodDataStoreSynced", reflect.TypeOf((*MockConditions)(nil).WaitTillPodDataStoreSynced))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPodDataStoreSyncStatus", reflect.TypeOf((*MockConditions)(nil).SetPodDataStoreSyncStatus), arg0)
 }
