@@ -185,9 +185,9 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 			// if the event is older, these func are not expected to be called.
 			mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeName).Return(eventNode, nil).AnyTimes()
 			if e.successfullyLabelNode {
-				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, "true").Return(true, nil)
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, config.BooleanFalse).Return(true, nil)
 			} else {
-				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, "true").Return(false, errors.New("sgp-test"))
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, config.BooleanFalse).Return(false, errors.New("sgp-test"))
 			}
 		}
 		res, err := mock.Reconciler.Reconcile(context.TODO(), sgpEventReconcileRequest)
