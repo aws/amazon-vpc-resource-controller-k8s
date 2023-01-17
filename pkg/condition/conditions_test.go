@@ -154,6 +154,14 @@ func TestCondition_IsWindowsIPAMEnabled(t *testing.T) {
 	}
 }
 
+// TestCondition_GetPodDataStoreSyncStatus tests two group of routines which are setting (write) the sync flag field
+// and are getting (read) the field.
+// In real case, pod controller routines keep checking the cache status and set the sync field to true if cache is ready.
+// At the same time, node controller routines keep asking if the pod cache is ready by Getting the status.
+// Until pod cache is ready, node controllers won't make any process but requeue coming requests exponenially
+// To simulate the case, the test cases create a routine as writer (pod routine) and routines as reader (node routines)
+// to request the lock on the field. By using these tests, we can preliminarily test the possibility of lock issue or
+// racing by safeguarding a processing time window.
 func TestCondition_GetPodDataStoreSyncStatus(t *testing.T) {
 	tests := []struct {
 		name            string

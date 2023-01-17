@@ -56,6 +56,7 @@ type NodeReconciler struct {
 // status accordingly
 func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	if !r.Conditions.GetPodDataStoreSyncStatus() {
+		// if pod cache is not ready, let's exponentially requeue the requests instead of letting routines wait
 		return ctrl.Result{Requeue: true}, goErr.New("pod datastore hasn't been synced, node controller need wait to retry")
 	}
 
