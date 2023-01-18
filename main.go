@@ -276,8 +276,7 @@ func main() {
 	}
 
 	// hasPodDataStoreSynced is set to true when the custom controller has synced
-	var hasPodDataStoreSynced = new(bool)
-	controllerConditions := condition.NewControllerConditions(hasPodDataStoreSynced,
+	controllerConditions := condition.NewControllerConditions(
 		ctrl.Log.WithName("controller conditions"), k8sApi)
 
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
@@ -297,7 +296,7 @@ func main() {
 		NodeManager:     nodeManager,
 		K8sAPI:          k8sApi,
 		DataStore:       dataStore,
-		DataStoreSynced: hasPodDataStoreSynced,
+		Condition:       controllerConditions,
 	}).SetupWithManager(ctx, mgr, clientSet, listPageLimit, syncPeriod); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "pod")
 		os.Exit(1)

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
@@ -42,8 +43,8 @@ type PodReconciler struct {
 	NodeManager manager.Manager
 	K8sAPI      k8s.K8sWrapper
 	// DataStore is the cache with memory optimized Pod Objects
-	DataStore       cache.Indexer
-	DataStoreSynced *bool
+	DataStore cache.Indexer
+	Condition condition.Conditions
 }
 
 var (
@@ -182,10 +183,9 @@ func (r *PodReconciler) SetupWithManager(ctx context.Context, manager ctrl.Manag
 		UsingConverter(&pod.PodConverter{
 			K8sResource:     "pods",
 			K8sResourceType: &v1.Pod{},
-		}).DataStoreSyncFlag(r.DataStoreSynced).
-		Options(custom.Options{
-			PageLimit:               pageLimit,
-			ResyncPeriod:            syncPeriod,
-			MaxConcurrentReconciles: MaxPodConcurrentReconciles,
-		}).Complete(r)
+		}).Options(custom.Options{
+		PageLimit:               pageLimit,
+		ResyncPeriod:            syncPeriod,
+		MaxConcurrentReconciles: MaxPodConcurrentReconciles,
+	}).UsingConditions(r.Condition).Complete(r)
 }

@@ -14,10 +14,13 @@
 package condition
 
 import (
+	"fmt"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/golang/mock/gomock"
@@ -47,33 +50,6 @@ var (
 		},
 	}
 )
-
-func Test_WaitTillPodDataStoreSynced(t *testing.T) {
-	syncVariable := new(bool)
-	c := condition{
-		log:                zap.New(zap.UseDevMode(true)),
-		hasDataStoreSynced: syncVariable,
-	}
-
-	var hasSynced bool
-	go func() {
-		c.WaitTillPodDataStoreSynced()
-		hasSynced = true
-	}()
-
-	time.Sleep(CheckDataStoreSyncedInterval * 2)
-	// If hasSynced is True then the function didn't wait for the
-	// cache to be synced
-	assert.False(t, hasSynced)
-
-	// Set the variable so the previous go routine stops
-	// and next call to the function doesn't block the test
-	*syncVariable = true
-
-	// If the code was buggy, this execution would block and
-	// timeout the test
-	c.WaitTillPodDataStoreSynced()
-}
 
 func TestCondition_IsWindowsIPAMEnabled(t *testing.T) {
 	tests := []struct {
@@ -169,11 +145,105 @@ func TestCondition_IsWindowsIPAMEnabled(t *testing.T) {
 			defer ctrl.Finish()
 
 			mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
-			conditions := NewControllerConditions(nil, zap.New(), mockK8s)
+			conditions := NewControllerConditions(zap.New(), mockK8s)
 
 			test.mock(mockK8s)
 
 			assert.Equal(t, conditions.IsWindowsIPAMEnabled(), test.expected)
+		})
+	}
+}
+
+// TestCondition_GetPodDataStoreSyncStatus tests two group of routines which are setting (write) the sync flag field
+// and are getting (read) the field.
+// In real case, pod controller routines keep checking the cache status and set the sync field to true if cache is ready.
+// At the same time, node controller routines keep asking if the pod cache is ready by Getting the status.
+// Until pod cache is ready, node controllers won't make any process but requeue coming requests exponenially
+// To simulate the case, the test cases create a routine as writer (pod routine) and routines as reader (node routines)
+// to request the lock on the field. By using these tests, we can preliminarily test the possibility of lock issue or
+// racing by safeguarding a processing time window.
+func TestCondition_GetPodDataStoreSyncStatus(t *testing.T) {
+	tests := []struct {
+		name            string
+		testBlockedTime int
+		// buffer time is used to consider other execution time during the process
+		testBufferTime int
+		workers        int
+	}{
+		{
+			name:            "worker doesn't wait long enough",
+			testBlockedTime: 5,
+			testBufferTime:  -1,
+			workers:         1,
+		},
+		{
+			name:            "worker waits with a buffer time",
+			testBlockedTime: 5,
+			testBufferTime:  1,
+			workers:         1,
+		},
+		{
+			name:            "three workers check on the flag",
+			testBlockedTime: 5,
+			testBufferTime:  1,
+			workers:         3,
+		},
+		{
+			name:            "large number workers check on the flag",
+			testBlockedTime: 5,
+			testBufferTime:  1,
+			workers:         30, // we want to use an unusual large workers to test routines conflict
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
+			conditions := NewControllerConditions(zap.New(), mockK8s)
+			start := time.Now()
+
+			// one routine is keeping the flag as false for 5s and then updates it to true
+			go func() {
+				waitFor := 0
+				for waitFor < test.testBlockedTime {
+					time.Sleep(time.Second * 1)
+					conditions.SetPodDataStoreSyncStatus(false)
+					waitFor++
+				}
+				conditions.SetPodDataStoreSyncStatus(true)
+			}()
+
+			var wg sync.WaitGroup
+			wg.Add(test.workers)
+
+			for i := 0; i < test.workers; i++ {
+				go func(id int) {
+					defer wg.Done()
+					worker := "worker-" + strconv.Itoa(id)
+					var synced bool
+					// this routine is checking if the flag is updated and how long the process took
+					// the processing time should be very small longer than required waiting time, otherwise fail the test
+					for {
+						synced = conditions.GetPodDataStoreSyncStatus()
+						if synced {
+							duration := int(time.Since(start).Seconds())
+							if test.testBufferTime >= 0 {
+								assert.GreaterOrEqual(t, test.testBlockedTime+test.testBufferTime, duration, fmt.Sprintf("worker %s Get the cache flag. Set and Get pod cache synced flag were not blocked", worker))
+							} else {
+								assert.GreaterOrEqual(t, duration, test.testBlockedTime+test.testBufferTime, fmt.Sprintf("worker %s didn't wait long enough, routines are not blocked", worker))
+							}
+							break
+						} else {
+							time.Sleep(time.Second * 1)
+						}
+					}
+				}(i)
+			}
+
+			wg.Wait()
 		})
 	}
 }

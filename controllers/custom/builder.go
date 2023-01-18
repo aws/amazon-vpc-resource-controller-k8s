@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -39,11 +40,11 @@ type Builder struct {
 	// controller must be queried using this datastore
 	dataStore cache.Indexer
 	// mgr is the controller runtime manager
-	mgr               manager.Manager
-	dataStoreSyncFlag *bool
+	mgr manager.Manager
 
-	log logr.Logger
-	ctx context.Context
+	log        logr.Logger
+	ctx        context.Context
+	conditions condition.Conditions
 }
 
 func (b *Builder) Named(name string) *Builder {
@@ -76,8 +77,8 @@ func (b *Builder) Options(options Options) *Builder {
 	return b
 }
 
-func (b *Builder) DataStoreSyncFlag(flag *bool) *Builder {
-	b.dataStoreSyncFlag = flag
+func (b *Builder) UsingConditions(conditions condition.Conditions) *Builder {
+	b.conditions = conditions
 	return b
 }
 
@@ -102,9 +103,7 @@ func (b *Builder) Complete(reconciler Reconciler) error {
 	if b.dataStore == nil {
 		return fmt.Errorf("need datastore to start the controller")
 	}
-	if b.dataStoreSyncFlag == nil {
-		return fmt.Errorf("data store sync flag cannot be null")
-	}
+
 	b.SetDefaults()
 
 	workQueue := workqueue.NewNamedRateLimitingQueue(
@@ -172,12 +171,12 @@ func (b *Builder) Complete(reconciler Reconciler) error {
 	}
 
 	controller := &CustomController{
-		log:       b.log,
-		options:   b.options,
-		config:    config,
-		Do:        reconciler,
-		workQueue: workQueue,
-		syncFlag:  b.dataStoreSyncFlag,
+		log:        b.log,
+		options:    b.options,
+		config:     config,
+		Do:         reconciler,
+		workQueue:  workQueue,
+		conditions: b.conditions,
 	}
 
 	// Adds the controller to the manager's Runnable
