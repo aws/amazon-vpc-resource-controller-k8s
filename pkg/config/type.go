@@ -37,8 +37,10 @@ const (
 	HasTrunkAttachedLabel = "vpc.amazonaws.com/has-trunk-attached"
 	// CustomNetworkingLabel is the label with the name of ENIConfig to be used by the node for custom networking
 	CustomNetworkingLabel = "vpc.amazonaws.com/eniConfig"
-	BooleanTrue           = "true"
-	BooleanFalse          = "false"
+	// Trunk attaching status value
+	BooleanTrue         = "true"
+	BooleanFalse        = "false"
+	NotSupportedEc2Type = "not-supported"
 	// NodeLabelOS is the Kubernetes Operating System label
 	NodeLabelOS = "kubernetes.io/os"
 	// NodeLabelOS is the Kubernetes Operating System label used before k8s version 1.16

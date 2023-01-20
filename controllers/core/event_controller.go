@@ -165,7 +165,9 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				return ctrl.Result{}, nil
 			} else {
 				if r.isEventToManageNode(event) && r.isValidEventForSGP(event) {
-					labelled, err := r.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, config.BooleanTrue)
+					// make the label value to false that indicates the node is ok to be proceeded by providers
+					// provider will decide if the node can be attached with trunk interface
+					labelled, err := r.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, config.BooleanFalse)
 					if err != nil {
 						// by returning an error, we request that our controller will get Reconcile() called again
 						// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
@@ -174,7 +176,7 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					}
 					if labelled {
 						eventControllerSGPEventsCount.WithLabelValues(SGPEventsCountMetrics).Inc()
-						r.Log.Info("Label node with trunk label as true", "Node", node.Name, "Label", config.HasTrunkAttachedLabel)
+						r.Log.V(1).Info("Label node with trunk label", "Node", node.Name, "Label", config.HasTrunkAttachedLabel)
 					}
 				}
 				if r.isValidEventForCustomNetworking(event) {
@@ -189,7 +191,7 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 						}
 						if labelled {
 							eventControllerCNEventsCount.WithLabelValues(CNEventsCountMetrics).Inc()
-							r.Log.Info("Label node with eniconfig label with configured name", "Node", node.Name, "Label", config.CustomNetworkingLabel)
+							r.Log.V(1).Info("Label node with eniconfig label with configured name", "Node", node.Name, "Label", config.CustomNetworkingLabel)
 						}
 					}
 				}
