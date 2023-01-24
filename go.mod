@@ -3,8 +3,8 @@ module github.com/aws/amazon-vpc-resource-controller-k8s
 go 1.16
 
 require (
-	github.com/aws/amazon-vpc-cni-k8s v1.9.0
-	github.com/aws/aws-sdk-go v1.40.43
+	github.com/aws/amazon-vpc-cni-k8s v1.12.1
+	github.com/aws/aws-sdk-go v1.43.29
 	github.com/go-logr/logr v0.4.0
 	github.com/go-logr/zapr v0.4.0
 	github.com/golang/mock v1.4.1
@@ -15,7 +15,7 @@ require (
 	github.com/prometheus/client_golang v1.11.0
 	github.com/prometheus/client_model v0.2.0
 	github.com/prometheus/common v0.26.0
-	github.com/stretchr/testify v1.7.0
+	github.com/stretchr/testify v1.8.0
 	go.uber.org/zap v1.18.1
 	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac
 	gomodules.xyz/jsonpatch/v2 v2.2.0
