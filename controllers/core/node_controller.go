@@ -70,8 +70,10 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
 		if errors.IsNotFound(err) {
 			cachedNode, found := r.Manager.GetNode(req.Name)
-			// delete the not found node instance id from node event cache for housekeeping
-			r.deleteNodeFromNodeEventCache(cachedNode.GetNodeInstanceID())
+			if cachedNode != nil {
+				// delete the not found node instance id from node event cache for housekeeping
+				r.deleteNodeFromNodeEventCache(cachedNode.GetNodeInstanceID())
+			}
 			if found {
 				err := r.Manager.DeleteNode(req.Name)
 				if err != nil {

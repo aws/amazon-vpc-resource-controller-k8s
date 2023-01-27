@@ -18,10 +18,10 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
+	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
+	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 
 	"github.com/golang/mock/gomock"
@@ -149,14 +149,14 @@ func TestNode_InitResources_SecondProviderInitFails(t *testing.T) {
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
 
 	// Second provider throws an error
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true).AnyTimes()
+	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil).AnyTimes()
 
-	mock.MockProviders["1"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["1"].EXPECT().InitResource(mock.MockInstance).Return(mockError)
+	mock.MockProviders["1"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true).AnyTimes()
+	mock.MockProviders["1"].EXPECT().InitResource(mock.MockInstance).Return(mockError).AnyTimes()
 
 	// Expect first provider to be de initialized
-	mock.MockProviders["0"].EXPECT().DeInitResource(mock.MockInstance).Return(nil)
+	mock.MockProviders["0"].EXPECT().DeInitResource(mock.MockInstance).Return(nil).AnyTimes()
 
 	err := mock.NodeWithMock.InitResources(mock.MockResourceManager, mock.MockEC2API)
 	assert.NotNil(t, err)
