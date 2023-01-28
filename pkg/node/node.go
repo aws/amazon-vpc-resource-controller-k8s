@@ -57,6 +57,8 @@ type Node interface {
 	UpdateCustomNetworkingSpecs(subnetID string, securityGroup []string)
 	IsReady() bool
 	IsManaged() bool
+
+	GetNodeInstanceID() string
 }
 
 // NewManagedNode returns node managed by the controller
@@ -200,4 +202,11 @@ func (n *node) IsManaged() bool {
 	defer n.lock.RUnlock()
 
 	return n.managed
+}
+
+func (n *node) GetNodeInstanceID() string {
+	n.lock.RLock()
+	defer n.lock.RUnlock()
+
+	return n.instance.InstanceID()
 }

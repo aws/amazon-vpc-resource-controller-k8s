@@ -62,6 +62,20 @@ func (mr *MockNodeMockRecorder) DeleteResources(arg0, arg1 interface{}) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteResources", reflect.TypeOf((*MockNode)(nil).DeleteResources), arg0, arg1)
 }
 
+// GetNodeInstanceID mocks base method.
+func (m *MockNode) GetNodeInstanceID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNodeInstanceID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetNodeInstanceID indicates an expected call of GetNodeInstanceID.
+func (mr *MockNodeMockRecorder) GetNodeInstanceID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNodeInstanceID", reflect.TypeOf((*MockNode)(nil).GetNodeInstanceID))
+}
+
 // InitResources mocks base method.
 func (m *MockNode) InitResources(arg0 resource.ResourceManager, arg1 api.EC2APIHelper) error {
 	m.ctrl.T.Helper()
