@@ -51,9 +51,11 @@ const (
 	LabelTime                     = "time"
 	LabelCacheHit                 = "cache_hit"
 	LabelCacheMiss                = "cache_miss"
+	LabelCacheAdd                 = "cache_add"
 	LabelCacheSetErr              = "cache_set_error"
 	CacheHitMetricsValue          = "NODE_CACHED"
 	CacheMissMetricsValue         = "NODE_NOT_CACHED"
+	CacheAddMetricsValue          = "NODE_ADDED"
 	CacheErrMetricsValue          = "NODE_CACHE_ERROR"
 	EventRegardingKind            = "Node"
 )
@@ -143,7 +145,7 @@ var (
 			Name: "event_reconcile_node_cache_operations",
 			Help: "The number of ops on retrieving node from cache",
 		},
-		[]string{LabelCacheHit, LabelCacheMiss, LabelCacheSetErr},
+		[]string{LabelCacheHit, LabelCacheMiss, LabelCacheAdd, LabelCacheSetErr},
 	)
 
 	prometheusRegistered = false
@@ -208,21 +210,33 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 			// index 0 is the flag for SecurityGroupForPod, index 1 is the flag for Custom Networking
 			cacheValue := []byte{0, 0}
-			// changing to 1 indicates the event for the regarding feature
-			if eventForSGP {
-				cacheValue[EnableSGP] = 1
-			} else {
-				cacheValue[EnableCN] = 1
-			}
 
 			// use cache to avoid unnecessary calls to API server/ClientCache and node controller cache
 			// due to using List, the redundant call number can be large
 			if hitValue, cacheErr := r.cache.Get(hostID); cacheErr == nil {
 				if (eventForSGP && hitValue[EnableSGP] == 1) || (eventForCN && hitValue[EnableCN] == 1) {
-					eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{CacheHitMetricsValue, "", ""}...).Inc()
+					eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{CacheHitMetricsValue, "", "", ""}...).Inc()
 					logger.V(1).Info("Node has been processed and found in cache, will skip this event", "NodeName", nodeName, "InstanceID", hostID)
 					continue
 				}
+				// if found the instance but the feature value is not updated, we need keep the other updated feature value
+				if eventForSGP {
+					cacheValue[EnableSGP] = 1
+					cacheValue[EnableCN] = hitValue[EnableCN]
+				} else {
+					cacheValue[EnableCN] = 1
+					cacheValue[EnableSGP] = hitValue[EnableSGP]
+				}
+				logger.V(1).Info("Cache hit", "InstanceID", hostID, "SGPFeature", eventForSGP, "Value_SGP", hitValue[EnableSGP], "CNFeature", eventForCN, "Value_CN", hitValue[EnableCN])
+				logger.V(1).Info("Cache hit -- Will update Cache as", "InstanceID", hostID, "SGPFeature", eventForSGP, "Value_SGP", cacheValue[EnableSGP], "CNFeature", eventForCN, "Value_CN", cacheValue[EnableCN])
+			} else {
+				// no hit, init regarding feature's value to 1, and the other feature will be 0
+				if eventForSGP {
+					cacheValue[EnableSGP] = 1
+				} else {
+					cacheValue[EnableCN] = 1
+				}
+				logger.V(1).Info("Cache miss -- Will update Cache as", "InstanceID", hostID, "SGPFeature", eventForSGP, "Value_SGP", cacheValue[EnableSGP], "CNFeature", eventForCN, "Value_CN", cacheValue[EnableCN])
 			}
 			// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
 			if node, err := r.K8sAPI.GetNode(nodeName); err != nil {
@@ -230,7 +244,7 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				r.Log.V(1).Info("Event reconciler didn't find the node and wait for next request for the node", "Node", node.Name)
 				return ctrl.Result{}, nil
 			} else {
-				eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", CacheMissMetricsValue, ""}...).Inc()
+				eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", CacheMissMetricsValue, "", ""}...).Inc()
 				eventControllerEventNodeCacheSize.Set(float64(r.cache.Len()))
 				if r.isEventToManageNode(event) && eventForSGP {
 					// make the label value to false that indicates the node is ok to be proceeded by providers
@@ -270,9 +284,10 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				}
 				// Only update cache after necessary labelling succeeds
 				if cacheErr := r.cache.Set(hostID, cacheValue); cacheErr != nil {
-					eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", "", CacheErrMetricsValue}...).Inc()
+					eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", "", "", CacheErrMetricsValue}...).Inc()
 					logger.Error(err, "Adding new node name to event controller cache failed")
 				} else {
+					eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", "", CacheAddMetricsValue, ""}...).Inc()
 					logger.Info("Added a new node into event cache", "NodeName", nodeName, "InstanceID", hostID, "CacheSize", r.cache.Len())
 				}
 			}
