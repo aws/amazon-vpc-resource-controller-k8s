@@ -318,6 +318,34 @@ func TestBranchENIProvider_NotSupported_LabelNode(t *testing.T) {
 	assert.False(t, supported)
 }
 
+func TestBranchENIProvider_Supported_LabelNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8sWrapper := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+
+	supportedInstanceType := "c5.large"
+	node := &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   NodeName,
+			Labels: map[string]string{config.HasTrunkAttachedLabel: config.BooleanFalse},
+		},
+	}
+
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().Os().Return("linux")
+	mockInstance.EXPECT().Type().Return(supportedInstanceType)
+	mockK8sWrapper.EXPECT().GetNode(NodeName).Return(node, nil)
+	// not calling the label method if the instance is supported
+	mockK8sWrapper.EXPECT().AddLabelToManageNode(node, gomock.Any(), gomock.Any()).Return(true, nil).Times(0)
+
+	supported := provider.IsInstanceSupported(mockInstance)
+	assert.True(t, supported)
+	// not updating the label if the instance is supported
+	assert.True(t, node.Labels[config.HasTrunkAttachedLabel] == config.BooleanFalse)
+}
+
 // TestBranchENIProvider_CreateAndAnnotateResources tests that create is invoked equal to the number of resources to
 // be created
 func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {

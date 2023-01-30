@@ -306,6 +306,9 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		if err != nil {
 			log.Error(err, "removing the node from cache as it failed to initialize")
 			m.removeNodeSafe(asyncJob.nodeName)
+			// if nitializing node failed, we want to make this visible although the manager will retry
+			// the trunk label will stay as false until retry succeed
+
 			// Node will be retried for init on next event
 			return ctrl.Result{}, nil
 		}
@@ -409,7 +412,6 @@ func (m *manager) updateNodeTrunkLabel(nodeName, labelKey, labelValue string) er
 	if node, err := m.wrapper.K8sAPI.GetNode(nodeName); err != nil {
 		return err
 	} else {
-		// initializing node failed, we want to make this visible although the manager will retry
 		updated, err := m.wrapper.K8sAPI.AddLabelToManageNode(node, labelKey, labelValue)
 		if !updated {
 			m.Log.Info("failed updating the node label for trunk when operating on node", "NodeName", nodeName, "LabelKey", labelKey, "LabelValue", labelValue)
