@@ -40,6 +40,9 @@ var (
 	mockEventNodeNameOne     = "ip-0-0-0-1.us-west-2.compute.internal"
 	mockEventNodeNameTwo     = "ip-0-0-0-2.us-west-2.compute.internal"
 	mockEventNodeNameThree   = "ip-0-0-0-3.us-west-2.compute.internal"
+	mockInstanceIdOne        = "i-00000000000000001"
+	mockInstanceIdTwo        = "i-00000000000000002"
+	mockInstanceIdThree      = "i-00000000000000003"
 	sgpEventReconcileRequest = reconcile.Request{
 		NamespacedName: types.NamespacedName{
 			Name:      mockSGPEventName,
@@ -62,7 +65,7 @@ var (
 		Regarding: corev1.ObjectReference{
 			Kind: EventRegardingKind,
 			Name: mockEventNodeNameOne,
-			UID:  types.UID("i-00000000000000001"),
+			UID:  types.UID(mockInstanceIdOne),
 		},
 		ReportingController: config.VpcCNIReportingAgent,
 		Reason:              config.VpcCNINodeEventReason,
@@ -78,7 +81,7 @@ var (
 		Regarding: corev1.ObjectReference{
 			Kind: EventRegardingKind,
 			Name: mockEventNodeNameTwo,
-			UID:  types.UID("i-00000000000000002"),
+			UID:  types.UID(mockInstanceIdTwo),
 		},
 		ReportingController: config.VpcCNIReportingAgent,
 		Reason:              config.VpcCNINodeEventReason,
@@ -94,7 +97,7 @@ var (
 		Regarding: corev1.ObjectReference{
 			Kind: EventRegardingKind,
 			Name: mockEventNodeNameThree,
-			UID:  types.UID("i-00000000000000003"),
+			UID:  types.UID(mockInstanceIdThree),
 		},
 		ReportingController: config.VpcCNIReportingAgent,
 		Reason:              config.VpcCNINodeEventReason,
@@ -110,7 +113,7 @@ var (
 		Regarding: corev1.ObjectReference{
 			Kind: EventRegardingKind,
 			Name: mockEventNodeNameOne,
-			UID:  types.UID("i-00000000000000001"),
+			UID:  types.UID(mockInstanceIdOne),
 		},
 		ReportingController: config.VpcCNIReportingAgent,
 		Reason:              config.VpcCNINodeEventReason,
@@ -126,7 +129,7 @@ var (
 		Regarding: corev1.ObjectReference{
 			Kind: EventRegardingKind,
 			Name: mockEventNodeNameTwo,
-			UID:  types.UID("i-00000000000000002"),
+			UID:  types.UID(mockInstanceIdTwo),
 		},
 		ReportingController: config.VpcCNIReportingAgent,
 		Reason:              config.VpcCNINodeEventReason,
@@ -142,7 +145,7 @@ var (
 		Regarding: corev1.ObjectReference{
 			Kind: EventRegardingKind,
 			Name: mockEventNodeNameThree,
-			UID:  types.UID("i-00000000000000003"),
+			UID:  types.UID(mockInstanceIdThree),
 		},
 		ReportingController: config.VpcCNIReportingAgent,
 		Reason:              config.VpcCNINodeEventReason,
@@ -466,7 +469,7 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 				TypeMeta: metav1.TypeMeta{},
 				ObjectMeta: metav1.ObjectMeta{
 					Name:   e.testNodeName,
-					Labels: map[string]string{config.NodeLabelOS: config.OSLinux, config.HasTrunkAttachedLabel: "true"},
+					Labels: map[string]string{config.NodeLabelOS: config.OSLinux, config.HasTrunkAttachedLabel: "false"},
 				},
 			}
 			mock.MockK8sAPI.EXPECT().GetNode(e.testNodeName).Return(eventNode, nil).AnyTimes()
@@ -490,5 +493,147 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 			assert.FailNow(t, "Unexpected test case, need to fail test as safeguard")
 		}
 		assert.Equal(t, res, reconcile.Result{})
+	}
+}
+
+func TestEventReconciler_Reconcile_DualEvents(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewEventControllerMock(ctrl)
+	ops := []client.ListOption{
+		client.MatchingFields{
+			EventFilterKey: config.VpcCNIReportingAgent,
+		},
+	}
+
+	eventList := &eventsv1.EventList{}
+	eventList.Items = append([]eventsv1.Event{}, *newSgpEventOne)
+	eventList.Items = append(eventList.Items, *newEniConfigEventOne)
+	eventList.Items = append(eventList.Items, *newSgpEventOne)
+	eventList.Items = append(eventList.Items, *newEniConfigEventOne)
+
+	eventNode := &corev1.Node{
+		TypeMeta: metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   mockEventNodeNameTwo,
+			Labels: map[string]string{config.NodeLabelOS: config.OSLinux, config.HasTrunkAttachedLabel: "false"},
+		},
+	}
+	// calls should be made only twice since after one SGP event and one Custom networking event other events for the same instance should be ignored
+	// due to cache hit
+	expectedCallTimes := 2
+	mock.MockK8sAPI.EXPECT().ListEvents(ops).Return(eventList, nil)
+	mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeNameTwo).Return(eventNode, nil).Times(expectedCallTimes)
+	mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, gomock.Any(), gomock.Any()).Return(true, nil).Times(expectedCallTimes)
+	res, err := mock.Reconciler.Reconcile(context.TODO(), sgpEventReconcileRequest)
+
+	assert.NoError(t, err, "Reconcile has no error for dual events tests")
+	assert.True(t, res.Requeue == false, "Reconcile has no requeue for dual events tests")
+	assert.True(t, mock.Reconciler.cache.Len() == 1)
+	cachedEntry, err := mock.Reconciler.cache.Get(mockInstanceIdTwo)
+	assert.NoError(t, err, "Should get entry from test cache successfully")
+	assert.True(t, cachedEntry[EnableSGP] == 1, "SGP is cached")
+	assert.True(t, cachedEntry[EnableCN] == 1, "Custom networking is cached")
+}
+
+func TestEventReconciler_Reconcile_DualEventsCacheStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mock := NewEventControllerMock(ctrl)
+
+	ops := []client.ListOption{
+		client.MatchingFields{
+			EventFilterKey: config.VpcCNIReportingAgent,
+		},
+	}
+
+	var events = []struct {
+		eventList *eventsv1.EventList
+		sgp       bool
+		cn        bool
+		msg       string
+	}{
+		{
+			eventList: &eventsv1.EventList{
+				Items: append([]eventsv1.Event{}, *newSgpEventOne),
+			},
+			sgp: true,
+			msg: "SGP event one",
+		},
+		{
+			eventList: &eventsv1.EventList{
+				Items: append([]eventsv1.Event{}, *newEniConfigEventOne),
+			},
+			cn:  true,
+			msg: "Custom networking event one",
+		},
+		{
+			eventList: &eventsv1.EventList{
+				Items: append([]eventsv1.Event{}, *newSgpEventOne),
+			},
+			sgp: true,
+			msg: "SGP event one",
+		},
+		{
+			eventList: &eventsv1.EventList{
+				Items: append([]eventsv1.Event{}, *newEniConfigEventOne),
+			},
+			cn:  true,
+			msg: "Custom networking event one",
+		},
+	}
+
+	var expectedCallTimes int
+	for idx, e := range events {
+		eventNode := &corev1.Node{
+			TypeMeta: metav1.TypeMeta{},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   mockEventNodeNameTwo,
+				Labels: map[string]string{config.NodeLabelOS: config.OSLinux, config.HasTrunkAttachedLabel: "false"},
+			},
+		}
+		mock.MockK8sAPI.EXPECT().ListEvents(ops).Return(e.eventList, nil)
+		switch idx {
+		case 0:
+			expectedCallTimes = 1
+			mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeNameTwo).Return(eventNode, nil).Times(expectedCallTimes)
+			if e.sgp {
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, config.BooleanFalse).Return(true, nil).Times(expectedCallTimes)
+			} else {
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.CustomNetworkingLabel, "testConfig").Return(true, nil).Times(expectedCallTimes)
+			}
+			_, err := mock.Reconciler.cache.Get(mockInstanceIdTwo)
+			assert.Error(t, err)
+			assert.True(t, mock.Reconciler.cache.Len() == 0)
+		case 1:
+			expectedCallTimes = 1
+			mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeNameTwo).Return(eventNode, nil).Times(expectedCallTimes)
+			if e.sgp {
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, config.BooleanFalse).Return(true, nil).Times(expectedCallTimes)
+			} else {
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.CustomNetworkingLabel, "testConfig").Return(true, nil).Times(expectedCallTimes)
+			}
+			entry, err := mock.Reconciler.cache.Get(mockInstanceIdTwo)
+			assert.NoError(t, err)
+			assert.True(t, mock.Reconciler.cache.Len() == 1)
+			assert.True(t, entry[EnableSGP] == 1 && entry[EnableCN] == 0, "Cache miss with entry")
+		default:
+			// at this moment, the cache should have updated for the key (instance id) with both features flagged as {1, 1}
+			// cache should be hit no matter how many events for this instance are added into this test
+			expectedCallTimes = 0
+			mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeNameTwo).Return(eventNode, nil).Times(expectedCallTimes)
+			if e.sgp {
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, config.BooleanFalse).Return(true, nil).Times(expectedCallTimes)
+			} else {
+				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.CustomNetworkingLabel, "testConfig").Return(true, nil).Times(expectedCallTimes)
+			}
+			entry, err := mock.Reconciler.cache.Get(mockInstanceIdTwo)
+			assert.NoError(t, err)
+			assert.True(t, mock.Reconciler.cache.Len() == 1)
+			assert.True(t, entry[EnableSGP] == 1 && entry[EnableCN] == 1, "Cache hit")
+		}
+
+		mock.Reconciler.Reconcile(context.TODO(), sgpEventReconcileRequest)
 	}
 }
