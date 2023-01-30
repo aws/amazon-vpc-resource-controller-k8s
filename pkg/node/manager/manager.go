@@ -306,9 +306,19 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		if err != nil {
 			log.Error(err, "removing the node from cache as it failed to initialize")
 			m.removeNodeSafe(asyncJob.nodeName)
+			// if initializing node failed, we want to make this visible although the manager will retry
+			// the trunk label will stay as false until retry succeed
+
 			// Node will be retried for init on next event
 			return ctrl.Result{}, nil
 		}
+
+		// node was successfully initialized, we need to update trunk label value to True
+		// this is the only place that the controller set the label to true
+		if err := m.updateNodeTrunkLabel(asyncJob.nodeName, config.HasTrunkAttachedLabel, config.BooleanTrue); err != nil {
+			m.Log.Error(err, "updating node trunk label to true failed", "NodeName", asyncJob.nodeName)
+		}
+
 		// If there's no error, we need to update the node so the capacity is advertised
 		asyncJob.op = Update
 		return m.performAsyncOperation(asyncJob)
@@ -396,4 +406,16 @@ func (m *manager) removeNodeSafe(nodeName string) {
 	defer m.lock.Unlock()
 
 	delete(m.dataStore, nodeName)
+}
+
+func (m *manager) updateNodeTrunkLabel(nodeName, labelKey, labelValue string) error {
+	if node, err := m.wrapper.K8sAPI.GetNode(nodeName); err != nil {
+		return err
+	} else {
+		updated, err := m.wrapper.K8sAPI.AddLabelToManageNode(node, labelKey, labelValue)
+		if !updated {
+			m.Log.Info("failed updating the node label for trunk when operating on node", "NodeName", nodeName, "LabelKey", labelKey, "LabelValue", labelValue)
+		}
+		return err
+	}
 }

@@ -232,7 +232,7 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			} else {
 				eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", CacheMissMetricsValue, ""}...).Inc()
 				eventControllerEventNodeCacheSize.Set(float64(r.cache.Len()))
-				if r.isEventToManageNode(event) && eventForSGP {
+				if eventForSGP {
 					// make the label value to false that indicates the node is ok to be proceeded by providers
 					// provider will decide if the node can be attached with trunk interface
 					labelled, err := r.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, config.BooleanFalse)
@@ -290,10 +290,6 @@ func (r *EventReconciler) isValidEventForSGP(event eventsv1.Event) bool {
 func (r *EventReconciler) isValidEventForCustomNetworking(event eventsv1.Event) bool {
 	return event.ReportingController == config.VpcCNIReportingAgent &&
 		event.Reason == config.VpcCNINodeEventReason && event.Action == config.VpcCNINodeEventActionForEniConfig
-}
-
-func (r *EventReconciler) isEventToManageNode(event eventsv1.Event) bool {
-	return event.Note == config.TrunkNotAttached || event.Note == config.TrunkAttached
 }
 
 func (r *EventReconciler) SetupWithManager(mgr ctrl.Manager) error {

@@ -472,15 +472,14 @@ func (b *branchENIProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
 	} else {
 		if node.Labels != nil {
 			if _, ok := node.Labels[config.HasTrunkAttachedLabel]; ok {
-				labelValue := config.BooleanTrue
 				if !supported {
-					labelValue = config.NotSupportedEc2Type
-				}
-				updated, err := b.apiWrapper.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, labelValue)
-				if err != nil {
-					b.log.Error(err, "failed to update node label", "NodeName", instance.Name(), "LabelKey", config.HasTrunkAttachedLabel, "ExpectedLabelValue", labelValue)
-				} else if !updated {
-					b.log.V(1).Info("unable to update node with the existing label key/value pair", "NodeName", instance.Name(), "LabelKey", config.HasTrunkAttachedLabel, "ExpectedLabelValue", labelValue)
+					labelValue := config.NotSupportedEc2Type
+					updated, err := b.apiWrapper.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, labelValue)
+					if err != nil {
+						b.log.Error(err, "failed to update node label", "NodeName", instance.Name(), "LabelKey", config.HasTrunkAttachedLabel, "ExpectedLabelValue", labelValue)
+					} else if !updated {
+						b.log.V(1).Info("unable to update node with the existing label key/value pair", "NodeName", instance.Name(), "LabelKey", config.HasTrunkAttachedLabel, "ExpectedLabelValue", labelValue)
+					}
 				}
 			}
 		} else {
