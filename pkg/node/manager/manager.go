@@ -306,7 +306,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		if err != nil {
 			log.Error(err, "removing the node from cache as it failed to initialize")
 			m.removeNodeSafe(asyncJob.nodeName)
-			// if nitializing node failed, we want to make this visible although the manager will retry
+			// if initializing node failed, we want to make this visible although the manager will retry
 			// the trunk label will stay as false until retry succeed
 
 			// Node will be retried for init on next event
