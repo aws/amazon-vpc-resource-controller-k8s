@@ -76,7 +76,7 @@ type K8sWrapper interface {
 	GetConfigMap(configMapName string, configMapNamespace string) (*v1.ConfigMap, error)
 	ListNodes() (*v1.NodeList, error)
 	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error)
-	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
+	GetEvent(namespacedName types.NamespacedName) (*eventsv1.Event, error)
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -213,10 +213,9 @@ func (k *k8sWrapper) AddLabelToManageNode(node *v1.Node, labelKey string, labelV
 	}
 }
 
-func (k *k8sWrapper) ListEvents(ops []client.ListOption) (*eventsv1.EventList, error) {
-	events := &eventsv1.EventList{}
-	if err := k.cacheClient.List(k.context, events, ops...); err != nil {
-		return nil, err
-	}
-	return events, nil
+func (k *k8sWrapper) GetEvent(namespacedName types.NamespacedName) (*eventsv1.Event, error) {
+	event := &eventsv1.Event{}
+	err := k.cacheClient.Get(k.context, namespacedName, event)
+
+	return event, err
 }

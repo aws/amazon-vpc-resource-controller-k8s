@@ -26,7 +26,7 @@ import (
 	v10 "k8s.io/api/core/v1"
 	v11 "k8s.io/api/events/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
-	client "sigs.k8s.io/controller-runtime/pkg/client"
+	types "k8s.io/apimachinery/pkg/types"
 )
 
 // MockK8sWrapper is a mock of K8sWrapper interface.
@@ -153,6 +153,21 @@ func (mr *MockK8sWrapperMockRecorder) GetENIConfig(arg0 interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetENIConfig", reflect.TypeOf((*MockK8sWrapper)(nil).GetENIConfig), arg0)
 }
 
+// GetEvent mocks base method.
+func (m *MockK8sWrapper) GetEvent(arg0 types.NamespacedName) (*v11.Event, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetEvent", arg0)
+	ret0, _ := ret[0].(*v11.Event)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetEvent indicates an expected call of GetEvent.
+func (mr *MockK8sWrapperMockRecorder) GetEvent(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEvent", reflect.TypeOf((*MockK8sWrapper)(nil).GetEvent), arg0)
+}
+
 // GetNode mocks base method.
 func (m *MockK8sWrapper) GetNode(arg0 string) (*v10.Node, error) {
 	m.ctrl.T.Helper()
@@ -166,21 +181,6 @@ func (m *MockK8sWrapper) GetNode(arg0 string) (*v10.Node, error) {
 func (mr *MockK8sWrapperMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNode", reflect.TypeOf((*MockK8sWrapper)(nil).GetNode), arg0)
-}
-
-// ListEvents mocks base method.
-func (m *MockK8sWrapper) ListEvents(arg0 []client.ListOption) (*v11.EventList, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListEvents", arg0)
-	ret0, _ := ret[0].(*v11.EventList)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ListEvents indicates an expected call of ListEvents.
-func (mr *MockK8sWrapperMockRecorder) ListEvents(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEvents", reflect.TypeOf((*MockK8sWrapper)(nil).ListEvents), arg0)
 }
 
 // ListNodes mocks base method.

@@ -29,30 +29,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 var (
-	mockSGPEventName         = "node-sgp-event"
-	mockCNEventName          = "node-custom-networking-event"
-	mockEventNodeNameOne     = "ip-0-0-0-1.us-west-2.compute.internal"
-	mockEventNodeNameTwo     = "ip-0-0-0-2.us-west-2.compute.internal"
-	mockEventNodeNameThree   = "ip-0-0-0-3.us-west-2.compute.internal"
-	mockInstanceIdOne        = "i-00000000000000001"
-	mockInstanceIdTwo        = "i-00000000000000002"
-	mockInstanceIdThree      = "i-00000000000000003"
-	sgpEventReconcileRequest = reconcile.Request{
+	mockNodeEventReqName   = "ip-192-168-0-0.us-west-2.compute.internal.1741bdaa24dc9119"
+	mockSGPEventName       = "node-sgp-event"
+	mockCNEventName        = "node-custom-networking-event"
+	mockEventNodeNameOne   = "ip-0-0-0-1.us-west-2.compute.internal"
+	mockEventNodeNameTwo   = "ip-0-0-0-2.us-west-2.compute.internal"
+	mockEventNodeNameThree = "ip-0-0-0-3.us-west-2.compute.internal"
+	mockInstanceIdOne      = "i-00000000000000001"
+	mockInstanceIdTwo      = "i-00000000000000002"
+	mockInstanceIdThree    = "i-00000000000000003"
+
+	nodeEventReconcileRequest = reconcile.Request{
 		NamespacedName: types.NamespacedName{
-			Name:      mockSGPEventName,
-			Namespace: config.KubeSystemNamespace,
-		},
-	}
-	eniConfigEventReconcileRequest = reconcile.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      mockCNEventName,
-			Namespace: config.KubeSystemNamespace,
+			Name:      mockNodeEventReqName,
+			Namespace: corev1.NamespaceDefault,
 		},
 	}
 
@@ -180,7 +175,8 @@ func NewEventControllerMock(ctrl *gomock.Controller, mockObjects ...runtime.Obje
 
 func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 	var events = []struct {
-		eventList             *eventsv1.EventList
+		event                 *eventsv1.Event
+		namespacedName        types.NamespacedName
 		isValidEventForSGP    bool
 		successfullyLabelNode bool
 		testNodeName          string
@@ -191,9 +187,8 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 		evictCache            bool
 	}{
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *oldSgpEvent),
-			},
+			event:                 oldSgpEvent,
+			namespacedName:        nodeEventReconcileRequest.NamespacedName,
 			isValidEventForSGP:    false,
 			successfullyLabelNode: false,
 			testNodeName:          mockEventNodeNameOne,
@@ -204,9 +199,8 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 			evictCache:            false,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newSgpEventOne),
-			},
+			event:                 newSgpEventOne,
+			namespacedName:        nodeEventReconcileRequest.NamespacedName,
 			isValidEventForSGP:    true,
 			successfullyLabelNode: true,
 			testNodeName:          mockEventNodeNameTwo,
@@ -217,9 +211,8 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 			evictCache:            false,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newSgpEventTwo),
-			},
+			event:                 newSgpEventTwo,
+			namespacedName:        nodeEventReconcileRequest.NamespacedName,
 			isValidEventForSGP:    true,
 			successfullyLabelNode: false,
 			testNodeName:          mockEventNodeNameThree,
@@ -230,9 +223,8 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 			evictCache:            false,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newSgpEventTwo),
-			},
+			event:                 newSgpEventTwo,
+			namespacedName:        nodeEventReconcileRequest.NamespacedName,
 			isValidEventForSGP:    true,
 			successfullyLabelNode: true,
 			testNodeName:          mockEventNodeNameThree,
@@ -243,9 +235,8 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 			evictCache:            false,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newSgpEventTwo),
-			},
+			event:                 newSgpEventTwo,
+			namespacedName:        nodeEventReconcileRequest.NamespacedName,
 			isValidEventForSGP:    true,
 			successfullyLabelNode: true,
 			testNodeName:          mockEventNodeNameThree,
@@ -256,9 +247,8 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 			evictCache:            false,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newSgpEventTwo),
-			},
+			event:                 newSgpEventTwo,
+			namespacedName:        nodeEventReconcileRequest.NamespacedName,
 			isValidEventForSGP:    true,
 			successfullyLabelNode: true,
 			testNodeName:          mockEventNodeNameThree,
@@ -269,9 +259,8 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 			evictCache:            true,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newSgpEventTwo),
-			},
+			event:                 newSgpEventTwo,
+			namespacedName:        nodeEventReconcileRequest.NamespacedName,
 			isValidEventForSGP:    true,
 			successfullyLabelNode: true,
 			testNodeName:          mockEventNodeNameThree,
@@ -287,17 +276,12 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewEventControllerMock(ctrl)
-	ops := []client.ListOption{
-		client.MatchingFields{
-			EventFilterKey: config.VpcCNIReportingAgent,
-		},
-	}
 
 	for _, e := range events {
 		if e.evictCache {
 			time.Sleep(testCacheExpiry + testWaitCacheEvict)
 		}
-		mock.MockK8sAPI.EXPECT().ListEvents(ops).Return(e.eventList, nil)
+		mock.MockK8sAPI.EXPECT().GetEvent(nodeEventReconcileRequest.NamespacedName).Return(e.event, nil)
 
 		_, cacheErr := mock.Reconciler.cache.Get(e.testNodeKey)
 
@@ -326,7 +310,7 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 				mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, config.HasTrunkAttachedLabel, config.BooleanFalse).Return(false, errors.New("sgp-test"))
 			}
 		}
-		res, err := mock.Reconciler.Reconcile(context.TODO(), sgpEventReconcileRequest)
+		res, err := mock.Reconciler.Reconcile(context.TODO(), nodeEventReconcileRequest)
 
 		if cacheErr == nil || e.successfullyLabelNode {
 			assert.NoError(t, err, e.msg)
@@ -348,14 +332,9 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 	defer ctrl.Finish()
 	mock := NewEventControllerMock(ctrl)
 
-	ops := []client.ListOption{
-		client.MatchingFields{
-			EventFilterKey: config.VpcCNIReportingAgent,
-		},
-	}
-
 	var events = []struct {
-		eventList                       *eventsv1.EventList
+		event                           *eventsv1.Event
+		namespacedName                  types.NamespacedName
 		isValidEventForCustomNetworking bool
 		successfullyLabelNode           bool
 		testNodeName                    string
@@ -366,9 +345,8 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 		evictCache                      bool
 	}{
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *oldEniConfigEvent),
-			},
+			event:                           oldEniConfigEvent,
+			namespacedName:                  nodeEventReconcileRequest.NamespacedName,
 			isValidEventForCustomNetworking: false,
 			successfullyLabelNode:           false,
 			testNodeName:                    mockEventNodeNameOne,
@@ -379,9 +357,8 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 			evictCache:                      false,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newEniConfigEventOne),
-			},
+			event:                           newEniConfigEventOne,
+			namespacedName:                  nodeEventReconcileRequest.NamespacedName,
 			isValidEventForCustomNetworking: true,
 			successfullyLabelNode:           true,
 			testNodeName:                    mockEventNodeNameTwo,
@@ -392,9 +369,8 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 			evictCache:                      false,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newEniConfigEventTwo),
-			},
+			event:                           newEniConfigEventTwo,
+			namespacedName:                  nodeEventReconcileRequest.NamespacedName,
 			isValidEventForCustomNetworking: true,
 			successfullyLabelNode:           false,
 			testNodeName:                    mockEventNodeNameThree,
@@ -405,9 +381,8 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 			evictCache:                      false,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newEniConfigEventTwo),
-			},
+			event:                           newEniConfigEventTwo,
+			namespacedName:                  nodeEventReconcileRequest.NamespacedName,
 			isValidEventForCustomNetworking: true,
 			successfullyLabelNode:           true,
 			testNodeName:                    mockEventNodeNameThree,
@@ -418,9 +393,8 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 			evictCache:                      false,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newEniConfigEventTwo),
-			},
+			event:                           newEniConfigEventTwo,
+			namespacedName:                  nodeEventReconcileRequest.NamespacedName,
 			isValidEventForCustomNetworking: true,
 			successfullyLabelNode:           true,
 			testNodeName:                    mockEventNodeNameThree,
@@ -431,9 +405,8 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 			evictCache:                      false,
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newEniConfigEventTwo),
-			},
+			event:                           newEniConfigEventTwo,
+			namespacedName:                  nodeEventReconcileRequest.NamespacedName,
 			isValidEventForCustomNetworking: true,
 			successfullyLabelNode:           true,
 			testNodeName:                    mockEventNodeNameThree,
@@ -449,7 +422,7 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 		if e.evictCache {
 			time.Sleep(testCacheExpiry + testWaitCacheEvict)
 		}
-		mock.MockK8sAPI.EXPECT().ListEvents(ops).Return(e.eventList, nil)
+		mock.MockK8sAPI.EXPECT().GetEvent(nodeEventReconcileRequest.NamespacedName).Return(e.event, nil)
 
 		_, cacheErr := mock.Reconciler.cache.Get(e.testNodeKey)
 
@@ -480,7 +453,7 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 			}
 		}
 
-		res, err := mock.Reconciler.Reconcile(context.TODO(), eniConfigEventReconcileRequest)
+		res, err := mock.Reconciler.Reconcile(context.TODO(), nodeEventReconcileRequest)
 
 		if cacheErr == nil || e.successfullyLabelNode {
 			assert.NoError(t, err)
@@ -501,11 +474,6 @@ func TestEventReconciler_Reconcile_DualEvents(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewEventControllerMock(ctrl)
-	ops := []client.ListOption{
-		client.MatchingFields{
-			EventFilterKey: config.VpcCNIReportingAgent,
-		},
-	}
 
 	eventList := &eventsv1.EventList{}
 	eventList.Items = append([]eventsv1.Event{}, *newSgpEventOne)
@@ -520,14 +488,24 @@ func TestEventReconciler_Reconcile_DualEvents(t *testing.T) {
 			Labels: map[string]string{config.NodeLabelOS: config.OSLinux, config.HasTrunkAttachedLabel: "false"},
 		},
 	}
-	// calls should be made only twice since after one SGP event and one Custom networking event other events for the same instance should be ignored
-	// due to cache hit
-	expectedCallTimes := 2
-	mock.MockK8sAPI.EXPECT().ListEvents(ops).Return(eventList, nil)
-	mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeNameTwo).Return(eventNode, nil).Times(expectedCallTimes)
-	mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, gomock.Any(), gomock.Any()).Return(true, nil).Times(expectedCallTimes)
-	res, err := mock.Reconciler.Reconcile(context.TODO(), sgpEventReconcileRequest)
 
+	events := []*eventsv1.Event{newSgpEventOne, newEniConfigEventOne}
+
+	times := 2
+	var err error
+	var res reconcile.Result
+	for i := 0; i < times; i++ {
+		for _, value := range events {
+			// calls should be made only twice since after one SGP event and one Custom networking event other events for the same instance should be ignored
+			// due to cache hit
+			expectedCallTimes := times - i - 1
+			mock.MockK8sAPI.EXPECT().GetEvent(nodeEventReconcileRequest.NamespacedName).Return(value, nil).Times(1)
+			mock.MockK8sAPI.EXPECT().GetNode(mockEventNodeNameTwo).Return(eventNode, nil).Times(expectedCallTimes)
+			mock.MockK8sAPI.EXPECT().AddLabelToManageNode(eventNode, gomock.Any(), gomock.Any()).Return(true, nil).Times(expectedCallTimes)
+			res, err = mock.Reconciler.Reconcile(context.TODO(), nodeEventReconcileRequest)
+			assert.NoError(t, err, "Reconcile has no error for test event", value)
+		}
+	}
 	assert.NoError(t, err, "Reconcile has no error for dual events tests")
 	assert.True(t, res.Requeue == false, "Reconcile has no requeue for dual events tests")
 	assert.True(t, mock.Reconciler.cache.Len() == 1)
@@ -542,45 +520,36 @@ func TestEventReconciler_Reconcile_DualEventsCacheStatus(t *testing.T) {
 	defer ctrl.Finish()
 	mock := NewEventControllerMock(ctrl)
 
-	ops := []client.ListOption{
-		client.MatchingFields{
-			EventFilterKey: config.VpcCNIReportingAgent,
-		},
-	}
-
 	var events = []struct {
-		eventList *eventsv1.EventList
-		sgp       bool
-		cn        bool
-		msg       string
+		event *eventsv1.Event
+		nn    types.NamespacedName
+		sgp   bool
+		cn    bool
+		msg   string
 	}{
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newSgpEventOne),
-			},
-			sgp: true,
-			msg: "SGP event one",
+			event: newSgpEventOne,
+			nn:    nodeEventReconcileRequest.NamespacedName,
+			sgp:   true,
+			msg:   "SGP event one",
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newEniConfigEventOne),
-			},
-			cn:  true,
-			msg: "Custom networking event one",
+			event: newEniConfigEventOne,
+			nn:    nodeEventReconcileRequest.NamespacedName,
+			cn:    true,
+			msg:   "Custom networking event one",
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newSgpEventOne),
-			},
-			sgp: true,
-			msg: "SGP event one",
+			event: newSgpEventOne,
+			nn:    nodeEventReconcileRequest.NamespacedName,
+			sgp:   true,
+			msg:   "SGP event one",
 		},
 		{
-			eventList: &eventsv1.EventList{
-				Items: append([]eventsv1.Event{}, *newEniConfigEventOne),
-			},
-			cn:  true,
-			msg: "Custom networking event one",
+			event: newEniConfigEventOne,
+			nn:    nodeEventReconcileRequest.NamespacedName,
+			cn:    true,
+			msg:   "Custom networking event one",
 		},
 	}
 
@@ -593,7 +562,7 @@ func TestEventReconciler_Reconcile_DualEventsCacheStatus(t *testing.T) {
 				Labels: map[string]string{config.NodeLabelOS: config.OSLinux, config.HasTrunkAttachedLabel: "false"},
 			},
 		}
-		mock.MockK8sAPI.EXPECT().ListEvents(ops).Return(e.eventList, nil)
+		mock.MockK8sAPI.EXPECT().GetEvent(e.nn).Return(e.event, nil)
 		switch idx {
 		case 0:
 			expectedCallTimes = 1
@@ -634,6 +603,6 @@ func TestEventReconciler_Reconcile_DualEventsCacheStatus(t *testing.T) {
 			assert.True(t, entry[EnableSGP] == 1 && entry[EnableCN] == 1, "Cache hit")
 		}
 
-		mock.Reconciler.Reconcile(context.TODO(), sgpEventReconcileRequest)
+		mock.Reconciler.Reconcile(context.TODO(), nodeEventReconcileRequest)
 	}
 }
