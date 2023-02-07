@@ -98,6 +98,7 @@ func main() {
 	var leaderLeaseRetryPeriod int
 	var outputPath string
 	var introspectBindAddr string
+	var leaseOnly bool
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080",
 		"The address the metric endpoint binds to.")
@@ -127,6 +128,7 @@ func main() {
 	flag.StringVar(&outputPath, "log-file", "stderr", "The path to redirect controller logs")
 	flag.StringVar(&introspectBindAddr, "introspect-bind-addr", ":22775",
 		"Port for serving the introspection API")
+	flag.BoolVar(&leaseOnly, "lease-only", false, "Controller uses lease only for leader election")
 
 	flag.Parse()
 
@@ -216,6 +218,11 @@ func main() {
 		},
 	})
 
+	leaderElectionSource := resourcelock.ConfigMapsLeasesResourceLock
+	if leaseOnly {
+		leaderElectionSource = resourcelock.LeasesResourceLock
+	}
+
 	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
 		SyncPeriod:                 &syncPeriod,
 		Scheme:                     scheme,
@@ -227,7 +234,7 @@ func main() {
 		RetryPeriod:                &retryPeriod,
 		LeaderElectionID:           config.LeaderElectionKey,
 		LeaderElectionNamespace:    config.LeaderElectionNamespace,
-		LeaderElectionResourceLock: resourcelock.ConfigMapsLeasesResourceLock,
+		LeaderElectionResourceLock: leaderElectionSource,
 		HealthProbeBindAddress:     ":61779", // the liveness endpoint is default to "/healthz"
 		NewCache:                   newCache,
 	})
