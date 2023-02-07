@@ -18,57 +18,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/allegro/bigcache/v3"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/go-logr/logr"
-	"github.com/prometheus/client_golang/prometheus"
-	"k8s.io/apimachinery/pkg/runtime"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
-
-	corev1 "k8s.io/api/core/v1"
 	eventsv1 "k8s.io/api/events/v1"
-
-	bigcache "github.com/allegro/bigcache/v3"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 const (
-	MaxEventConcurrentReconciles  = 4
-	EventCreatedPastMinutes       = 2
-	EventFilterKey                = "reason"
-	LoggerName                    = "event"
-	TotalEventsCountMetrics       = "reconcile"
-	EventFailureCountMetrics      = "failing_list"
-	SGPEventsFailureCountMetrics  = "trunk_label_failed"
-	SGPEventsCountMetrics         = "trunk_labelled"
-	CNEventsFailureCountMetrics   = "eniconfig_label_failed"
-	CNEventsCountMetrics          = "eniconfig_labelled"
-	ReconcileEventsLatencyMetrics = "reconcile_events"
-	LabelOperation                = "operation"
-	LabelTime                     = "time"
-	LabelCacheHit                 = "cache_hit"
-	LabelCacheMiss                = "cache_miss"
-	LabelCacheAdd                 = "cache_add"
-	LabelCacheSetErr              = "cache_set_error"
-	CacheHitMetricsValue          = "NODE_CACHED"
-	CacheMissMetricsValue         = "NODE_NOT_CACHED"
-	CacheAddMetricsValue          = "NODE_ADDED"
-	CacheErrMetricsValue          = "NODE_CACHE_ERROR"
-	EventRegardingKind            = "Node"
+	CniPodNamePrefix       = "aws-node"
+	InitialWatchingEventRV = "1"
+
+	MaxGoroutinesProcessEvents = 4
+	RetryWatcherTimeoutMinutes = 5
 )
-
-// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;update;patch;list;watch
-
-type EventReconciler struct {
-	Log    logr.Logger
-	Scheme *runtime.Scheme
-	K8sAPI k8s.K8sWrapper
-	cache  *bigcache.BigCache
-}
 
 type Feature int
 
@@ -77,262 +46,217 @@ const (
 	EnableCN
 )
 
-var (
-	eventControllerTotalEventsCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "total_events_reconciled_by_event_controller",
-			Help: "The number of events that were reconcile by the controller",
-		},
-		[]string{LabelOperation},
-	)
+type WatchedEventController struct {
+	clientSet            kubernetes.Clientset
+	logger               logr.Logger
+	ctx                  context.Context
+	k8sAPI               k8s.K8sWrapper
+	cache                *bigcache.BigCache
+	prometheusRegistered bool
+	eventWatchTime       int
+}
 
-	eventControllerSGPEventsCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "security_group_pod_events_reconciled_by_event_controller",
-			Help: "The number of SGP events that were reconcile by the controller",
-		},
-		[]string{LabelOperation},
-	)
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=get;watch
 
-	eventControllerSGPEventsFailureCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "failed_security_group_pod_events_reconciled_by_event_controller",
-			Help: "The number of SGP events that were reconcile by the controller but failed on label node",
-		},
-		[]string{LabelOperation},
-	)
-
-	eventControllerCNEventsCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "custom_networking_events_reconciled_by_event_controller",
-			Help: "The number of custom networking events that were reconcile by the controller",
-		},
-		[]string{LabelOperation},
-	)
-
-	eventControllerCNEventsFailureCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "failed_custom_networking_events_reconciled_by_event_controller",
-			Help: "The number of custom networking events that were reconcile by the controller but failed on label node",
-		},
-		[]string{LabelOperation},
-	)
-
-	eventControllerEventFailureCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "failed_get_events__by_event_controller",
-			Help: "The number of failures on getting events by the controller",
-		},
-		[]string{LabelOperation},
-	)
-
-	eventReconcileOperationLatency = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name: "event_reconcile_operation_latency",
-			Help: "Event controller reconcile events latency in ms",
-		},
-		[]string{LabelTime},
-	)
-
-	eventControllerEventNodeCacheSize = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "event_reconcile_node_cache_size",
-			Help: "Event controller node cache size",
-		},
-	)
-
-	eventControllerEventNodeCacheOpsCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "event_reconcile_node_cache_operations",
-			Help: "The number of ops on retrieving node from cache",
-		},
-		[]string{LabelCacheHit, LabelCacheMiss, LabelCacheAdd, LabelCacheSetErr},
-	)
-
-	prometheusRegistered = false
-)
-
-func NewEventReconciler(log logr.Logger, scheme *runtime.Scheme, k8sAPI k8s.K8sWrapper, nodeCache *bigcache.BigCache) *EventReconciler {
-	return &EventReconciler{
-		Log:    log,
-		Scheme: scheme,
-		K8sAPI: k8sAPI,
-		cache:  nodeCache,
+func NewWatchedEventController(ctx context.Context,
+	log logr.Logger,
+	client kubernetes.Clientset,
+	k8sAPI k8s.K8sWrapper,
+	nodeCache *bigcache.BigCache,
+	eventWatchTime int) *WatchedEventController {
+	return &WatchedEventController{
+		clientSet:      client,
+		logger:         log,
+		ctx:            ctx,
+		k8sAPI:         k8sAPI,
+		cache:          nodeCache,
+		eventWatchTime: eventWatchTime,
 	}
 }
 
-func PrometheusRegister() {
-	if !prometheusRegistered {
-		metrics.Registry.MustRegister(eventControllerTotalEventsCount)
-		metrics.Registry.MustRegister(eventControllerSGPEventsCount)
-		metrics.Registry.MustRegister(eventControllerEventFailureCount)
-		metrics.Registry.MustRegister(eventControllerCNEventsCount)
-		metrics.Registry.MustRegister(eventReconcileOperationLatency)
-		metrics.Registry.MustRegister(eventControllerSGPEventsFailureCount)
-		metrics.Registry.MustRegister(eventControllerCNEventsFailureCount)
-		metrics.Registry.MustRegister(eventControllerEventNodeCacheSize)
-		metrics.Registry.MustRegister(eventControllerEventNodeCacheOpsCount)
-		prometheusRegistered = true
-	}
-}
-
-func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	start := time.Now()
-	var err error
-
-	logger := r.Log.WithValues(LoggerName, req.Name)
-
-	eventControllerTotalEventsCount.WithLabelValues(TotalEventsCountMetrics).Inc()
-
-	ops := []client.ListOption{
-		client.MatchingFields{
-			EventFilterKey: config.VpcCNINodeEventReason,
-		},
+func (wec *WatchedEventController) watchEvents() error {
+	// client-go default timeout on watcher is 5-10 minutes, we use 5 minutes here
+	timeOut := int64(RetryWatcherTimeoutMinutes * 60)
+	watchFunc := func(opts v1.ListOptions) (watch.Interface, error) {
+		return wec.clientSet.EventsV1().
+			Events(config.KubeSystemNamespace).
+			Watch(wec.ctx, v1.ListOptions{
+				TimeoutSeconds: &timeOut,
+				FieldSelector: fields.Set{
+					"reason": config.VpcCNINodeEventReason,
+				}.AsSelector().String(),
+			})
 	}
 
-	events, err := r.K8sAPI.ListEvents(ops)
+	watcher, err := wec.k8sAPI.GetRetryWatcher(InitialWatchingEventRV, watchFunc)
+
 	if err != nil {
-		logger.Error(err, "List events failed")
-		eventControllerEventFailureCount.WithLabelValues(EventFailureCountMetrics).Inc()
-		return ctrl.Result{}, err
+		wec.logger.Error(err, "Setup self watched event controller watcher failed")
+		return err
 	}
 
-	for _, event := range events.Items {
-		// only check and process events were created in the past EventCreatedPastMinutes minutes
-		if !event.GetCreationTimestamp().After(time.Now().Add(-time.Minute*EventCreatedPastMinutes)) || event.Regarding.Kind != EventRegardingKind {
-			continue
-		}
-		eventForSGP := r.isValidEventForSGP(event)
-		eventForCN := r.isValidEventForCustomNetworking(event)
-		if eventForSGP || eventForCN {
-			nodeName := event.Regarding.Name
-			// use instance ID as cache key since they are guaranteed regionally unique
-			hostID := string(event.Regarding.UID)
+	// TODO: since this may cause panic on closing closed channel, we can evaluate this later again
+	// since we can't let the watcher close itself, panic is not a bad thing until we have health check in place.
+	defer watcher.Stop()
 
-			// index 0 is the flag for SecurityGroupForPod, index 1 is the flag for Custom Networking
-			cacheValue := []byte{0, 0}
-
-			// use cache to avoid unnecessary calls to API server/ClientCache and node controller cache
-			// due to using List, the redundant call number can be large
-			if hitValue, cacheErr := r.cache.Get(hostID); cacheErr == nil {
-				if (eventForSGP && hitValue[EnableSGP] == 1) || (eventForCN && hitValue[EnableCN] == 1) {
-					eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{CacheHitMetricsValue, "", "", ""}...).Inc()
-					logger.V(1).Info("Node has been processed and found in cache, will skip this event", "NodeName", nodeName, "InstanceID", hostID)
-					continue
-				}
-				// if found the instance but the feature value is not updated, we need keep the other updated feature value
-				if eventForSGP {
-					cacheValue[EnableSGP] = 1
-					cacheValue[EnableCN] = hitValue[EnableCN]
-				} else {
-					cacheValue[EnableCN] = 1
-					cacheValue[EnableSGP] = hitValue[EnableSGP]
-				}
-				logger.V(1).Info("Cache hit", "InstanceID", hostID, "SGPFeature", eventForSGP, "Value_SGP", hitValue[EnableSGP], "CNFeature", eventForCN, "Value_CN", hitValue[EnableCN])
-				logger.V(1).Info("Cache hit -- Will update Cache as", "InstanceID", hostID, "SGPFeature", eventForSGP, "Value_SGP", cacheValue[EnableSGP], "CNFeature", eventForCN, "Value_CN", cacheValue[EnableCN])
-			} else {
-				// no hit, init regarding feature's value to 1, and the other feature will be 0
-				if eventForSGP {
-					cacheValue[EnableSGP] = 1
-				} else {
-					cacheValue[EnableCN] = 1
-				}
-				logger.V(1).Info("Cache miss -- Will update Cache as", "InstanceID", hostID, "SGPFeature", eventForSGP, "Value_SGP", cacheValue[EnableSGP], "CNFeature", eventForCN, "Value_CN", cacheValue[EnableCN])
+	for {
+		select {
+		case <-wec.ctx.Done():
+			wec.logger.Info("Received done signal from context, shutting down the self managed event controller")
+			return nil
+		case <-watcher.Done():
+			// since the watcher is a critical component to support SGP feature
+			// we need to panic and restart the entire controller if retryWatcher stops for any reason
+			// TODO: use health check to gracefully restart the entire controller
+			wec.logger.Info("event watcher Done chan was closed, need panic to restart...")
+			eventWatcherPanicCount.WithLabelValues(WatcherPanicCount).Inc()
+			panic("event self watcher can't be closed, panic to restart")
+		case event, open := <-watcher.ResultChan():
+			if !open {
+				// need safe guard the watcher
+				wec.logger.Info("event watcher ResultChan was closed, need panic to restart...")
+				eventWatcherPanicCount.WithLabelValues(WatcherPanicCount).Inc()
+				// TODO: use health check to gracefully restart the entire controller
+				panic("event self watcher can't be closed, panic to restart")
 			}
-			// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
-			if node, err := r.K8sAPI.GetNode(nodeName); err != nil {
-				// if not found the node, we don't requeue and just wait VPC CNI to send another request
-				r.Log.V(1).Info("Event reconciler didn't find the node and wait for next request for the node", "Node", node.Name)
-				return ctrl.Result{}, nil
+			eventWatchedTotalCount.WithLabelValues(TotalEventWatchedCount).Inc()
+			switch event.Type {
+			// for this use case, no need to check on DELETE and BOOKMARK types
+			case watch.Added, watch.Modified:
+				wantedEvent, ok := event.Object.(*eventsv1.Event)
+				if ok {
+					wec.logger.V(1).Info("Get an event from watcher and add into processing channel", "EventName", wantedEvent.Name, "EventNamespace", wantedEvent.Namespace, "Event", wantedEvent)
+					if wantedEvent.CreationTimestamp.After(time.Now().Add(-time.Duration(wec.eventWatchTime) * time.Minute)) {
+						eventControllerTotalValidEventsCount.WithLabelValues(TotalValidEventsCount).Inc()
+						// using short life goroutines to do the one-off processing
+						// prefer short life goroutines than long life fixed number of goroutines for this work
+						go wec.processEvent(*wantedEvent)
+					}
+				}
+			case watch.Error:
+				// for our use case, we ignore errors. if watcher itself decides to quit, we need restart the entire controller
+				err := event.Object.(error)
+				eventControllerEventWatcherFailureCount.WithLabelValues(EventFailureCountMetrics).Inc()
+				wec.logger.Error(err, "watch error when receiving events from watcher channel")
+			}
+		}
+	}
+}
+
+func (wec *WatchedEventController) processEvent(event eventsv1.Event) error {
+	start := time.Now()
+	defer eventWatchOperationLatency.WithLabelValues(WatchEventsLatencyMetrics).Observe(float64(time.Since(start).Seconds()))
+
+	eventForSGP := isValidEventForSGP(event)
+	eventForCN := isValidEventForCustomNetworking(event)
+	if eventForSGP || eventForCN {
+		nodeName := event.Related.Name
+		// use instance ID as cache key since they are guaranteed regionally unique
+		hostID := string(event.Related.UID)
+
+		// index 0 is the flag for SecurityGroupForPod, index 1 is the flag for Custom Networking
+		cacheValue := []byte{0, 0}
+
+		// use cache to avoid unnecessary calls to API server/ClientCache and node controller cache
+		if hitValue, cacheErr := wec.cache.Get(hostID); cacheErr == nil {
+			if (eventForSGP && hitValue[EnableSGP] == 1) || (eventForCN && hitValue[EnableCN] == 1) {
+				eventControllerNodeCacheOpsCount.WithLabelValues([]string{CacheHitMetricsValue, "", "", ""}...).Inc()
+				wec.logger.V(1).Info("Node has been processed and found in cache, will skip this event", "NodeName", nodeName, "InstanceID", hostID)
+				return nil
+			}
+			// if found the instance but the feature value is not updated, we need keep the other updated feature value
+			if eventForSGP {
+				cacheValue[EnableSGP] = 1
+				cacheValue[EnableCN] = hitValue[EnableCN]
 			} else {
-				eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", CacheMissMetricsValue, "", ""}...).Inc()
-				eventControllerEventNodeCacheSize.Set(float64(r.cache.Len()))
-				if eventForSGP {
-					// make the label value to false that indicates the node is ok to be proceeded by providers
-					// provider will decide if the node can be attached with trunk interface
-					labelled, err := r.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, config.BooleanFalse)
+				cacheValue[EnableCN] = 1
+				cacheValue[EnableSGP] = hitValue[EnableSGP]
+			}
+			wec.logger.V(1).Info("Cache hit", "InstanceID", hostID, "SGPFeature", eventForSGP, "Value_SGP", hitValue[EnableSGP], "CNFeature", eventForCN, "Value_CN", hitValue[EnableCN])
+			wec.logger.V(1).Info("Cache hit -- Will update Cache as", "InstanceID", hostID, "SGPFeature", eventForSGP, "Value_SGP", cacheValue[EnableSGP], "CNFeature", eventForCN, "Value_CN", cacheValue[EnableCN])
+		} else {
+			// no hit, init regarding feature's value to 1, and the other feature will be 0
+			if eventForSGP {
+				cacheValue[EnableSGP] = 1
+			} else {
+				cacheValue[EnableCN] = 1
+			}
+			wec.logger.V(1).Info("Cache miss -- Will update Cache as", "InstanceID", hostID, "SGPFeature", eventForSGP, "Value_SGP", cacheValue[EnableSGP], "CNFeature", eventForCN, "Value_CN", cacheValue[EnableCN])
+		}
+		// we use the GetNode() as a safeguard to avoid repeating reconciling on deleted nodes
+		eventControllerCallGETToAPIServerCount.WithLabelValues(EventGetCallCountMetrics).Inc()
+		if node, err := wec.k8sAPI.GetNode(nodeName); err != nil {
+			// if not found the node, we don't requeue and just wait VPC CNI to send another request
+			wec.logger.Info("Event reconciler didn't find the node and wait for next request for the node", "Node", node.Name)
+			return nil
+		} else {
+			eventControllerNodeCacheOpsCount.WithLabelValues([]string{"", CacheMissMetricsValue, "", ""}...).Inc()
+			eventControllerNodeCacheSize.Set(float64(wec.cache.Len()))
+
+			// since we support aggresive events, multiple goroutines could race to the label.
+			// don't try to label again if label key exists since here should be the first place to add label.
+			_, sgpLabelled := node.Labels[config.HasTrunkAttachedLabel]
+			if eventForSGP && !sgpLabelled {
+				// make the label value to false that indicates the node is ok to be proceeded by providers
+				// provider will decide if the node can be attached with trunk interface
+				labelled, err := wec.k8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, config.BooleanFalse)
+				if err != nil {
+					// by returning an error, we request that our controller will get Reconcile() called again
+					// TODO: we can consider let VPC CNI re-send event instead of requeueing the request
+					eventControllerSGPEventsFailureCount.WithLabelValues(SGPEventsFailureCountMetrics).Inc()
+					return err
+				}
+				if labelled {
+					eventControllerSGPEventsCount.WithLabelValues(SGPEventsCountMetrics).Inc()
+					wec.logger.Info("Label node with trunk label as false", "Node", node.Name, "InstanceID", hostID, "Label", config.HasTrunkAttachedLabel)
+				}
+				// We don't process labelled == false because when labelled == false but err == nil, meaning the key value pair is present in labels
+				// but the cache missed the instance for some reason, we want to go ahead to add the instance into cache
+			}
+
+			// since we support aggresive events, multiple goroutines could race to the label.
+			// don't try to label again if label key exists since here should be the first place to add label.
+			_, cnLabelled := node.Labels[config.CustomNetworkingLabel]
+			if eventForCN && !cnLabelled {
+				configKey, configName := parseEventMsg(event.Note)
+				if configKey == config.CustomNetworkingLabel {
+					labelled, err := wec.k8sAPI.AddLabelToManageNode(node, config.CustomNetworkingLabel, configName)
 					if err != nil {
-						// by returning an error, we request that our controller will get Reconcile() called again
+						// by returning an error, we request Reconcile() being called again
 						// TODO: we can consider let VPC CNI re-send event instead of requeueing the request
-						eventControllerSGPEventsFailureCount.WithLabelValues(SGPEventsFailureCountMetrics).Inc()
-						return ctrl.Result{}, err
+						eventControllerCNEventsFailureCount.WithLabelValues(CNEventsFailureCountMetrics).Inc()
+						return err
 					}
 					if labelled {
-						eventControllerSGPEventsCount.WithLabelValues(SGPEventsCountMetrics).Inc()
-						r.Log.Info("Label node with trunk label as false", "Node", node.Name, "InstanceID", hostID, "Label", config.HasTrunkAttachedLabel)
+						eventControllerCNEventsCount.WithLabelValues(CNEventsCountMetrics).Inc()
+						wec.logger.V(1).Info("Label node with eniconfig label with configured name", "Node", node.Name, "Label", config.CustomNetworkingLabel)
 					}
 					// We don't process labelled == false because when labelled == false but err == nil, meaning the key value pair is present in labels
 					// but the cache missed the instance for some reason, we want to go ahead to add the instance into cache
 				}
-
-				if eventForCN {
-					configKey, configName := parseEventMsg(event.Note)
-					if configKey == config.CustomNetworkingLabel {
-						labelled, err := r.K8sAPI.AddLabelToManageNode(node, config.CustomNetworkingLabel, configName)
-						if err != nil {
-							// by returning an error, we request Reconcile() being called again
-							// TODO: we can consider let VPC CNI re-send event instead of requeueing the request
-							eventControllerCNEventsFailureCount.WithLabelValues(CNEventsFailureCountMetrics).Inc()
-							return ctrl.Result{}, err
-						}
-						if labelled {
-							eventControllerCNEventsCount.WithLabelValues(CNEventsCountMetrics).Inc()
-							r.Log.V(1).Info("Label node with eniconfig label with configured name", "Node", node.Name, "Label", config.CustomNetworkingLabel)
-						}
-						// We don't process labelled == false because when labelled == false but err == nil, meaning the key value pair is present in labels
-						// but the cache missed the instance for some reason, we want to go ahead to add the instance into cache
-					}
-				}
-				// Only update cache after necessary labelling succeeds
-				if cacheErr := r.cache.Set(hostID, cacheValue); cacheErr != nil {
-					eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", "", "", CacheErrMetricsValue}...).Inc()
-					logger.Error(err, "Adding new node name to event controller cache failed")
-				} else {
-					eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{"", "", CacheAddMetricsValue, ""}...).Inc()
-					logger.Info("Added a new node into event cache", "NodeName", nodeName, "InstanceID", hostID, "CacheSize", r.cache.Len())
-				}
+			}
+			// Only update cache after necessary labelling succeeds
+			if cacheErr := wec.cache.Set(hostID, cacheValue); cacheErr != nil {
+				eventControllerNodeCacheOpsCount.WithLabelValues([]string{"", "", "", CacheErrMetricsValue}...).Inc()
+				wec.logger.Error(err, "Adding new node name to event controller cache failed")
+			} else {
+				eventControllerNodeCacheOpsCount.WithLabelValues([]string{"", "", CacheAddMetricsValue, ""}...).Inc()
+				wec.logger.Info("Added a new node into event cache", "NodeName", nodeName, "InstanceID", hostID, "CacheSize", wec.cache.Len())
 			}
 		}
 	}
-	eventReconcileOperationLatency.WithLabelValues(ReconcileEventsLatencyMetrics).Observe(float64(time.Since(start).Milliseconds()))
-	return ctrl.Result{}, nil
+
+	return nil
 }
 
-func (r *EventReconciler) isValidEventForSGP(event eventsv1.Event) bool {
+func isValidEventForSGP(event eventsv1.Event) bool {
 	return event.ReportingController == config.VpcCNIReportingAgent &&
-		event.Reason == config.VpcCNINodeEventReason && event.Action == config.VpcCNINodeEventActionForTrunk
+		event.Reason == config.VpcCNINodeEventReason && strings.HasPrefix(event.Action, config.VpcCNINodeEventActionForTrunk)
 }
 
-func (r *EventReconciler) isValidEventForCustomNetworking(event eventsv1.Event) bool {
+func isValidEventForCustomNetworking(event eventsv1.Event) bool {
 	return event.ReportingController == config.VpcCNIReportingAgent &&
-		event.Reason == config.VpcCNINodeEventReason && event.Action == config.VpcCNINodeEventActionForEniConfig
-}
-
-func (r *EventReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &eventsv1.Event{}, EventFilterKey, func(raw client.Object) []string {
-		event := raw.(*eventsv1.Event)
-		return []string{event.Reason}
-	}); err != nil {
-		return err
-	}
-
-	r.Log.Info("Event manager is using settings", "ConcurrentReconciles", MaxEventConcurrentReconciles, "MinutesInPast", EventCreatedPastMinutes)
-	PrometheusRegister()
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&eventsv1.Event{}).Owns(&corev1.Node{}).
-		WithEventFilter(predicate.Funcs{
-			DeleteFunc: func(de event.DeleteEvent) bool { return false },
-			UpdateFunc: func(ue event.UpdateEvent) bool {
-				return ue.ObjectOld.GetGeneration() != ue.ObjectNew.GetGeneration()
-			},
-			GenericFunc: func(ge event.GenericEvent) bool { return false },
-			CreateFunc: func(ce event.CreateEvent) bool {
-				now := time.Now()
-				then := now.Add(-time.Minute * EventCreatedPastMinutes)
-				return ce.Object.GetCreationTimestamp().After(then)
-			},
-		}).
-		WithOptions(controller.Options{MaxConcurrentReconciles: MaxEventConcurrentReconciles}).Complete(r)
+		event.Reason == config.VpcCNINodeEventReason && strings.HasPrefix(event.Action, config.VpcCNINodeEventActionForEniConfig)
 }
 
 func parseEventMsg(msg string) (string, string) {
@@ -343,4 +267,39 @@ func parseEventMsg(msg string) (string, string) {
 	key := splittedMsg[0]
 	value := splittedMsg[1]
 	return key, value
+}
+
+func (wec *WatchedEventController) Start(mgr manager.Manager) error {
+	var err error
+	wec.prometheusRegister()
+	go func() {
+		<-mgr.Elected()
+
+		if err = wec.watchEvents(); err != nil {
+			wec.logger.Error(err, "couldn't start self managed event controller with watch")
+		}
+	}()
+
+	// wait for 1 second in this goroutine to ensure the watcher being created without error
+	time.Sleep(1 * time.Second)
+	return err
+}
+
+func (wec *WatchedEventController) prometheusRegister() {
+	if !wec.prometheusRegistered {
+		metrics.Registry.MustRegister(eventControllerTotalValidEventsCount)
+		metrics.Registry.MustRegister(eventControllerSGPEventsCount)
+		metrics.Registry.MustRegister(eventControllerEventWatcherFailureCount)
+		metrics.Registry.MustRegister(eventControllerCNEventsCount)
+		metrics.Registry.MustRegister(eventWatchOperationLatency)
+		metrics.Registry.MustRegister(eventControllerSGPEventsFailureCount)
+		metrics.Registry.MustRegister(eventControllerCNEventsFailureCount)
+		metrics.Registry.MustRegister(eventControllerNodeCacheSize)
+		metrics.Registry.MustRegister(eventControllerNodeCacheOpsCount)
+		metrics.Registry.MustRegister(eventControllerCallGETToAPIServerCount)
+		metrics.Registry.MustRegister(eventWatcherPanicCount)
+		metrics.Registry.MustRegister(eventWatchedTotalCount)
+		wec.prometheusRegistered = true
+		wec.logger.Info("Register metrics for event controller")
+	}
 }

@@ -23,7 +23,6 @@ import (
 
 	appv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	eventsv1 "k8s.io/api/events/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,7 +30,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
+	goWatch "k8s.io/client-go/tools/watch"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -76,7 +77,7 @@ type K8sWrapper interface {
 	GetConfigMap(configMapName string, configMapNamespace string) (*v1.ConfigMap, error)
 	ListNodes() (*v1.NodeList, error)
 	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error)
-	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
+	GetRetryWatcher(initialRv string, watchFn cache.WatchFunc) (*goWatch.RetryWatcher, error)
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -207,16 +208,16 @@ func (k *k8sWrapper) AddLabelToManageNode(node *v1.Node, labelKey string, labelV
 		return false, nil
 	} else {
 		newNode := node.DeepCopy()
+		// in case if the node object has nil label map
+		if newNode.Labels == nil {
+			newNode.Labels = make(map[string]string)
+		}
 		newNode.Labels[labelKey] = labelValue
 		err := k.cacheClient.Status().Patch(k.context, newNode, client.MergeFrom(node))
 		return err == nil, err
 	}
 }
 
-func (k *k8sWrapper) ListEvents(ops []client.ListOption) (*eventsv1.EventList, error) {
-	events := &eventsv1.EventList{}
-	if err := k.cacheClient.List(k.context, events, ops...); err != nil {
-		return nil, err
-	}
-	return events, nil
+func (k *k8sWrapper) GetRetryWatcher(initialRv string, watchFunc cache.WatchFunc) (*goWatch.RetryWatcher, error) {
+	return goWatch.NewRetryWatcher(initialRv, &cache.ListWatch{WatchFunc: watchFunc})
 }

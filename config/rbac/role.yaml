@@ -59,10 +59,7 @@ rules:
   resources:
   - events
   verbs:
-  - create
-  - list
-  - patch
-  - update
+  - get
   - watch
 - apiGroups:
   - vpcresources.k8s.aws

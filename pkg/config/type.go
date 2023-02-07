@@ -72,6 +72,7 @@ const (
 	EnableWindowsIPAMKey    = "enable-windows-ipam"
 	// Since LeaderElectionNamespace and VpcCniConfigMapName may be different in the future
 	KubeSystemNamespace            = "kube-system"
+	DefaultNamespace               = "default"
 	VpcCNIDaemonSetName            = "aws-node"
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
 )

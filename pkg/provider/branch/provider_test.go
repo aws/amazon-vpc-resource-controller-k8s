@@ -333,10 +333,10 @@ func TestBranchENIProvider_Supported_LabelNode(t *testing.T) {
 		},
 	}
 
-	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().Name().Return(NodeName).Times(0)
 	mockInstance.EXPECT().Os().Return("linux")
 	mockInstance.EXPECT().Type().Return(supportedInstanceType)
-	mockK8sWrapper.EXPECT().GetNode(NodeName).Return(node, nil)
+	mockK8sWrapper.EXPECT().GetNode(NodeName).Return(node, nil).Times(0)
 	// not calling the label method if the instance is supported
 	mockK8sWrapper.EXPECT().AddLabelToManageNode(node, gomock.Any(), gomock.Any()).Return(true, nil).Times(0)
 

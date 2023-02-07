@@ -24,9 +24,9 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/apps/v1"
 	v10 "k8s.io/api/core/v1"
-	v11 "k8s.io/api/events/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
-	client "sigs.k8s.io/controller-runtime/pkg/client"
+	cache "k8s.io/client-go/tools/cache"
+	watch "k8s.io/client-go/tools/watch"
 )
 
 // MockK8sWrapper is a mock of K8sWrapper interface.
@@ -168,19 +168,19 @@ func (mr *MockK8sWrapperMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNode", reflect.TypeOf((*MockK8sWrapper)(nil).GetNode), arg0)
 }
 
-// ListEvents mocks base method.
-func (m *MockK8sWrapper) ListEvents(arg0 []client.ListOption) (*v11.EventList, error) {
+// GetRetryWatcher mocks base method.
+func (m *MockK8sWrapper) GetRetryWatcher(arg0 string, arg1 cache.WatchFunc) (*watch.RetryWatcher, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListEvents", arg0)
-	ret0, _ := ret[0].(*v11.EventList)
+	ret := m.ctrl.Call(m, "GetRetryWatcher", arg0, arg1)
+	ret0, _ := ret[0].(*watch.RetryWatcher)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// ListEvents indicates an expected call of ListEvents.
-func (mr *MockK8sWrapperMockRecorder) ListEvents(arg0 interface{}) *gomock.Call {
+// GetRetryWatcher indicates an expected call of GetRetryWatcher.
+func (mr *MockK8sWrapperMockRecorder) GetRetryWatcher(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEvents", reflect.TypeOf((*MockK8sWrapper)(nil).ListEvents), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRetryWatcher", reflect.TypeOf((*MockK8sWrapper)(nil).GetRetryWatcher), arg0, arg1)
 }
 
 // ListNodes mocks base method.

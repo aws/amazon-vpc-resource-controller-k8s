@@ -427,8 +427,6 @@ func Test_performAsyncOperation(t *testing.T) {
 	}
 
 	job.op = Init
-	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
-	mock.MockK8sAPI.EXPECT().AddLabelToManageNode(v1Node, config.HasTrunkAttachedLabel, config.BooleanTrue).Return(true, nil).AnyTimes()
 	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
 	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
 	_, err := mock.Manager.performAsyncOperation(job)

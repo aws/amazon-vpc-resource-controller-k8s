@@ -26,6 +26,7 @@ import (
 	crdv1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/apps"
+	controllers "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
@@ -45,7 +46,6 @@ import (
 	"go.uber.org/zap/zapcore"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	eventsv1 "k8s.io/api/events/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -98,6 +98,7 @@ func main() {
 	var leaderLeaseRetryPeriod int
 	var outputPath string
 	var introspectBindAddr string
+	var eventWatchTime int
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080",
 		"The address the metric endpoint binds to.")
@@ -127,6 +128,8 @@ func main() {
 	flag.StringVar(&outputPath, "log-file", "stderr", "The path to redirect controller logs")
 	flag.StringVar(&introspectBindAddr, "introspect-bind-addr", ":22775",
 		"Port for serving the introspection API")
+	flag.IntVar(&eventWatchTime, "event-watch-time", 1,
+		"The minutes that events watcher looks backwards")
 
 	flag.Parse()
 
@@ -206,11 +209,6 @@ func main() {
 			&appsv1.DaemonSet{}: {Field: fields.Set{
 				"metadata.name":      config.VpcCNIDaemonSetName,
 				"metadata.namespace": config.KubeSystemNamespace,
-			}.AsSelector(),
-			},
-			&eventsv1.Event{}: {Field: fields.Set{
-				"reason":              config.VpcCNINodeEventReason,
-				"reportingController": config.VpcCNIReportingAgent,
 			}.AsSelector(),
 			},
 		},
@@ -363,14 +361,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (corecontroller.NewEventReconciler(
-		ctrl.Log.WithName("Controllers").WithName("Event"),
-		mgr.GetScheme(),
-		k8sApi, nodeEventCache).SetupWithManager(mgr)); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Event")
-		os.Exit(1)
-	}
-
 	if err = (&resource.IntrospectHandler{
 		Log:             ctrl.Log.WithName("introspect"),
 		BindAddress:     introspectBindAddr,
@@ -404,6 +394,16 @@ func main() {
 			Log:       ctrl.Log.WithName("annotation validation webhook"),
 			Condition: controllerConditions,
 		}})
+
+	eventWatcher := controllers.NewWatchedEventController(
+		ctx,
+		ctrl.Log.WithName("Controllers").WithName("SelfWatchedEvent"),
+		*clientSet, k8sApi, nodeEventCache, eventWatchTime)
+	setupLog.Info("starting self watchers")
+	if err = eventWatcher.Start(mgr); err != nil {
+		setupLog.Error(err, "unable to start self watched event controller")
+		os.Exit(1)
+	}
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctx); err != nil {

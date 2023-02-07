@@ -168,6 +168,10 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	}
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceMs(start))
 
+	// when trunk was successfully initialized, we need to update trunk label value to True
+	// this is the only place that the controller set the label to true
+	b.providerUpdateNodeLabel(instance.Name(), config.HasTrunkAttachedLabel, config.BooleanTrue)
+
 	// Add the Trunk ENI to cache
 	err = b.addTrunkToCache(nodeName, trunkENI)
 	if err != nil {
@@ -461,29 +465,11 @@ func (b *branchENIProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
 	limits, found := vpc.Limits[instance.Type()]
 	supported := found && instance.Os() == config.OSLinux && limits.IsTrunkingCompatible
 
-	// 1, since VPC CNI will not send events for nodes that are labelled as not-supported
-	// 2, since VPC CNI will not keep sending events if nodes have been labelled as true and trunk has been attached
-	// here calling GetNode API will not cause large call volume
-	if node, err := b.apiWrapper.K8sAPI.GetNode(instance.Name()); err != nil {
-		b.log.Error(err, "couldn't get the node when checking if the node is supported for trunk interface", "NodeName", instance.Name())
-	} else {
-		if node.Labels != nil {
-			if _, ok := node.Labels[config.HasTrunkAttachedLabel]; ok {
-				if !supported {
-					labelValue := config.NotSupportedEc2Type
-					updated, err := b.apiWrapper.K8sAPI.AddLabelToManageNode(node, config.HasTrunkAttachedLabel, labelValue)
-					if err != nil {
-						b.log.Error(err, "failed to update node label", "NodeName", instance.Name(), "LabelKey", config.HasTrunkAttachedLabel, "ExpectedLabelValue", labelValue)
-					} else if !updated {
-						b.log.V(1).Info("unable to update node with the existing label key/value pair", "NodeName", instance.Name(), "LabelKey", config.HasTrunkAttachedLabel, "ExpectedLabelValue", labelValue)
-					}
-				}
-			}
-		} else {
-			// at this point, the label map shouldn't be nil
-			// TODO: https://github.com/aws/amazon-vpc-resource-controller-k8s/issues/163
-			b.log.Error(err, "unexpected nil map for node labels", "NodeName", instance.Name())
-		}
+	if !supported {
+		// 1, since VPC CNI will not send events for nodes that are labelled as not-supported
+		// 2, since VPC CNI will not keep sending events if nodes have been labelled as true and trunk has been attached
+		// here calling GetNode API will not cause large call volume
+		b.providerUpdateNodeLabel(instance.Name(), config.HasTrunkAttachedLabel, config.NotSupportedEc2Type)
 	}
 
 	return supported
@@ -511,4 +497,25 @@ func (b *branchENIProvider) IntrospectNode(nodeName string) interface{} {
 		return struct{}{}
 	}
 	return trunkENI.Introspect()
+}
+
+func (b *branchENIProvider) providerUpdateNodeLabel(nodeName, labelKey, labelValue string) {
+	if node, err := b.apiWrapper.K8sAPI.GetNode(nodeName); err != nil {
+		b.log.Error(err, "couldn't get the node when updating node sgp label", "NodeName", nodeName, "LabelKey", labelKey, "ExpectedLabelValue", labelValue)
+	} else {
+		if node.Labels != nil {
+			if _, ok := node.Labels[config.HasTrunkAttachedLabel]; ok {
+				updated, err := b.apiWrapper.K8sAPI.AddLabelToManageNode(node, labelKey, labelValue)
+				if err != nil {
+					b.log.Error(err, "failed to update node label", "NodeName", nodeName, "LabelKey", labelKey, "ExpectedLabelValue", labelValue)
+				} else if !updated {
+					b.log.V(1).Info("unable to update node with the existing label key/value pair", "NodeName", nodeName, "LabelKey", labelKey, "ExpectedLabelValue", labelValue)
+				}
+			}
+		} else {
+			// at this point, the label map shouldn't be nil
+			// TODO: https://github.com/aws/amazon-vpc-resource-controller-k8s/issues/163
+			b.log.Error(err, "unexpected nil map for node labels", "NodeName", nodeName)
+		}
+	}
 }
