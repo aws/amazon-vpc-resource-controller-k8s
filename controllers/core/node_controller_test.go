@@ -117,7 +117,7 @@ func TestNodeReconciler_Reconcile_DeleteNode(t *testing.T) {
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001")
 	mock.Manager.EXPECT().DeleteNode(mockNodeName).Return(nil)
-	mock.MockNode.EXPECT().IsManaged().Return(true)
+	mock.MockNode.EXPECT().HasInstance().Return(true).Times(1)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
@@ -133,7 +133,7 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentNode(t *testing.T) {
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
 	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001")
-	mock.MockNode.EXPECT().IsManaged().Return(true)
+	mock.MockNode.EXPECT().HasInstance().Return(true).Times(1)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
@@ -148,9 +148,25 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentUnmanagedNode(t *testing.T) {
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
-	// unmanaged node's instance shouldn't be called otehrwise it will cause dereference nil pointer
+	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001").Times(1)
+	mock.MockNode.EXPECT().HasInstance().Return(true).Times(1)
+
+	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
+	assert.NoError(t, err)
+	assert.Equal(t, res, reconcile.Result{})
+}
+
+func TestNodeReconciler_Reconcile_DeleteNonExistentUnmanagedWithoutInstanceNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewNodeMock(ctrl)
+
+	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
+	// if instance failed to be initialized for node, the GetInstanceID shouldn't be called to avoid dereference on nil pointer
 	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001").Times(0)
-	mock.MockNode.EXPECT().IsManaged().Return(false)
+	mock.MockNode.EXPECT().HasInstance().Return(false).Times(1)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)

@@ -203,7 +203,6 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		cacheValue := []byte{0, 0}
 
 		// use cache to avoid unnecessary calls to API server/ClientCache and node controller cache
-		// due to using List, the redundant call number can be large
 		if hitValue, cacheErr := r.cache.Get(hostID); cacheErr == nil {
 			if (eventForSGP && hitValue[EnableSGP] == 1) || (eventForCN && hitValue[EnableCN] == 1) {
 				eventControllerEventNodeCacheOpsCount.WithLabelValues([]string{CacheHitMetricsValue, "", "", ""}...).Inc()

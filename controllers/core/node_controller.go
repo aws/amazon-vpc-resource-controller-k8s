@@ -70,10 +70,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
 		if errors.IsNotFound(err) {
 			cachedNode, found := r.Manager.GetNode(req.Name)
-			// TODO: we need investigate if we should initialize instance for unmanaged node as well
-			// only operate on managed node because unmanaged node has no instance initialized
-			// operating on them will lead to nil pointer dereference
-			if cachedNode != nil && cachedNode.IsManaged() {
+			if cachedNode != nil && cachedNode.HasInstance() {
 				// delete the not found node instance id from node event cache for housekeeping
 				r.deleteNodeFromNodeEventCache(cachedNode.GetNodeInstanceID())
 			}
