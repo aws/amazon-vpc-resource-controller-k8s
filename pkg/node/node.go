@@ -59,6 +59,7 @@ type Node interface {
 	IsManaged() bool
 
 	GetNodeInstanceID() string
+	HasInstance() bool
 }
 
 // NewManagedNode returns node managed by the controller
@@ -72,8 +73,16 @@ func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os stri
 }
 
 // NewUnManagedNode returns a node that's not managed by the controller
-func NewUnManagedNode() Node {
-	return &node{}
+func NewUnManagedNode(log logr.Logger, nodeName, instanceID, os string) Node {
+	// We should initialize instance for unmanaged node as well
+	// only operate on managed node because unmanaged node has no instance initialized
+	// operating on them could lead to nil pointer dereference
+	return &node{
+		managed: false,
+		log: log.WithName("node resource handler").
+			WithValues("node name", nodeName),
+		instance: ec2.NewEC2Instance(nodeName, instanceID, os),
+	}
 }
 
 // UpdateNode refreshes the capacity if it's reset to 0
@@ -209,4 +218,11 @@ func (n *node) GetNodeInstanceID() string {
 	defer n.lock.RUnlock()
 
 	return n.instance.InstanceID()
+}
+
+func (n *node) HasInstance() bool {
+	n.lock.RLock()
+	defer n.lock.RUnlock()
+
+	return n.instance != nil
 }

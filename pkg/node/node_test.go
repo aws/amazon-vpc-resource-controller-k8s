@@ -32,9 +32,11 @@ import (
 )
 
 var (
-	nodeName  = "node-name"
-	mockError = fmt.Errorf("mock error")
-	mockNode  = v1.Node{
+	nodeName   = "node-name"
+	instanceID = "i-00000000001"
+	linux      = "linux"
+	mockError  = fmt.Errorf("mock error")
+	mockNode   = v1.Node{
 		ObjectMeta: metaV1.ObjectMeta{
 			Name: nodeName,
 		},
@@ -75,20 +77,22 @@ func NewMock(ctrl *gomock.Controller, mockProviderCount int) Mocks {
 
 // TestNewManagedNode tests the new node is not nil and node is managed but not ready
 func TestNewManagedNode(t *testing.T) {
-	node := NewManagedNode(zap.New(), nodeName, "", "")
+	node := NewManagedNode(zap.New(), nodeName, instanceID, linux)
 
 	assert.NotNil(t, node)
+	assert.True(t, node.GetNodeInstanceID() == instanceID)
 	assert.True(t, node.IsManaged())
 	assert.False(t, node.IsReady())
 }
 
 // TestNewUnManagedNode tests the new node is not nil and node is not managed
 func TestNewUnManagedNode(t *testing.T) {
-	node := NewUnManagedNode()
+	node := NewUnManagedNode(zap.New(), nodeName, instanceID, linux)
 
 	assert.NotNil(t, node)
 	assert.False(t, node.IsManaged())
 	assert.False(t, node.IsReady())
+	assert.True(t, node.GetNodeInstanceID() == instanceID)
 }
 
 // TestNode_InitResources tests the instance details is loaded and the node is initialized without error

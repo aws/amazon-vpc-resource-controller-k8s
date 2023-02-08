@@ -143,7 +143,8 @@ func (m *manager) AddNode(nodeName string) error {
 		log.Info("node added as a managed node")
 		op = Init
 	} else {
-		newNode = node.NewUnManagedNode()
+		newNode = node.NewUnManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
+			GetNodeOS(k8sNode))
 		m.dataStore[k8sNode.Name] = newNode
 		log.V(1).Info("node added as an un-managed node")
 		return nil
@@ -197,7 +198,8 @@ func (m *manager) UpdateNode(nodeName string) error {
 		log.Info("node was being managed earlier, will be added as un-managed node now")
 		// Change the node in cache, but for de initializing all resource providers
 		// pass the async job the older cached value instead
-		m.dataStore[nodeName] = node.NewUnManagedNode()
+		m.dataStore[nodeName] = node.NewUnManagedNode(m.Log, k8sNode.Name,
+			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode))
 		op = Delete
 	case StillManaged:
 		// We only need to update the Subnet for Managed Node. This subnet is required for creating

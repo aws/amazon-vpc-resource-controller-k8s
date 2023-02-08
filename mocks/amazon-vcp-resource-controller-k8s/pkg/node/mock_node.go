@@ -76,6 +76,20 @@ func (mr *MockNodeMockRecorder) GetNodeInstanceID() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNodeInstanceID", reflect.TypeOf((*MockNode)(nil).GetNodeInstanceID))
 }
 
+// HasInstance mocks base method.
+func (m *MockNode) HasInstance() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasInstance")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// HasInstance indicates an expected call of HasInstance.
+func (mr *MockNodeMockRecorder) HasInstance() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasInstance", reflect.TypeOf((*MockNode)(nil).HasInstance))
+}
+
 // InitResources mocks base method.
 func (m *MockNode) InitResources(arg0 resource.ResourceManager, arg1 api.EC2APIHelper) error {
 	m.ctrl.T.Helper()

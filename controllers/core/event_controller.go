@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
+	corev1 "k8s.io/api/core/v1"
 	eventsv1 "k8s.io/api/events/v1"
 
 	bigcache "github.com/allegro/bigcache/v3"
@@ -38,7 +39,7 @@ import (
 const (
 	MaxEventConcurrentReconciles  = 4
 	EventCreatedPastMinutes       = 2
-	EventFilterKey                = "reportingComponent"
+	EventFilterKey                = "reason"
 	LoggerName                    = "event"
 	TotalEventsCountMetrics       = "reconcile"
 	EventFailureCountMetrics      = "failing_list"
@@ -185,7 +186,7 @@ func (r *EventReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	ops := []client.ListOption{
 		client.MatchingFields{
-			EventFilterKey: config.VpcCNIReportingAgent,
+			EventFilterKey: config.VpcCNINodeEventReason,
 		},
 	}
 
@@ -310,7 +311,7 @@ func (r *EventReconciler) isValidEventForCustomNetworking(event eventsv1.Event) 
 func (r *EventReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &eventsv1.Event{}, EventFilterKey, func(raw client.Object) []string {
 		event := raw.(*eventsv1.Event)
-		return []string{event.ReportingController}
+		return []string{event.Reason}
 	}); err != nil {
 		return err
 	}
@@ -318,10 +319,12 @@ func (r *EventReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Log.Info("Event manager is using settings", "ConcurrentReconciles", MaxEventConcurrentReconciles, "MinutesInPast", EventCreatedPastMinutes)
 	PrometheusRegister()
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&eventsv1.Event{}).
+		For(&eventsv1.Event{}).Owns(&corev1.Node{}).
 		WithEventFilter(predicate.Funcs{
-			DeleteFunc:  func(de event.DeleteEvent) bool { return false },
-			UpdateFunc:  func(ue event.UpdateEvent) bool { return false },
+			DeleteFunc: func(de event.DeleteEvent) bool { return false },
+			UpdateFunc: func(ue event.UpdateEvent) bool {
+				return ue.ObjectOld.GetGeneration() != ue.ObjectNew.GetGeneration()
+			},
 			GenericFunc: func(ge event.GenericEvent) bool { return false },
 			CreateFunc: func(ce event.CreateEvent) bool {
 				now := time.Now()

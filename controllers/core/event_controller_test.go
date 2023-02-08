@@ -289,7 +289,7 @@ func TestEventReconciler_Reconcile_SGPEvent(t *testing.T) {
 	mock := NewEventControllerMock(ctrl)
 	ops := []client.ListOption{
 		client.MatchingFields{
-			EventFilterKey: config.VpcCNIReportingAgent,
+			EventFilterKey: config.VpcCNINodeEventReason,
 		},
 	}
 
@@ -350,7 +350,7 @@ func TestEventReconciler_Reconcile_ENIConfigLabelNodeEvent(t *testing.T) {
 
 	ops := []client.ListOption{
 		client.MatchingFields{
-			EventFilterKey: config.VpcCNIReportingAgent,
+			EventFilterKey: config.VpcCNINodeEventReason,
 		},
 	}
 
@@ -503,7 +503,7 @@ func TestEventReconciler_Reconcile_DualEvents(t *testing.T) {
 	mock := NewEventControllerMock(ctrl)
 	ops := []client.ListOption{
 		client.MatchingFields{
-			EventFilterKey: config.VpcCNIReportingAgent,
+			EventFilterKey: config.VpcCNINodeEventReason,
 		},
 	}
 
@@ -544,7 +544,7 @@ func TestEventReconciler_Reconcile_DualEventsCacheStatus(t *testing.T) {
 
 	ops := []client.ListOption{
 		client.MatchingFields{
-			EventFilterKey: config.VpcCNIReportingAgent,
+			EventFilterKey: config.VpcCNINodeEventReason,
 		},
 	}
 

@@ -69,7 +69,7 @@ var (
 	}
 	mockError = fmt.Errorf("mock error")
 
-	unManagedNode = node.NewUnManagedNode()
+	unManagedNode = node.NewUnManagedNode(zap.New(), nodeName, instanceID, config.OSLinux)
 	managedNode   = node.NewManagedNode(zap.New(), nodeName, instanceID, config.OSLinux)
 )
 
@@ -94,7 +94,7 @@ func (m *AsyncJobMatcher) String() string {
 
 func AreNodesEqual(expected node.Node, actual node.Node) bool {
 	return expected.IsManaged() == actual.IsManaged() &&
-		expected.IsReady() == actual.IsReady()
+		expected.IsReady() == actual.IsReady() && expected.GetNodeInstanceID() == actual.GetNodeInstanceID()
 }
 
 type Mock struct {
@@ -567,4 +567,11 @@ func Test_UpdateNode_Windows_UnManagedToManaged(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, mock.Manager.dataStore, nodeName)
 	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
+}
+
+func Test_Node_HasInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	assert.True(t, managedNode.HasInstance(), "managed node should have instance")
+	assert.True(t, unManagedNode.HasInstance(), "unmanaged node should have instance")
 }
