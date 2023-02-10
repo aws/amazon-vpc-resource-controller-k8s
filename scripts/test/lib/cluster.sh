@@ -24,7 +24,7 @@ function attach_controller_policy_cluster_role() {
   echo "Attaching IAM Policy to Cluster Service Role"
   AWS_MAX_ATTEMPTS=10 aws iam attach-role-policy \
     --policy-arn arn:aws:iam::aws:policy/AmazonEKSVPCResourceController \
-    --role-name "$ROLE_NAME" > /dev/null
+    --role-name "$ROLE_NAME" --debug
 }
 
 function detach_controller_policy_cluster_role() {
