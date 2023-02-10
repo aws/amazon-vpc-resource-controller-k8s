@@ -8,14 +8,32 @@
 # CLUSTER_NAME: name of the cluster
 # KUBE_CONFIG_PATH: path to the kubeconfig file, default ~/.kube/config
 # REGION: default us-west-2
+# RUN_DEVEKS_TEST: false
 
-set -e
+set -euoE pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 INTEGRATION_TEST_DIR="$SCRIPT_DIR/../../test/integration"
 SECONDS=0
 
+: "${RUN_DEVEKS_TEST:=false}"
+: "${ENDPOINT:=""}"
+
 source "$SCRIPT_DIR"/lib/cluster.sh
+
+cleanup(){
+
+  if [[ $? == 0 ]]; then
+    echo "Successfully ran all tests in $(($SECONDS / 60)) minutes and $(($SECONDS % 60)) seconds"
+  else
+    echo "Integration tests failed"
+
+  echo "Cleaning up the setup"
+  set_env_aws_node "ENABLE_POD_ENI" "false"
+  detach_controller_policy_cluster_role
+}
+
+trap cleanup EXIT
 
 function run_integration_tests(){
   TEST_RESULT=success
@@ -28,7 +46,6 @@ function run_integration_tests(){
   (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 ginkgo --skip=LOCAL -v -timeout=10m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
 
   if [[ "$TEST_RESULT" == fail ]]; then
-      echo "Integration tests failed."
       exit 1
   fi
 }
@@ -38,11 +55,12 @@ KUBE CONFIG: $KUBE_CONFIG_PATH
 CLUSTER_NAME: $CLUSTER_NAME
 REGION: $REGION"
 
-load_cluster_details
+if [[ "${RUN_DEVEKS_TEST}" == "true" ]];then
+  load_deveks_cluster_details
+else
+  load_cluster_details
+fi
+
 attach_controller_policy_cluster_role
 set_env_aws_node "ENABLE_POD_ENI" "true"
 run_integration_tests
-set_env_aws_node "ENABLE_POD_ENI" "false"
-detach_controller_policy_cluster_role
-
-echo "Successfully ran all tests in $(($SECONDS / 60)) minutes and $(($SECONDS % 60)) seconds"
