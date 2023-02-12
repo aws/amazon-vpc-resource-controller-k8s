@@ -396,9 +396,6 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 }
 
 func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) (ctrl.Result, error) {
-	b.lock.RLock()
-	defer b.lock.RUnlock()
-
 	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
 	if !isPresent {
 		return ctrl.Result{}, fmt.Errorf("failed to find trunk ENI on the node %s", nodeName)
