@@ -45,6 +45,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -205,6 +206,11 @@ func main() {
 			&appsv1.DaemonSet{}: {Field: fields.Set{
 				"metadata.name":      config.VpcCNIDaemonSetName,
 				"metadata.namespace": config.KubeSystemNamespace,
+			}.AsSelector(),
+			},
+			&eventsv1.Event{}: {Field: fields.Set{
+				"reason":              config.VpcCNINodeEventReason,
+				"reportingController": config.VpcCNIReportingAgent,
 			}.AsSelector(),
 			},
 		},
