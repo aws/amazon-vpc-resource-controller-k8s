@@ -6,12 +6,12 @@ require (
 	github.com/allegro/bigcache/v3 v3.1.0
 	github.com/aws/amazon-vpc-cni-k8s v1.9.0
 	github.com/aws/aws-sdk-go v1.40.43
-	github.com/go-logr/logr v0.4.0
+	github.com/go-logr/logr v1.2.3
 	github.com/go-logr/zapr v0.4.0
 	github.com/golang/mock v1.4.4
 	github.com/google/uuid v1.1.2
-	github.com/onsi/ginkgo/v2 v2.3.1
-	github.com/onsi/gomega v1.22.0
+	github.com/onsi/ginkgo/v2 v2.8.1
+	github.com/onsi/gomega v1.27.1
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.14.0
 	github.com/prometheus/client_model v0.3.0
