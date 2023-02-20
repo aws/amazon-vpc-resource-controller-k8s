@@ -90,7 +90,9 @@ func NewControllerManagedBy(ctx context.Context, mgr manager.Manager) *Builder {
 // Complete adds the controller to manager's Runnable. The Controller
 // runnable will start when the manager starts
 func (b *Builder) Complete(reconciler Reconciler) error {
-	if b.log == nil {
+	// Loggr is no longer an interface
+	// The suggestion is using LogSink to do nil check now
+	if b.log.GetSink() == nil {
 		return fmt.Errorf("need to set the logger")
 	}
 	if b.converter == nil {
