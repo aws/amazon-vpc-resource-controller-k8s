@@ -747,6 +747,65 @@ func TestEventReconciler_Reconcile_DualEvents(t *testing.T) {
 	assert.True(t, cachedEntry[EnableCN] == 1, "Custom networking is cached")
 }
 
+// TestEventReconciler_Cache_Works tests cache works when same events are received
+func TestEventReconciler_Cache_Works(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mock := NewEventControllerMock(ctrl)
+
+	events := []*eventsv1.Event{
+		newSgpEventOne,
+		newSgpEventOne,
+		newSgpEventOne,
+	}
+	eventNode := &corev1.Node{
+		TypeMeta: metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: newSgpEventOne.Related.Name,
+		},
+	}
+
+	// node cache should skip the other two duplicated events
+	validRequest := 1
+
+	mock.MockK8sAPI.EXPECT().GetNode(newSgpEventOne.Related.Name).Return(eventNode, nil).Times(validRequest)
+	mock.MockK8sAPI.EXPECT().AddLabelToManageNode(gomock.Any(), gomock.Any(), gomock.Any()).Return(true, nil).Times(validRequest)
+	for _, e := range events {
+		mock.Controller.processEvent(*e)
+	}
+	assert.True(t, mock.Controller.cache.Len() == validRequest)
+}
+
+func TestEventReconciler_Cache_Works_Wiuth_NodeLabel(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mock := NewEventControllerMock(ctrl)
+
+	events := []*eventsv1.Event{
+		newSgpEventOne,
+		newSgpEventTwo,
+	}
+	eventNode := &corev1.Node{
+		TypeMeta: metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: newSgpEventOne.Related.Name,
+			// existing node labels should skip all attempts to label nodes
+			Labels: map[string]string{config.NodeLabelOS: config.OSLinux, config.HasTrunkAttachedLabel: "false"},
+		},
+	}
+
+	callGetNode := 2
+	callAddLabel := 0
+	cacheSize := 2
+
+	mock.MockK8sAPI.EXPECT().GetNode(gomock.Any()).Return(eventNode, nil).Times(callGetNode)
+	mock.MockK8sAPI.EXPECT().AddLabelToManageNode(gomock.Any(), gomock.Any(), gomock.Any()).Return(true, nil).Times(callAddLabel)
+	for _, e := range events {
+		mock.Controller.processEvent(*e)
+	}
+	assert.True(t, mock.Controller.cache.Len() == cacheSize)
+}
+
 // TestEventReconciler_Reconcile_DualEventsCacheStatus tests code labels node cache behavior for both SGP and CN enabled
 func TestEventReconciler_Reconcile_DualEventsCacheStatus(t *testing.T) {
 	ctrl := gomock.NewController(t)
