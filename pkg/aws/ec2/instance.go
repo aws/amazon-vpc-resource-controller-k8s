@@ -20,6 +20,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 )
 
 // ec2Instance stores all the information that can be shared across the providers for an instance
@@ -117,7 +118,23 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		return fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s", i.instanceType)
 	}
 
-	i.deviceIndexes = make([]bool, limits.Interface)
+	defaultCardIdx := limits.DefaultNetworkCardIndex
+	var defaultNetworkCardLimit int64
+	for _, card := range limits.NetworkCards {
+		if card.NetworkCardIndex == int64(defaultCardIdx) {
+			defaultNetworkCardLimit = card.MaximumNetworkInterfaces
+			break
+		}
+	}
+	if defaultNetworkCardLimit == 0 {
+		return fmt.Errorf("didn't find valid network card with max interface limit from limit file for instance type %s", i.instanceType)
+	}
+
+	// currently CNI and this controller both only support single network card
+	// we want to make sure to use the smaller number between instance max supported interfaces and the default card max supported interfaces
+	maxInterfaces := utils.Minimum(int64(limits.Interface), defaultNetworkCardLimit)
+
+	i.deviceIndexes = make([]bool, int(maxInterfaces))
 	for _, nwInterface := range instance.NetworkInterfaces {
 		index := nwInterface.Attachment.DeviceIndex
 		i.deviceIndexes[*index] = true
