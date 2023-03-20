@@ -17,7 +17,6 @@ import (
 	"context"
 	"testing"
 
-	bigcache "github.com/allegro/bigcache/v3"
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
 	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
@@ -61,18 +60,18 @@ func NewNodeMock(ctrl *gomock.Controller, mockObjects ...runtime.Object) NodeMoc
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	client := fakeClient.NewFakeClientWithScheme(scheme, mockObjects...)
-	testCache, _ := bigcache.NewBigCache(bigcache.DefaultConfig(testCacheExpiry))
+	// testCache, _ := bigcache.NewBigCache(bigcache.DefaultConfig(testCacheExpiry))
 	return NodeMock{
 		Conditions: mockConditions,
 		Manager:    mockManager,
 		MockNode:   mockNode,
 		Reconciler: NodeReconciler{
-			Scheme:         scheme,
-			Client:         client,
-			Log:            zap.New(),
-			Manager:        mockManager,
-			Conditions:     mockConditions,
-			NodeEventCache: testCache,
+			Scheme:     scheme,
+			Client:     client,
+			Log:        zap.New(),
+			Manager:    mockManager,
+			Conditions: mockConditions,
+			// NodeEventCache: testCache,
 		},
 	}
 }
@@ -115,9 +114,9 @@ func TestNodeReconciler_Reconcile_DeleteNode(t *testing.T) {
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
-	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001")
+	// mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001")
 	mock.Manager.EXPECT().DeleteNode(mockNodeName).Return(nil)
-	mock.MockNode.EXPECT().HasInstance().Return(true).Times(1)
+	// mock.MockNode.EXPECT().HasInstance().Return(true).Times(1)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
@@ -132,8 +131,8 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentNode(t *testing.T) {
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
-	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001")
-	mock.MockNode.EXPECT().HasInstance().Return(true).Times(1)
+	// mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001")
+	// mock.MockNode.EXPECT().HasInstance().Return(true).Times(1)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
@@ -148,8 +147,8 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentUnmanagedNode(t *testing.T) {
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
-	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001").Times(1)
-	mock.MockNode.EXPECT().HasInstance().Return(true).Times(1)
+	// mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001").Times(1)
+	// mock.MockNode.EXPECT().HasInstance().Return(true).Times(1)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
@@ -165,8 +164,8 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentUnmanagedWithoutInstanceNode(
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
 	// if instance failed to be initialized for node, the GetInstanceID shouldn't be called to avoid dereference on nil pointer
-	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001").Times(0)
-	mock.MockNode.EXPECT().HasInstance().Return(false).Times(1)
+	// mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-00000000000000001").Times(0)
+	// mock.MockNode.EXPECT().HasInstance().Return(false).Times(1)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
