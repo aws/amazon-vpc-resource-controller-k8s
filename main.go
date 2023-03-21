@@ -14,7 +14,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -22,7 +21,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/allegro/bigcache/v3"
 	crdv1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/apps"
@@ -45,7 +43,6 @@ import (
 	"go.uber.org/zap/zapcore"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	eventsv1 "k8s.io/api/events/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -210,11 +207,11 @@ func main() {
 				"metadata.namespace": config.KubeSystemNamespace,
 			}.AsSelector(),
 			},
-			&eventsv1.Event{}: {Field: fields.Set{
-				"reason":              config.VpcCNINodeEventReason,
-				"reportingController": config.VpcCNIReportingAgent,
-			}.AsSelector(),
-			},
+			// &eventsv1.Event{}: {Field: fields.Set{
+			// 	"reason":              config.VpcCNINodeEventReason,
+			// 	"reportingController": config.VpcCNIReportingAgent,
+			// }.AsSelector(),
+			// },
 		},
 	})
 
@@ -326,23 +323,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	config := bigcache.Config{
-		Shards:           config.InstancesCacheShards,
-		LifeWindow:       config.InstancesCacheTTL,
-		HardMaxCacheSize: config.InstancesCacheMaxSize,
-	}
-	nodeEventCache, err := bigcache.New(context.Background(), config)
+	// config := bigcache.Config{
+	// 	Shards:           config.InstancesCacheShards,
+	// 	LifeWindow:       config.InstancesCacheTTL,
+	// 	HardMaxCacheSize: config.InstancesCacheMaxSize,
+	// }
+	// nodeEventCache, err := bigcache.New(context.Background(), config)
 	if err != nil {
 		setupLog.Error(err, "Initializing node cache failed")
 	}
 
 	if err = (&corecontroller.NodeReconciler{
-		Client:         mgr.GetClient(),
-		Log:            ctrl.Log.WithName("controllers").WithName("Node"),
-		Scheme:         mgr.GetScheme(),
-		Manager:        nodeManager,
-		Conditions:     controllerConditions,
-		NodeEventCache: nodeEventCache,
+		Client:     mgr.GetClient(),
+		Log:        ctrl.Log.WithName("controllers").WithName("Node"),
+		Scheme:     mgr.GetScheme(),
+		Manager:    nodeManager,
+		Conditions: controllerConditions,
+		// NodeEventCache: nodeEventCache,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
 		os.Exit(1)
@@ -370,13 +367,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (corecontroller.NewEventReconciler(
-		ctrl.Log.WithName("Controllers").WithName("Event"),
-		mgr.GetScheme(),
-		k8sApi, nodeEventCache).SetupWithManager(mgr)); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Event")
-		os.Exit(1)
-	}
+	// Disable Event controller for now due to known possible performance impacts on etcd servers
+	// if err = (corecontroller.NewEventReconciler(
+	// 	ctrl.Log.WithName("Controllers").WithName("Event"),
+	// 	mgr.GetScheme(),
+	// 	k8sApi, nodeEventCache).SetupWithManager(mgr)); err != nil {
+	// 	setupLog.Error(err, "unable to create controller", "controller", "Event")
+	// 	os.Exit(1)
+	// }
 
 	if err = (&resource.IntrospectHandler{
 		Log:             ctrl.Log.WithName("introspect"),
