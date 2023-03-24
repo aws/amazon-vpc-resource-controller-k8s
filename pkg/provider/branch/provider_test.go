@@ -293,36 +293,11 @@ func TestBranchENIProvider_GetResourceCapacity_NotSupported(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestBranchENIProvider_NotSupported_LabelNode(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	provider, mockK8sWrapper := getProviderAndMockK8sWrapper(ctrl)
-	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
-
-	supportedInstanceType := "t3.medium"
-	node := &v1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   NodeName,
-			Labels: map[string]string{config.HasTrunkAttachedLabel: config.BooleanFalse},
-		},
-	}
-
-	mockInstance.EXPECT().Name().Return(NodeName)
-	mockInstance.EXPECT().Os().Return("linux")
-	mockInstance.EXPECT().Type().Return(supportedInstanceType)
-	mockK8sWrapper.EXPECT().GetNode(NodeName).Return(node, nil)
-	mockK8sWrapper.EXPECT().AddLabelToManageNode(node, config.HasTrunkAttachedLabel, config.NotSupportedEc2Type).Return(true, nil)
-
-	supported := provider.IsInstanceSupported(mockInstance)
-	assert.False(t, supported)
-}
-
 func TestBranchENIProvider_Supported_LabelNode(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider, mockK8sWrapper := getProviderAndMockK8sWrapper(ctrl)
+	provider, _ := getProviderAndMockK8sWrapper(ctrl)
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 
 	supportedInstanceType := "c5.large"
@@ -333,12 +308,8 @@ func TestBranchENIProvider_Supported_LabelNode(t *testing.T) {
 		},
 	}
 
-	mockInstance.EXPECT().Name().Return(NodeName)
 	mockInstance.EXPECT().Os().Return("linux")
 	mockInstance.EXPECT().Type().Return(supportedInstanceType)
-	mockK8sWrapper.EXPECT().GetNode(NodeName).Return(node, nil)
-	// not calling the label method if the instance is supported
-	mockK8sWrapper.EXPECT().AddLabelToManageNode(node, gomock.Any(), gomock.Any()).Return(true, nil).Times(0)
 
 	supported := provider.IsInstanceSupported(mockInstance)
 	assert.True(t, supported)

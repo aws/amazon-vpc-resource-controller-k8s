@@ -315,12 +315,6 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 			return ctrl.Result{}, nil
 		}
 
-		// node was successfully initialized, we need to update trunk label value to True
-		// this is the only place that the controller set the label to true
-		if err := m.updateNodeTrunkLabel(asyncJob.nodeName, config.HasTrunkAttachedLabel, config.BooleanTrue); err != nil {
-			m.Log.Error(err, "updating node trunk label to true failed", "NodeName", asyncJob.nodeName)
-		}
-
 		// If there's no error, we need to update the node so the capacity is advertised
 		asyncJob.op = Update
 		return m.performAsyncOperation(asyncJob)
