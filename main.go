@@ -207,11 +207,6 @@ func main() {
 				"metadata.namespace": config.KubeSystemNamespace,
 			}.AsSelector(),
 			},
-			// &eventsv1.Event{}: {Field: fields.Set{
-			// 	"reason":              config.VpcCNINodeEventReason,
-			// 	"reportingController": config.VpcCNIReportingAgent,
-			// }.AsSelector(),
-			// },
 		},
 	})
 
