@@ -1,5 +1,7 @@
+ARG BASE_IMAGE
+ARG BUILD_IMAGE
 # Build the controller binary
-FROM public.ecr.aws/bitnami/golang:1.20.1 as builder
+FROM $BUILD_IMAGE as builder
 
 WORKDIR /workspace
 ENV GOPROXY direct
@@ -28,7 +30,7 @@ RUN GIT_VERSION=$(git describe --tags --always) && \
         CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build \
         -ldflags="-X ${VERSION_PKG}.GitVersion=${GIT_VERSION} -X ${VERSION_PKG}.GitCommit=${GIT_COMMIT} -X ${VERSION_PKG}.BuildDate=${BUILD_DATE}" -a -o controller main.go
 
-FROM public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-nonroot:latest.2
+FROM $BASE_IMAGE
 
 WORKDIR /
 COPY --from=public.ecr.aws/eks-distro/kubernetes/go-runner:v0.9.0-eks-1-21-4 /usr/local/bin/go-runner /usr/local/bin/go-runner
