@@ -8,6 +8,8 @@ export GOPROXY = direct
 
 VERSION ?= $(GIT_VERSION)
 IMAGE ?= $(REPO):$(VERSION)
+BASE_IMAGE ?= public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-nonroot:latest.2
+BUILD_IMAGE ?= public.ecr.aws/bitnami/golang:1.20.1
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:trivialVersions=true"
 
@@ -68,7 +70,7 @@ generate: controller-gen
 
 # Build the docker image
 docker-build: check-env test
-	docker build . -t ${IMAGE}
+	docker build --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) . -t ${IMAGE}
 
 # Push the docker image
 docker-push: check-env
