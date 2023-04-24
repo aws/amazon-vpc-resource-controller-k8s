@@ -88,6 +88,20 @@ func (mr *MockConditionsMockRecorder) IsWindowsIPAMEnabled() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsWindowsIPAMEnabled", reflect.TypeOf((*MockConditions)(nil).IsWindowsIPAMEnabled))
 }
 
+// IsWindowsIPAMEnabled mocks base method.
+func (m *MockConditions) IsWindowsPrefixDelegationEnabled() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsWindowsPrefixDelegationEnabled")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsWindowsIPAMEnabled indicates an expected call of IsWindowsIPAMEnabled.
+func (mr *MockConditionsMockRecorder) IsWindowsPrefixDelegationEnabled() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsWindowsPrefixDelegationEnabled", reflect.TypeOf((*MockConditions)(nil).IsWindowsPrefixDelegationEnabled))
+}
+
 // SetPodDataStoreSyncStatus mocks base method.
 func (m *MockConditions) SetPodDataStoreSyncStatus(arg0 bool) {
 	m.ctrl.T.Helper()

@@ -18,8 +18,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
@@ -311,10 +312,28 @@ func TestIPv4Provider_UpdateResourceCapacity(t *testing.T) {
 
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, workerPool: mockWorker, instanceProviderAndPool: map[string]ResourceProviderAndPool{},
+		log: zap.New(zap.UseDevMode(true)).WithName("ip provider"), conditions: mockConditions}
 
-	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, log: zap.New(zap.UseDevMode(true)).WithName("ip provider")}
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockManager := mock_eni.NewMockENIManager(ctrl)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
 
-	mockInstance.EXPECT().Name().Return(nodeName).Times(2)
+	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
+
+	ipV4WarmPoolConfig := config.WarmPoolConfig{
+		DesiredSize:  config.IPv4DefaultWPSize,
+		MaxDeviation: config.IPv4DefaultMaxDev,
+		ReservedSize: config.IPv4DefaultResSize,
+	}
+
+	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
+	mockPool.EXPECT().SetToActive(&ipV4WarmPoolConfig).Return(job)
+	mockWorker.EXPECT().SubmitJob(job)
+
+	mockInstance.EXPECT().Name().Return(nodeName).Times(3)
 	mockInstance.EXPECT().Type().Return(instanceType)
 	mockInstance.EXPECT().Os().Return(config.OSWindows)
 	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 5).Return(nil)

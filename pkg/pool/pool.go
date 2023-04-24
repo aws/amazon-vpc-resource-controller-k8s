@@ -43,6 +43,8 @@ type Pool interface {
 	ReSync(resources []string)
 	ReconcilePool() *worker.WarmPoolJob
 	ProcessCoolDownQueue() bool
+	SetToDraining() *worker.WarmPoolJob
+	SetToActive(warmPoolConfig *config.WarmPoolConfig) *worker.WarmPoolJob
 	Introspect() IntrospectResponse
 }
 
@@ -384,6 +386,21 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 	log.V(1).Info("no need for reconciliation")
 
 	return &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}
+}
+
+func (p *pool) SetToDraining() *worker.WarmPoolJob {
+	// Set the desired size and max deviation to 0.
+	// This would force the pool to delete resources from the pool.
+	// Any resource being cooled down will be released.
+	p.warmPoolConfig.DesiredSize = 0
+	p.warmPoolConfig.MaxDeviation = 0
+
+	return p.ReconcilePool()
+}
+
+func (p *pool) SetToActive(warmPoolConfig *config.WarmPoolConfig) *worker.WarmPoolJob {
+	p.warmPoolConfig = warmPoolConfig
+	return p.ReconcilePool()
 }
 
 func (p *pool) Introspect() IntrospectResponse {

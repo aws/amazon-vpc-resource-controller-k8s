@@ -20,6 +20,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
@@ -43,6 +44,8 @@ type ipv4Provider struct {
 	lock sync.RWMutex // guards the following
 	// instanceResources stores the ENIManager and the resource pool per instance
 	instanceProviderAndPool map[string]ResourceProviderAndPool
+	// conditions is used to check which IP allocation mode is enabled
+	conditions condition.Conditions
 }
 
 // InstanceResource contains the instance's ENI manager and the resource pool
@@ -52,13 +55,14 @@ type ResourceProviderAndPool struct {
 }
 
 func NewIPv4Provider(log logr.Logger, apiWrapper api.Wrapper,
-	workerPool worker.Worker, resourceConfig config.ResourceConfig) provider.ResourceProvider {
+	workerPool worker.Worker, resourceConfig config.ResourceConfig, conditions condition.Conditions) provider.ResourceProvider {
 	return &ipv4Provider{
 		instanceProviderAndPool: make(map[string]ResourceProviderAndPool),
 		config:                  resourceConfig.WarmPoolConfig,
 		log:                     log,
 		apiWrapper:              apiWrapper,
 		workerPool:              workerPool,
+		conditions:              conditions,
 	}
 }
 
@@ -100,10 +104,19 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 		"capacity", nodeCapacity, "node name", nodeName, "instance type",
 		instance.Type(), "instance ID", instance.InstanceID())
 
-	// Reconcile pool after starting up and submit the async job
-	job := resourcePool.ReconcilePool()
-	if job.Operations != worker.OperationReconcileNotRequired {
-		p.SubmitAsyncJob(job)
+	// If PD mode is enabled, need to drain the secondary IPv4 pool
+	if p.conditions.IsWindowsPrefixDelegationEnabled() {
+		job := resourcePool.SetToDraining()
+		if job.Operations != worker.OperationReconcileNotRequired {
+			p.SubmitAsyncJob(job)
+		}
+		p.log.Info("setting the secondary IPv4 pool to draining state")
+	} else {
+		// Reconcile pool after starting up and submit the async job
+		job := resourcePool.ReconcilePool()
+		if job.Operations != worker.OperationReconcileNotRequired {
+			p.SubmitAsyncJob(job)
+		}
 	}
 
 	// Submit the async job to periodically process the delete queue
@@ -120,6 +133,33 @@ func (p *ipv4Provider) DeInitResource(instance ec2.EC2Instance) error {
 
 // UpdateResourceCapacity updates the resource capacity based on the type of instance
 func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
+	resourceProviderAndPool, isPresent := p.getInstanceProviderAndPool(instance.Name())
+	if !isPresent {
+		p.log.Error(nil, "cannot find the instance provider and pool form the cache", "node-name", instance.Name())
+		return nil
+	}
+
+	// If prefix delegation is enabled, then set the pool state to draining and do not update the capacity as that would be
+	// done by prefix provider
+	if p.conditions.IsWindowsPrefixDelegationEnabled() {
+		job := resourceProviderAndPool.resourcePool.SetToDraining()
+		p.log.Info("IPv4 prefix provider pool should be active")
+		p.SubmitAsyncJob(job)
+		return nil
+	}
+
+	// Reset resource config to default values
+	resourceConfig := config.LoadResourceConfig()
+	ipv4ResourceConfig, ok := resourceConfig[config.ResourceNameIPAddress]
+	if !ok {
+		p.log.Error(fmt.Errorf("failed to find resource configuration"), "resourceName", config.ResourceNameIPAddress)
+		return nil
+	}
+
+	// Set the secondary IP provider pool state to active
+	job := resourceProviderAndPool.resourcePool.SetToActive(ipv4ResourceConfig.WarmPoolConfig)
+	p.SubmitAsyncJob(job)
+
 	instanceType := instance.Type()
 	instanceName := instance.Name()
 	os := instance.Os()
