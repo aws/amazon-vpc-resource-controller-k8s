@@ -19,11 +19,13 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 type ENICleaner struct {
@@ -37,10 +39,16 @@ type ENICleaner struct {
 	ctx               context.Context
 }
 
-func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
+func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager, healthzHandler *rcHealthz.HealthzHandler) error {
 	e.clusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
 	e.availableENIs = make(map[string]struct{})
 	e.ctx = ctx
+
+	healthzHandler.AddControllersHealthCheckers(
+		map[string]healthz.Checker{
+			"health-interface-cleaner": rcHealthz.SimplePing("interface cleanup", e.Log),
+		},
+	)
 
 	return mgr.Add(e)
 }

@@ -15,16 +15,20 @@ package manager
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 	asyncWorker "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	"github.com/google/uuid"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
@@ -84,7 +88,7 @@ type AsyncOperationJob struct {
 
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
-	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions) (Manager, error) {
+	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
 
 	manager := &manager{
 		resourceManager: resourceManager,
@@ -94,6 +98,11 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 		worker:          worker,
 		conditions:      conditions,
 	}
+
+	// add health check on subpath for node manager
+	healthzHandler.AddControllersHealthCheckers(
+		map[string]healthz.Checker{"health-node-manager": manager.check()},
+	)
 
 	return manager, worker.StartWorkerPool(manager.performAsyncOperation)
 }
@@ -404,14 +413,19 @@ func (m *manager) removeNodeSafe(nodeName string) {
 	delete(m.dataStore, nodeName)
 }
 
-func (m *manager) updateNodeTrunkLabel(nodeName, labelKey, labelValue string) error {
-	if node, err := m.wrapper.K8sAPI.GetNode(nodeName); err != nil {
-		return err
-	} else {
-		updated, err := m.wrapper.K8sAPI.AddLabelToManageNode(node, labelKey, labelValue)
-		if !updated {
-			m.Log.Info("failed updating the node label for trunk when operating on node", "NodeName", nodeName, "LabelKey", labelKey, "LabelValue", labelValue)
-		}
+func (m *manager) check() healthz.Checker {
+	// instead of using SimplePing, testing the node cache from manager makes the test more accurate
+	return func(req *http.Request) error {
+		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
+			randomName := uuid.New().String()
+			_, found := m.GetNode(randomName)
+			m.Log.V(1).Info("health check tested ping GetNode to check on datastore cache in node manager successfully", "TesedNodeName", randomName, "NodeFound", found)
+			var ping interface{}
+			m.worker.SubmitJob(ping)
+			m.Log.V(1).Info("health check tested ping SubmitJob with a nil job to check on worker queue in node manager successfully")
+			c <- nil
+		}, m.Log)
+
 		return err
 	}
 }

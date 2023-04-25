@@ -7,8 +7,10 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
@@ -16,6 +18,23 @@ type NodeUpdateWebhook struct {
 	decoder   *admission.Decoder
 	Condition condition.Conditions
 	Log       logr.Logger
+	Checker   healthz.Checker
+}
+
+func NewNodeUpdateWebhook(condition condition.Conditions, log logr.Logger, healthzHandler *rcHealthz.HealthzHandler) *NodeUpdateWebhook {
+	nodeUpdateWebhook := &NodeUpdateWebhook{
+		Condition: condition,
+		Log:       log,
+	}
+
+	// add health check on subpath for node validation webhook
+	healthzHandler.AddControllersHealthCheckers(
+		map[string]healthz.Checker{
+			"health-node-validating-webhook": rcHealthz.SimplePing("node validating webhook", log),
+		},
+	)
+
+	return nodeUpdateWebhook
 }
 
 const awsNodeUsername = "system:serviceaccount:kube-system:aws-node"

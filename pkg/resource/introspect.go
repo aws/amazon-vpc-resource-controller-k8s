@@ -18,8 +18,10 @@ import (
 	"encoding/json"
 	"net/http"
 
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 const (
@@ -93,6 +95,11 @@ func (i *IntrospectHandler) NodeResourceHandler(w http.ResponseWriter, r *http.R
 	w.Write(jsonData)
 }
 
-func (i *IntrospectHandler) SetupWithManager(mgr ctrl.Manager) error {
+func (i *IntrospectHandler) SetupWithManager(mgr ctrl.Manager, healthzHanlder *rcHealthz.HealthzHandler) error {
+	// add health check on subpath for introspect controller
+	healthzHanlder.AddControllersHealthCheckers(
+		map[string]healthz.Checker{"health-introspect-controller": rcHealthz.SimplePing("Introspect controller", i.Log)},
+	)
+
 	return mgr.Add(i)
 }

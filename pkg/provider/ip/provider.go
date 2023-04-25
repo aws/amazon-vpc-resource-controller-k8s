@@ -15,12 +15,14 @@ package ip
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
@@ -28,6 +30,7 @@ import (
 
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 type ipv4Provider struct {
@@ -43,6 +46,8 @@ type ipv4Provider struct {
 	lock sync.RWMutex // guards the following
 	// instanceResources stores the ENIManager and the resource pool per instance
 	instanceProviderAndPool map[string]ResourceProviderAndPool
+	// healthz check subpath
+	checker healthz.Checker
 }
 
 // InstanceResource contains the instance's ENI manager and the resource pool
@@ -53,13 +58,15 @@ type ResourceProviderAndPool struct {
 
 func NewIPv4Provider(log logr.Logger, apiWrapper api.Wrapper,
 	workerPool worker.Worker, resourceConfig config.ResourceConfig) provider.ResourceProvider {
-	return &ipv4Provider{
+	provider := &ipv4Provider{
 		instanceProviderAndPool: make(map[string]ResourceProviderAndPool),
 		config:                  resourceConfig.WarmPoolConfig,
 		log:                     log,
 		apiWrapper:              apiWrapper,
 		workerPool:              workerPool,
 	}
+	provider.checker = provider.check()
+	return provider
 }
 
 func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
@@ -343,4 +350,22 @@ func (p *ipv4Provider) IntrospectNode(nodeName string) interface{} {
 		return struct{}{}
 	}
 	return resource.resourcePool.Introspect()
+}
+
+func (p *ipv4Provider) check() healthz.Checker {
+	p.log.Info("IPv4 provider's healthz subpath was added")
+	return func(req *http.Request) error {
+		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
+			var ping interface{}
+			p.SubmitAsyncJob(ping)
+			p.log.V(1).Info("***** health check on IPv4 provider tested SubmitAsyncJob *****")
+			c <- nil
+		}, p.log)
+
+		return err
+	}
+}
+
+func (p *ipv4Provider) GetHealthChecker() healthz.Checker {
+	return p.checker
 }

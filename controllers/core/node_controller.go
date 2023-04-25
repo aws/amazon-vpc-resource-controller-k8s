@@ -16,17 +16,22 @@ package controllers
 import (
 	"context"
 	goErr "errors"
+	"net/http"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
+	"github.com/google/uuid"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 // MaxNodeConcurrentReconciles is the number of go routines that can invoke
@@ -43,7 +48,7 @@ type NodeReconciler struct {
 	Scheme     *runtime.Scheme
 	Manager    manager.Manager
 	Conditions condition.Conditions
-	// NodeEventCache *bigcache.BigCache
+	Context    context.Context
 }
 
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
@@ -68,6 +73,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
 		if errors.IsNotFound(err) {
+			r.Log.V(1).Info("the requested node couldn't be found by k8s client", "Node", req.NamespacedName)
 			_, found := r.Manager.GetNode(req.Name)
 			// if cachedNode != nil && cachedNode.HasInstance() {
 			// 	// delete the not found node instance id from node event cache for housekeeping
@@ -80,7 +86,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 					logger.Error(err, "failed to delete node from manager")
 					return ctrl.Result{}, nil
 				}
-				logger.Info("deleted the node from manager")
+				logger.V(1).Info("deleted the node from manager")
 			}
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -98,17 +104,45 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, err
 }
 
-// func (r *NodeReconciler) deleteNodeFromNodeEventCache(nodeId string) {
-// 	if err := r.NodeEventCache.Delete(nodeId); err != nil {
-// 		r.Log.V(1).Info("node controller removing node from node event cache failed", "Error", err)
-// 	} else {
-// 		r.Log.V(1).Info("node controller removed the node from node event cache successfully", "InstanceId", nodeId)
-// 	}
-// }
+func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHealthz.HealthzHandler) error {
+	// add health check on subpath for node controller
+	healthzHandler.AddControllersHealthCheckers(
+		map[string]healthz.Checker{"health-node-controller": r.Check()},
+	)
 
-func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: MaxNodeConcurrentReconciles}).
 		Complete(r)
+}
+
+func (r *NodeReconciler) Check() healthz.Checker {
+	r.Log.Info("Node controller's healthz subpath was added")
+	return func(req *http.Request) error {
+		// if the reconciler is not ready, using the simple ping to test
+		// this can test the referenced cached pod datastore
+		if !r.Conditions.GetPodDataStoreSyncStatus() {
+			r.Log.V(1).Info("***** node controller healthz enpoint tested Simple Ping *****")
+			return nil
+		}
+
+		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
+			// when the reconciler is ready, testing the reconciler with a fake node request
+			pingRequest := &ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: corev1.NamespaceDefault,
+					Name:      uuid.New().String(),
+				},
+			}
+
+			// expecting to 'return ctrl.Result{}, client.IgnoreNotFound(err)'
+			// IgnoreNotFound returns nil on NotFound errors.
+			// this can test the pod cached datastore and node cached datastore
+			_, rErr := r.Reconcile(r.Context, *pingRequest)
+			r.Log.V(1).Info("***** node controller healthz endpoint tested Reconcile *****")
+			c <- rErr
+		}, r.Log)
+
+		return err
+	}
 }
