@@ -12,6 +12,8 @@ BASE_IMAGE ?= public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-no
 BUILD_IMAGE ?= public.ecr.aws/bitnami/golang:1.20.1
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:trivialVersions=true"
+GOARCH ?= amd64
+PLATFORM ?= linux/amd64
 
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -67,6 +69,10 @@ vet:
 # Generate code
 generate: controller-gen
 	$(CONTROLLER_GEN) object:headerFile="scripts/templates/boilerplate.go.txt" paths="./..."
+
+# Build the docker image with buildx
+docker-buildx: check-env test
+	docker buildx build --platform=$(PLATFORM) -t $(IMAGE)-$(GOARCH) --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) --build-arg $(GOARCH) --load .
 
 # Build the docker image
 docker-build: check-env test
