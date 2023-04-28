@@ -275,16 +275,15 @@ func main() {
 		SGPAPI: sgpAPI,
 	}
 
+	// hasPodDataStoreSynced is set to true when the custom controller has synced
+	controllerConditions := condition.NewControllerConditions(
+		ctrl.Log.WithName("controller conditions"), k8sApi)
 	supportedResources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
-	resourceManager, err := resource.NewResourceManager(ctx, supportedResources, apiWrapper)
+	resourceManager, err := resource.NewResourceManager(ctx, supportedResources, apiWrapper, controllerConditions)
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init resources", "resources", supportedResources)
 		os.Exit(1)
 	}
-
-	// hasPodDataStoreSynced is set to true when the custom controller has synced
-	controllerConditions := condition.NewControllerConditions(
-		ctrl.Log.WithName("controller conditions"), k8sApi)
 
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
 		10, 1, ctrl.Log.WithName("node async workers"), ctx)
