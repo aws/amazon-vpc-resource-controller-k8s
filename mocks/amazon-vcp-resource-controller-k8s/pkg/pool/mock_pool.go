@@ -20,6 +20,7 @@ package mock_pool
 import (
 	reflect "reflect"
 
+	config "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	pool "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	worker "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	gomock "github.com/golang/mock/gomock"
@@ -108,6 +109,20 @@ func (mr *MockPoolMockRecorder) Introspect() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockPool)(nil).Introspect))
 }
 
+// IsManagedResource mocks base method.
+func (m *MockPool) IsManagedResource(arg0 string) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsManagedResource", arg0)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsManagedResource indicates an expected call of IsManagedResource.
+func (mr *MockPoolMockRecorder) IsManagedResource(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsManagedResource", reflect.TypeOf((*MockPool)(nil).IsManagedResource), arg0)
+}
+
 // ProcessCoolDownQueue mocks base method.
 func (m *MockPool) ProcessCoolDownQueue() bool {
 	m.ctrl.T.Helper()
@@ -146,6 +161,34 @@ func (m *MockPool) ReconcilePool() *worker.WarmPoolJob {
 func (mr *MockPoolMockRecorder) ReconcilePool() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReconcilePool", reflect.TypeOf((*MockPool)(nil).ReconcilePool))
+}
+
+// SetToActive mocks base method.
+func (m *MockPool) SetToActive(arg0 *config.WarmPoolConfig) *worker.WarmPoolJob {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetToActive", arg0)
+	ret0, _ := ret[0].(*worker.WarmPoolJob)
+	return ret0
+}
+
+// SetToActive indicates an expected call of SetToActive.
+func (mr *MockPoolMockRecorder) SetToActive(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetToActive", reflect.TypeOf((*MockPool)(nil).SetToActive), arg0)
+}
+
+// SetToDraining mocks base method.
+func (m *MockPool) SetToDraining() *worker.WarmPoolJob {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetToDraining")
+	ret0, _ := ret[0].(*worker.WarmPoolJob)
+	return ret0
+}
+
+// SetToDraining indicates an expected call of SetToDraining.
+func (mr *MockPoolMockRecorder) SetToDraining() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetToDraining", reflect.TypeOf((*MockPool)(nil).SetToDraining))
 }
 
 // UpdatePool mocks base method.

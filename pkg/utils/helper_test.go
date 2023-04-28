@@ -481,3 +481,47 @@ func NewSecurityGroupPolicyMatchExpressionSASelector(name string, namespace stri
 	}
 	return sgp
 }
+
+func TestDeconstructIPsFromPrefix(t *testing.T) {
+	// /32 prefix only contains 1 ip address
+	prefix1 := "10.0.1.0/32"
+	ips, err := DeconstructIPsFromPrefix(prefix1)
+	assert.NoError(t, err)
+	assert.ElementsMatch(t, []string{"10.0.1.0/32"}, ips)
+
+	// /28 has 16 ip addresses
+	prefix2 := "10.0.1.0/28"
+	ips, err = DeconstructIPsFromPrefix(prefix2)
+	assert.NoError(t, err)
+	assert.Equal(t, 16, len(ips))
+	assert.Contains(t, ips, "10.0.1.15/32")
+	assert.NotContains(t, ips, "10.0.1.16/32")
+
+	// /30 has 4 ip addresses
+	prefix3 := "10.0.1.0/30"
+	expectedIPs := []string{"10.0.1.0/32", "10.0.1.1/32", "10.0.1.2/32", "10.0.1.3/32"}
+	ips, err = DeconstructIPsFromPrefix(prefix3)
+	assert.NoError(t, err)
+	assert.Equal(t, 4, len(ips))
+	assert.ElementsMatch(t, expectedIPs, ips)
+}
+
+func TestDeconstructIPsFromPrefix_InvalidPrefix(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+	}{
+		{name: "double slash makes invalid mask", prefix: "10.0.1.0//28"},
+		{name: "negative mask", prefix: "10.0.1.0/-2"},
+		{name: "missing backslash", prefix: "10.0.1"},
+		{name: "not enough segments", prefix: "10.0.1/28"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ips, err := DeconstructIPsFromPrefix(test.prefix)
+			assert.Error(t, err)
+			assert.Nil(t, ips)
+		})
+	}
+}
