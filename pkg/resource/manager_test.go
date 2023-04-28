@@ -18,7 +18,9 @@ import (
 	"testing"
 
 	mock_handler "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/golang/mock/gomock"
@@ -46,8 +48,9 @@ func Test_NewResourceManager(t *testing.T) {
 
 	mock := NewMock(ctrl)
 	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
-
-	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper, zap.New(zap.UseDevMode(true)), healthzHandler)
+	mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
+	conditions := condition.NewControllerConditions(zap.New(), mockK8s)
+	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper, zap.New(zap.UseDevMode(true)), healthzHandler, conditions)
 	assert.NoError(t, err)
 
 	_, ok := manger.GetResourceHandler(config.ResourceNamePodENI)

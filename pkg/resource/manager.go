@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
@@ -52,7 +53,8 @@ type ResourceManager interface {
 	GetResourceHandler(resourceName string) (handler.Handler, bool)
 }
 
-func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api.Wrapper, log logr.Logger, healthzHandler *rcHealthz.HealthzHandler) (ResourceManager, error) {
+func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api.Wrapper, log logr.Logger,
+	healthzHandler *rcHealthz.HealthzHandler, conditions condition.Conditions) (ResourceManager, error) {
 	// Load that static configuration of the resource
 	resourceConfig := config.LoadResourceConfig()
 
@@ -85,7 +87,7 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 
 		if resourceName == config.ResourceNameIPAddress {
 			resourceProvider = ip.NewIPv4Provider(ctrl.Log.WithName("ipv4 provider"),
-				wrapper, workers, resourceConfig)
+				wrapper, workers, resourceConfig, conditions)
 			healthCheckers[ipv4ProviderHealthCheckSubpath] = resourceProvider.GetHealthChecker()
 			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
 				resourceName, resourceProvider, ctx)
