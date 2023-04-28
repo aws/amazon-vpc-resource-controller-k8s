@@ -34,13 +34,14 @@ import (
 // ConfigMapReconciler reconciles a ConfigMap object
 type ConfigMapReconciler struct {
 	client.Client
-	Log                   logr.Logger
-	Scheme                *runtime.Scheme
-	NodeManager           manager.Manager
-	K8sAPI                k8s.K8sWrapper
-	Condition             condition.Conditions
-	curWinIPAMEnabledCond bool
-	Context               context.Context
+	Log                               logr.Logger
+	Scheme                            *runtime.Scheme
+	NodeManager                       manager.Manager
+	K8sAPI                            k8s.K8sWrapper
+	Condition                         condition.Conditions
+	curWinIPAMEnabledCond             bool
+	curWinPrefixDelegationEnabledCond bool
+	Context                           context.Context
 }
 
 //+kubebuilder:rbac:groups=core,resources=configmaps,namespace=kube-system,resourceNames=amazon-vpc-cni,verbs=get;list;watch
@@ -70,11 +71,27 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Check if the flag value has changed
 	newWinIPAMEnabledCond := r.Condition.IsWindowsIPAMEnabled()
 
+	var isIPAMFlagUpdated bool
 	if r.curWinIPAMEnabledCond != newWinIPAMEnabledCond {
 		r.curWinIPAMEnabledCond = newWinIPAMEnabledCond
 		logger.Info("updated configmap", config.EnableWindowsIPAMKey, r.curWinIPAMEnabledCond)
 
-		// Flag is updated, update all nodes
+		isIPAMFlagUpdated = true
+	}
+
+	// Check if the prefix delegation flag has changed
+	newWinPrefixDelegationEnabledCond := r.Condition.IsWindowsPrefixDelegationEnabled()
+
+	var isPrefixFlagUpdated bool
+	if r.curWinPrefixDelegationEnabledCond != newWinPrefixDelegationEnabledCond {
+		r.curWinPrefixDelegationEnabledCond = newWinPrefixDelegationEnabledCond
+		logger.Info("updated configmap", config.EnableWindowsPrefixDelegationKey, r.curWinPrefixDelegationEnabledCond)
+
+		isPrefixFlagUpdated = true
+	}
+
+	// Flag is updated, update all nodes
+	if isIPAMFlagUpdated || isPrefixFlagUpdated {
 		err := UpdateNodesOnConfigMapChanges(r.K8sAPI, r.NodeManager)
 		if err != nil {
 			// Error in updating nodes
