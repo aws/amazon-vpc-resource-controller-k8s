@@ -39,6 +39,10 @@ type Conditions interface {
 	// IsWindowsIPAMEnabled to process events only when Windows IPAM is enabled
 	// by the user
 	IsWindowsIPAMEnabled() bool
+
+	// IsWindowsPrefixDelegationEnabled to process events only when Windows Prefix Delegation is enabled
+	IsWindowsPrefixDelegationEnabled() bool
+
 	// IsPodSGPEnabled to process events only when Security Group for Pods feature
 	// is enabled by the user
 	// IsPodSGPEnabled() bool We need to check if SGP is enabled via ConfigMap + Environment variables
@@ -61,6 +65,12 @@ var (
 			Help: "Binary value to indicate whether user has set enable-windows-ipam to true",
 		})
 
+	conditionWindowsPrefixDelegationEnabled = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "windows_prefix_delegation_enabled",
+			Help: "Binary value to indicate whether user has set enable-windows-prefix-delegation to true",
+		})
+
 	prometheusRegistered = false
 )
 
@@ -68,6 +78,7 @@ func prometheusRegister() {
 	if !prometheusRegistered {
 		metrics.Registry.MustRegister(
 			conditionWindowsIPAMEnabled,
+			conditionWindowsPrefixDelegationEnabled,
 		)
 	}
 
@@ -77,6 +88,7 @@ func prometheusRegister() {
 func NewControllerConditions(log logr.Logger, k8sApi k8s.K8sWrapper) Conditions {
 	prometheusRegister()
 	conditionWindowsIPAMEnabled.Set(0)
+	conditionWindowsPrefixDelegationEnabled.Set(0)
 
 	return &condition{
 		log:    log,
@@ -103,6 +115,35 @@ func (c *condition) IsWindowsIPAMEnabled() bool {
 	}
 
 	conditionWindowsIPAMEnabled.Set(0)
+	return false
+}
+
+func (c *condition) IsWindowsPrefixDelegationEnabled() bool {
+	if c.IsOldVPCControllerDeploymentPresent() {
+		return false
+	}
+
+	// Return false if configmap not present/any errors
+	vpcCniConfigMap, err := c.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
+
+	if err == nil && vpcCniConfigMap.Data != nil {
+		if ipamVal, ok := vpcCniConfigMap.Data[config.EnableWindowsIPAMKey]; ok {
+			// Check if Windows IPAM is enabled
+			enableWinIpamVal, err := strconv.ParseBool(ipamVal)
+			if err == nil && enableWinIpamVal {
+				if pdVal, ok := vpcCniConfigMap.Data[config.EnableWindowsPrefixDelegationKey]; ok {
+					enableWinPDVal, err := strconv.ParseBool(pdVal)
+					// Check if Windows PD is enabled
+					if err == nil && enableWinPDVal {
+						conditionWindowsPrefixDelegationEnabled.Set(1)
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	conditionWindowsPrefixDelegationEnabled.Set(0)
 	return false
 }
 

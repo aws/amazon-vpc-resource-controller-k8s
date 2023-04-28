@@ -22,6 +22,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
@@ -29,9 +30,9 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
-	v1 "k8s.io/api/core/v1"
 
 	"github.com/go-logr/logr"
+	v1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
@@ -48,25 +49,34 @@ type ipv4Provider struct {
 	// lock to allow multiple routines to access the cache concurrently
 	lock sync.RWMutex // guards the following
 	// instanceResources stores the ENIManager and the resource pool per instance
-	instanceProviderAndPool map[string]ResourceProviderAndPool
+	instanceProviderAndPool map[string]*ResourceProviderAndPool
+	// conditions is used to check which IP allocation mode is enabled
+	conditions condition.Conditions
 	// healthz check subpath
 	checker healthz.Checker
 }
 
-// InstanceResource contains the instance's ENI manager and the resource pool
+// ResourceProviderAndPool contains the instance's ENI manager and the resource pool
 type ResourceProviderAndPool struct {
+	// lock guards the struct
+	lock         sync.RWMutex
 	eniManager   eni.ENIManager
 	resourcePool pool.Pool
+	// capacity is stored so that it can be advertised when node is updated
+	capacity int
+	// isPrevPDEnabled stores whether PD was enabled previously
+	isPrevPDEnabled bool
 }
 
 func NewIPv4Provider(log logr.Logger, apiWrapper api.Wrapper,
-	workerPool worker.Worker, resourceConfig config.ResourceConfig) provider.ResourceProvider {
+	workerPool worker.Worker, resourceConfig config.ResourceConfig, conditions condition.Conditions) provider.ResourceProvider {
 	provider := &ipv4Provider{
-		instanceProviderAndPool: make(map[string]ResourceProviderAndPool),
+		instanceProviderAndPool: make(map[string]*ResourceProviderAndPool),
 		config:                  resourceConfig.WarmPoolConfig,
 		log:                     log,
 		apiWrapper:              apiWrapper,
 		workerPool:              workerPool,
+		conditions:              conditions,
 	}
 	provider.checker = provider.check()
 	return provider
@@ -76,8 +86,8 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 
 	eniManager := eni.NewENIManager(instance)
-	presentIPs, err := eniManager.InitResources(p.apiWrapper.EC2API)
-	if err != nil {
+	ipV4Resources, err := eniManager.InitResources(p.apiWrapper.EC2API)
+	if err != nil || ipV4Resources == nil {
 		if errors.Is(err, utils.ErrNotFound) {
 			msg := fmt.Sprintf("The instance type %s is not supported for Windows", instance.Type())
 			utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), "Unsupported", msg, v1.EventTypeWarning, p.log)
@@ -86,32 +96,55 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
+	presentIPs := ipV4Resources.PrivateIPv4Addresses
+	presentPrefixes := ipV4Resources.IPv4Prefixes
+
+	presentIPSet := map[string]struct{}{}
+	for _, ip := range presentIPs {
+		presentIPSet[ip] = struct{}{}
+	}
+
 	pods, err := p.apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
 	if err != nil {
 		return err
 	}
 
-	podToResourceMap := map[string]string{}
+	podToResourceMap := map[string]pool.Resource{}
 	usedIPSet := map[string]struct{}{}
 	for _, pod := range pods {
 		annotation, present := pod.Annotations[config.ResourceNameIPAddress]
 		if !present {
 			continue
 		}
-		podToResourceMap[string(pod.UID)] = annotation
-		usedIPSet[annotation] = struct{}{}
+		// Only mark pod as used if it's secondary IP
+		if _, found := presentIPSet[annotation]; found {
+			podToResourceMap[string(pod.UID)] = pool.Resource{GroupID: annotation, ResourceID: annotation}
+			usedIPSet[annotation] = struct{}{}
+		}
 	}
 
-	warmResources := difference(presentIPs, usedIPSet)
+	warmIPs := difference(presentIPs, usedIPSet)
+	warmResources := make(map[string][]pool.Resource, len(presentIPs))
+	for _, ip := range warmIPs {
+		warmResources[ip] = append(warmResources[ip], pool.Resource{GroupID: ip, ResourceID: ip})
+	}
 
-	nodeCapacity := getCapacity(instance.Type(), instance.Os())
-	resourcePool := pool.NewResourcePool(p.log.WithName("ipv4 resource pool").
-		WithValues("node name", instance.Name()), p.config, podToResourceMap,
-		warmResources, instance.Name(), nodeCapacity)
+	nodeCapacity := getCapacity(instance.Type(), instance.Os()) - len(presentPrefixes)
 
-	p.putInstanceProviderAndPool(nodeName, resourcePool, eniManager)
+	// Set warm pool config to empty config if PD is enabled
+	secondaryIPWPConfig := p.config
+	isPDEnabled := p.conditions.IsWindowsPrefixDelegationEnabled()
+	if isPDEnabled {
+		secondaryIPWPConfig = &config.WarmPoolConfig{}
+	}
 
-	p.log.Info("initialized the resource provider for resource IPv4",
+	resourcePool := pool.NewResourcePool(p.log.WithName("secondary ipv4 address resource pool").
+		WithValues("node name", instance.Name()), secondaryIPWPConfig, podToResourceMap,
+		warmResources, instance.Name(), nodeCapacity, false)
+
+	p.putInstanceProviderAndPool(nodeName, resourcePool, eniManager, nodeCapacity, isPDEnabled)
+
+	p.log.Info("initialized the resource provider for secondary ipv4 address",
 		"capacity", nodeCapacity, "node name", nodeName, "instance type",
 		instance.Type(), "instance ID", instance.InstanceID())
 
@@ -135,11 +168,49 @@ func (p *ipv4Provider) DeInitResource(instance ec2.EC2Instance) error {
 
 // UpdateResourceCapacity updates the resource capacity based on the type of instance
 func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
+	resourceProviderAndPool, isPresent := p.getInstanceProviderAndPool(instance.Name())
+	if !isPresent {
+		p.log.Error(nil, "cannot find the instance provider and pool form the cache", "node-name", instance.Name())
+		return nil
+	}
+
+	resourceProviderAndPool.lock.Lock()
+	defer resourceProviderAndPool.lock.Unlock()
+
+	// Check if PD is enabled
+	isCurrPDEnabled := p.conditions.IsWindowsPrefixDelegationEnabled()
+
+	// Previous state and current state are both PD enabled or disabled, no need to update warm pool config or capacity for secondary
+	// IP provider
+	if resourceProviderAndPool.isPrevPDEnabled == isCurrPDEnabled {
+		return nil
+	}
+
+	// If prefix delegation is enabled, then set the secondary IP pool state to draining and
+	// do not update the capacity as that would be done by prefix provider
+	if !resourceProviderAndPool.isPrevPDEnabled && isCurrPDEnabled {
+		resourceProviderAndPool.isPrevPDEnabled = true
+		p.log.Info("Prefix IP provider should be active")
+		job := resourceProviderAndPool.resourcePool.SetToDraining()
+		if job.Operations != worker.OperationReconcileNotRequired {
+			p.SubmitAsyncJob(job)
+		}
+		return nil
+	}
+
+	resourceProviderAndPool.isPrevPDEnabled = false
+
+	// Set the secondary IP provider pool state to active
+	job := resourceProviderAndPool.resourcePool.SetToActive(p.config)
+	if job.Operations != worker.OperationReconcileNotRequired {
+		p.SubmitAsyncJob(job)
+	}
+
 	instanceType := instance.Type()
 	instanceName := instance.Name()
 	os := instance.Os()
 
-	capacity := getCapacity(instanceType, os)
+	capacity := resourceProviderAndPool.capacity
 
 	err := p.apiWrapper.K8sAPI.AdvertiseCapacityIfNotSet(instance.Name(), config.ResourceNameIPAddress, capacity)
 	if err != nil {
@@ -206,7 +277,7 @@ func (p *ipv4Provider) CreatePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 		return
 	}
 	didSucceed := true
-	ips, err := instanceResource.eniManager.CreateIPV4Address(job.ResourceCount, p.apiWrapper.EC2API, p.log)
+	ips, err := instanceResource.eniManager.CreateIPV4Resource(job.ResourceCount, config.ResourceTypeIPv4Address, p.apiWrapper.EC2API, p.log)
 	if err != nil {
 		p.log.Error(err, "failed to create all/some of the IPv4 addresses", "created ips", ips)
 		didSucceed = false
@@ -223,14 +294,14 @@ func (p *ipv4Provider) ReSyncPool(job *worker.WarmPoolJob) {
 		return
 	}
 
-	resources, err := providerAndPool.eniManager.InitResources(p.apiWrapper.EC2API)
-	if err != nil {
+	ipV4Resources, err := providerAndPool.eniManager.InitResources(p.apiWrapper.EC2API)
+	if err != nil || ipV4Resources == nil {
 		p.log.Error(err, "failed to get init resources for the node",
 			"name", job.NodeName)
 		return
 	}
 
-	providerAndPool.resourcePool.ReSync(resources)
+	providerAndPool.resourcePool.ReSync(ipV4Resources.PrivateIPv4Addresses)
 }
 
 // DeletePrivateIPv4AndUpdatePool executes the Delete IPv4 workflow for the list of IPs provided in the warm pool job
@@ -241,7 +312,7 @@ func (p *ipv4Provider) DeletePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 		return
 	}
 	didSucceed := true
-	failedIPs, err := instanceResource.eniManager.DeleteIPV4Address(job.Resources, p.apiWrapper.EC2API, p.log)
+	failedIPs, err := instanceResource.eniManager.DeleteIPV4Resource(job.Resources, config.ResourceTypeIPv4Address, p.apiWrapper.EC2API, p.log)
 	if err != nil {
 		p.log.Error(err, "failed to delete all/some of the IPv4 addresses", "failed ips", failedIPs)
 		didSucceed = false
@@ -264,20 +335,23 @@ func (p *ipv4Provider) updatePoolAndReconcileIfRequired(resourcePool pool.Pool, 
 }
 
 // putInstanceProviderAndPool stores the node's instance provider and pool to the cache
-func (p *ipv4Provider) putInstanceProviderAndPool(nodeName string, resourcePool pool.Pool, manager eni.ENIManager) {
+func (p *ipv4Provider) putInstanceProviderAndPool(nodeName string, resourcePool pool.Pool, manager eni.ENIManager, capacity int,
+	isPrevPDEnabled bool) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	resource := ResourceProviderAndPool{
-		eniManager:   manager,
-		resourcePool: resourcePool,
+	resource := &ResourceProviderAndPool{
+		eniManager:      manager,
+		resourcePool:    resourcePool,
+		capacity:        capacity,
+		isPrevPDEnabled: isPrevPDEnabled,
 	}
 
 	p.instanceProviderAndPool[nodeName] = resource
 }
 
 // getInstanceProviderAndPool returns the node's instance provider and pool from the cache
-func (p *ipv4Provider) getInstanceProviderAndPool(nodeName string) (ResourceProviderAndPool, bool) {
+func (p *ipv4Provider) getInstanceProviderAndPool(nodeName string) (*ResourceProviderAndPool, bool) {
 	p.lock.RLock()
 	defer p.lock.RUnlock()
 

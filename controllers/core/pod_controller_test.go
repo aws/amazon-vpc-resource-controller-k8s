@@ -22,9 +22,11 @@ import (
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
 	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
+	mock_pool "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/pool"
+	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
 	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
-
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
@@ -53,8 +55,9 @@ var (
 	mockPod = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      mockPodName,
-			Namespace: mockPodNS,
+			Name:        mockPodName,
+			Namespace:   mockPodNS,
+			Annotations: map[string]string{config.ResourceNameIPAddress: "192.168.10.0/32"},
 		},
 		Spec: v1.PodSpec{
 			NodeName: mockNodeName,
@@ -93,6 +96,7 @@ type Mock struct {
 	MockNode            *mock_node.MockNode
 	PodReconciler       *PodReconciler
 	MockHandler         *mock_handler.MockHandler
+	MockProvider        *mock_provider.MockResourceProvider
 }
 
 func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
@@ -101,7 +105,6 @@ func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
 	mockResourceManager := mock_resource.NewMockResourceManager(ctrl)
 	mockNode := mock_node.NewMockNode(ctrl)
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
-
 	converter := pod.PodConverter{}
 	mockIndexer := cache.NewIndexer(converter.Indexer, pod.NodeNameIndexer())
 	mockIndexer.Add(mockPod)
@@ -307,4 +310,39 @@ func TestPodReconcile_Reconcile_PodDeletedManagedNodeDeletedFromCluster(t *testi
 	result, err := mock.PodReconciler.Reconcile(delReq)
 	assert.NoError(t, err)
 	assert.Equal(t, result, controllerruntime.Result{})
+}
+
+// TestUpdateResourceName_IsDeleteEvent_PrefixProvider tests for pod deletion events, prefix handler is used when ip is managed by prefix
+// ip pool
+func TestUpdateResourceName_IsDeleteEvent_PrefixProvider(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
+	mockProvider.EXPECT().GetPool(mockPod.Spec.NodeName).Return(mockPool, true)
+	mockPool.EXPECT().IsManagedResource(mockPod.Annotations[config.ResourceNameIPAddress]).Return(true)
+	resourceName := mock.PodReconciler.updateResourceName(true, mockPod)
+
+	assert.Equal(t, config.ResourceNameIPAddressFromPrefix, resourceName)
+}
+
+// TestUpdateResourceName_IsDeleteEvent_SecondaryIPProvider tests for pod deletion events, secondary ip handler is used when ip is managed
+// by secondary ip pool
+func TestUpdateResourceName_IsDeleteEvent_SecondaryIPProvider(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
+	mockProvider.EXPECT().GetPool(mockPod.Spec.NodeName).Return(mockPool, true)
+	mockPool.EXPECT().IsManagedResource(mockPod.Annotations[config.ResourceNameIPAddress]).Return(false)
+	resourceName := mock.PodReconciler.updateResourceName(true, mockPod)
+
+	// since resource ip is not managed by prefix ip pool, resource name remains unchanged
+	assert.Equal(t, config.ResourceNameIPAddress, resourceName)
 }
