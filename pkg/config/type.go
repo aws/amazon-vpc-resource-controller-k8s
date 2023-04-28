@@ -66,10 +66,11 @@ const (
 )
 
 const (
-	LeaderElectionKey       = "cp-vpc-resource-controller"
-	LeaderElectionNamespace = "kube-system"
-	VpcCniConfigMapName     = "amazon-vpc-cni"
-	EnableWindowsIPAMKey    = "enable-windows-ipam"
+	LeaderElectionKey                = "cp-vpc-resource-controller"
+	LeaderElectionNamespace          = "kube-system"
+	VpcCniConfigMapName              = "amazon-vpc-cni"
+	EnableWindowsIPAMKey             = "enable-windows-ipam"
+	EnableWindowsPrefixDelegationKey = "enable-windows-prefix-delegation"
 	// Since LeaderElectionNamespace and VpcCniConfigMapName may be different in the future
 	KubeSystemNamespace            = "kube-system"
 	VpcCNIDaemonSetName            = "aws-node"
