@@ -76,28 +76,28 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
 type EC2APIHelper interface {
 	AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string, vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error)
 	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
-		secondaryPrivateIPCount int, interfaceType *string) (*ec2.NetworkInterface, error)
+		ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2.Subnet, error)
 	GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]*ec2.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error)
-	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
-		deviceIndex *int64, description *string, interfaceType *string, secondaryIPCount int) (*ec2.NetworkInterface, error)
+	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []*ec2.Tag, deviceIndex *int64,
+		description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*ec2.NetworkInterface, error)
 	AttachNetworkInterfaceToInstance(instanceId *string, nwInterfaceId *string, deviceIndex *int64) (*string, error)
 	SetDeleteOnTermination(attachmentId *string, eniId *string) error
 	DetachNetworkInterfaceFromInstance(attachmentId *string) error
 	DetachAndDeleteNetworkInterface(attachmentId *string, nwInterfaceId *string) error
 	WaitForNetworkInterfaceStatusChange(networkInterfaceId *string, desiredStatus string) error
 	GetInstanceDetails(instanceId *string) (*ec2.Instance, error)
-	AssignIPv4AddressesAndWaitTillReady(eniID string, count int) ([]string, error)
-	UnassignPrivateIpAddresses(eniID string, ips []string) error
+	AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error)
+	UnassignIPv4Resources(eniID string, resourceType config.ResourceType, resources []string) error
 }
 
 // CreateNetworkInterface creates a new network interface
 func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
-	secondaryPrivateIPCount int, interfaceType *string) (*ec2.NetworkInterface, error) {
+	ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2.NetworkInterface, error) {
 	eniDescription := CreateENIDescriptionPrefix + *description
 
 	var ec2SecurityGroups []*string
@@ -128,8 +128,19 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 		TagSpecifications: tagSpecifications,
 	}
 
-	if secondaryPrivateIPCount != 0 {
-		createInput.SecondaryPrivateIpAddressCount = aws.Int64(int64(secondaryPrivateIPCount))
+	if ipResourceCount != nil {
+		secondaryPrivateIPCount := ipResourceCount.SecondaryIPv4Count
+		ipV4PrefixCount := ipResourceCount.IPv4PrefixCount
+
+		if secondaryPrivateIPCount != 0 && ipV4PrefixCount != 0 {
+			return nil, fmt.Errorf("cannot specify both secondaryPrivateIPCount %v and ipV4PrefixCount %v", secondaryPrivateIPCount, ipV4PrefixCount)
+		}
+
+		if secondaryPrivateIPCount != 0 {
+			createInput.SecondaryPrivateIpAddressCount = aws.Int64(int64(secondaryPrivateIPCount))
+		} else if ipV4PrefixCount != 0 {
+			createInput.Ipv4PrefixCount = aws.Int64(int64(ipV4PrefixCount))
+		}
 	}
 
 	if interfaceType != nil {
@@ -299,9 +310,9 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 // CreateAndAttachNetworkInterface creates and attaches the network interface to the instance. The function will
 // wait till the interface is successfully attached
 func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string,
-	tags []*ec2.Tag, deviceIndex *int64, description *string, interfaceType *string, secondaryIPCount int) (*ec2.NetworkInterface, error) {
+	tags []*ec2.Tag, deviceIndex *int64, description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*ec2.NetworkInterface, error) {
 
-	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, secondaryIPCount, interfaceType)
+	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, ipResourceCount, interfaceType)
 	if err != nil {
 		return nil, err
 	}
@@ -434,77 +445,119 @@ func (h *ec2APIHelper) GetInstanceDetails(instanceId *string) (*ec2.Instance, er
 	return nil, fmt.Errorf("failed to find instance details for input %v", *describeInstanceInput)
 }
 
-// AssignIPv4AddressesAndWaitTillReady assigns IPv4 Address to the interface and waits till the IP Address is attached
-// to the instance
-func (h *ec2APIHelper) AssignIPv4AddressesAndWaitTillReady(eniID string, count int) ([]string, error) {
-	var assignedIPs []string
+func (h *ec2APIHelper) AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error) {
+	var assignedResources []string
+	input := &ec2.AssignPrivateIpAddressesInput{}
 
-	input := &ec2.AssignPrivateIpAddressesInput{
-		NetworkInterfaceId:             &eniID,
-		SecondaryPrivateIpAddressCount: aws.Int64(int64(count)),
+	switch resourceType {
+	case config.ResourceTypeIPv4Address:
+		input = &ec2.AssignPrivateIpAddressesInput{
+			NetworkInterfaceId:             &eniID,
+			SecondaryPrivateIpAddressCount: aws.Int64(int64(count)),
+		}
+	case config.ResourceTypeIPv4Prefix:
+		input = &ec2.AssignPrivateIpAddressesInput{
+			NetworkInterfaceId: &eniID,
+			Ipv4PrefixCount:    aws.Int64(int64(count)),
+		}
 	}
 
 	assignPrivateIPOutput, err := h.ec2Wrapper.AssignPrivateIPAddresses(input)
 	if err != nil {
-		return assignedIPs, err
+		return assignedResources, err
 	}
 
-	if assignPrivateIPOutput != nil && assignPrivateIPOutput.AssignedPrivateIpAddresses != nil &&
-		len(assignPrivateIPOutput.AssignedPrivateIpAddresses) == 0 {
-		return assignedIPs, fmt.Errorf("failed ot create %v ip address to eni %s", count, eniID)
+	if assignPrivateIPOutput == nil ||
+		(resourceType == config.ResourceNameIPAddress && len(assignPrivateIPOutput.AssignedPrivateIpAddresses) == 0) ||
+		(resourceType == config.ResourceTypeIPv4Prefix && len(assignPrivateIPOutput.AssignedIpv4Prefixes) == 0) {
+		return assignedResources, fmt.Errorf("failed to create %v %s to eni %s", count, resourceType, eniID)
 	}
 
 	ErrIPNotAttachedYet := fmt.Errorf("private IPv4 address is not attached yet")
+	ErrPrefixNotAttachedYet := fmt.Errorf("IPv4 prefix is not attached yet")
 
 	err = retry.OnError(waitForIPAttachment,
 		func(err error) bool {
-			if err == ErrIPNotAttachedYet {
-				// Retry in case IPs are not attached yet
+			if err == ErrIPNotAttachedYet || err == ErrPrefixNotAttachedYet {
+				// Retry in case IPv4 Resources are not attached yet
 				return true
 			}
 			return false
 		}, func() error {
-			// Describe the network interface on which the new IPs are assigned
+			// Describe the network interface on which the new IP or prefixes are assigned
 			interfaces, err := h.DescribeNetworkInterfaces([]*string{&eniID})
-			// Re initialize the slice so we don't add IPs multiple time
-			assignedIPs = []string{}
-			if err == nil && len(interfaces) == 1 && interfaces[0].PrivateIpAddresses != nil {
-				// Get the map of IPs returned by the describe network interface call
-				ipAddress := map[string]bool{}
-				for _, ipAddr := range interfaces[0].PrivateIpAddresses {
-					ipAddress[*ipAddr.PrivateIpAddress] = true
-				}
-				// Verify the describe network interface returns all the IPs that were assigned in the
-				// AssignPrivateIPAddresses call
-				for _, ip := range assignPrivateIPOutput.AssignedPrivateIpAddresses {
-					if _, ok := ipAddress[*ip.PrivateIpAddress]; !ok {
-						// Even if one IP is not assigned, set the error so that we only return only the IPs that
-						// are successfully assigned on the ENI
-						err = ErrIPNotAttachedYet
-					} else {
-						assignedIPs = append(assignedIPs, *ip.PrivateIpAddress)
+			// Re-initialize the slice so that we don't add IP resources multiple times
+			assignedResources = []string{}
+
+			if err == nil && len(interfaces) == 1 {
+				if resourceType == config.ResourceTypeIPv4Address && interfaces[0].PrivateIpAddresses != nil {
+					// Get the map of IPs returned by the describe network interface call
+					ipAddress := map[string]bool{}
+					for _, ipAddr := range interfaces[0].PrivateIpAddresses {
+						ipAddress[*ipAddr.PrivateIpAddress] = true
 					}
+					// Verify describe network interface returns all the IPs that were assigned in the
+					// AssignPrivateIPAddresses call
+					for _, ip := range assignPrivateIPOutput.AssignedPrivateIpAddresses {
+						if _, ok := ipAddress[*ip.PrivateIpAddress]; !ok {
+							// Even if one IP is not assigned, set the error so that we only return only the IPs that
+							// are successfully assigned on the ENI
+							err = ErrIPNotAttachedYet
+						} else {
+							assignedResources = append(assignedResources, *ip.PrivateIpAddress)
+						}
+					}
+					return err
+				} else if resourceType == config.ResourceTypeIPv4Prefix && interfaces[0].Ipv4Prefixes != nil {
+					// Get the map of IP prefixes returned by the describe network interface call
+					ipPrefixes := map[string]bool{}
+					for _, ipPrefix := range interfaces[0].Ipv4Prefixes {
+						ipPrefixes[*ipPrefix.Ipv4Prefix] = true
+					}
+					// Verify describe network interface returns all the IP prefixes that were assigned in the
+					// AssignPrivateIPAddresses call
+					for _, prefix := range assignPrivateIPOutput.AssignedIpv4Prefixes {
+						if _, ok := ipPrefixes[*prefix.Ipv4Prefix]; !ok {
+							// Even if one prefix is not assigned, set the error so that we only return the IP prefixes that
+							// are successfully assigned on the ENI
+							err = ErrPrefixNotAttachedYet
+						} else {
+							assignedResources = append(assignedResources, *prefix.Ipv4Prefix)
+						}
+					}
+					return err
 				}
-				//
-				return err
 			}
 			return err
 		})
 
 	if err != nil {
-		// If some of the assigned IP addresses were not yet returned in the describe network interface call,
-		// returns the list of IPs that were returned
-		return assignedIPs, err
+		// If some of the assigned IP resources were not yet returned in the describe network interface call,
+		// returns the list of resources that were returned
+		return assignedResources, err
 	}
 
-	return assignedIPs, nil
+	return assignedResources, nil
 }
 
-func (h *ec2APIHelper) UnassignPrivateIpAddresses(eniID string, ips []string) error {
-	unassignPrivateIpAddressesInput := &ec2.UnassignPrivateIpAddressesInput{
-		NetworkInterfaceId: &eniID,
-		PrivateIpAddresses: aws.StringSlice(ips),
+// UnassignIPv4Resources un-assigns IPv4 address or prefix from the interface and waits till it succeeds
+func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.ResourceType, resources []string) error {
+	unassignPrivateIpAddressesInput := &ec2.UnassignPrivateIpAddressesInput{}
+
+	// Use respective input param depending on which resource type is being unassigned
+	switch resourceType {
+	case config.ResourceTypeIPv4Address:
+		unassignPrivateIpAddressesInput = &ec2.UnassignPrivateIpAddressesInput{
+			NetworkInterfaceId: &eniID,
+			PrivateIpAddresses: aws.StringSlice(resources),
+		}
+	case config.ResourceTypeIPv4Prefix:
+		unassignPrivateIpAddressesInput = &ec2.UnassignPrivateIpAddressesInput{
+			NetworkInterfaceId: &eniID,
+			Ipv4Prefixes:       aws.StringSlice(resources),
+		}
 	}
+
 	_, err := h.ec2Wrapper.UnassignPrivateIPAddresses(unassignPrivateIpAddressesInput)
 	return err
 }

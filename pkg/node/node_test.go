@@ -44,6 +44,9 @@ var (
 			Name: nodeName,
 		},
 	}
+	nitroInstanceType     = "t3.xlarge"
+	nonNitroInstanceType  = "c1.medium"
+	bareMetalInstanceType = "c5.metal"
 )
 
 type Mocks struct {
@@ -296,4 +299,37 @@ func TestNode_UpdateResources_NodeNotReady(t *testing.T) {
 
 	err := mock.NodeWithMock.UpdateResources(mock.MockResourceManager)
 	assert.Nil(t, err)
+}
+
+// TestNode_IsNitroInstance_Nitro tests that if the node is nitro instance type, it should return true
+func TestNode_IsNitroInstance_Nitro(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 1)
+	mock.MockInstance.EXPECT().Type().Return(nitroInstanceType)
+
+	assert.True(t, mock.NodeWithMock.IsNitroInstance())
+}
+
+// TestNode_IsNitroInstance_BareMetal tests that if the node is bare metal, which means it's built on nitro system, it should return true
+func TestNode_IsNitroInstance_BareMetal(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 1)
+	mock.MockInstance.EXPECT().Type().Return(bareMetalInstanceType)
+
+	assert.True(t, mock.NodeWithMock.IsNitroInstance())
+}
+
+// TestNode_IsNitroInstance_NonNitro tests that if the node is non-nitro instance type, it should return false
+func TestNode_IsNitroInstance_NonNitro(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 1)
+	mock.MockInstance.EXPECT().Type().Return(nonNitroInstanceType)
+
+	assert.False(t, mock.NodeWithMock.IsNitroInstance())
 }

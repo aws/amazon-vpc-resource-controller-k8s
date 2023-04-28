@@ -14,8 +14,8 @@
 package utils
 
 // Difference returns a-b, elements present in a and not in b
-func Difference(a, b []string) (diff []string) {
-	m := make(map[string]struct{})
+func Difference[T comparable](a, b []T) (diff []T) {
+	m := make(map[T]struct{})
 
 	for _, item := range b {
 		m[item] = struct{}{}

@@ -65,6 +65,7 @@ type Node interface {
 	UpdateCustomNetworkingSpecs(subnetID string, securityGroup []string)
 	IsReady() bool
 	IsManaged() bool
+	IsNitroInstance() bool
 
 	GetNodeInstanceID() string
 	HasInstance() bool
@@ -239,4 +240,12 @@ func (n *node) HasInstance() bool {
 	defer n.lock.RUnlock()
 
 	return n.instance != nil
+}
+
+func (n *node) IsNitroInstance() bool {
+	n.lock.RLock()
+	defer n.lock.RUnlock()
+
+	isNitroInstance, err := utils.IsNitroInstance(n.instance.Type())
+	return err == nil && isNitroInstance
 }

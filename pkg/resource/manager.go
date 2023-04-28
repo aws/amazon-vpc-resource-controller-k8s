@@ -18,12 +18,14 @@ import (
 	"fmt"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/prefix"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	"github.com/go-logr/logr"
 
@@ -49,10 +51,12 @@ type Resource struct {
 
 type ResourceManager interface {
 	GetResourceProviders() map[string]provider.ResourceProvider
+	GetResourceProvider(resourceName string) (provider.ResourceProvider, bool)
 	GetResourceHandler(resourceName string) (handler.Handler, bool)
 }
 
-func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api.Wrapper, log logr.Logger, healthzHandler *rcHealthz.HealthzHandler) (ResourceManager, error) {
+func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api.Wrapper, log logr.Logger,
+	healthzHandler *rcHealthz.HealthzHandler, conditions condition.Conditions) (ResourceManager, error) {
 	// Load that static configuration of the resource
 	resourceConfig := config.LoadResourceConfig()
 
@@ -85,10 +89,15 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 
 		if resourceName == config.ResourceNameIPAddress {
 			resourceProvider = ip.NewIPv4Provider(ctrl.Log.WithName("ipv4 provider"),
-				wrapper, workers, resourceConfig)
+				wrapper, workers, resourceConfig, conditions)
 			healthCheckers[ipv4ProviderHealthCheckSubpath] = resourceProvider.GetHealthChecker()
 			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
 				resourceName, resourceProvider, ctx)
+		} else if resourceName == config.ResourceNameIPAddressFromPrefix {
+			resourceProvider = prefix.NewIPv4PrefixProvider(ctrl.Log.WithName("ipv4 prefix provider"),
+				wrapper, workers, resourceConfig, conditions)
+			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
+				config.ResourceNameIPAddress, resourceProvider, ctx)
 		} else if resourceName == config.ResourceNamePodENI {
 			resourceProvider = branch.NewBranchENIProvider(ctrl.Log.WithName("branch eni provider"),
 				wrapper, workers, resourceConfig, ctx)
@@ -128,6 +137,14 @@ func (m *Manager) GetResourceProviders() map[string]provider.ResourceProvider {
 		providers[resourceName] = provider
 	}
 	return providers
+}
+
+func (m *Manager) GetResourceProvider(resourceName string) (provider.ResourceProvider, bool) {
+	resource, found := m.resource[resourceName]
+	if !found {
+		return nil, found
+	}
+	return resource.ResourceProvider, found
 }
 
 func (m *Manager) GetResourceHandler(resourceName string) (handler.Handler, bool) {

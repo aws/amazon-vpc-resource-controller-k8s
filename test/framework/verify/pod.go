@@ -21,6 +21,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
+	helper "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
@@ -153,6 +154,23 @@ func (v *PodVerification) WindowsPodHaveIPv4Address(pod *v1.Pod) {
 	// Remove the CIDR and compare pod IP with the IP annotated from VPC Controller
 	Expect(pod.Status.PodIP).To(Equal(strings.Split(ipAddWithCidr, "/")[0]))
 
+}
+
+func (v *PodVerification) WindowsPodHaveIPv4AddressFromPrefixes(pod *v1.Pod, ipV4Prefixes []string) {
+	By("matching the prefix-deconstructed IPv4 from annotation to the pod IP")
+	ipAddWithCidr, found := pod.Annotations["vpc.amazonaws.com/PrivateIPv4Address"]
+	Expect(found).To(BeTrue())
+	result := false
+	for _, prefix := range ipV4Prefixes {
+		allIPsFromPrefix, err := helper.DeconstructIPsFromPrefix(prefix)
+		Expect(err).ToNot(HaveOccurred())
+
+		if helper.Include(ipAddWithCidr, allIPsFromPrefix) {
+			result = true
+			break
+		}
+	}
+	Expect(result).To(BeTrue())
 }
 
 func (v *PodVerification) WindowsPodHaveResourceLimits(pod *v1.Pod, expected bool) {

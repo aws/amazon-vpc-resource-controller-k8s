@@ -20,6 +20,7 @@ package mock_api
 import (
 	reflect "reflect"
 
+	config "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	ec2 "github.com/aws/aws-sdk-go/service/ec2"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -47,19 +48,19 @@ func (m *MockEC2APIHelper) EXPECT() *MockEC2APIHelperMockRecorder {
 	return m.recorder
 }
 
-// AssignIPv4AddressesAndWaitTillReady mocks base method.
-func (m *MockEC2APIHelper) AssignIPv4AddressesAndWaitTillReady(arg0 string, arg1 int) ([]string, error) {
+// AssignIPv4ResourcesAndWaitTillReady mocks base method.
+func (m *MockEC2APIHelper) AssignIPv4ResourcesAndWaitTillReady(arg0 string, arg1 config.ResourceType, arg2 int) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AssignIPv4AddressesAndWaitTillReady", arg0, arg1)
+	ret := m.ctrl.Call(m, "AssignIPv4ResourcesAndWaitTillReady", arg0, arg1, arg2)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// AssignIPv4AddressesAndWaitTillReady indicates an expected call of AssignIPv4AddressesAndWaitTillReady.
-func (mr *MockEC2APIHelperMockRecorder) AssignIPv4AddressesAndWaitTillReady(arg0, arg1 interface{}) *gomock.Call {
+// AssignIPv4ResourcesAndWaitTillReady indicates an expected call of AssignIPv4ResourcesAndWaitTillReady.
+func (mr *MockEC2APIHelperMockRecorder) AssignIPv4ResourcesAndWaitTillReady(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignIPv4AddressesAndWaitTillReady", reflect.TypeOf((*MockEC2APIHelper)(nil).AssignIPv4AddressesAndWaitTillReady), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignIPv4ResourcesAndWaitTillReady", reflect.TypeOf((*MockEC2APIHelper)(nil).AssignIPv4ResourcesAndWaitTillReady), arg0, arg1, arg2)
 }
 
 // AssociateBranchToTrunk mocks base method.
@@ -93,7 +94,7 @@ func (mr *MockEC2APIHelperMockRecorder) AttachNetworkInterfaceToInstance(arg0, a
 }
 
 // CreateAndAttachNetworkInterface mocks base method.
-func (m *MockEC2APIHelper) CreateAndAttachNetworkInterface(arg0, arg1 *string, arg2 []string, arg3 []*ec2.Tag, arg4 *int64, arg5, arg6 *string, arg7 int) (*ec2.NetworkInterface, error) {
+func (m *MockEC2APIHelper) CreateAndAttachNetworkInterface(arg0, arg1 *string, arg2 []string, arg3 []*ec2.Tag, arg4 *int64, arg5, arg6 *string, arg7 *config.IPResourceCount) (*ec2.NetworkInterface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateAndAttachNetworkInterface", arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
 	ret0, _ := ret[0].(*ec2.NetworkInterface)
@@ -108,7 +109,7 @@ func (mr *MockEC2APIHelperMockRecorder) CreateAndAttachNetworkInterface(arg0, ar
 }
 
 // CreateNetworkInterface mocks base method.
-func (m *MockEC2APIHelper) CreateNetworkInterface(arg0, arg1 *string, arg2 []string, arg3 []*ec2.Tag, arg4 int, arg5 *string) (*ec2.NetworkInterface, error) {
+func (m *MockEC2APIHelper) CreateNetworkInterface(arg0, arg1 *string, arg2 []string, arg3 []*ec2.Tag, arg4 *config.IPResourceCount, arg5 *string) (*ec2.NetworkInterface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateNetworkInterface", arg0, arg1, arg2, arg3, arg4, arg5)
 	ret0, _ := ret[0].(*ec2.NetworkInterface)
@@ -268,18 +269,18 @@ func (mr *MockEC2APIHelperMockRecorder) SetDeleteOnTermination(arg0, arg1 interf
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDeleteOnTermination", reflect.TypeOf((*MockEC2APIHelper)(nil).SetDeleteOnTermination), arg0, arg1)
 }
 
-// UnassignPrivateIpAddresses mocks base method.
-func (m *MockEC2APIHelper) UnassignPrivateIpAddresses(arg0 string, arg1 []string) error {
+// UnassignIPv4Resources mocks base method.
+func (m *MockEC2APIHelper) UnassignIPv4Resources(arg0 string, arg1 config.ResourceType, arg2 []string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UnassignPrivateIpAddresses", arg0, arg1)
+	ret := m.ctrl.Call(m, "UnassignIPv4Resources", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// UnassignPrivateIpAddresses indicates an expected call of UnassignPrivateIpAddresses.
-func (mr *MockEC2APIHelperMockRecorder) UnassignPrivateIpAddresses(arg0, arg1 interface{}) *gomock.Call {
+// UnassignIPv4Resources indicates an expected call of UnassignIPv4Resources.
+func (mr *MockEC2APIHelperMockRecorder) UnassignIPv4Resources(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnassignPrivateIpAddresses", reflect.TypeOf((*MockEC2APIHelper)(nil).UnassignPrivateIpAddresses), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnassignIPv4Resources", reflect.TypeOf((*MockEC2APIHelper)(nil).UnassignIPv4Resources), arg0, arg1, arg2)
 }
 
 // WaitForNetworkInterfaceStatusChange mocks base method.

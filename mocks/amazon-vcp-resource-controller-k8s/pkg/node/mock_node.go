@@ -117,6 +117,20 @@ func (mr *MockNodeMockRecorder) IsManaged() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsManaged", reflect.TypeOf((*MockNode)(nil).IsManaged))
 }
 
+// IsNitroInstance mocks base method.
+func (m *MockNode) IsNitroInstance() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsNitroInstance")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsNitroInstance indicates an expected call of IsNitroInstance.
+func (mr *MockNodeMockRecorder) IsNitroInstance() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsNitroInstance", reflect.TypeOf((*MockNode)(nil).IsNitroInstance))
+}
+
 // IsReady mocks base method.
 func (m *MockNode) IsReady() bool {
 	m.ctrl.T.Helper()

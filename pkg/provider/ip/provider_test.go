@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_pool "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/pool"
 	mock_eni "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/ip/eni"
@@ -26,6 +27,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/golang/mock/gomock"
@@ -34,12 +36,21 @@ import (
 )
 
 var (
-	nodeName     = "node-1"
-	instanceType = "t3.medium"
+	nodeName             = "node-1"
+	instanceType         = "t3.medium"
+	nonNitroInstanceType = "m1.large"
 
 	ip1 = "192.168.1.1"
 	ip2 = "192.168.1.2"
 	ip3 = "192.168.1.3"
+
+	nodeCapacity = 14
+
+	ipV4WarmPoolConfig = config.WarmPoolConfig{
+		DesiredSize:  config.IPv4DefaultWPSize,
+		MaxDeviation: config.IPv4DefaultMaxDev,
+		ReservedSize: config.IPv4DefaultResSize,
+	}
 )
 
 // TestIpv4Provider_difference tests difference removes the difference between an array and a set
@@ -77,7 +88,7 @@ func TestNewIPv4Provider_getCapacity(t *testing.T) {
 // cache after calling the API
 func TestNewIPv4Provider_deleteInstanceProviderAndPool(t *testing.T) {
 	ipProvider := getMockIpProvider()
-	ipProvider.instanceProviderAndPool[nodeName] = ResourceProviderAndPool{}
+	ipProvider.instanceProviderAndPool[nodeName] = &ResourceProviderAndPool{}
 	ipProvider.deleteInstanceProviderAndPool(nodeName)
 	assert.NotContains(t, ipProvider.instanceProviderAndPool, nodeName)
 }
@@ -85,7 +96,7 @@ func TestNewIPv4Provider_deleteInstanceProviderAndPool(t *testing.T) {
 // TestNewIPv4Provider_getInstanceProviderAndPool tests if the resource pool and provider is present in cache it's returned
 func TestNewIPv4Provider_getInstanceProviderAndPool(t *testing.T) {
 	ipProvider := getMockIpProvider()
-	resourcePoolAndProvider := ResourceProviderAndPool{}
+	resourcePoolAndProvider := &ResourceProviderAndPool{}
 	ipProvider.instanceProviderAndPool[nodeName] = resourcePoolAndProvider
 	result, found := ipProvider.getInstanceProviderAndPool(nodeName)
 
@@ -102,9 +113,10 @@ func TestIpv4Provider_putInstanceProviderAndPool(t *testing.T) {
 	mockManager := mock_eni.NewMockENIManager(ctrl)
 
 	ipProvider := getMockIpProvider()
-	ipProvider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
+	ipProvider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 
-	assert.Equal(t, ResourceProviderAndPool{resourcePool: mockPool, eniManager: mockManager}, ipProvider.instanceProviderAndPool[nodeName])
+	assert.Equal(t, &ResourceProviderAndPool{resourcePool: mockPool, eniManager: mockManager, capacity: nodeCapacity, isPrevPDEnabled: false},
+		ipProvider.instanceProviderAndPool[nodeName])
 }
 
 // TestIpv4Provider_updatePoolAndReconcileIfRequired_NoFurtherReconcile tests pool is updated and reconciliation is not
@@ -152,7 +164,7 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool(t *testing.T) {
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	resourcesToDelete := []string{ip1, ip2}
 
 	deleteJob := &worker.WarmPoolJob{
@@ -162,7 +174,7 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool(t *testing.T) {
 		NodeName:      nodeName,
 	}
 
-	mockManager.EXPECT().DeleteIPV4Address(resourcesToDelete, nil, gomock.Any()).Return([]string{}, nil)
+	mockManager.EXPECT().DeleteIPV4Resource(resourcesToDelete, config.ResourceTypeIPv4Address, nil, gomock.Any()).Return([]string{}, nil)
 	mockPool.EXPECT().UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationDeleted,
 		Resources:     []string{},
@@ -182,7 +194,7 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool_SomeResourceFail(t *testing
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	resourcesToDelete := []string{ip1, ip2}
 	failedResources := []string{ip2}
 
@@ -193,7 +205,7 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool_SomeResourceFail(t *testing
 		NodeName:      nodeName,
 	}
 
-	mockManager.EXPECT().DeleteIPV4Address(resourcesToDelete, nil, gomock.Any()).Return(failedResources, nil)
+	mockManager.EXPECT().DeleteIPV4Resource(resourcesToDelete, config.ResourceTypeIPv4Address, nil, gomock.Any()).Return(failedResources, nil)
 	mockPool.EXPECT().UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationDeleted,
 		Resources:     failedResources,
@@ -213,7 +225,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool(t *testing.T) {
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	createdResources := []string{ip1, ip2}
 
 	createJob := &worker.WarmPoolJob{
@@ -223,7 +235,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool(t *testing.T) {
 		NodeName:      nodeName,
 	}
 
-	mockManager.EXPECT().CreateIPV4Address(2, nil, gomock.Any()).Return(createdResources, nil)
+	mockManager.EXPECT().CreateIPV4Resource(2, config.ResourceTypeIPv4Address, nil, gomock.Any()).Return(createdResources, nil)
 	mockPool.EXPECT().UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationCreate,
 		Resources:     createdResources,
@@ -243,7 +255,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool_Fail(t *testing.T) {
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	createdResources := []string{ip1, ip2}
 
 	createJob := &worker.WarmPoolJob{
@@ -253,7 +265,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool_Fail(t *testing.T) {
 		NodeName:      nodeName,
 	}
 
-	mockManager.EXPECT().CreateIPV4Address(2, nil, gomock.Any()).Return(createdResources, fmt.Errorf("failed"))
+	mockManager.EXPECT().CreateIPV4Resource(2, config.ResourceTypeIPv4Address, nil, gomock.Any()).Return(createdResources, fmt.Errorf("failed"))
 	mockPool.EXPECT().UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationCreate,
 		Resources:     createdResources,
@@ -271,7 +283,7 @@ func TestIpv4Provider_ReSyncPool(t *testing.T) {
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	resources := []string{ip1, ip2}
 
 	reSyncJob := &worker.WarmPoolJob{
@@ -284,7 +296,8 @@ func TestIpv4Provider_ReSyncPool(t *testing.T) {
 	ipv4Provider.ReSyncPool(reSyncJob)
 
 	// When no error occurs, pool should be re-synced
-	mockManager.EXPECT().InitResources(ipv4Provider.apiWrapper.EC2API).Return(resources, nil)
+	ipV4Resources := &eni.IPv4Resource{PrivateIPv4Addresses: resources}
+	mockManager.EXPECT().InitResources(ipv4Provider.apiWrapper.EC2API).Return(ipV4Resources, nil)
 	mockPool.EXPECT().ReSync(resources)
 	ipv4Provider.ReSyncPool(reSyncJob)
 }
@@ -304,20 +317,146 @@ func TestIPv4Provider_SubmitAsyncJob(t *testing.T) {
 	ipv4Provider.SubmitAsyncJob(job)
 }
 
-// TestIPv4Provider_UpdateResourceCapacity tests the resource capacity is updated by calling the k8s wrapper
-func TestIPv4Provider_UpdateResourceCapacity(t *testing.T) {
+// TestIPv4Provider_UpdateResourceCapacity_FromFromPDToIP tests the warm pool is set to active when secondary IP mode is enabled and
+// resource capacity is updated by calling the k8s wrapper
+func TestIPv4Provider_UpdateResourceCapacity_FromFromPDToIP(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	ipV4WarmPoolConfig := config.WarmPoolConfig{
+		DesiredSize:  config.IPv4DefaultWPSize,
+		MaxDeviation: config.IPv4DefaultMaxDev,
+		ReservedSize: config.IPv4DefaultResSize,
+	}
+	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, workerPool: mockWorker, config: &ipV4WarmPoolConfig,
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{}, log: zap.New(zap.UseDevMode(true)).WithName("ip provider"), conditions: mockConditions}
 
-	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, log: zap.New(zap.UseDevMode(true)).WithName("ip provider")}
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockManager := mock_eni.NewMockENIManager(ctrl)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, true)
+	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
 
-	mockInstance.EXPECT().Name().Return(nodeName).Times(2)
-	mockInstance.EXPECT().Type().Return(instanceType)
+	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
+	mockPool.EXPECT().SetToActive(&ipV4WarmPoolConfig).Return(job)
+	mockWorker.EXPECT().SubmitJob(job)
+
+	mockInstance.EXPECT().Name().Return(nodeName).Times(3)
+	mockInstance.EXPECT().Type().Return(instanceType).Times(2)
 	mockInstance.EXPECT().Os().Return(config.OSWindows)
-	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 5).Return(nil)
+	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 14).Return(nil)
+
+	err := ipv4Provider.UpdateResourceCapacity(mockInstance)
+	assert.NoError(t, err)
+}
+
+// TestIPv4Provider_UpdateResourceCapacity_FromFromIPToPD tests the warm pool is drained when PD is enabled
+func TestIPv4Provider_UpdateResourceCapacity_FromFromIPToPD(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, workerPool: mockWorker,
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{}, log: zap.New(zap.UseDevMode(true)).WithName("ip provider"), conditions: mockConditions}
+
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockManager := mock_eni.NewMockENIManager(ctrl)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
+	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
+
+	job := &worker.WarmPoolJob{Operations: worker.OperationDeleted}
+	mockPool.EXPECT().SetToDraining().Return(job)
+	mockWorker.EXPECT().SubmitJob(job)
+	mockInstance.EXPECT().Name().Return(nodeName)
+	mockInstance.EXPECT().Type().Return(instanceType)
+
+	err := ipv4Provider.UpdateResourceCapacity(mockInstance)
+	assert.NoError(t, err)
+}
+
+// TestIPv4Provider_UpdateResourceCapacity_FromFromIPToPD_NonNitro tests that even if PD is enabled, non-nitro instances continue to use
+// secondary IP mode
+func TestIPv4Provider_UpdateResourceCapacity_FromFromIPToPD_NonNitro(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, workerPool: mockWorker, config: &ipV4WarmPoolConfig,
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{}, log: zap.New(zap.UseDevMode(true)).WithName("ip provider"), conditions: mockConditions}
+
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockManager := mock_eni.NewMockENIManager(ctrl)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
+	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
+
+	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
+	mockPool.EXPECT().SetToActive(&ipV4WarmPoolConfig).Return(job)
+	mockWorker.EXPECT().SubmitJob(job)
+	mockInstance.EXPECT().Name().Return(nodeName).Times(4)
+	mockInstance.EXPECT().Type().Return(nonNitroInstanceType).Times(3)
+	mockInstance.EXPECT().Os().Return(config.OSWindows)
+	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 14).Return(nil)
+
+	err := ipv4Provider.UpdateResourceCapacity(mockInstance)
+	assert.NoError(t, err)
+}
+
+// TestIPv4Provider_UpdateResourceCapacity_FromPDToPD tests the resource capacity is not updated when PD mode stays enabled
+func TestIPv4Provider_UpdateResourceCapacity_FromPDToPD(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log: zap.New(zap.UseDevMode(true)).WithName("ip provider"), conditions: mockConditions}
+
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockManager := mock_eni.NewMockENIManager(ctrl)
+	mockInstance.EXPECT().Name().Return(nodeName)
+	mockInstance.EXPECT().Type().Return(instanceType)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, true)
+	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
+
+	err := ipv4Provider.UpdateResourceCapacity(mockInstance)
+	assert.NoError(t, err)
+}
+
+// TestIPv4Provider_UpdateResourceCapacity_FromIPToIP tests the resource capacity is not updated when secondary IP mode stays enabled
+func TestIPv4Provider_UpdateResourceCapacity_FromIPToIP(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, workerPool: mockWorker, config: &ipV4WarmPoolConfig,
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{}, log: zap.New(zap.UseDevMode(true)).WithName("ip provider"), conditions: mockConditions}
+
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockManager := mock_eni.NewMockENIManager(ctrl)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
+	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
+
+	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
+	mockPool.EXPECT().SetToActive(&ipV4WarmPoolConfig).Return(job)
+	mockWorker.EXPECT().SubmitJob(job)
+
+	mockInstance.EXPECT().Name().Return(nodeName).Times(3)
+	mockInstance.EXPECT().Type().Return(instanceType).Times(2)
+	mockInstance.EXPECT().Os().Return(config.OSWindows)
+	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 14).Return(nil)
 
 	err := ipv4Provider.UpdateResourceCapacity(mockInstance)
 	assert.NoError(t, err)
@@ -329,7 +468,7 @@ func TestIpv4Provider_GetPool(t *testing.T) {
 
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, nil)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, nil, nodeCapacity, false)
 
 	pool, found := ipv4Provider.GetPool(nodeName)
 	assert.True(t, found)
@@ -342,7 +481,7 @@ func TestIpv4Provider_Introspect(t *testing.T) {
 
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, nil)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, nil, nodeCapacity, false)
 	expectedResp := pool.IntrospectResponse{}
 
 	mockPool.EXPECT().Introspect().Return(expectedResp)
@@ -358,6 +497,6 @@ func TestIpv4Provider_Introspect(t *testing.T) {
 }
 
 func getMockIpProvider() ipv4Provider {
-	return ipv4Provider{instanceProviderAndPool: map[string]ResourceProviderAndPool{},
+	return ipv4Provider{instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
 		log: zap.New(zap.UseDevMode(true)).WithName("ip provider")}
 }

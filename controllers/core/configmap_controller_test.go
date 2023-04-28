@@ -38,7 +38,12 @@ var (
 	mockConfigMap = &corev1.ConfigMap{
 		TypeMeta:   metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: config.KubeSystemNamespace},
-		Data:       map[string]string{config.EnableWindowsIPAMKey: "true"},
+		Data:       map[string]string{config.EnableWindowsIPAMKey: "true", config.EnableWindowsPrefixDelegationKey: "true"},
+	}
+	mockConfigMapPD = &corev1.ConfigMap{
+		TypeMeta:   metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: config.KubeSystemNamespace},
+		Data:       map[string]string{config.EnableWindowsIPAMKey: "false", config.EnableWindowsPrefixDelegationKey: "true"},
 	}
 	mockConfigMapReq = reconcile.Request{
 		NamespacedName: types.NamespacedName{
@@ -59,12 +64,13 @@ var (
 )
 
 type ConfigMapMock struct {
-	MockNodeManager     *mock_manager.MockManager
-	ConfigMapReconciler *ConfigMapReconciler
-	MockNode            *mock_node.MockNode
-	MockK8sAPI          *mock_k8s.MockK8sWrapper
-	MockCondition       *mock_condition.MockConditions
-	curWinIPAMCond      bool
+	MockNodeManager            *mock_manager.MockManager
+	ConfigMapReconciler        *ConfigMapReconciler
+	MockNode                   *mock_node.MockNode
+	MockK8sAPI                 *mock_k8s.MockK8sWrapper
+	MockCondition              *mock_condition.MockConditions
+	curWinIPAMCond             bool
+	curWinPrefixDelegationCond bool
 }
 
 func NewConfigMapMock(ctrl *gomock.Controller, mockObjects ...runtime.Object) ConfigMapMock {
@@ -86,10 +92,11 @@ func NewConfigMapMock(ctrl *gomock.Controller, mockObjects ...runtime.Object) Co
 			K8sAPI:      mockK8sWrapper,
 			Condition:   mockCondition,
 		},
-		MockNode:       mockNode,
-		MockK8sAPI:     mockK8sWrapper,
-		MockCondition:  mockCondition,
-		curWinIPAMCond: false,
+		MockNode:                   mockNode,
+		MockK8sAPI:                 mockK8sWrapper,
+		MockCondition:              mockCondition,
+		curWinIPAMCond:             false,
+		curWinPrefixDelegationCond: false,
 	}
 }
 
@@ -99,9 +106,24 @@ func Test_Reconcile_ConfigMap_Updated(t *testing.T) {
 
 	mock := NewConfigMapMock(ctrl, mockConfigMap)
 	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
+	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
 	mock.MockK8sAPI.EXPECT().ListNodes().Return(nodeList, nil)
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.MockNodeManager.EXPECT().UpdateNode(mockNodeName).Return(nil)
+
+	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
+	assert.NoError(t, err)
+	assert.Equal(t, res, reconcile.Result{})
+
+}
+
+func Test_Reconcile_ConfigMap_PD_Disabled_If_IPAM_Disabled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewConfigMapMock(ctrl, mockConfigMapPD)
+	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
+	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
 
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.NoError(t, err)
@@ -118,7 +140,7 @@ func Test_Reconcile_ConfigMap_NoData(t *testing.T) {
 	mock := NewConfigMapMock(ctrl, mockConfigMap_WithNoData)
 
 	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
-
+	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
@@ -130,6 +152,7 @@ func Test_Reconcile_ConfigMap_Deleted(t *testing.T) {
 
 	mock := NewConfigMapMock(ctrl)
 	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
+	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
 
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.NoError(t, err)
@@ -142,6 +165,7 @@ func Test_Reconcile_UpdateNode_Error(t *testing.T) {
 
 	mock := NewConfigMapMock(ctrl, mockConfigMap)
 	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
+	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
 	mock.MockK8sAPI.EXPECT().ListNodes().Return(nodeList, nil)
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.MockNodeManager.EXPECT().UpdateNode(mockNodeName).Return(errMock)
