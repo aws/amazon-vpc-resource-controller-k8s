@@ -168,6 +168,21 @@ func (mr *MockK8sWrapperMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNode", reflect.TypeOf((*MockK8sWrapper)(nil).GetNode), arg0)
 }
 
+// GetPod mocks base method.
+func (m *MockK8sWrapper) GetPod(arg0, arg1 string) (*v10.Pod, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPod", arg0, arg1)
+	ret0, _ := ret[0].(*v10.Pod)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPod indicates an expected call of GetPod.
+func (mr *MockK8sWrapperMockRecorder) GetPod(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPod", reflect.TypeOf((*MockK8sWrapper)(nil).GetPod), arg0, arg1)
+}
+
 // ListEvents mocks base method.
 func (m *MockK8sWrapper) ListEvents(arg0 []client.ListOption) (*v11.EventList, error) {
 	m.ctrl.T.Helper()

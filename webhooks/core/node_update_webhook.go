@@ -8,8 +8,11 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
@@ -19,12 +22,19 @@ type NodeUpdateWebhook struct {
 	Condition condition.Conditions
 	Log       logr.Logger
 	Checker   healthz.Checker
+	client    k8s.K8sWrapper
 }
 
-func NewNodeUpdateWebhook(condition condition.Conditions, log logr.Logger, healthzHandler *rcHealthz.HealthzHandler) *NodeUpdateWebhook {
+const (
+	podNameKey      string = "authentication.kubernetes.io/pod-name"
+	awsNodeUsername string = "system:serviceaccount:kube-system:aws-node"
+)
+
+func NewNodeUpdateWebhook(condition condition.Conditions, log logr.Logger, client k8s.K8sWrapper, healthzHandler *rcHealthz.HealthzHandler) *NodeUpdateWebhook {
 	nodeUpdateWebhook := &NodeUpdateWebhook{
 		Condition: condition,
 		Log:       log,
+		client:    client,
 	}
 
 	// add health check on subpath for node validation webhook
@@ -36,8 +46,6 @@ func NewNodeUpdateWebhook(condition condition.Conditions, log logr.Logger, healt
 
 	return nodeUpdateWebhook
 }
-
-const awsNodeUsername = "system:serviceaccount:kube-system:aws-node"
 
 // +kubebuilder:webhook:path=/validate-v1-node,mutating=false,matchPolicy=Equivalent,failurePolicy=ignore,groups="",resources=nodes,verbs=update,versions=v1,name=vnode.vpc.k8s.aws,sideEffects=None,admissionReviewVersions=v1
 
@@ -51,6 +59,12 @@ func (a *NodeUpdateWebhook) Handle(_ context.Context, req admission.Request) adm
 	}
 
 	logger := a.Log.WithValues("node", req.Name)
+
+	// if for some reason the Extra map doesn't have the key or the value length is 0, we can't deny the request since their existence is not guaranteed
+	if len(req.UserInfo.Extra[podNameKey]) > 0 && !a.VPCCNIUpdateItsOwnHost(req.Name, req.UserInfo.Extra[podNameKey][0]) {
+		logger.Info("The request came from a aws-node whose host does not match the requested host. The request will be denied.")
+		return admission.Denied("Unmatched host from the aws-node pod")
+	}
 
 	logger.Info("update request received from aws-node")
 
@@ -97,4 +111,31 @@ func (a *NodeUpdateWebhook) Handle(_ context.Context, req admission.Request) adm
 func (a *NodeUpdateWebhook) InjectDecoder(d *admission.Decoder) error {
 	a.decoder = d
 	return nil
+}
+
+// Check if the request from the Node Object hosting the requesting user
+func (a *NodeUpdateWebhook) VPCCNIUpdateItsOwnHost(nodeName string, podName string) bool {
+	var pod *corev1.Pod
+	var err error
+
+	retry.OnError(
+		retry.DefaultBackoff,
+		func(err error) bool {
+			// we retry on some errors from API server side
+			retriable := apierrors.IsTooManyRequests(err) ||
+				apierrors.IsServerTimeout(err) ||
+				apierrors.IsInternalError(err) ||
+				apierrors.IsServiceUnavailable(err)
+			return retriable
+		},
+		func() error {
+			pod, err = a.client.GetPod(podName, config.KubeSystemNamespace)
+			return err
+		},
+	)
+	match := pod.Spec.NodeName == nodeName
+	if !match {
+		a.Log.Info("Node update webhook has unmatched requested node and aws-node host name", "RequestedNode", nodeName, "AwsNodeName", pod.Spec.NodeName)
+	}
+	return match
 }

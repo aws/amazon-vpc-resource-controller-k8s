@@ -77,6 +77,7 @@ type K8sWrapper interface {
 	ListNodes() (*v1.NodeList, error)
 	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error)
 	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
+	GetPod(podName, podNamespace string) (*v1.Pod, error)
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -135,6 +136,15 @@ func (k *k8sWrapper) GetNode(nodeName string) (*v1.Node, error) {
 		Name: nodeName,
 	}, node)
 	return node, err
+}
+
+func (k *k8sWrapper) GetPod(podName, podNamespace string) (*v1.Pod, error) {
+	pod := &v1.Pod{}
+	err := k.cacheClient.Get(k.context, types.NamespacedName{
+		Name:      podName,
+		Namespace: podNamespace,
+	}, pod)
+	return pod, err
 }
 
 func (k *k8sWrapper) BroadcastEvent(object runtime.Object, reason string, message string, eventType string) {

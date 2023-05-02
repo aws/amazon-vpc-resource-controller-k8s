@@ -25,6 +25,7 @@ import (
 	appV1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -62,6 +63,13 @@ var (
 	mockDS = &appV1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      config.VpcCNIDaemonSetName,
+			Namespace: config.KubeSystemNamespace,
+		},
+	}
+
+	mockPod = &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "testPod",
 			Namespace: config.KubeSystemNamespace,
 		},
 	}
@@ -182,4 +190,21 @@ func TestK8sWrapper_GetDeployment_Err(t *testing.T) {
 	_, err := wrapper.GetDeployment("default",
 		config.OldVPCControllerDeploymentName)
 	assert.Error(t, err)
+}
+
+func TestK8sWrapper_GetPod(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockPod})
+
+	_, err := wrapper.GetPod(mockPod.Name, mockPod.Namespace)
+	assert.NoError(t, err, "shouldn't see error when getting pod")
+}
+
+func TestK8sWrapper_GetPod_err(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockPod})
+
+	_, err := wrapper.GetPod(mockPod.Name, "default")
+	assert.Error(t, err, "shouldn see error when getting pod")
+	assert.True(t, apierrors.IsNotFound(err), "the error should be podNotFound error")
 }

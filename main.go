@@ -375,7 +375,7 @@ func main() {
 	})
 
 	nodeValidateWebhook := webhookcore.NewNodeUpdateWebhook(
-		controllerConditions, ctrl.Log.WithName("node validating webhook"), healthzHandler)
+		controllerConditions, ctrl.Log.WithName("node validating webhook"), k8sApi, healthzHandler)
 	webhookServer.Register("/validate-v1-node", &webhook.Admission{
 		Handler: nodeValidateWebhook})
 
