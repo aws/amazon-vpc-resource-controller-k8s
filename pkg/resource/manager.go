@@ -41,6 +41,7 @@ type Resource struct {
 
 type ResourceManager interface {
 	GetResourceProviders() map[string]provider.ResourceProvider
+	GetResourceProvider(resourceName string) (provider.ResourceProvider, bool)
 	GetResourceHandler(resourceName string) (handler.Handler, bool)
 }
 
@@ -114,6 +115,14 @@ func (m *Manager) GetResourceProviders() map[string]provider.ResourceProvider {
 		providers[resourceName] = provider
 	}
 	return providers
+}
+
+func (m *Manager) GetResourceProvider(resourceName string) (provider.ResourceProvider, bool) {
+	resource, found := m.resource[resourceName]
+	if !found {
+		return nil, found
+	}
+	return resource.ResourceProvider, found
 }
 
 func (m *Manager) GetResourceHandler(resourceName string) (handler.Handler, bool) {

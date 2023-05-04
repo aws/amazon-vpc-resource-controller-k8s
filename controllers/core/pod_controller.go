@@ -210,8 +210,11 @@ func (r *PodReconciler) updateResourceName(isDeletionEvent bool, pod *v1.Pod) st
 			return resourceName
 		}
 		// Check prefix provider to see if it's a prefix deconstructed IP
-		providerMap := r.ResourceManager.GetResourceProviders()
-		prefixProvider := providerMap[config.ResourceNameIPAddressFromPrefix]
+		prefixProvider, found := r.ResourceManager.GetResourceProvider(config.ResourceNameIPAddressFromPrefix)
+		if !found {
+			r.Log.Error(fmt.Errorf("resource provider was not found"), "resource", resourceName)
+			return resourceName
+		}
 		resourcePool, ok := prefixProvider.GetPool(pod.Spec.NodeName)
 		// If IP is managed by prefix IP pool, update resource name so that prefix IP handler will be used
 		if ok && resourcePool.IsManagedResource(resourceID) {
