@@ -21,6 +21,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/go-logr/logr"
@@ -49,8 +50,8 @@ type eni struct {
 
 type ENIManager interface {
 	InitResources(ec2APIHelper api.EC2APIHelper) ([]string, []string, error)
-	CreateIPV4Resource(required int, resourceType api.ResourceType, ec2APIHelper api.EC2APIHelper, log logr.Logger) ([]string, error)
-	DeleteIPV4Resource(ipList []string, resourceType api.ResourceType, ec2APIHelper api.EC2APIHelper, log logr.Logger) ([]string, error)
+	CreateIPV4Resource(required int, resourceType config.ResourceType, ec2APIHelper api.EC2APIHelper, log logr.Logger) ([]string, error)
+	DeleteIPV4Resource(ipList []string, resourceType config.ResourceType, ec2APIHelper api.EC2APIHelper, log logr.Logger) ([]string, error)
 }
 
 // NewENIManager returns a new ENI Manager
@@ -108,7 +109,7 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, []s
 
 // CreateIPV4Resource creates either IPv4 address or IPv4 prefix depending on ResourceType and returns the list of assigned resources
 // along with the error if not all the required resources were assigned
-func (e *eniManager) CreateIPV4Resource(required int, resourceType api.ResourceType, ec2APIHelper api.EC2APIHelper, log logr.Logger) ([]string, error) {
+func (e *eniManager) CreateIPV4Resource(required int, resourceType config.ResourceType, ec2APIHelper api.EC2APIHelper, log logr.Logger) ([]string, error) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
 
@@ -173,7 +174,7 @@ func (e *eniManager) CreateIPV4Resource(required int, resourceType api.ResourceT
 
 		// Create new ENI and store newly assigned resources into map
 		switch resourceType {
-		case api.ResourceTypeIPv4Address:
+		case config.ResourceTypeIPv4Address:
 			nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
 				aws.String(e.instance.SubnetID()), e.instance.InstanceSecurityGroup(), nil, aws.Int64(deviceIndex),
 				&ENIDescription, nil, want, 0)
@@ -194,7 +195,7 @@ func (e *eniManager) CreateIPV4Resource(required int, resourceType api.ResourceT
 				}
 			}
 
-		case api.ResourceTypeIPv4Prefix:
+		case config.ResourceTypeIPv4Prefix:
 			nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
 				aws.String(e.instance.SubnetID()), e.instance.InstanceSecurityGroup(), nil, aws.Int64(deviceIndex),
 				&ENIDescription, nil, 0, want)
@@ -223,7 +224,7 @@ func (e *eniManager) CreateIPV4Resource(required int, resourceType api.ResourceT
 	}
 
 	// add subnet mask to assigned IP
-	if resourceType == api.ResourceTypeIPv4Address {
+	if resourceType == config.ResourceTypeIPv4Address {
 		assignedIPv4Resources = e.addSubnetMaskToIPSlice(assignedIPv4Resources)
 	}
 
@@ -232,7 +233,7 @@ func (e *eniManager) CreateIPV4Resource(required int, resourceType api.ResourceT
 
 // DeleteIPV4Resource deletes the list of IPv4 resources depending on resource type and returns the list of resources
 // that failed to delete along with the error
-func (e *eniManager) DeleteIPV4Resource(resourceList []string, resourceType api.ResourceType, ec2APIHelper api.EC2APIHelper, log logr.Logger) ([]string, error) {
+func (e *eniManager) DeleteIPV4Resource(resourceList []string, resourceType config.ResourceType, ec2APIHelper api.EC2APIHelper, log logr.Logger) ([]string, error) {
 	e.lock.Lock()
 	defer e.lock.Unlock()
 
@@ -246,7 +247,7 @@ func (e *eniManager) DeleteIPV4Resource(resourceList []string, resourceType api.
 	}
 
 	// IP address needs to have /19 suffix, whereas prefix already has /28 suffix
-	if resourceType == api.ResourceTypeIPv4Address {
+	if resourceType == config.ResourceTypeIPv4Address {
 		resourceList = e.stripSubnetMaskFromIPSlice(resourceList)
 	}
 	groupedResources := e.groupResourcesPerENI(resourceList)

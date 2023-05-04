@@ -386,7 +386,7 @@ func TestEc2APIHelper_CreateNetworkInterface_NoSecondaryIP(t *testing.T) {
 
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(createNetworkInterfaceOutput, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, nil)
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, 0, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, branchInterfaceId, *output.NetworkInterfaceId)
@@ -406,7 +406,7 @@ func TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIP(t *testing.T) {
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).
 		Return(createNetworkInterfaceOutput, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 5, nil)
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 5, 0, nil)
 
 	createNetworkInterfaceInput.SecondaryPrivateIpAddressCount = nil
 
@@ -429,7 +429,7 @@ func TestEc2APIHelper_CreateNetworkInterface_TypeTrunk(t *testing.T) {
 	mockWrapper.EXPECT().CreateNetworkInterfacePermission(createNetworkInterfacePermissionInputTrunk).
 		Return(nil, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, &interfaceTypeTrunk)
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, 0, &interfaceTypeTrunk)
 
 	createNetworkInterfaceInput.InterfaceType = nil
 
@@ -447,7 +447,7 @@ func TestEc2APIHelper_CreateNetworkInterface_EmptyResponse(t *testing.T) {
 
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(nil, nil)
 
-	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, nil)
+	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, 0, nil)
 
 	assert.NotNil(t, err)
 }
@@ -461,7 +461,7 @@ func TestEc2APIHelper_CreateNetworkInterface_Error(t *testing.T) {
 
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(nil, mockError)
 
-	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, nil)
+	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, 0, nil)
 
 	assert.Error(t, err, mockError)
 }
@@ -673,7 +673,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface(t *testing.T) {
 		Return(describeNetworkInterfaceOutputUsingOneInterfaceId, nil)
 
 	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
-		&deviceIndex, &eniDescription, nil, 0)
+		&deviceIndex, &eniDescription, nil, 0, 0)
 
 	// Clean up
 	describeNetworkInterfaceOutputUsingOneInterfaceId.NetworkInterfaces[0].Attachment.Status = oldStatus
@@ -697,7 +697,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface_DeleteOnAttachFailed(t *te
 	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil)
 
 	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
-		&deviceIndex, &eniDescription, nil, 0)
+		&deviceIndex, &eniDescription, nil, 0, 0)
 
 	assert.NotNil(t, err)
 	assert.Nil(t, nwInterface)
@@ -722,7 +722,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface_DeleteOnSetTerminationFail
 	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil)
 
 	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
-		&deviceIndex, &eniDescription, nil, 0)
+		&deviceIndex, &eniDescription, nil, 0, 0)
 
 	assert.NotNil(t, err)
 	assert.Nil(t, nwInterface)
@@ -934,9 +934,9 @@ func TestEC2APIHelper_GetInstanceDetails_Error(t *testing.T) {
 	assert.Error(t, mockError, err)
 }
 
-// TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady tests that once new IP addresses are assigned they are returned
+// TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady tests that once new IP addresses are assigned they are returned
 // only when the IPs are attached to the instance
-func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady(t *testing.T) {
+func TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -945,7 +945,7 @@ func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady(t *testing.T) {
 	mockWrapper.EXPECT().AssignPrivateIPAddresses(assignPrivateIPInput).Return(assignPrivateIPOutput, nil)
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInput).Return(describeNetworkInterfaceOutput, nil)
 
-	createdIPs, err := ec2ApiHelper.AssignIPv4AddressesAndWaitTillReady(eniID, 2)
+	createdIPs, err := ec2ApiHelper.AssignIPv4ResourcesAndWaitTillReady(eniID, config.ResourceTypeIPv4Address, 2)
 
 	assert.NoError(t, err)
 	assert.Equal(t, []string{ipAddress1, ipAddress2}, createdIPs)
@@ -953,7 +953,7 @@ func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady(t *testing.T) {
 
 // TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_Error tests that error is returned if the assign private IP call
 // fails
-func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_Error(t *testing.T) {
+func TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady_Error(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -961,14 +961,14 @@ func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_Error(t *testing.T) {
 
 	mockWrapper.EXPECT().AssignPrivateIPAddresses(assignPrivateIPInput).Return(nil, mockError)
 
-	_, err := ec2ApiHelper.AssignIPv4AddressesAndWaitTillReady(eniID, 2)
+	_, err := ec2ApiHelper.AssignIPv4ResourcesAndWaitTillReady(eniID, config.ResourceTypeIPv4Address, 2)
 
 	assert.Error(t, mockError, err)
 }
 
-// TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_AttachedAfterSecondDescribe tests if the describe call is called
+// TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady_AttachedAfterSecondDescribe tests if the describe call is called
 // till all the newly assigned ips are returned
-func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_AttachedAfterSecondDescribe(t *testing.T) {
+func TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady_AttachedAfterSecondDescribe(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -986,14 +986,14 @@ func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_AttachedAfterSecondDes
 		mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInput).Return(describeNetworkInterfaceOutput, nil),
 	)
 
-	createdIPs, err := ec2ApiHelper.AssignIPv4AddressesAndWaitTillReady(eniID, 2)
+	createdIPs, err := ec2ApiHelper.AssignIPv4ResourcesAndWaitTillReady(eniID, config.ResourceTypeIPv4Address, 2)
 
 	assert.NoError(t, err)
 	assert.Equal(t, []string{ipAddress1, ipAddress2}, createdIPs)
 }
 
-// TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_DescribeReturnsPartialResult returns the partially assigned IPs
-func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_DescribeReturnsPartialResult(t *testing.T) {
+// TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady_DescribeReturnsPartialResult returns the partially assigned IPs
+func TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady_DescribeReturnsPartialResult(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -1009,7 +1009,7 @@ func TestEC2APIHelper_AssignIPv4AddressesAndWaitTillReady_DescribeReturnsPartial
 				}}}}, nil).Times(maxRetryOnError),
 	)
 
-	createdIPs, err := ec2ApiHelper.AssignIPv4AddressesAndWaitTillReady(eniID, 2)
+	createdIPs, err := ec2ApiHelper.AssignIPv4ResourcesAndWaitTillReady(eniID, config.ResourceTypeIPv4Address, 2)
 
 	assert.NotNil(t, err)
 	// Assert that even though 2 IPs were assigned, only 1 is returned because the describe call doesn't contain the second IP

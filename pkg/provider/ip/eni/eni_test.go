@@ -20,6 +20,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
@@ -88,6 +89,9 @@ var (
 	}
 
 	log = zap.New(zap.UseDevMode(true)).WithName("eni manager")
+
+	ResourceTypeIPv4Address string = "IPv4Address"
+	ResourceTypeIPv4Prefix  string = "IPv4Prefix"
 )
 
 func createENIDetails(eniID string, remainingCapacity int) *eni {
@@ -106,8 +110,8 @@ func getMockManager(ctrl *gomock.Controller) (eniManager, *mock_ec2.MockEC2Insta
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	mockEc2APIHelper := mock_api.NewMockEC2APIHelper(ctrl)
 	return eniManager{
-		ipToENIMap: map[string]*eni{},
-		instance:   mockInstance,
+		resourceToENIMap: map[string]*eni{},
+		instance:         mockInstance,
 	}, mockInstance, mockEc2APIHelper
 }
 
@@ -130,7 +134,7 @@ func TestEni_InitResources(t *testing.T) {
 	// Capacity is 4 and already present 1, so remaining capacity = 4-1=3
 	expectedENIDetails2 := createENIDetails(eniID2, 3)
 
-	allIPs, err := manager.InitResources(mockEc2APIHelper)
+	allIPs, _, err := manager.InitResources(mockEc2APIHelper)
 
 	assert.NoError(t, err)
 	// Assert all the IPs are returned
@@ -139,7 +143,7 @@ func TestEni_InitResources(t *testing.T) {
 	assert.Equal(t, []*eni{expectedENIDetails1, expectedENIDetails2}, manager.attachedENIs)
 	// Assert the ENI to IP mapping is as expected
 	assert.True(t, reflect.DeepEqual(map[string]*eni{ip1: expectedENIDetails1, ip2: expectedENIDetails1,
-		ip3: expectedENIDetails2}, manager.ipToENIMap))
+		ip3: expectedENIDetails2}, manager.resourceToENIMap))
 }
 
 // TestEni_InitResources_Error tests that error is returned if the ec2 api fails to describe the instance
@@ -153,14 +157,14 @@ func TestEni_InitResources_Error(t *testing.T) {
 
 	mockEc2APIHelper.EXPECT().GetInstanceNetworkInterface(&instanceID).Return(nwInterfaces, mockError)
 
-	_, err := manager.InitResources(mockEc2APIHelper)
+	_, _, err := manager.InitResources(mockEc2APIHelper)
 
 	assert.Error(t, mockError, err)
 }
 
 // TestEniManager_CreateIPV4Address_FromSingleENI tests IP are created using a single ENI when it has the desired
 // capacity
-func TestEniManager_CreateIPV4Address_FromSingleENI(t *testing.T) {
+func TestEniManager_CreateIPV4Resource_FromSingleENI(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -168,20 +172,20 @@ func TestEniManager_CreateIPV4Address_FromSingleENI(t *testing.T) {
 
 	manager.attachedENIs = []*eni{createENIDetails(eniID1, 2)}
 
-	mockEc2APIHelper.EXPECT().AssignIPv4AddressesAndWaitTillReady(eniID1, 2).Return([]string{ip1, ip2}, nil)
+	mockEc2APIHelper.EXPECT().AssignIPv4ResourcesAndWaitTillReady(eniID1, ResourceTypeIPv4Address, 2).Return([]string{ip1, ip2}, nil)
 	mockInstance.EXPECT().Name().Return(instanceName)
 	mockInstance.EXPECT().Type().Return(instanceType).Times(2)
 	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(2)
 
-	ips, err := manager.CreateIPV4Address(2, mockEc2APIHelper, log)
+	ips, err := manager.CreateIPV4Resource(2, config.ResourceType(ResourceTypeIPv4Address), mockEc2APIHelper, log)
 
 	assert.NoError(t, err)
 	assert.Equal(t, []string{ip1WithMask, ip2WithMask}, ips)
 	assert.Equal(t, 0, manager.attachedENIs[0].remainingCapacity)
 }
 
-// TestEniManager_CreateIPV4Address_FromMultipleENI tests IPs are assigned from multiple different ENIs
-func TestEniManager_CreateIPV4Address_FromMultipleENI(t *testing.T) {
+// TestEniManager_CreateIPV4Resource_FromMultipleENI tests IPs are assigned from multiple different ENIs
+func TestEniManager_CreateIPV4Resource_FromMultipleENI(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -191,15 +195,15 @@ func TestEniManager_CreateIPV4Address_FromMultipleENI(t *testing.T) {
 		createENIDetails(eniID2, 3)}
 
 	gomock.InOrder(
-		mockEc2APIHelper.EXPECT().AssignIPv4AddressesAndWaitTillReady(eniID1, 1).Return([]string{ip1}, nil),
-		mockEc2APIHelper.EXPECT().AssignIPv4AddressesAndWaitTillReady(eniID2, 1).Return([]string{ip2}, nil),
+		mockEc2APIHelper.EXPECT().AssignIPv4ResourcesAndWaitTillReady(eniID1, ResourceTypeIPv4Address, 1).Return([]string{ip1}, nil),
+		mockEc2APIHelper.EXPECT().AssignIPv4ResourcesAndWaitTillReady(eniID2, ResourceTypeIPv4Address, 1).Return([]string{ip2}, nil),
 	)
 
 	mockInstance.EXPECT().Type().Return(instanceType).Times(2)
 	mockInstance.EXPECT().Name().Return(instanceName)
 	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(2)
 
-	ips, err := manager.CreateIPV4Address(2, mockEc2APIHelper, log)
+	ips, err := manager.CreateIPV4Resource(2, config.ResourceType(ResourceTypeIPv4Address), mockEc2APIHelper, log)
 
 	assert.NoError(t, err)
 	// Assert returned Ips are as expected
@@ -208,13 +212,13 @@ func TestEniManager_CreateIPV4Address_FromMultipleENI(t *testing.T) {
 	assert.Equal(t, 0, manager.attachedENIs[0].remainingCapacity)
 	assert.Equal(t, 2, manager.attachedENIs[1].remainingCapacity)
 	// Assert the mapping from IP to ENI  is created
-	assert.Equal(t, manager.attachedENIs[0], manager.ipToENIMap[ip1])
-	assert.Equal(t, manager.attachedENIs[1], manager.ipToENIMap[ip2])
+	assert.Equal(t, manager.attachedENIs[0], manager.resourceToENIMap[ip1])
+	assert.Equal(t, manager.attachedENIs[1], manager.resourceToENIMap[ip2])
 }
 
-// TestEniManager_CreateIPV4Address_FromNewENI tests if existing ENIs cannot supply new IP, IPs are allocated from a new
+// TestEniManager_CreateIPV4Resource_FromNewENI tests if existing ENIs cannot supply new IP, IPs are allocated from a new
 // ENI
-func TestEniManager_CreateIPV4Address_FromNewENI(t *testing.T) {
+func TestEniManager_CreateIPV4Resource_FromNewENI(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -233,12 +237,12 @@ func TestEniManager_CreateIPV4Address_FromNewENI(t *testing.T) {
 
 	gomock.InOrder(
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-			&ENIDescription, nil, 3).Return(networkInterface1, nil),
+			&ENIDescription, nil, 3, 0).Return(networkInterface1, nil),
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-			&ENIDescription, nil, 1).Return(networkInterface2, nil),
+			&ENIDescription, nil, 1, 0).Return(networkInterface2, nil),
 	)
 
-	ips, err := manager.CreateIPV4Address(4, mockEc2APIHelper, log)
+	ips, err := manager.CreateIPV4Resource(4, config.ResourceType(ResourceTypeIPv4Address), mockEc2APIHelper, log)
 
 	expectedNewENI1 := createENIDetails(*networkInterface1.NetworkInterfaceId, 0)
 	expectedNewENI2 := createENIDetails(*networkInterface2.NetworkInterfaceId, 2)
@@ -246,7 +250,7 @@ func TestEniManager_CreateIPV4Address_FromNewENI(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []string{ip2WithMask, ip3WithMask, ip4WithMask, ip6WithMask}, ips)
 	assert.Equal(t, []*eni{existingENI, expectedNewENI1, expectedNewENI2}, manager.attachedENIs)
-	assert.Equal(t, map[string]*eni{ip2: expectedNewENI1, ip3: expectedNewENI1, ip4: expectedNewENI1, ip6: expectedNewENI2}, manager.ipToENIMap)
+	assert.Equal(t, map[string]*eni{ip2: expectedNewENI1, ip3: expectedNewENI1, ip4: expectedNewENI1, ip6: expectedNewENI2}, manager.resourceToENIMap)
 }
 
 // TestEniManager_CreateIPV4Address_InBetweenENIFail test that if some of the IP creation fails, the ones that succeeded
@@ -269,19 +273,19 @@ func TestEniManager_CreateIPV4Address_InBetweenENIFail(t *testing.T) {
 
 	gomock.InOrder(
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-			&ENIDescription, nil, 3).Return(networkInterface1, nil),
+			&ENIDescription, nil, 3, 0).Return(networkInterface1, nil),
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-			&ENIDescription, nil, 1).Return(nil, mockError),
+			&ENIDescription, nil, 1, 0).Return(nil, mockError),
 	)
 
-	ips, err := manager.CreateIPV4Address(4, mockEc2APIHelper, log)
+	ips, err := manager.CreateIPV4Resource(4, config.ResourceType(ResourceTypeIPv4Address), mockEc2APIHelper, log)
 
 	expectedNewENI1 := createENIDetails(*networkInterface1.NetworkInterfaceId, 0)
 
 	assert.Error(t, mockError, err)
 	assert.Equal(t, []string{ip2, ip3, ip4}, ips)
 	assert.Equal(t, []*eni{existingENI, expectedNewENI1}, manager.attachedENIs)
-	assert.Equal(t, map[string]*eni{ip2: expectedNewENI1, ip3: expectedNewENI1, ip4: expectedNewENI1}, manager.ipToENIMap)
+	assert.Equal(t, map[string]*eni{ip2: expectedNewENI1, ip3: expectedNewENI1, ip4: expectedNewENI1}, manager.resourceToENIMap)
 }
 
 // TestEniManager_DeleteIPV4Address tests ips are un assigned and network interface without any secondary IP is deleted
@@ -294,25 +298,25 @@ func TestEniManager_DeleteIPV4Address(t *testing.T) {
 	eniDetails1 := createENIDetails(eniID1, 1)
 	eniDetails2 := createENIDetails(eniID2, 1)
 
-	manager.ipToENIMap = map[string]*eni{ip1: eniDetails1, ip2: eniDetails1, ip3: eniDetails2, ip4: eniDetails2}
+	manager.resourceToENIMap = map[string]*eni{ip1: eniDetails1, ip2: eniDetails1, ip3: eniDetails2, ip4: eniDetails2}
 	manager.attachedENIs = []*eni{eniDetails1, eniDetails2}
 
 	mockInstance.EXPECT().Name().Return(instanceName)
 	mockInstance.EXPECT().Type().Return(instanceType).Times(1)
 	mockInstance.EXPECT().PrimaryNetworkInterfaceID().Return(eniID1)
 	// Unassign the IPs from interface 1 and 2
-	mockEc2APIHelper.EXPECT().UnassignPrivateIpAddresses(eniID1, []string{ip1}).Return(nil)
-	mockEc2APIHelper.EXPECT().UnassignPrivateIpAddresses(eniID2, []string{ip3, ip4}).Return(nil)
+	mockEc2APIHelper.EXPECT().UnassignIPv4Resources(eniID1, ResourceTypeIPv4Address, []string{ip1}).Return(nil)
+	mockEc2APIHelper.EXPECT().UnassignIPv4Resources(eniID2, ResourceTypeIPv4Address, []string{ip3, ip4}).Return(nil)
 	// Delete the network interface 2 as it has no more secondary IP left
 	mockEc2APIHelper.EXPECT().DeleteNetworkInterface(&eniID2).Return(nil)
 
-	failedToDelete, err := manager.DeleteIPV4Address([]string{ip3, ip1, ip4}, mockEc2APIHelper, log)
+	failedToDelete, err := manager.DeleteIPV4Resource([]string{ip3, ip1, ip4}, config.ResourceType(ResourceTypeIPv4Address), mockEc2APIHelper, log)
 
 	assert.NoError(t, err)
 	assert.Empty(t, failedToDelete)
 	assert.Equal(t, []*eni{eniDetails1}, manager.attachedENIs)
-	assert.NotContains(t, manager.ipToENIMap, ip1)
-	assert.NotContains(t, manager.ipToENIMap, ip3)
+	assert.NotContains(t, manager.resourceToENIMap, ip1)
+	assert.NotContains(t, manager.resourceToENIMap, ip3)
 }
 
 // TestEniManager_DeleteIPV4Address tests ips are un assigned and network interface without any secondary IP is deleted
@@ -325,25 +329,25 @@ func TestEniManager_DeleteIPV4Address_SomeFail(t *testing.T) {
 	eniDetails1 := createENIDetails(eniID1, 1)
 	eniDetails2 := createENIDetails(eniID2, 2)
 
-	manager.ipToENIMap = map[string]*eni{ip1: eniDetails1, ip2: eniDetails1, ip3: eniDetails2}
+	manager.resourceToENIMap = map[string]*eni{ip1: eniDetails1, ip2: eniDetails1, ip3: eniDetails2}
 	manager.attachedENIs = []*eni{eniDetails1, eniDetails2}
 
 	mockInstance.EXPECT().Name().Return(instanceName)
 	mockInstance.EXPECT().Type().Return(instanceType).Times(1)
 	mockInstance.EXPECT().PrimaryNetworkInterfaceID().Return(eniID1)
 	// Unassign the IPs from interface 1 and 2
-	mockEc2APIHelper.EXPECT().UnassignPrivateIpAddresses(eniID1, []string{ip1}).Return(mockError)
-	mockEc2APIHelper.EXPECT().UnassignPrivateIpAddresses(eniID2, []string{ip3}).Return(nil)
+	mockEc2APIHelper.EXPECT().UnassignIPv4Resources(eniID1, ResourceTypeIPv4Address, []string{ip1}).Return(mockError)
+	mockEc2APIHelper.EXPECT().UnassignIPv4Resources(eniID2, ResourceTypeIPv4Address, []string{ip3}).Return(nil)
 	// Delete the network interface 2 as it has no more secondary IP left
 	mockEc2APIHelper.EXPECT().DeleteNetworkInterface(&eniID2).Return(nil)
 
-	failedToDelete, err := manager.DeleteIPV4Address([]string{ip1, ip3}, mockEc2APIHelper, log)
+	failedToDelete, err := manager.DeleteIPV4Resource([]string{ip1, ip3}, config.ResourceType(ResourceTypeIPv4Address), mockEc2APIHelper, log)
 
 	assert.NotNil(t, err)
 	assert.Equal(t, []string{ip1}, failedToDelete)
 	assert.Equal(t, []*eni{eniDetails1}, manager.attachedENIs)
-	assert.Contains(t, manager.ipToENIMap, ip1)
-	assert.NotContains(t, manager.ipToENIMap, ip3)
+	assert.Contains(t, manager.resourceToENIMap, ip1)
+	assert.NotContains(t, manager.resourceToENIMap, ip3)
 }
 
 func TestEniManager_groupIPsPerENI(t *testing.T) {
@@ -359,9 +363,9 @@ func TestEniManager_groupIPsPerENI(t *testing.T) {
 	ipToENIMap[ip4] = eni2
 	ipToENIMap[ip5] = eni2
 
-	eniManager := eniManager{ipToENIMap: ipToENIMap, attachedENIs: attachedENIs}
+	eniManager := eniManager{resourceToENIMap: ipToENIMap, attachedENIs: attachedENIs}
 
-	groupedIP := eniManager.groupIPsPerENI([]string{ip1, ip4, ip3})
+	groupedIP := eniManager.groupResourcesPerENI([]string{ip1, ip4, ip3})
 	assert.Equal(t, map[*eni][]string{eni1: {ip1, ip3}, eni2: {ip4}}, groupedIP)
 }
 

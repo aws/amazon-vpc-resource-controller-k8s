@@ -77,6 +77,13 @@ const (
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
 )
 
+type ResourceType string
+
+const (
+	ResourceTypeIPv4Address ResourceType = "IPv4Address"
+	ResourceTypeIPv4Prefix  ResourceType = "IPv4Prefix"
+)
+
 // Events metadata
 // They are used to identify valid events emitted from authorized agents
 const (
