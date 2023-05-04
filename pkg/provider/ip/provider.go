@@ -19,7 +19,6 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
-	ec2api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -266,7 +265,7 @@ func (p *ipv4Provider) CreatePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 		return
 	}
 	didSucceed := true
-	ips, err := instanceResource.eniManager.CreateIPV4Resource(job.ResourceCount, ec2api.ResourceTypeIPv4Address, p.apiWrapper.EC2API, p.log)
+	ips, err := instanceResource.eniManager.CreateIPV4Resource(job.ResourceCount, config.ResourceTypeIPv4Address, p.apiWrapper.EC2API, p.log)
 	if err != nil {
 		p.log.Error(err, "failed to create all/some of the IPv4 addresses", "created ips", ips)
 		didSucceed = false
@@ -301,7 +300,7 @@ func (p *ipv4Provider) DeletePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 		return
 	}
 	didSucceed := true
-	failedIPs, err := instanceResource.eniManager.DeleteIPV4Resource(job.Resources, ec2api.ResourceTypeIPv4Address, p.apiWrapper.EC2API, p.log)
+	failedIPs, err := instanceResource.eniManager.DeleteIPV4Resource(job.Resources, config.ResourceTypeIPv4Address, p.apiWrapper.EC2API, p.log)
 	if err != nil {
 		p.log.Error(err, "failed to delete all/some of the IPv4 addresses", "failed ips", failedIPs)
 		didSucceed = false
