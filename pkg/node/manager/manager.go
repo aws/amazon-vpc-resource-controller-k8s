@@ -143,7 +143,7 @@ func (m *manager) AddNode(nodeName string) error {
 
 	if shouldManage {
 		newNode = node.NewManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
-			GetNodeOS(k8sNode))
+			GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
 		err := m.updateSubnetIfUsingENIConfig(newNode, k8sNode)
 		if err != nil {
 			return err
@@ -195,7 +195,7 @@ func (m *manager) UpdateNode(nodeName string) error {
 	case UnManagedToManaged:
 		log.Info("node was previously un-managed, will be added as managed node now")
 		cachedNode = node.NewManagedNode(m.Log, k8sNode.Name,
-			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode))
+			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
 		// Update the Subnet if the node has custom networking configured
 		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
 		if err != nil {
@@ -313,7 +313,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 	var err error
 	switch asyncJob.op {
 	case Init:
-		err = asyncJob.node.InitResources(m.resourceManager, m.wrapper.EC2API)
+		err = asyncJob.node.InitResources(m.resourceManager)
 		if err != nil {
 			log.Error(err, "removing the node from cache as it failed to initialize")
 			m.removeNodeSafe(asyncJob.nodeName)
@@ -328,9 +328,9 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		asyncJob.op = Update
 		return m.performAsyncOperation(asyncJob)
 	case Update:
-		err = asyncJob.node.UpdateResources(m.resourceManager, m.wrapper.EC2API)
+		err = asyncJob.node.UpdateResources(m.resourceManager)
 	case Delete:
-		err = asyncJob.node.DeleteResources(m.resourceManager, m.wrapper.EC2API)
+		err = asyncJob.node.DeleteResources(m.resourceManager)
 	default:
 		m.Log.V(1).Info("no operation operation requested",
 			"node", asyncJob.nodeName)

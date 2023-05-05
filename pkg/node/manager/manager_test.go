@@ -71,7 +71,7 @@ var (
 	mockError = fmt.Errorf("mock error")
 
 	unManagedNode = node.NewUnManagedNode(zap.New(), nodeName, instanceID, config.OSLinux)
-	managedNode   = node.NewManagedNode(zap.New(), nodeName, instanceID, config.OSLinux)
+	managedNode   = node.NewManagedNode(zap.New(), nodeName, instanceID, config.OSLinux, nil, nil)
 
 	healthzHandler = healthz.NewHealthzHandler(5)
 )
@@ -432,19 +432,19 @@ func Test_performAsyncOperation(t *testing.T) {
 	job.op = Init
 
 	mock.MockK8sAPI.EXPECT().AddLabelToManageNode(v1Node, config.HasTrunkAttachedLabel, config.BooleanTrue).Return(true, nil).AnyTimes()
-	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
-	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(nil)
+	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager).Return(nil)
 	_, err := mock.Manager.performAsyncOperation(job)
 	assert.Contains(t, mock.Manager.dataStore, nodeName)
 	assert.NoError(t, err)
 
 	job.op = Update
-	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
+	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager).Return(nil)
 	_, err = mock.Manager.performAsyncOperation(job)
 	assert.NoError(t, err)
 
 	job.op = Delete
-	mock.MockNode.EXPECT().DeleteResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
+	mock.MockNode.EXPECT().DeleteResources(mock.MockResourceManager).Return(nil)
 	_, err = mock.Manager.performAsyncOperation(job)
 	assert.NoError(t, err)
 
@@ -465,7 +465,7 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 		op:       Init,
 	}
 
-	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager, mock.MockEC2API).Return(&node.ErrInitResources{})
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{})
 
 	_, err := mock.Manager.performAsyncOperation(job)
 	assert.NotContains(t, mock.Manager.dataStore, nodeName) // It should be cleared from cache

@@ -17,7 +17,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -258,6 +259,8 @@ func TestEc2Instance_LoadDetails_InstanceENILimitNotFound(t *testing.T) {
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NotNil(t, err)
+	// ensure the expected error is returned to trigger a node event
+	assert.ErrorIs(t, err, utils.ErrNotFound)
 
 	// Clean up
 	nwInterfaces.InstanceType = &instanceType
