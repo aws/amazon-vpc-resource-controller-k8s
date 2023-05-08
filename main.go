@@ -278,7 +278,7 @@ func main() {
 	// hasPodDataStoreSynced is set to true when the custom controller has synced
 	controllerConditions := condition.NewControllerConditions(
 		ctrl.Log.WithName("controller conditions"), k8sApi)
-	supportedResources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
+	supportedResources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress, config.ResourceNameIPAddressFromPrefix}
 	resourceManager, err := resource.NewResourceManager(ctx, supportedResources, apiWrapper, controllerConditions)
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init resources", "resources", supportedResources)

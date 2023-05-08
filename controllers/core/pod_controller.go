@@ -15,10 +15,12 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
@@ -124,6 +126,12 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 	// For each resource, if a handler can allocate/de-allocate a resource then delegate the
 	// allocation/de-allocation task to the respective handler
 	for resourceName, totalCount := range aggregateResources {
+		// Pod annotation ResourceNameIPAddress has two resource managers: secondary IP and prefix IP;
+		// backend needs to distinguish which resource provider and handler should be used here accordingly
+		if resourceName == config.ResourceNameIPAddress {
+			resourceName = r.updateResourceName(isDeleteEvent || hasPodCompleted || nodeDeletedInCluster, pod)
+		}
+
 		resourceHandler, isSupported := r.ResourceManager.GetResourceHandler(resourceName)
 		if !isSupported {
 			continue
@@ -188,4 +196,36 @@ func (r *PodReconciler) SetupWithManager(ctx context.Context, manager ctrl.Manag
 		ResyncPeriod:            syncPeriod,
 		MaxConcurrentReconciles: MaxPodConcurrentReconciles,
 	}).UsingConditions(r.Condition).Complete(r)
+}
+
+// updateResourceName updates resource name according to pod event and which IP allocation mode is enabled
+func (r *PodReconciler) updateResourceName(isDeletionEvent bool, pod *v1.Pod) string {
+	resourceName := config.ResourceNameIPAddress
+	// Pod deletion must use the handler that assigned the IP resource regardless which IP allocation mode is active
+	if isDeletionEvent {
+		resourceID, present := pod.Annotations[resourceName]
+		if !present {
+			r.Log.Error(fmt.Errorf("resource ID was not found in annotation"),
+				"resource", resourceName, "is delete event", isDeletionEvent)
+			return resourceName
+		}
+		// Check prefix provider to see if it's a prefix deconstructed IP
+		prefixProvider, found := r.ResourceManager.GetResourceProvider(config.ResourceNameIPAddressFromPrefix)
+		if !found {
+			r.Log.Error(fmt.Errorf("resource provider was not found"), "resource", resourceName)
+			return resourceName
+		}
+		resourcePool, ok := prefixProvider.GetPool(pod.Spec.NodeName)
+		// If IP is managed by prefix IP pool, update resource name so that prefix IP handler will be used
+		if ok && resourcePool.IsManagedResource(resourceID) {
+			resourceName = config.ResourceNameIPAddressFromPrefix
+		}
+	} else {
+		// Pod creation should use the currently active resource handler
+		if r.Condition.IsWindowsPrefixDelegationEnabled() {
+			// If prefix delegation is enabled, update resource name so that prefix handler will be used
+			resourceName = config.ResourceNameIPAddressFromPrefix
+		}
+	}
+	return resourceName
 }

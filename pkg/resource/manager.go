@@ -24,6 +24,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/prefix"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -40,6 +41,7 @@ type Resource struct {
 
 type ResourceManager interface {
 	GetResourceProviders() map[string]provider.ResourceProvider
+	GetResourceProvider(resourceName string) (provider.ResourceProvider, bool)
 	GetResourceHandler(resourceName string) (handler.Handler, bool)
 }
 
@@ -74,6 +76,11 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 				wrapper, workers, resourceConfig, conditions)
 			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
 				resourceName, resourceProvider, ctx)
+		} else if resourceName == config.ResourceNameIPAddressFromPrefix {
+			resourceProvider = prefix.NewIPv4PrefixProvider(ctrl.Log.WithName("ipv4 prefix provider"),
+				wrapper, workers, resourceConfig, conditions)
+			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
+				config.ResourceNameIPAddress, resourceProvider, ctx)
 		} else if resourceName == config.ResourceNamePodENI {
 			resourceProvider = branch.NewBranchENIProvider(ctrl.Log.WithName("branch eni provider"),
 				wrapper, workers, resourceConfig, ctx)
@@ -108,6 +115,14 @@ func (m *Manager) GetResourceProviders() map[string]provider.ResourceProvider {
 		providers[resourceName] = provider
 	}
 	return providers
+}
+
+func (m *Manager) GetResourceProvider(resourceName string) (provider.ResourceProvider, bool) {
+	resource, found := m.resource[resourceName]
+	if !found {
+		return nil, found
+	}
+	return resource.ResourceProvider, found
 }
 
 func (m *Manager) GetResourceHandler(resourceName string) (handler.Handler, bool) {
