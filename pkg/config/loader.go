@@ -27,6 +27,15 @@ const (
 	IPv4DefaultMaxDev  = 1
 	IPv4DefaultResSize = 0
 
+	// Default Configuration for IPv4 prefix resource type
+	IPv4PDDefaultWorker               = 2
+	IPv4PDDefaultWPSize               = 1
+	IPv4PDDefaultMaxDev               = 0
+	IPv4PDDefaultResSize              = 0
+	IPv4PDDefaultWarmIPTargetSize     = 1
+	IPv4PDDefaultMinIPTargetSize      = 3
+	IPv4PDDefaultWarmPrefixTargetSize = 0
+
 	// EC2 API QPS for user service client
 	// Tested: 15 + 20 limits
 	// Tested: 15 + 8 limits (not seeing significant degradation from 15+20)
