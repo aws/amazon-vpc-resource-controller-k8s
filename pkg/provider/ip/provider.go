@@ -112,24 +112,20 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 
 	nodeCapacity := getCapacity(instance.Type(), instance.Os()) - len(presentPrefixes)
 
-	// Set warm pool config to 0 if PD is enabled
-	ipV4WarmPoolConfig := p.config
+	// Set warm pool config to empty config if PD is enabled
+	secondaryIPWPConfig := p.config
 	isPDEnabled := p.conditions.IsWindowsPrefixDelegationEnabled()
 	if isPDEnabled {
-		ipV4WarmPoolConfig = &config.WarmPoolConfig{
-			DesiredSize:  0,
-			MaxDeviation: 0,
-			ReservedSize: 0,
-		}
+		secondaryIPWPConfig = &config.WarmPoolConfig{}
 	}
 
-	resourcePool := pool.NewResourcePool(p.log.WithName("secondary ipv4 resource pool").
-		WithValues("node name", instance.Name()), ipV4WarmPoolConfig, podToResourceMap,
+	resourcePool := pool.NewResourcePool(p.log.WithName("secondary ipv4 address resource pool").
+		WithValues("node name", instance.Name()), secondaryIPWPConfig, podToResourceMap,
 		warmResources, instance.Name(), nodeCapacity, false)
 
 	p.putInstanceProviderAndPool(nodeName, resourcePool, eniManager, nodeCapacity, isPDEnabled)
 
-	p.log.Info("initialized the resource provider for resource IPv4",
+	p.log.Info("initialized the resource provider for secondary ipv4 address",
 		"capacity", nodeCapacity, "node name", nodeName, "instance type",
 		instance.Type(), "instance ID", instance.InstanceID())
 
@@ -165,7 +161,8 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	// Check if PD is enabled
 	isCurrPDEnabled := p.conditions.IsWindowsPrefixDelegationEnabled()
 
-	// Previous state and current state are either both enabled or disabled, effectively no change
+	// Previous state and current state are both PD enabled or disabled, no need to update warm pool config or capacity for secondary
+	// IP provider
 	if resourceProviderAndPool.isPrevPDEnabled == isCurrPDEnabled {
 		return nil
 	}
@@ -174,9 +171,9 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	// do not update the capacity as that would be done by prefix provider
 	if !resourceProviderAndPool.isPrevPDEnabled && isCurrPDEnabled {
 		resourceProviderAndPool.isPrevPDEnabled = true
-
-		job := resourceProviderAndPool.resourcePool.SetToDraining()
-		p.log.Info("IPv4 prefix provider should be active")
+		emptyWPConfig := &config.WarmPoolConfig{}
+		job := resourceProviderAndPool.resourcePool.UpdateWarmPoolConfig(emptyWPConfig)
+		p.log.Info("Prefix IP provider should be active")
 		p.SubmitAsyncJob(job)
 		return nil
 	}
@@ -184,14 +181,7 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	resourceProviderAndPool.isPrevPDEnabled = false
 
 	// Set the secondary IP provider pool state to active
-	resourceConfig := config.LoadResourceConfig()
-	ipv4ResourceConfig, ok := resourceConfig[config.ResourceNameIPAddress]
-	if !ok {
-		p.log.Error(fmt.Errorf("failed to find resource configuration"), "update resource capacity failed",
-			"resource name", config.ResourceNameIPAddress)
-		return nil
-	}
-	job := resourceProviderAndPool.resourcePool.SetToActive(ipv4ResourceConfig.WarmPoolConfig)
+	job := resourceProviderAndPool.resourcePool.UpdateWarmPoolConfig(p.config)
 	p.SubmitAsyncJob(job)
 
 	instanceType := instance.Type()

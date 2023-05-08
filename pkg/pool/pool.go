@@ -503,7 +503,6 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 
 // SetToDraining sets warm pool config to empty, which would force the pool to delete resources.
 func (p *pool) SetToDraining() *worker.WarmPoolJob {
-
 	p.lock.Lock()
 	p.warmPoolConfig = &config.WarmPoolConfig{}
 	p.lock.Unlock()
