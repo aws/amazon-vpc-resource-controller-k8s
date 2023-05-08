@@ -108,6 +108,20 @@ func (mr *MockPoolMockRecorder) Introspect() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockPool)(nil).Introspect))
 }
 
+// IsManagedResource mocks base method.
+func (m *MockPool) IsManagedResource(arg0 string) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsManagedResource", arg0)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsManagedResource indicates an expected call of IsManagedResource.
+func (mr *MockPoolMockRecorder) IsManagedResource(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsManagedResource", reflect.TypeOf((*MockPool)(nil).IsManagedResource), arg0)
+}
+
 // ProcessCoolDownQueue mocks base method.
 func (m *MockPool) ProcessCoolDownQueue() bool {
 	m.ctrl.T.Helper()

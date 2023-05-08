@@ -50,3 +50,7 @@ func MaxOf[T constraints.Ordered](vars ...T) T {
 	}
 	return result
 }
+
+func CeilDivision(x, y int) int {
+	return (x + y - 1) / y
+}
