@@ -27,6 +27,8 @@ const (
 	ResourceNamePodENI = VPCResourcePrefix + "pod-eni"
 	// ResourceNameIPAddress is the extended resource name for private IP addresses
 	ResourceNameIPAddress = VPCResourcePrefix + "PrivateIPv4Address"
+	// ResourceNameIPAddressFromPrefix is the resource name for prefix-deconstructed IP addresses, not a pod annotation
+	ResourceNameIPAddressFromPrefix = VPCResourcePrefix + "PrivateIPv4AddressFromPrefix"
 )
 
 // K8s Labels
