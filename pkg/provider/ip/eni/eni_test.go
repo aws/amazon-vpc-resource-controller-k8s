@@ -18,8 +18,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
@@ -156,6 +157,23 @@ func TestEni_InitResources_Error(t *testing.T) {
 	_, err := manager.InitResources(mockEc2APIHelper)
 
 	assert.Error(t, mockError, err)
+}
+
+// TestEni_InitResources_Unsupported_Type_Error tests that error is returned if the instance type is not supported
+func TestEni_InitResources_Unsupported_Type_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	manager, mockInstance, mockEc2APIHelper := getMockManager(ctrl)
+	dummyType := "dummy.large"
+	mockInstance.EXPECT().InstanceID().Return(instanceID)
+	mockInstance.EXPECT().Type().Return(dummyType)
+	mockEc2APIHelper.EXPECT().GetInstanceNetworkInterface(&instanceID).Return(nwInterfaces, nil)
+
+	_, err := manager.InitResources(mockEc2APIHelper)
+
+	assert.Error(t, mockError, err)
+	assert.ErrorIs(t, err, utils.ErrNotFound)
 }
 
 // TestEniManager_CreateIPV4Address_FromSingleENI tests IP are created using a single ENI when it has the desired

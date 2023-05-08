@@ -21,6 +21,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/go-logr/logr"
@@ -71,7 +72,7 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, err
 
 	limits, found := vpc.Limits[e.instance.Type()]
 	if !found {
-		return nil, fmt.Errorf("unsupported instance type")
+		return nil, fmt.Errorf("unsupported instance type, error: %w", utils.ErrNotFound)
 	}
 
 	ipLimit := limits.IPv4PerInterface

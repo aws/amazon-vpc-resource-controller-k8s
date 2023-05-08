@@ -14,13 +14,17 @@
 package node
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	v1 "k8s.io/api/core/v1"
 
 	"github.com/go-logr/logr"
 )
@@ -36,6 +40,10 @@ type node struct {
 	managed bool
 	// instance stores the ec2 instance details that is shared by all the providers
 	instance ec2.EC2Instance
+	// node has reference to k8s APIs
+	k8sAPI k8s.K8sWrapper
+	// node has reference to EC2 APIs
+	ec2API api.EC2APIHelper
 }
 
 // ErrInitResources to wrap error messages for all errors encountered
@@ -50,9 +58,9 @@ func (e *ErrInitResources) Error() string {
 }
 
 type Node interface {
-	InitResources(resourceManager resource.ResourceManager, helper api.EC2APIHelper) error
-	DeleteResources(resourceManager resource.ResourceManager, helper api.EC2APIHelper) error
-	UpdateResources(resourceManager resource.ResourceManager, helper api.EC2APIHelper) error
+	InitResources(resourceManager resource.ResourceManager) error
+	DeleteResources(resourceManager resource.ResourceManager) error
+	UpdateResources(resourceManager resource.ResourceManager) error
 
 	UpdateCustomNetworkingSpecs(subnetID string, securityGroup []string)
 	IsReady() bool
@@ -63,12 +71,14 @@ type Node interface {
 }
 
 // NewManagedNode returns node managed by the controller
-func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os string) Node {
+func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
 	return &node{
 		managed: true,
 		log: log.WithName("node resource handler").
 			WithValues("node name", nodeName),
 		instance: ec2.NewEC2Instance(nodeName, instanceID, os),
+		k8sAPI:   k8sAPI,
+		ec2API:   ec2API,
 	}
 }
 
@@ -86,7 +96,7 @@ func NewUnManagedNode(log logr.Logger, nodeName, instanceID, os string) Node {
 }
 
 // UpdateNode refreshes the capacity if it's reset to 0
-func (n *node) UpdateResources(resourceManager resource.ResourceManager, helper api.EC2APIHelper) error {
+func (n *node) UpdateResources(resourceManager resource.ResourceManager) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
@@ -112,7 +122,7 @@ func (n *node) UpdateResources(resourceManager resource.ResourceManager, helper 
 		return fmt.Errorf("failed to update one or more resources %v", errUpdates)
 	}
 
-	err := n.instance.UpdateCurrentSubnetAndCidrBlock(helper)
+	err := n.instance.UpdateCurrentSubnetAndCidrBlock(n.ec2API)
 	if err != nil {
 		n.log.Error(err, "failed to update cidr block", "instance", n.instance.Name())
 	}
@@ -121,12 +131,16 @@ func (n *node) UpdateResources(resourceManager resource.ResourceManager, helper 
 }
 
 // InitResources initializes the resource pool and provider of all supported resources
-func (n *node) InitResources(resourceManager resource.ResourceManager, helper api.EC2APIHelper) error {
+func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
-
-	err := n.instance.LoadDetails(helper)
+	err := n.instance.LoadDetails(n.ec2API)
 	if err != nil {
+		if errors.Is(err, utils.ErrNotFound) {
+			// Send a node event for users' visibility
+			msg := fmt.Sprintf("The instance type %s is not supported yet by the vpc resource controller", n.instance.Type())
+			utils.SendNodeEvent(n.k8sAPI, n.instance.Name(), "Unsupported", msg, v1.EventTypeWarning, n.log)
+		}
 		return &ErrInitResources{
 			Message: "failed to load instance details",
 			Err:     err,
@@ -167,7 +181,7 @@ func (n *node) InitResources(resourceManager resource.ResourceManager, helper ap
 }
 
 // DeleteResources performs clean up of all the resource pools and provider of the nodes
-func (n *node) DeleteResources(resourceManager resource.ResourceManager, _ api.EC2APIHelper) error {
+func (n *node) DeleteResources(resourceManager resource.ResourceManager) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 

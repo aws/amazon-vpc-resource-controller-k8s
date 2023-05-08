@@ -30,6 +30,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	"github.com/google/uuid"
 
@@ -466,8 +467,15 @@ func (b *branchENIProvider) GetPool(_ string) (pool.Pool, bool) {
 // IsInstanceSupported returns true for linux node as pod eni is only supported for linux worker node
 func (b *branchENIProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
 	limits, found := vpc.Limits[instance.Type()]
-	return found && instance.Os() == config.OSLinux && limits.IsTrunkingCompatible
+	supported := found && instance.Os() == config.OSLinux && limits.IsTrunkingCompatible
 
+	if !supported {
+		// Send a node event for users' visibility
+		msg := fmt.Sprintf("The instance type %s is not supported for trunk interface (Security Group for Pods)", instance.Type())
+		utils.SendNodeEvent(b.apiWrapper.K8sAPI, instance.Name(), "Unsupported", msg, v1.EventTypeWarning, b.log)
+	}
+
+	return supported
 }
 
 func (b *branchENIProvider) Introspect() interface{} {

@@ -14,6 +14,7 @@
 package ip
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -26,7 +27,9 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	v1 "k8s.io/api/core/v1"
 
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -75,6 +78,11 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 	eniManager := eni.NewENIManager(instance)
 	presentIPs, err := eniManager.InitResources(p.apiWrapper.EC2API)
 	if err != nil {
+		if errors.Is(err, utils.ErrNotFound) {
+			msg := fmt.Sprintf("The instance type %s is not supported for Windows", instance.Type())
+			utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), "Unsupported", msg, v1.EventTypeWarning, p.log)
+		}
+
 		return err
 	}
 
