@@ -61,13 +61,14 @@ type ResourceProviderAndPool struct {
 }
 
 func NewIPv4Provider(log logr.Logger, apiWrapper api.Wrapper,
-	workerPool worker.Worker, resourceConfig config.ResourceConfig) provider.ResourceProvider {
+	workerPool worker.Worker, resourceConfig config.ResourceConfig, conditions condition.Conditions) provider.ResourceProvider {
 	return &ipv4Provider{
 		instanceProviderAndPool: make(map[string]*ResourceProviderAndPool),
 		config:                  resourceConfig.WarmPoolConfig,
 		log:                     log,
 		apiWrapper:              apiWrapper,
 		workerPool:              workerPool,
+		conditions:              conditions,
 	}
 }
 
@@ -75,10 +76,13 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 
 	eniManager := eni.NewENIManager(instance)
-	presentIPs, presentPrefixes, err := eniManager.InitResources(p.apiWrapper.EC2API)
-	if err != nil {
+	ipV4Resources, err := eniManager.InitResources(p.apiWrapper.EC2API)
+	if err != nil || ipV4Resources == nil {
 		return err
 	}
+
+	presentIPs := ipV4Resources.PrivateIPv4Addresses
+	presentPrefixes := ipV4Resources.IPv4Prefixes
 
 	presentIPSet := map[string]struct{}{}
 	for _, ip := range presentIPs {
@@ -171,8 +175,7 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	// do not update the capacity as that would be done by prefix provider
 	if !resourceProviderAndPool.isPrevPDEnabled && isCurrPDEnabled {
 		resourceProviderAndPool.isPrevPDEnabled = true
-		emptyWPConfig := &config.WarmPoolConfig{}
-		job := resourceProviderAndPool.resourcePool.UpdateWarmPoolConfig(emptyWPConfig)
+		job := resourceProviderAndPool.resourcePool.SetToDraining()
 		p.log.Info("Prefix IP provider should be active")
 		p.SubmitAsyncJob(job)
 		return nil
@@ -181,7 +184,7 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	resourceProviderAndPool.isPrevPDEnabled = false
 
 	// Set the secondary IP provider pool state to active
-	job := resourceProviderAndPool.resourcePool.UpdateWarmPoolConfig(p.config)
+	job := resourceProviderAndPool.resourcePool.SetToActive(p.config)
 	p.SubmitAsyncJob(job)
 
 	instanceType := instance.Type()
@@ -272,14 +275,14 @@ func (p *ipv4Provider) ReSyncPool(job *worker.WarmPoolJob) {
 		return
 	}
 
-	resources, _, err := providerAndPool.eniManager.InitResources(p.apiWrapper.EC2API)
-	if err != nil {
+	ipV4Resources, err := providerAndPool.eniManager.InitResources(p.apiWrapper.EC2API)
+	if err != nil || ipV4Resources == nil {
 		p.log.Error(err, "failed to get init resources for the node",
 			"name", job.NodeName)
 		return
 	}
 
-	providerAndPool.resourcePool.ReSync(resources)
+	providerAndPool.resourcePool.ReSync(ipV4Resources.PrivateIPv4Addresses)
 }
 
 // DeletePrivateIPv4AndUpdatePool executes the Delete IPv4 workflow for the list of IPs provided in the warm pool job

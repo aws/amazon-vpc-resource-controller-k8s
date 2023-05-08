@@ -27,6 +27,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/golang/mock/gomock"
@@ -284,11 +285,12 @@ func TestIpv4Provider_ReSyncPool(t *testing.T) {
 	}
 
 	// When error occurs, pool should not be re-synced
-	mockManager.EXPECT().InitResources(ipv4Provider.apiWrapper.EC2API).Return(nil, nil, fmt.Errorf(""))
+	mockManager.EXPECT().InitResources(ipv4Provider.apiWrapper.EC2API).Return(nil, fmt.Errorf(""))
 	ipv4Provider.ReSyncPool(reSyncJob)
 
 	// When no error occurs, pool should be re-synced
-	mockManager.EXPECT().InitResources(ipv4Provider.apiWrapper.EC2API).Return(resources, nil, nil)
+	ipV4Resources := &eni.IPv4Resource{PrivateIPv4Addresses: resources}
+	mockManager.EXPECT().InitResources(ipv4Provider.apiWrapper.EC2API).Return(ipV4Resources, nil)
 	mockPool.EXPECT().ReSync(resources)
 	ipv4Provider.ReSyncPool(reSyncJob)
 }
@@ -316,7 +318,6 @@ func TestIPv4Provider_UpdateResourceCapacity_FromFromPDToIP(t *testing.T) {
 
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
-
 	mockConditions := mock_condition.NewMockConditions(ctrl)
 	mockWorker := mock_worker.NewMockWorker(ctrl)
 	ipV4WarmPoolConfig := config.WarmPoolConfig{
