@@ -419,8 +419,8 @@ func TestEc2APIHelper_CreateNetworkInterface_NoSecondaryIP(t *testing.T) {
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(createNetworkInterfaceOutput, nil)
-
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, 0, nil)
+	count := &config.IPResourceCount{SecondaryIPv4Count: 0, IPv4PrefixCount: 0}
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, count, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, branchInterfaceId, *output.NetworkInterfaceId)
@@ -440,7 +440,8 @@ func TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIP(t *testing.T) {
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).
 		Return(createNetworkInterfaceOutput, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 5, 0, nil)
+	count := &config.IPResourceCount{SecondaryIPv4Count: 5, IPv4PrefixCount: 0}
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, count, nil)
 
 	createNetworkInterfaceInput.SecondaryPrivateIpAddressCount = nil
 
@@ -462,7 +463,8 @@ func TestEc2APIHelper_CreateNetworkInterface_WithPrefixCount(t *testing.T) {
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).
 		Return(createNetworkInterfaceOutput, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, 5, nil)
+	count := &config.IPResourceCount{SecondaryIPv4Count: 0, IPv4PrefixCount: 5}
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, count, nil)
 
 	createNetworkInterfaceInput.Ipv4PrefixCount = nil
 
@@ -482,7 +484,8 @@ func TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIPAndPrefixCount_Error
 	createNetworkInterfaceInput.SecondaryPrivateIpAddressCount = &ipCount
 	createNetworkInterfaceInput.Ipv4PrefixCount = &ipCount
 
-	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 5, 5, nil)
+	count := &config.IPResourceCount{SecondaryIPv4Count: 5, IPv4PrefixCount: 5}
+	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, count, nil)
 
 	createNetworkInterfaceInput.SecondaryPrivateIpAddressCount = nil
 	createNetworkInterfaceInput.Ipv4PrefixCount = nil
@@ -505,7 +508,7 @@ func TestEc2APIHelper_CreateNetworkInterface_TypeTrunk(t *testing.T) {
 	mockWrapper.EXPECT().CreateNetworkInterfacePermission(createNetworkInterfacePermissionInputTrunk).
 		Return(nil, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, 0, &interfaceTypeTrunk)
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, nil, &interfaceTypeTrunk)
 
 	createNetworkInterfaceInput.InterfaceType = nil
 
@@ -523,7 +526,7 @@ func TestEc2APIHelper_CreateNetworkInterface_EmptyResponse(t *testing.T) {
 
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(nil, nil)
 
-	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, 0, nil)
+	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, nil, nil)
 
 	assert.NotNil(t, err)
 }
@@ -537,7 +540,7 @@ func TestEc2APIHelper_CreateNetworkInterface_Error(t *testing.T) {
 
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(nil, mockError)
 
-	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, 0, 0, nil)
+	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, nil, nil)
 
 	assert.Error(t, err, mockError)
 }
@@ -749,7 +752,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface(t *testing.T) {
 		Return(describeNetworkInterfaceOutputUsingOneInterfaceId, nil)
 
 	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
-		&deviceIndex, &eniDescription, nil, 0, 0)
+		&deviceIndex, &eniDescription, nil, nil)
 
 	// Clean up
 	describeNetworkInterfaceOutputUsingOneInterfaceId.NetworkInterfaces[0].Attachment.Status = oldStatus
@@ -773,7 +776,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface_DeleteOnAttachFailed(t *te
 	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil)
 
 	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
-		&deviceIndex, &eniDescription, nil, 0, 0)
+		&deviceIndex, &eniDescription, nil, nil)
 
 	assert.NotNil(t, err)
 	assert.Nil(t, nwInterface)
@@ -798,7 +801,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface_DeleteOnSetTerminationFail
 	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil)
 
 	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
-		&deviceIndex, &eniDescription, nil, 0, 0)
+		&deviceIndex, &eniDescription, nil, nil)
 
 	assert.NotNil(t, err)
 	assert.Nil(t, nwInterface)

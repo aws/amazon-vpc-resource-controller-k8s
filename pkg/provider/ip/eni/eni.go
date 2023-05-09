@@ -48,8 +48,13 @@ type eni struct {
 	remainingCapacity int
 }
 
+type IPv4Resource struct {
+	PrivateIPv4Addresses []string
+	IPv4Prefixes         []string
+}
+
 type ENIManager interface {
-	InitResources(ec2APIHelper api.EC2APIHelper) ([]string, []string, error)
+	InitResources(ec2APIHelper api.EC2APIHelper) (*IPv4Resource, error)
 	CreateIPV4Resource(required int, resourceType config.ResourceType, ec2APIHelper api.EC2APIHelper, log logr.Logger) ([]string, error)
 	DeleteIPV4Resource(ipList []string, resourceType config.ResourceType, ec2APIHelper api.EC2APIHelper, log logr.Logger) ([]string, error)
 }
@@ -63,16 +68,16 @@ func NewENIManager(instance ec2.EC2Instance) *eniManager {
 }
 
 // InitResources loads the list of ENIs, secondary IPs and prefixes, associated with the instance
-func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, []string, error) {
+func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) (*IPv4Resource, error) {
 
 	nwInterfaces, err := ec2APIHelper.GetInstanceNetworkInterface(aws.String(e.instance.InstanceID()))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	limits, found := vpc.Limits[e.instance.Type()]
 	if !found {
-		return nil, nil, fmt.Errorf("unsupported instance type")
+		return nil, fmt.Errorf("unsupported instance type")
 	}
 
 	ipLimit := limits.IPv4PerInterface
@@ -103,8 +108,11 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) ([]string, []s
 			e.attachedENIs = append(e.attachedENIs, eni)
 		}
 	}
-
-	return e.addSubnetMaskToIPSlice(availIPs), availPrefixes, nil
+	ipV4Resource := IPv4Resource{
+		PrivateIPv4Addresses: e.addSubnetMaskToIPSlice(availIPs),
+		IPv4Prefixes:         availPrefixes,
+	}
+	return &ipV4Resource, nil
 }
 
 // CreateIPV4Resource creates either IPv4 address or IPv4 prefix depending on ResourceType and returns the list of assigned resources
@@ -175,9 +183,10 @@ func (e *eniManager) CreateIPV4Resource(required int, resourceType config.Resour
 		// Create new ENI and store newly assigned resources into map
 		switch resourceType {
 		case config.ResourceTypeIPv4Address:
+			ipResourceCount := &config.IPResourceCount{SecondaryIPv4Count: want}
 			nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
 				aws.String(e.instance.SubnetID()), e.instance.InstanceSecurityGroup(), nil, aws.Int64(deviceIndex),
-				&ENIDescription, nil, want, 0)
+				&ENIDescription, nil, ipResourceCount)
 			if err != nil {
 				// TODO: Check if any clean up is required here for linux nodes only?
 				return assignedIPv4Resources, err
@@ -196,9 +205,10 @@ func (e *eniManager) CreateIPV4Resource(required int, resourceType config.Resour
 			}
 
 		case config.ResourceTypeIPv4Prefix:
+			ipResourceCount := &config.IPResourceCount{IPv4PrefixCount: want}
 			nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
 				aws.String(e.instance.SubnetID()), e.instance.InstanceSecurityGroup(), nil, aws.Int64(deviceIndex),
-				&ENIDescription, nil, 0, want)
+				&ENIDescription, nil, ipResourceCount)
 			if err != nil {
 				// TODO: Check if any clean up is required here for linux nodes only?
 				return assignedIPv4Resources, err

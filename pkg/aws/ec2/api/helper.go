@@ -76,15 +76,15 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
 type EC2APIHelper interface {
 	AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string, vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error)
 	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
-		secondaryPrivateIPCount int, ipV4PrefixCount int, interfaceType *string) (*ec2.NetworkInterface, error)
+		ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2.Subnet, error)
 	GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]*ec2.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error)
-	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
-		deviceIndex *int64, description *string, interfaceType *string, secondaryIPCount int, ipV4PrefixCount int) (*ec2.NetworkInterface, error)
+	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []*ec2.Tag, deviceIndex *int64,
+		description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*ec2.NetworkInterface, error)
 	AttachNetworkInterfaceToInstance(instanceId *string, nwInterfaceId *string, deviceIndex *int64) (*string, error)
 	SetDeleteOnTermination(attachmentId *string, eniId *string) error
 	DetachNetworkInterfaceFromInstance(attachmentId *string) error
@@ -97,7 +97,7 @@ type EC2APIHelper interface {
 
 // CreateNetworkInterface creates a new network interface
 func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
-	secondaryPrivateIPCount int, ipV4PrefixCount int, interfaceType *string) (*ec2.NetworkInterface, error) {
+	ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2.NetworkInterface, error) {
 	eniDescription := CreateENIDescriptionPrefix + *description
 
 	var ec2SecurityGroups []*string
@@ -127,14 +127,20 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 		SubnetId:          subnetId,
 		TagSpecifications: tagSpecifications,
 	}
-	if secondaryPrivateIPCount != 0 && ipV4PrefixCount != 0 {
-		return nil, fmt.Errorf("cannot specify both secondaryPrivateIPCount %v and ipV4PrefixCount %v", secondaryPrivateIPCount, ipV4PrefixCount)
-	}
 
-	if secondaryPrivateIPCount != 0 {
-		createInput.SecondaryPrivateIpAddressCount = aws.Int64(int64(secondaryPrivateIPCount))
-	} else if ipV4PrefixCount != 0 {
-		createInput.Ipv4PrefixCount = aws.Int64(int64(ipV4PrefixCount))
+	if ipResourceCount != nil {
+		secondaryPrivateIPCount := ipResourceCount.SecondaryIPv4Count
+		ipV4PrefixCount := ipResourceCount.IPv4PrefixCount
+
+		if secondaryPrivateIPCount != 0 && ipV4PrefixCount != 0 {
+			return nil, fmt.Errorf("cannot specify both secondaryPrivateIPCount %v and ipV4PrefixCount %v", secondaryPrivateIPCount, ipV4PrefixCount)
+		}
+
+		if secondaryPrivateIPCount != 0 {
+			createInput.SecondaryPrivateIpAddressCount = aws.Int64(int64(secondaryPrivateIPCount))
+		} else if ipV4PrefixCount != 0 {
+			createInput.Ipv4PrefixCount = aws.Int64(int64(ipV4PrefixCount))
+		}
 	}
 
 	if interfaceType != nil {
@@ -304,9 +310,9 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 // CreateAndAttachNetworkInterface creates and attaches the network interface to the instance. The function will
 // wait till the interface is successfully attached
 func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string,
-	tags []*ec2.Tag, deviceIndex *int64, description *string, interfaceType *string, secondaryIPCount int, ipV4PrefixCount int) (*ec2.NetworkInterface, error) {
+	tags []*ec2.Tag, deviceIndex *int64, description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*ec2.NetworkInterface, error) {
 
-	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, secondaryIPCount, ipV4PrefixCount, interfaceType)
+	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, ipResourceCount, interfaceType)
 	if err != nil {
 		return nil, err
 	}
@@ -461,17 +467,19 @@ func (h *ec2APIHelper) AssignIPv4ResourcesAndWaitTillReady(eniID string, resourc
 		return assignedResources, err
 	}
 
-	if assignPrivateIPOutput != nil && (assignPrivateIPOutput.AssignedPrivateIpAddresses != nil &&
-		len(assignPrivateIPOutput.AssignedPrivateIpAddresses) == 0 || assignPrivateIPOutput.AssignedIpv4Prefixes != nil &&
-		len(assignPrivateIPOutput.AssignedIpv4Prefixes) == 0) {
+	if (resourceType == config.ResourceNameIPAddress && assignPrivateIPOutput.AssignedPrivateIpAddresses != nil &&
+		len(assignPrivateIPOutput.AssignedPrivateIpAddresses) == 0) ||
+		(resourceType == config.ResourceTypeIPv4Prefix && assignPrivateIPOutput.AssignedIpv4Prefixes != nil &&
+			len(assignPrivateIPOutput.AssignedIpv4Prefixes) == 0) {
 		return assignedResources, fmt.Errorf("failed to create %v %s to eni %s", count, resourceType, eniID)
 	}
 
-	ErrIPResourceNotAttachedYet := fmt.Errorf("%v is not attached yet", resourceType)
+	ErrIPNotAttachedYet := fmt.Errorf("private IPv4 address is not attached yet")
+	ErrPrefixNotAttachedYet := fmt.Errorf("IPv4 prefix is not attached yet")
 
 	err = retry.OnError(waitForIPAttachment,
 		func(err error) bool {
-			if err == ErrIPResourceNotAttachedYet {
+			if err == ErrIPNotAttachedYet || err == ErrPrefixNotAttachedYet {
 				// Retry in case IPv4 Resources are not attached yet
 				return true
 			}
@@ -495,32 +503,30 @@ func (h *ec2APIHelper) AssignIPv4ResourcesAndWaitTillReady(eniID string, resourc
 						if _, ok := ipAddress[*ip.PrivateIpAddress]; !ok {
 							// Even if one IP is not assigned, set the error so that we only return only the IPs that
 							// are successfully assigned on the ENI
-							err = ErrIPResourceNotAttachedYet
+							err = ErrIPNotAttachedYet
 						} else {
 							assignedResources = append(assignedResources, *ip.PrivateIpAddress)
 						}
 					}
 					return err
-				} else {
-					if resourceType == config.ResourceTypeIPv4Prefix && interfaces[0].Ipv4Prefixes != nil {
-						// Get the map of IP prefixes returned by the describe network interface call
-						ipPrefixes := map[string]bool{}
-						for _, ipPrefix := range interfaces[0].Ipv4Prefixes {
-							ipPrefixes[*ipPrefix.Ipv4Prefix] = true
-						}
-						// Verify describe network interface returns all the IP prefixes that were assigned in the
-						// AssignPrivateIPAddresses call
-						for _, prefix := range assignPrivateIPOutput.AssignedIpv4Prefixes {
-							if _, ok := ipPrefixes[*prefix.Ipv4Prefix]; !ok {
-								// Even if one prefix is not assigned, set the error so that we only return the IP prefixes that
-								// are successfully assigned on the ENI
-								err = ErrIPResourceNotAttachedYet
-							} else {
-								assignedResources = append(assignedResources, *prefix.Ipv4Prefix)
-							}
-						}
-						return err
+				} else if resourceType == config.ResourceTypeIPv4Prefix && interfaces[0].Ipv4Prefixes != nil {
+					// Get the map of IP prefixes returned by the describe network interface call
+					ipPrefixes := map[string]bool{}
+					for _, ipPrefix := range interfaces[0].Ipv4Prefixes {
+						ipPrefixes[*ipPrefix.Ipv4Prefix] = true
 					}
+					// Verify describe network interface returns all the IP prefixes that were assigned in the
+					// AssignPrivateIPAddresses call
+					for _, prefix := range assignPrivateIPOutput.AssignedIpv4Prefixes {
+						if _, ok := ipPrefixes[*prefix.Ipv4Prefix]; !ok {
+							// Even if one prefix is not assigned, set the error so that we only return the IP prefixes that
+							// are successfully assigned on the ENI
+							err = ErrPrefixNotAttachedYet
+						} else {
+							assignedResources = append(assignedResources, *prefix.Ipv4Prefix)
+						}
+					}
+					return err
 				}
 			}
 			return err

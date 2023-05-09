@@ -109,6 +109,11 @@ var (
 		Ipv4Prefixes: []*ec2.Ipv4PrefixSpecification{{Ipv4Prefix: &prefix1}, {Ipv4Prefix: &prefix2}, {Ipv4Prefix: &prefix3}},
 	}
 	log = zap.New(zap.UseDevMode(true)).WithName("eni manager")
+
+	ipCountFor3     = &config.IPResourceCount{SecondaryIPv4Count: 3, IPv4PrefixCount: 0}
+	ipCountFor1     = &config.IPResourceCount{SecondaryIPv4Count: 1, IPv4PrefixCount: 0}
+	prefixCountFor3 = &config.IPResourceCount{SecondaryIPv4Count: 0, IPv4PrefixCount: 3}
+	prefixCountFor1 = &config.IPResourceCount{SecondaryIPv4Count: 0, IPv4PrefixCount: 1}
 )
 
 func createENIDetails(eniID string, remainingCapacity int) *eni {
@@ -151,13 +156,13 @@ func TestEni_InitResources(t *testing.T) {
 	// Capacity is 4 and already present 1, so remaining capacity = 4-1=3
 	expectedENIDetails2 := createENIDetails(eniID2, 3)
 
-	allIPs, allPrefixes, err := manager.InitResources(mockEc2APIHelper)
+	ipV4Resource, err := manager.InitResources(mockEc2APIHelper)
 
 	assert.NoError(t, err)
 	// Assert all the IPs are returned
-	assert.Equal(t, []string{ip1WithMask, ip2WithMask, ip3WithMask}, allIPs)
+	assert.Equal(t, []string{ip1WithMask, ip2WithMask, ip3WithMask}, ipV4Resource.PrivateIPv4Addresses)
 	// Assert all the prefixes are returned
-	assert.Equal(t, []string{prefix1}, allPrefixes)
+	assert.Equal(t, []string{prefix1}, ipV4Resource.IPv4Prefixes)
 	// Assert ENIs are added to the list of available ENIs
 	assert.Equal(t, []*eni{expectedENIDetails1, expectedENIDetails2}, manager.attachedENIs)
 	// Assert the ENI to IP mapping is as expected
@@ -176,7 +181,7 @@ func TestEni_InitResources_Error(t *testing.T) {
 
 	mockEc2APIHelper.EXPECT().GetInstanceNetworkInterface(&instanceID).Return(nwInterfaces, mockError)
 
-	_, _, err := manager.InitResources(mockEc2APIHelper)
+	_, err := manager.InitResources(mockEc2APIHelper)
 
 	assert.Error(t, mockError, err)
 }
@@ -308,9 +313,9 @@ func TestEniManager_CreateIPV4Resource_TypeIPV4Address_FromNewENI(t *testing.T) 
 
 	gomock.InOrder(
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-			&ENIDescription, nil, 3, 0).Return(networkInterface1, nil),
+			&ENIDescription, nil, ipCountFor3).Return(networkInterface1, nil),
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-			&ENIDescription, nil, 1, 0).Return(networkInterface2, nil),
+			&ENIDescription, nil, ipCountFor1).Return(networkInterface2, nil),
 	)
 
 	ips, err := manager.CreateIPV4Resource(4, config.ResourceTypeIPv4Address, mockEc2APIHelper, log)
@@ -343,7 +348,7 @@ func TestEniManager_CreateIPV4Resource_TypeIPV4Prefix_FromNewENI(t *testing.T) {
 	mockInstance.EXPECT().InstanceSecurityGroup().Return(instanceSG).Times(1)
 
 	mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-		&ENIDescription, nil, 0, 1).Return(networkInterface3, nil)
+		&ENIDescription, nil, prefixCountFor1).Return(networkInterface3, nil)
 
 	prefixes, err := manager.CreateIPV4Resource(1, config.ResourceTypeIPv4Prefix, mockEc2APIHelper, log)
 
@@ -375,9 +380,9 @@ func TestEniManager_CreateIPV4Resource_TypeIPV4Address_InBetweenENIFail(t *testi
 
 	gomock.InOrder(
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-			&ENIDescription, nil, 3, 0).Return(networkInterface1, nil),
+			&ENIDescription, nil, ipCountFor3).Return(networkInterface1, nil),
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-			&ENIDescription, nil, 1, 0).Return(nil, mockError),
+			&ENIDescription, nil, ipCountFor1).Return(nil, mockError),
 	)
 
 	ips, err := manager.CreateIPV4Resource(4, config.ResourceTypeIPv4Address, mockEc2APIHelper, log)
@@ -410,9 +415,9 @@ func TestEniManager_CreateIPV4Resource_TypeIPV4Prefix_InBetweenENIFail(t *testin
 
 	gomock.InOrder(
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-			&ENIDescription, nil, 0, 3).Return(networkInterface4, nil),
+			&ENIDescription, nil, prefixCountFor3).Return(networkInterface4, nil),
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
-			&ENIDescription, nil, 0, 1).Return(nil, mockError),
+			&ENIDescription, nil, prefixCountFor1).Return(nil, mockError),
 	)
 
 	prefixes, err := manager.CreateIPV4Resource(4, config.ResourceTypeIPv4Prefix, mockEc2APIHelper, log)
