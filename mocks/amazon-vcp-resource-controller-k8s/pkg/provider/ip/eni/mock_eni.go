@@ -21,6 +21,8 @@ import (
 	reflect "reflect"
 
 	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	config "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	eni "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	logr "github.com/go-logr/logr"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -48,41 +50,41 @@ func (m *MockENIManager) EXPECT() *MockENIManagerMockRecorder {
 	return m.recorder
 }
 
-// CreateIPV4Address mocks base method.
-func (m *MockENIManager) CreateIPV4Address(arg0 int, arg1 api.EC2APIHelper, arg2 logr.Logger) ([]string, error) {
+// CreateIPV4Resource mocks base method.
+func (m *MockENIManager) CreateIPV4Resource(arg0 int, arg1 config.ResourceType, arg2 api.EC2APIHelper, arg3 logr.Logger) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateIPV4Address", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "CreateIPV4Resource", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// CreateIPV4Address indicates an expected call of CreateIPV4Address.
-func (mr *MockENIManagerMockRecorder) CreateIPV4Address(arg0, arg1, arg2 interface{}) *gomock.Call {
+// CreateIPV4Resource indicates an expected call of CreateIPV4Resource.
+func (mr *MockENIManagerMockRecorder) CreateIPV4Resource(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateIPV4Address", reflect.TypeOf((*MockENIManager)(nil).CreateIPV4Address), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateIPV4Resource", reflect.TypeOf((*MockENIManager)(nil).CreateIPV4Resource), arg0, arg1, arg2, arg3)
 }
 
-// DeleteIPV4Address mocks base method.
-func (m *MockENIManager) DeleteIPV4Address(arg0 []string, arg1 api.EC2APIHelper, arg2 logr.Logger) ([]string, error) {
+// DeleteIPV4Resource mocks base method.
+func (m *MockENIManager) DeleteIPV4Resource(arg0 []string, arg1 config.ResourceType, arg2 api.EC2APIHelper, arg3 logr.Logger) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteIPV4Address", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "DeleteIPV4Resource", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// DeleteIPV4Address indicates an expected call of DeleteIPV4Address.
-func (mr *MockENIManagerMockRecorder) DeleteIPV4Address(arg0, arg1, arg2 interface{}) *gomock.Call {
+// DeleteIPV4Resource indicates an expected call of DeleteIPV4Resource.
+func (mr *MockENIManagerMockRecorder) DeleteIPV4Resource(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteIPV4Address", reflect.TypeOf((*MockENIManager)(nil).DeleteIPV4Address), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteIPV4Resource", reflect.TypeOf((*MockENIManager)(nil).DeleteIPV4Resource), arg0, arg1, arg2, arg3)
 }
 
 // InitResources mocks base method.
-func (m *MockENIManager) InitResources(arg0 api.EC2APIHelper) ([]string, error) {
+func (m *MockENIManager) InitResources(arg0 api.EC2APIHelper) (*eni.IPv4Resource, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "InitResources", arg0)
-	ret0, _ := ret[0].([]string)
+	ret0, _ := ret[0].(*eni.IPv4Resource)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
