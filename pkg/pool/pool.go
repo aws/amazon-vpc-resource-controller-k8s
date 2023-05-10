@@ -198,6 +198,9 @@ func (p *pool) ReSync(upstreamResourceGroupIDs []string) {
 					p.log.Info("removing resource from warm pool",
 						"group id", resource.GroupID, "resource id", resource.ResourceID)
 					p.warmResources[resource.GroupID] = append(p.warmResources[resource.GroupID][:i], p.warmResources[resource.GroupID][i+1:]...)
+					if len(p.warmResources[resource.GroupID]) == 0 {
+						delete(p.warmResources, resource.GroupID)
+					}
 				}
 			}
 
@@ -496,9 +499,18 @@ func (p *pool) Introspect() IntrospectResponse {
 		usedResources[k] = v
 	}
 
+	warmResources := make(map[string][]Resource)
+	for group, resources := range p.warmResources {
+		var resourcesCopy []Resource
+		for _, res := range resources {
+			resourcesCopy = append(resourcesCopy, res)
+		}
+		warmResources[group] = resourcesCopy
+	}
+
 	return IntrospectResponse{
 		UsedResources:    usedResources,
-		WarmResources:    p.warmResources,
+		WarmResources:    warmResources,
 		CoolingResources: p.coolDownQueue,
 	}
 }
