@@ -79,6 +79,19 @@ const (
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
 )
 
+type ResourceType string
+
+const (
+	ResourceTypeIPv4Address ResourceType = "IPv4Address"
+	ResourceTypeIPv4Prefix  ResourceType = "IPv4Prefix"
+)
+
+// IPResourceCount contains the arguments for number of IPv4 resources to request
+type IPResourceCount struct {
+	SecondaryIPv4Count int
+	IPv4PrefixCount    int
+}
+
 // Events metadata
 // They are used to identify valid events emitted from authorized agents
 const (
