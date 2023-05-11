@@ -23,7 +23,6 @@ import (
 	handler "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/handler"
 	provider "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	gomock "github.com/golang/mock/gomock"
-	healthz "sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 // MockResourceManager is a mock of ResourceManager interface.
@@ -47,20 +46,6 @@ func NewMockResourceManager(ctrl *gomock.Controller) *MockResourceManager {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockResourceManager) EXPECT() *MockResourceManagerMockRecorder {
 	return m.recorder
-}
-
-// GetCheckers mocks base method.
-func (m *MockResourceManager) GetCheckers() map[string]healthz.Checker {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetCheckers")
-	ret0, _ := ret[0].(map[string]healthz.Checker)
-	return ret0
-}
-
-// GetCheckers indicates an expected call of GetCheckers.
-func (mr *MockResourceManagerMockRecorder) GetCheckers() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCheckers", reflect.TypeOf((*MockResourceManager)(nil).GetCheckers))
 }
 
 // GetResourceHandler mocks base method.

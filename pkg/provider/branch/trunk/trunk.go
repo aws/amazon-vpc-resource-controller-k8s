@@ -188,7 +188,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		}
 
 		trunk, err := t.ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceID, aws.String(t.instance.SubnetID()),
-			t.instance.InstanceSecurityGroup(), nil, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, 0)
+			t.instance.CurrentInstanceSecurityGroup(), nil, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, 0)
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("create_trunk_eni").Inc()
 			log.Error(err, "failed to create trunk interface")
@@ -311,7 +311,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 
 	// If the security group is empty use the instance security group
 	if securityGroups == nil || len(securityGroups) == 0 {
-		securityGroups = t.instance.InstanceSecurityGroup()
+		securityGroups = t.instance.CurrentInstanceSecurityGroup()
 	}
 
 	var newENIs []*ENIDetails

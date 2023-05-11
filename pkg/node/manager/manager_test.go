@@ -38,15 +38,24 @@ import (
 )
 
 var (
-	instanceID    = "i-01234567890abcdef"
-	providerId    = "aws:///us-west-2c/" + instanceID
-	eniConfigName = "eni-config-name"
-	subnetID      = "subnet-id"
-	nodeName      = "ip-192-168-55-73.us-west-2.compute.internal"
+	instanceID      = "i-01234567890abcdef"
+	providerId      = "aws:///us-west-2c/" + instanceID
+	eniConfigName   = "eni-config-name"
+	subnetID        = "subnet-id"
+	nodeName        = "ip-192-168-55-73.us-west-2.compute.internal"
+	securityGroupId = "sg-1"
 
 	eniConfig = &v1alpha1.ENIConfig{
 		Spec: v1alpha1.ENIConfigSpec{
-			Subnet: subnetID,
+			SecurityGroups: []string{securityGroupId},
+			Subnet:         subnetID,
+		},
+	}
+
+	eniConfig_empty_sg = &v1alpha1.ENIConfig{
+		Spec: v1alpha1.ENIConfigSpec{
+			SecurityGroups: []string{},
+			Subnet:         subnetID,
 		},
 	}
 
@@ -244,6 +253,33 @@ func Test_AddNode_CustomNetworking(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, mock.Manager.dataStore, nodeName)
 	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
+}
+
+// Test adding node when custom networking is enabled but incorrect ENIConfig is defined; it should succeed
+func Test_AddNode_CustomNetworking_Incorrect_ENIConfig(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+
+	job := AsyncOperationJob{
+		op:       Init,
+		nodeName: nodeName,
+		node:     managedNode,
+	}
+
+	nodeWithENIConfig := v1Node.DeepCopy()
+	nodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
+	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig_empty_sg, nil)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
+
+	err := mock.Manager.AddNode(nodeName)
+	assert.NoError(t, err)
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
+
 }
 
 func Test_AddNode_CustomNetworking_NoENIConfig(t *testing.T) {

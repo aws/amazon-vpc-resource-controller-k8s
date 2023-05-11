@@ -597,7 +597,7 @@ func TestTrunkENI_InitTrunk_TrunkNotExists(t *testing.T) {
 	freeIndex := int64(2)
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockInstance.EXPECT().InstanceSecurityGroup().Return(SecurityGroups)
+	mockInstance.EXPECT().CurrentInstanceSecurityGroup().Return(SecurityGroups)
 	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]*awsEc2.InstanceNetworkInterface{}, nil)
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(freeIndex, nil)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId)
@@ -774,7 +774,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
-	mockInstance.EXPECT().InstanceSecurityGroup().Return(InstanceSecurityGroup)
+	mockInstance.EXPECT().CurrentInstanceSecurityGroup().Return(InstanceSecurityGroup)
 
 	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, InstanceSecurityGroup,
 		vlan1Tag, 0, nil).Return(BranchInterface1, nil)

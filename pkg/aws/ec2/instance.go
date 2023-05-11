@@ -43,14 +43,14 @@ type ec2Instance struct {
 	currentSubnetID string
 	// currentSubnetCIDRBlock can either point to the Subnet CIDR block for instance subnet or subnet from ENIConfig
 	currentSubnetCIDRBlock string
-	// currentInstanceSecurityGroup can either point to the instance security group or the security group in ENIConfig
+	// currentInstanceSecurityGroup can either point to the primary network interface security group or the security group in ENIConfig
 	currentInstanceSecurityGroup []string
 	// subnetMask is the mask of the subnet CIDR block
 	subnetMask string
 	// deviceIndexes is the list of indexes used by the EC2 Instance
 	deviceIndexes []bool
-	// instanceSecurityGroups is the security group used by the primary network interface
-	instanceSecurityGroups []string
+	// primaryENIGroups is the security group used by the primary network interface
+	primaryENISecurityGroups []string
 	// primaryENIID is the ID of the primary network interface of the instance
 	primaryENIID string
 	// newCustomNetworkingSubnetID is the SubnetID from the ENIConfig
@@ -72,7 +72,7 @@ type EC2Instance interface {
 	SubnetMask() string
 	SubnetCidrBlock() string
 	PrimaryNetworkInterfaceID() string
-	InstanceSecurityGroup() []string
+	CurrentInstanceSecurityGroup() []string
 	SetNewCustomNetworkingSpec(subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 }
@@ -140,11 +140,11 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		i.deviceIndexes[*index] = true
 
 		// Load the Security group of the primary network interface
-		if i.instanceSecurityGroups == nil && (nwInterface.PrivateIpAddress != nil && instance.PrivateIpAddress != nil && *nwInterface.PrivateIpAddress == *instance.PrivateIpAddress) {
+		if i.primaryENISecurityGroups == nil && (nwInterface.PrivateIpAddress != nil && instance.PrivateIpAddress != nil && *nwInterface.PrivateIpAddress == *instance.PrivateIpAddress) {
 			i.primaryENIID = *nwInterface.NetworkInterfaceId
 			// TODO: Group can change, should be refreshed each time we want to use this
 			for _, group := range nwInterface.Groups {
-				i.instanceSecurityGroups = append(i.instanceSecurityGroups, *group.GroupId)
+				i.primaryENISecurityGroups = append(i.primaryENISecurityGroups, *group.GroupId)
 			}
 		}
 	}
@@ -192,8 +192,9 @@ func (i *ec2Instance) PrimaryNetworkInterfaceID() string {
 	return i.primaryENIID
 }
 
-// InstanceSecurityGroup returns the instance security group of the primary network interface
-func (i *ec2Instance) InstanceSecurityGroup() []string {
+// CurrentInstanceSecurityGroup returns the current instance security
+// (primary network interface SG or SG specified in the ENIConfig
+func (i *ec2Instance) CurrentInstanceSecurityGroup() []string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
 
@@ -253,7 +254,12 @@ func (i *ec2Instance) updateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHel
 	// Custom networking is being used on node, point the current subnet ID, CIDR block and
 	// instance security group to the one's present in the Custom networking spec
 	if i.newCustomNetworkingSubnetID != "" {
-		i.currentInstanceSecurityGroup = i.newCustomNetworkingSecurityGroup
+		if i.newCustomNetworkingSecurityGroup != nil && len(i.newCustomNetworkingSecurityGroup) > 0 {
+			i.currentInstanceSecurityGroup = i.newCustomNetworkingSecurityGroup
+		} else {
+			// when security groups are not specified in ENIConfig, use the primary network interface SG as per custom networking documentation
+			i.currentInstanceSecurityGroup = i.primaryENISecurityGroups
+		}
 		// Only get the subnet CIDR block again if the subnet ID has changed
 		if i.newCustomNetworkingSubnetID != i.currentSubnetID {
 			customSubnet, err := ec2APIHelper.GetSubnet(&i.newCustomNetworkingSubnetID)
@@ -267,11 +273,11 @@ func (i *ec2Instance) updateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHel
 			i.currentSubnetCIDRBlock = *customSubnet.CidrBlock
 		}
 	} else {
-		// Custom networking in not being used, point to the instance security group and
+		// Custom networking in not being used, point to the primary network interface security group and
 		// subnet details
 		i.currentSubnetID = i.instanceSubnetID
 		i.currentSubnetCIDRBlock = i.instanceSubnetCidrBlock
-		i.currentInstanceSecurityGroup = i.instanceSecurityGroups
+		i.currentInstanceSecurityGroup = i.primaryENISecurityGroups
 	}
 
 	return nil
