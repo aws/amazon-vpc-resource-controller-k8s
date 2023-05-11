@@ -256,6 +256,7 @@ func Test_AddNode_CustomNetworking(t *testing.T) {
 }
 
 // Test adding node when custom networking is enabled but incorrect ENIConfig is defined; it should succeed
+// TODO: combine with other Test_AddNode_CustomNetworking tests
 func Test_AddNode_CustomNetworking_Incorrect_ENIConfig(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

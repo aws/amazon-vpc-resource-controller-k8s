@@ -119,7 +119,7 @@ func TestEc2Instance_LoadDetails(t *testing.T) {
 	assert.Equal(t, subnetCidrBlock, ec2Instance.SubnetCidrBlock())
 	assert.Equal(t, instanceType, ec2Instance.Type())
 	assert.Equal(t, []bool{true, false, true}, ec2Instance.deviceIndexes)
-	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.CurrentInstanceSecurityGroup())
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.CurrentInstanceSecurityGroups())
 	assert.Equal(t, primaryInterfaceID, ec2Instance.PrimaryNetworkInterfaceID())
 }
 
@@ -198,7 +198,7 @@ func TestEc2Instance_LoadDetails_SubnetPreLoaded(t *testing.T) {
 
 	// Set the custom networking subnet ID and CIDR block
 	ec2Instance.newCustomNetworkingSubnetID = customNWSubnetID
-	ec2Instance.newCustomNetworkingSecurityGroup = customNWSecurityGroups
+	ec2Instance.newCustomNetworkingSecurityGroups = customNWSecurityGroups
 
 	customSubnet := &ec2.Subnet{CidrBlock: &customNWSubnetCidr}
 
@@ -209,7 +209,7 @@ func TestEc2Instance_LoadDetails_SubnetPreLoaded(t *testing.T) {
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NoError(t, err)
 	assert.Equal(t, customNWSubnetID, ec2Instance.currentSubnetID)
-	assert.Equal(t, customNWSecurityGroups, ec2Instance.currentInstanceSecurityGroup)
+	assert.Equal(t, customNWSecurityGroups, ec2Instance.currentInstanceSecurityGroups)
 	assert.Equal(t, customNWSubnetCidr, ec2Instance.currentSubnetCIDRBlock)
 }
 
@@ -347,7 +347,7 @@ func TestEc2Instance_LoadDetails_InvalidCustomNetworkingConfiguration(t *testing
 	// Set the custom networking subnet ID and CIDR block
 	customNWSubnetID := "custom-networking"
 	ec2Instance.newCustomNetworkingSubnetID = customNWSubnetID
-	ec2Instance.newCustomNetworkingSecurityGroup = []string{}
+	ec2Instance.newCustomNetworkingSecurityGroups = []string{}
 
 	customNWSubnetCidr := "192.2.0.0/24"
 	customSubnet := &ec2.Subnet{CidrBlock: &customNWSubnetCidr}
@@ -360,6 +360,6 @@ func TestEc2Instance_LoadDetails_InvalidCustomNetworkingConfiguration(t *testing
 	assert.NoError(t, err)
 	assert.Equal(t, customNWSubnetID, ec2Instance.currentSubnetID)
 	// Expect the primary network interface security groups when ENIConfig SG is missing
-	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.currentInstanceSecurityGroup)
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.currentInstanceSecurityGroups)
 	assert.Equal(t, customNWSubnetCidr, ec2Instance.currentSubnetCIDRBlock)
 }

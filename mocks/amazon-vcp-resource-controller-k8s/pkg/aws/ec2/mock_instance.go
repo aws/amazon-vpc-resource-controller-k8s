@@ -47,18 +47,18 @@ func (m *MockEC2Instance) EXPECT() *MockEC2InstanceMockRecorder {
 	return m.recorder
 }
 
-// CurrentInstanceSecurityGroup mocks base method.
-func (m *MockEC2Instance) CurrentInstanceSecurityGroup() []string {
+// CurrentInstanceSecurityGroups mocks base method.
+func (m *MockEC2Instance) CurrentInstanceSecurityGroups() []string {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CurrentInstanceSecurityGroup")
+	ret := m.ctrl.Call(m, "CurrentInstanceSecurityGroups")
 	ret0, _ := ret[0].([]string)
 	return ret0
 }
 
-// CurrentInstanceSecurityGroup indicates an expected call of CurrentInstanceSecurityGroup.
-func (mr *MockEC2InstanceMockRecorder) CurrentInstanceSecurityGroup() *gomock.Call {
+// CurrentInstanceSecurityGroups indicates an expected call of CurrentInstanceSecurityGroups.
+func (mr *MockEC2InstanceMockRecorder) CurrentInstanceSecurityGroups() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentInstanceSecurityGroup", reflect.TypeOf((*MockEC2Instance)(nil).CurrentInstanceSecurityGroup))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentInstanceSecurityGroups", reflect.TypeOf((*MockEC2Instance)(nil).CurrentInstanceSecurityGroups))
 }
 
 // FreeDeviceIndex mocks base method.
