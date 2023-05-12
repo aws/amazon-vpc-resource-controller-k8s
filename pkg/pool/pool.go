@@ -46,8 +46,6 @@ type Pool interface {
 	ReSync(resources []string)
 	ReconcilePool() *worker.WarmPoolJob
 	ProcessCoolDownQueue() bool
-	SetToDraining() *worker.WarmPoolJob
-	SetToActive(warmPoolConfig *config.WarmPoolConfig) *worker.WarmPoolJob
 	Introspect() IntrospectResponse
 	IsManagedResource(resourceID string) bool
 }
