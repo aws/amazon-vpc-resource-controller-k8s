@@ -46,6 +46,8 @@ type Pool interface {
 	ReSync(resources []string)
 	ReconcilePool() *worker.WarmPoolJob
 	ProcessCoolDownQueue() bool
+	SetToDraining() *worker.WarmPoolJob
+	SetToActive(warmPoolConfig *config.WarmPoolConfig) *worker.WarmPoolJob
 	Introspect() IntrospectResponse
 	IsManagedResource(resourceID string) bool
 }
@@ -421,7 +423,7 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 
 	// Consider pending create as well so we don't create multiple subsequent create request
 	deviation := p.warmPoolConfig.DesiredSize - (numWarmResources + p.pendingCreate)
-	if p.isPDPool && p.warmPoolConfig.DesiredSize > 0 {
+	if p.isPDPool {
 		deviation = p.getPDDeviation()
 	}
 
@@ -497,6 +499,25 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 	log.V(1).Info("no need for reconciliation")
 
 	return &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}
+}
+
+// SetToDraining sets warm pool config to empty, which would force the pool to delete resources.
+func (p *pool) SetToDraining() *worker.WarmPoolJob {
+
+	p.lock.Lock()
+	p.warmPoolConfig = &config.WarmPoolConfig{}
+	p.lock.Unlock()
+
+	return p.ReconcilePool()
+}
+
+// SetToActive sets warm pool config to valid values, which would force the pool to request resources.
+func (p *pool) SetToActive(warmPoolConfig *config.WarmPoolConfig) *worker.WarmPoolJob {
+	p.lock.Lock()
+	p.warmPoolConfig = warmPoolConfig
+	p.lock.Unlock()
+
+	return p.ReconcilePool()
 }
 
 func (p *pool) Introspect() IntrospectResponse {

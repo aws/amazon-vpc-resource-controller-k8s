@@ -56,7 +56,6 @@ var (
 			{GroupID: grp2, ResourceID: res3},
 		},
 		grp3: {
-
 			{GroupID: grp3, ResourceID: res4},
 			{GroupID: grp3, ResourceID: res5},
 			{GroupID: grp3, ResourceID: res6},
@@ -529,6 +528,52 @@ func TestPool_Introspect(t *testing.T) {
 	assert.True(t, reflect.DeepEqual(warmPool.usedResources, resp.UsedResources))
 	assert.True(t, reflect.DeepEqual(warmPool.warmResources, resp.WarmResources))
 	assert.ElementsMatch(t, warmPool.coolDownQueue, resp.CoolingResources)
+}
+
+func TestPool_SetToDraining_SecondaryIP_Pool(t *testing.T) {
+	warmPool := getMockPool(poolConfig, usedResources, warmPoolResources, 7, false)
+	job := warmPool.SetToDraining()
+
+	// only 1 warm resource, i.e. secondary IP address
+	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationDeleted, Resources: []string{"res-3"}, ResourceCount: 1}, job)
+	assert.Equal(t, 1, warmPool.pendingDelete)
+}
+
+func TestPool_SetToDraining_PD_Pool(t *testing.T) {
+	usedResourcesPrefix := map[string]Resource{
+		pod1: {GroupID: grp1, ResourceID: res1},
+		pod2: {GroupID: grp2, ResourceID: res2},
+		pod3: {GroupID: grp3, ResourceID: res4},
+	}
+	warmPool := getMockPool(poolConfig, usedResourcesPrefix, warmPoolResourcesPrefix, 224, true)
+	job := warmPool.SetToDraining()
+
+	// there's only 1 free group grp-7, so the job is deleting 1 prefix and pendingDelete is 16 ips
+	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationDeleted, Resources: []string{"grp-7"}, ResourceCount: 1}, job)
+	assert.Equal(t, 16, warmPool.pendingDelete)
+}
+
+func TestPool_SetToActive_SecondaryIP_Pool(t *testing.T) {
+	emptyConfig := &config.WarmPoolConfig{}
+	warmPool := getMockPool(emptyConfig, usedResources, nil, 7, false)
+	newConfig := &config.WarmPoolConfig{DesiredSize: config.IPv4DefaultWPSize, MaxDeviation: config.IPv4DefaultMaxDev}
+	job := warmPool.SetToActive(newConfig)
+
+	// default desired size is 3
+	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationCreate, ResourceCount: 3}, job)
+	assert.Equal(t, 3, warmPool.pendingCreate)
+}
+
+func TestPool_SetToActive_PD_Pool(t *testing.T) {
+	emptyConfig := &config.WarmPoolConfig{}
+	warmPool := getMockPool(emptyConfig, nil, nil, 224, true)
+	// note that without passing any values for warm targets, the pool still uses its default values
+	newConfig := &config.WarmPoolConfig{MaxDeviation: config.IPv4PDDefaultMaxDev}
+	job := warmPool.SetToActive(newConfig)
+
+	// no warm resource, will allocate 1 prefix to satisfy default warm pool config
+	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationCreate, ResourceCount: 1}, job)
+	assert.Equal(t, 16, warmPool.pendingCreate)
 }
 
 func TestIsManagedResource(t *testing.T) {
