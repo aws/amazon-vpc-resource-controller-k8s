@@ -247,7 +247,7 @@ func TestEniManager_CreateIPV4Address_FromNewENI(t *testing.T) {
 	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
 	mockInstance.EXPECT().SubnetID().Return(subnetID).Times(2)
 	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(4)
-	mockInstance.EXPECT().InstanceSecurityGroup().Return(instanceSG).Times(2)
+	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(instanceSG).Times(2)
 
 	gomock.InOrder(
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
@@ -283,7 +283,7 @@ func TestEniManager_CreateIPV4Address_InBetweenENIFail(t *testing.T) {
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int64(3), nil).Times(2)
 	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
 	mockInstance.EXPECT().SubnetID().Return(subnetID).Times(2)
-	mockInstance.EXPECT().InstanceSecurityGroup().Return(instanceSG).Times(2)
+	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(instanceSG).Times(2)
 
 	gomock.InOrder(
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
