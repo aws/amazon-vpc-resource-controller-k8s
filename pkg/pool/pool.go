@@ -62,7 +62,7 @@ type pool struct {
 	// usedResources is the key value pair of the owner id to the resource id
 	usedResources map[string]Resource
 	// warmResources is the map of group id to a list of free resources available to be allocated to the pods
-	warmResources map[string][]Resource // use map  so that assign/free is fast, despite resync/reconsile always slow
+	warmResources map[string][]Resource
 	// coolDownQueue is the resources that sit in the queue for the cool down period
 	coolDownQueue []CoolDownResource
 	// pendingCreate represents the number of resources being created asynchronously

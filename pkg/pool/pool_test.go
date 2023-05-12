@@ -31,14 +31,6 @@ var (
 		ReservedSize: 1,
 		MaxDeviation: 1,
 	}
-	//pdPoolConfig = &config.WarmPoolConfig{
-	//	DesiredSize:      1,
-	//	ReservedSize:     1,
-	//	MaxDeviation:     1,
-	//	WarmIPTarget:     3,
-	//	MinIPTarget:      1,
-	//	WarmPrefixTarget: 1,
-	//}
 
 	nodeName = "node-name"
 
