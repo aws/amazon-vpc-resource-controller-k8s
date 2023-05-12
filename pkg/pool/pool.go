@@ -15,8 +15,6 @@ package pool
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -34,7 +32,10 @@ var (
 	ErrResourceAlreadyAssigned    = fmt.Errorf("resource is already assigned to the requestor")
 	ErrResourceDoesntExist        = fmt.Errorf("requested resource doesn't exist in used pool")
 	ErrIncorrectResourceOwner     = fmt.Errorf("resource doesn't belong to the requestor")
-	NumIPv4AddrPerPrefix          = 16
+)
+
+const (
+	NumIPv4AddrPerPrefix = 16
 )
 
 type Pool interface {
@@ -137,7 +138,7 @@ func (p *pool) ReSync(upstreamResourceGroupIDs []string) {
 		}
 
 		if p.isPDPool {
-			resourceIDs, err := DeconstructIPsFromPrefix(resourceGroupID)
+			resourceIDs, err := utils.DeconstructIPsFromPrefix(resourceGroupID)
 			if err != nil {
 				p.log.Error(err, "failed to sync upstream resource", "resource group id", resourceGroupID, "err", err)
 				continue
@@ -166,10 +167,10 @@ func (p *pool) ReSync(upstreamResourceGroupIDs []string) {
 	}
 
 	// resources that are present upstream but missing in the pool
-	newResources := differenceResourceList(upstreamResource, localResources)
+	newResources := utils.Difference(upstreamResource, localResources)
 
 	// resources that are deleted from upstream but still present in the pool
-	deletedResources := differenceResourceList(localResources, upstreamResource)
+	deletedResources := utils.Difference(localResources, upstreamResource)
 
 	if len(newResources) == 0 && len(deletedResources) == 0 {
 		p.log.Info("local and upstream state is in sync")
@@ -198,6 +199,7 @@ func (p *pool) ReSync(upstreamResourceGroupIDs []string) {
 					p.log.Info("removing resource from warm pool",
 						"group id", resource.GroupID, "resource id", resource.ResourceID)
 					p.warmResources[resource.GroupID] = append(p.warmResources[resource.GroupID][:i], p.warmResources[resource.GroupID][i+1:]...)
+					// if the removed resource is the only one in the group, then delete the resource group from warm pool
 					if len(p.warmResources[resource.GroupID]) == 0 {
 						delete(p.warmResources, resource.GroupID)
 					}
@@ -261,11 +263,10 @@ func (p *pool) AssignResource(requesterID string) (resourceID string, shouldReco
 
 	// Add the resource in the used resource key-value pair
 	p.usedResources[requesterID] = resource
-	resourceID = resource.ResourceID
 	p.log.V(1).Info("assigned resource",
-		"resource id", resourceID, "requester id", requesterID)
+		"resource id", resource.ResourceID, "requester id", requesterID)
 
-	return resourceID, true, nil
+	return resource.ResourceID, true, nil
 }
 
 func (p *pool) GetAssignedResource(requesterID string) (resourceID string, ownsResource bool) {
@@ -327,7 +328,7 @@ func (p *pool) UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldRecon
 			resourceIDs := []string{resourceGroup}
 			if p.isPDPool {
 				var err error
-				if resourceIDs, err = DeconstructIPsFromPrefix(resourceGroup); err != nil {
+				if resourceIDs, err = utils.DeconstructIPsFromPrefix(resourceGroup); err != nil {
 					log.Error(err, "failed to deconstruct prefix into valid IPs", "prefix", resourceGroup)
 				}
 			}
@@ -455,27 +456,35 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 
 		var resourceToDelete []string
 		numToDelete := deviation
-		for numToDelete > 0 {
-			numFreeGroups, freeResourceGroups := p.findFreeGroup()
-			if numFreeGroups == 0 {
-				log.Info("no warm resources to delete", "deviation", deviation, "numToDelete", numToDelete)
-				break
+		if numToDelete > 0 {
+			var freeResourceGroups []string
+			if p.isPDPool {
+				// for prefix IP pool, each resource group is a /28 IPv4 prefix, which contains 16 IPv4 addresses
+				freeResourceGroups = findFreeGroup(p.warmResources, NumIPv4AddrPerPrefix)
+			} else {
+				// for secondary IP pool, each resource group only contains 1 IPv4 address
+				freeResourceGroups = findFreeGroup(p.warmResources, 1)
 			}
 
-			// Remove resources to be deleted form the warm pool
-			for _, groupID := range freeResourceGroups {
-				if numToDelete <= 0 {
-					break
+			if len(freeResourceGroups) > 0 {
+				// Remove resources to be deleted from the warm pool
+				for _, groupID := range freeResourceGroups {
+					if numToDelete <= 0 {
+						break
+					}
+					log.Info("removing free resource group from warm pool", "group id", groupID,
+						"# resources deleted", p.warmResources[groupID])
+					resourceToDelete = append(resourceToDelete, groupID)
+					numToDelete -= len(p.warmResources[groupID])
+					delete(p.warmResources, groupID)
 				}
-				log.Info("removing free resource group from warm pool", "group id", groupID)
-				resourceToDelete = append(resourceToDelete, groupID)
-				numToDelete -= len(p.warmResources[groupID])
-				delete(p.warmResources, groupID)
+			} else {
+				log.Info("no warm resources to delete", "deviation", deviation, "numToDelete", numToDelete)
 			}
 		}
 
 		// Increment pending to the number of resource being deleted, once successfully deleted the count can be decremented
-		p.pendingDelete += deviation - numToDelete
+		p.pendingDelete += deviation
 
 		if len(resourceToDelete) > 0 {
 			// Submit the job to delete resources
@@ -515,10 +524,11 @@ func (p *pool) Introspect() IntrospectResponse {
 	}
 }
 
-// IsManagedResource checks if the IPv4 address is managed by the handler
+// IsManagedResource checks if the resource is managed by the handler
 func (p *pool) IsManagedResource(resourceID string) bool {
 	p.lock.RLock()
 	defer p.lock.RUnlock()
+
 	for _, resource := range p.usedResources {
 		if resource.ResourceID == resourceID {
 			return true
@@ -527,7 +537,17 @@ func (p *pool) IsManagedResource(resourceID string) bool {
 	return false
 }
 
-// findMinGroup finds the resource group with the lowest number of resources, and returns the group id along with its count of resources
+// findFreeGroup finds groups that have all possible resources free to be allocated or deleted, and returns their group ids
+func findFreeGroup(resourceGroups map[string][]Resource, numResourcesPerGroup int) (freeGroupIDs []string) {
+	for groupID, resources := range resourceGroups {
+		if resources != nil && len(resources) == numResourcesPerGroup {
+			freeGroupIDs = append(freeGroupIDs, groupID)
+		}
+	}
+	return
+}
+
+// findMinGroup finds the resource group with the fewest resources, and returns the group id along with its count of resources
 func findMinGroup(resourceGroups map[string][]Resource) (group string, minCount int) {
 	for groupID, resources := range resourceGroups {
 		if resources == nil || len(resources) == 0 {
@@ -540,7 +560,6 @@ func findMinGroup(resourceGroups map[string][]Resource) (group string, minCount 
 			group = groupID
 		}
 	}
-
 	return
 }
 
@@ -585,43 +604,43 @@ func (p *pool) assignResourceFromAnyGroup() Resource {
 func (p *pool) getPDDeviation() int {
 	deviationPrefix := 0
 
+	// if target value is valid, then set defined flag to true; else set it to default value
 	var isWarmIPTargetDefined, isMinIPTargetDefined, isWarmPrefixTargetDefined bool
 	if p.warmPoolConfig.WarmIPTarget > 0 {
 		isWarmIPTargetDefined = true
+	} else {
+		p.warmPoolConfig.WarmIPTarget = config.IPv4PDDefaultWarmIPTargetSize
 	}
+
 	if p.warmPoolConfig.MinIPTarget > 0 {
 		isMinIPTargetDefined = true
+	} else {
+		p.warmPoolConfig.MinIPTarget = config.IPv4PDDefaultMinIPTargetSize
 	}
+
 	if p.warmPoolConfig.WarmPrefixTarget > 0 {
 		isWarmPrefixTargetDefined = true
+	} else {
+		p.warmPoolConfig.WarmPrefixTarget = config.IPv4PDDefaultWarmPrefixTargetSize
 	}
 
 	numExistingWarmResources := numResourcesFromMap(p.warmResources)
 
-	// if neither WarmIPTarget nor MinIPTarget defined but WarmPrefixTarget is defined, calculate deviation in number of prefixes first
+	// if neither WarmIPTarget nor MinIPTarget defined but WarmPrefixTarget is defined, return deviation needed for warm prefix target
 	if !isWarmIPTargetDefined && !isMinIPTargetDefined && isWarmPrefixTargetDefined {
-		// a prefix is free if it has all possible IPs available for allocation, e.g. for /28 prefix it means 16 IPs
-		numFreePrefix, _ := p.findFreeGroup()
-		deviationPrefix = p.warmPoolConfig.WarmPrefixTarget - numFreePrefix - p.pendingCreate/NumIPv4AddrPerPrefix
-		p.log.Info("calculating IP deviation for prefix pool", "p.warmPoolConfig", p.warmPoolConfig,
-			"numFreePrefix", numFreePrefix, "existing warm resources", numExistingWarmResources, "p.pendingCreate", p.pendingCreate,
+		freePrefixes := findFreeGroup(p.warmResources, NumIPv4AddrPerPrefix)
+		deviationPrefix = p.warmPoolConfig.WarmPrefixTarget - len(freePrefixes) - utils.CeilDivision(p.pendingCreate, NumIPv4AddrPerPrefix)
+
+		p.log.Info("calculating IP deviation for prefix pool to satisfy warm prefix target", "warm prefix target",
+			p.warmPoolConfig.WarmPrefixTarget, "numFreePrefix", len(freePrefixes), "p.pendingCreate", p.pendingCreate,
 			"p.pendingDelete", p.pendingDelete, "deviation", deviationPrefix*NumIPv4AddrPerPrefix)
 
 		return deviationPrefix * NumIPv4AddrPerPrefix
 	}
 
-	// if WarmIPTarget is not defined, use its default value
-	if !isWarmIPTargetDefined {
-		p.warmPoolConfig.WarmIPTarget = config.IPv4PDDefaultWarmIPTargetSize
-	}
-	// if MinIPTarget is not defined, use its default value
-	if !isMinIPTargetDefined {
-		p.warmPoolConfig.MinIPTarget = config.IPv4PDDefaultMinIPTargetSize
-	}
-
 	// total resources in pool include used resources, warm resources, and pendingCreate (to avoid duplicate request)
 	numTotalResources := len(p.usedResources) + p.pendingCreate + numExistingWarmResources
-	// number of prefixes already allocated to the pool
+	// number of existing prefixes
 	numCurrPrefix := utils.CeilDivision(numTotalResources, 16)
 
 	// number of total resources required to meet WarmIPTarget
@@ -648,78 +667,11 @@ func (p *pool) getPDDeviation() int {
 	return deviationPrefix * NumIPv4AddrPerPrefix
 }
 
-// findFreeGroup finds groups that have all possibles resources free and returns the number of such groups along with group ids
-func (p *pool) findFreeGroup() (numFreeGroups int, freeGroupIDs []string) {
-	// for 2nd secondary pool, each resource group only contains 1 resource
-	numResourcePerGroup := 1
-	if p.isPDPool {
-		// for IPv4 prefix pool, each resource group is a /28 prefix, which contains 16 resources, i.e. IPv4 addresses
-		numResourcePerGroup = NumIPv4AddrPerPrefix
-	}
-
-	// find resource groups that have all possible resources free to allocate/release
-	for groupID, resources := range p.warmResources {
-		if resources != nil && len(resources) == numResourcePerGroup {
-			freeGroupIDs = append(freeGroupIDs, groupID)
-			numFreeGroups++
-		}
-	}
-	return
-}
-
-// resources in a, but not in b
-func differenceResourceList(a, b []Resource) (diff []Resource) {
-	if a == nil || len(a) == 0 || b == nil || len(b) == 0 {
-		return
-	}
-
-	m := make(map[Resource]struct{})
-
-	for _, item := range b {
-		m[item] = struct{}{}
-	}
-	for _, item := range a {
-		if _, ok := m[item]; !ok {
-			diff = append(diff, item)
-		}
-	}
-	return
-}
-
 // numResourcesFromMap returns total number of resources from a map of list of resources indexed by group id
 func numResourcesFromMap(resourceGroups map[string][]Resource) int {
 	count := 0
 	for _, resources := range resourceGroups {
 		count += len(resources)
 	}
-
 	return count
-}
-
-// DeconstructIPsFromPrefix deconstructs a /28 IPv4 prefix into a list of /32 IPv4 addresses
-func DeconstructIPsFromPrefix(prefix string) ([]string, error) {
-	var deconstructedIPs []string
-	index := strings.Index(prefix, "/")
-	if index < 0 {
-		return nil, fmt.Errorf("invalid IPv4 prefix %v", prefix)
-	}
-
-	addr := strings.Split(prefix[:index], ".")
-	networkAddr := addr[0] + "." + addr[1] + "." + addr[2] + "."
-
-	mask, err := strconv.Atoi(prefix[index+1:])
-	if err != nil {
-		return nil, err
-	}
-	numOfAddresses := (32 - mask) * 4
-
-	for i := 0; i < numOfAddresses; i++ {
-		hostAddr, err := strconv.Atoi(addr[3])
-		if err != nil {
-			return nil, err
-		}
-		ipAddr := networkAddr + strconv.Itoa(hostAddr+i) + "/32"
-		deconstructedIPs = append(deconstructedIPs, ipAddr)
-	}
-	return deconstructedIPs, nil
 }

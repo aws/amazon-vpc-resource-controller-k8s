@@ -31,6 +31,14 @@ var (
 		ReservedSize: 1,
 		MaxDeviation: 1,
 	}
+	//pdPoolConfig = &config.WarmPoolConfig{
+	//	DesiredSize:      1,
+	//	ReservedSize:     1,
+	//	MaxDeviation:     1,
+	//	WarmIPTarget:     3,
+	//	MinIPTarget:      1,
+	//	WarmPrefixTarget: 1,
+	//}
 
 	nodeName = "node-name"
 
@@ -38,12 +46,48 @@ var (
 	pod2 = "default/pod-2"
 	pod3 = "test/pod-3"
 
-	//grp1, grp2, grp3, grp4, grp5, grp6, grp7 = "grp-1", "grp-2", "grp-3", "grp-4", "grp-5", "grp-6", "grp-7"
-	res1, res2, res3, res4, res5, res6, res7 = "res-1", "res-2", "res-3", "res-4", "res-5", "res-6", "res-7"
-
-	warmPoolResources = map[string][]Resource{
+	grp1, grp2, grp3, grp4, grp5, grp6, grp7              = "grp-1", "grp-2", "grp-3", "grp-4", "grp-5", "grp-6", "grp-7"
+	res1, res2, res3, res4, res5, res6, res7, res8        = "res-1", "res-2", "res-3", "res-4", "res-5", "res-6", "res-7", "res-8"
+	res9, res10, res11, res12, res13, res14, res15, res16 = "res-9", "res-10", "res-11", "res-12", "res-13", "res-14", "res-15", "res-16"
+	warmPoolResources                                     = map[string][]Resource{
 		res3: {
 			{GroupID: res3, ResourceID: res3},
+		},
+	}
+
+	warmPoolResourcesPrefix = map[string][]Resource{
+		grp1: {
+			{GroupID: grp1, ResourceID: res1},
+		},
+		grp2: {
+			{GroupID: grp2, ResourceID: res2},
+			{GroupID: grp2, ResourceID: res3},
+		},
+		grp3: {
+
+			{GroupID: grp3, ResourceID: res4},
+			{GroupID: grp3, ResourceID: res5},
+			{GroupID: grp3, ResourceID: res6},
+		},
+		grp4: {},
+		grp7: {
+			{GroupID: grp7, ResourceID: res1}, {GroupID: grp7, ResourceID: res2}, {GroupID: grp7, ResourceID: res3},
+			{GroupID: grp7, ResourceID: res4}, {GroupID: grp7, ResourceID: res5}, {GroupID: grp7, ResourceID: res6},
+			{GroupID: grp7, ResourceID: res7}, {GroupID: grp7, ResourceID: res8}, {GroupID: grp7, ResourceID: res9},
+			{GroupID: grp7, ResourceID: res10}, {GroupID: grp7, ResourceID: res11}, {GroupID: grp7, ResourceID: res12},
+			{GroupID: grp7, ResourceID: res13}, {GroupID: grp7, ResourceID: res14}, {GroupID: grp7, ResourceID: res15},
+			{GroupID: grp7, ResourceID: res16},
+		},
+	}
+
+	warmPoolResourcesSameCount = map[string][]Resource{
+		grp5: {
+			{GroupID: grp5, ResourceID: res1},
+			{GroupID: grp5, ResourceID: res2},
+		},
+		grp6: {
+			{GroupID: grp6, ResourceID: res3},
+			{GroupID: grp6, ResourceID: res4},
 		},
 	}
 
@@ -493,4 +537,230 @@ func TestPool_Introspect(t *testing.T) {
 	assert.True(t, reflect.DeepEqual(warmPool.usedResources, resp.UsedResources))
 	assert.True(t, reflect.DeepEqual(warmPool.warmResources, resp.WarmResources))
 	assert.ElementsMatch(t, warmPool.coolDownQueue, resp.CoolingResources)
+}
+
+func TestIsManagedResource(t *testing.T) {
+	warmPool := getMockPool(poolConfig, usedResources, nil, 7, false)
+	pdWarmPool := getMockPool(poolConfig, nil, nil, 7, true)
+
+	assert.True(t, warmPool.IsManagedResource(res1))
+	assert.False(t, warmPool.IsManagedResource(res3))
+	assert.False(t, pdWarmPool.IsManagedResource(res1))
+}
+
+func TestFindFreeGroup(t *testing.T) {
+	groupIDs := findFreeGroup(warmPoolResources, 1)
+	assert.ElementsMatch(t, []string{res3}, groupIDs)
+
+	// empty warm pool should return empty group id since no group has resource
+	groupIDs = findFreeGroup(nil, 1)
+	assert.ElementsMatch(t, []string{}, groupIDs)
+
+	// grp3 with 3 resources is deemed free, the others don't have enough resources available
+	groupIDs = findFreeGroup(warmPoolResourcesPrefix, 3)
+	assert.ElementsMatch(t, []string{grp3}, groupIDs)
+}
+
+func TestFindMinGroup(t *testing.T) {
+	// should not return grp4 since empty resource group is ignored
+	groupID, count := findMinGroup(warmPoolResourcesPrefix)
+	assert.Equal(t, grp1, groupID)
+	assert.Equal(t, 1, count)
+
+	// since grp5 and grp6 have same number of resources, it will return one of them
+	_, count = findMinGroup(warmPoolResourcesSameCount)
+	assert.Equal(t, 2, count)
+}
+
+func TestAssignResourceFromAnyGroup_SecondaryIP_Pool(t *testing.T) {
+	warmPool := getMockPool(poolConfig, usedResources, warmPoolResources, 7, false)
+	resource := warmPool.assignResourceFromAnyGroup()
+	// since there's only one resource in the map, we can assert which resource is returned
+	assert.Equal(t, Resource{GroupID: res3, ResourceID: res3}, resource)
+}
+
+func TestAssignResourceFromAnyGroup_PD_Pool(t *testing.T) {
+	warmPool := getMockPool(poolConfig, usedResources, warmPoolResourcesPrefix, 7, true)
+	resource := warmPool.assignResourceFromAnyGroup()
+	// since it can assign any resource from the map, it's hard to assert which resource is assigned
+	assert.NotNil(t, resource)
+	assert.Equal(t, numResourcesFromMap(warmPoolResourcesPrefix)-1, numResourcesFromMap(warmPool.warmResources))
+}
+
+func TestAssignResourceFromMinGroup_SecondaryIP_Pool(t *testing.T) {
+	warmPool := getMockPool(poolConfig, usedResources, warmPoolResources, 7, false)
+	resource := warmPool.assignResourceFromMinGroup()
+	// res3 is the min group with only one resource free
+	assert.Equal(t, Resource{GroupID: res3, ResourceID: res3}, resource)
+}
+
+func TestAssignResourceFromMinGroup_PD_Pool(t *testing.T) {
+	warmPool := getMockPool(poolConfig, usedResources, warmPoolResourcesPrefix, 7, true)
+	resource := warmPool.assignResourceFromMinGroup()
+	// grp1 is the min group with only one resource free
+	assert.Equal(t, Resource{GroupID: grp1, ResourceID: res1}, resource)
+
+	// next min group is grp2 with 2 resources free
+	resource2 := warmPool.assignResourceFromMinGroup()
+	assert.Equal(t, grp2, resource2.GroupID)
+
+	resource3 := warmPool.assignResourceFromMinGroup()
+	assert.Equal(t, grp2, resource3.GroupID)
+
+	// next min group is grp3 with 3 resources free
+	resource4 := warmPool.assignResourceFromMinGroup()
+	assert.Equal(t, grp3, resource4.GroupID)
+}
+
+func TestGetPDDeviation_TargetNotSet(t *testing.T) {
+	// since no target is specified, will use default values here
+	pdPool := getMockPool(poolConfig, nil, nil, 224, true)
+	deviation := pdPool.getPDDeviation()
+
+	// pool is empty, default warm ip target is 1, default minimum ip target is 3
+	assert.Equal(t, 16, deviation)
+}
+
+func TestGetPDDeviation_InvalidTarget_Zero(t *testing.T) {
+	poolConfig.MinIPTarget = 0
+	poolConfig.WarmIPTarget = 0
+	poolConfig.WarmPrefixTarget = 0
+	pdPool := getMockPool(poolConfig, nil, nil, 224, true)
+
+	deviation := pdPool.getPDDeviation()
+
+	// since invalid target is specified, will use default values here
+	assert.Equal(t, config.IPv4PDDefaultWarmIPTargetSize, pdPool.warmPoolConfig.WarmIPTarget)
+	assert.Equal(t, config.IPv4PDDefaultMinIPTargetSize, pdPool.warmPoolConfig.MinIPTarget)
+	assert.Equal(t, config.IPv4PDDefaultWarmPrefixTargetSize, pdPool.warmPoolConfig.WarmPrefixTarget)
+	// pool is empty, need 1 more prefix (i.e. 16 ips) to satisfy the default targets
+	assert.Equal(t, 16, deviation)
+}
+
+func TestGetPDDeviation_InvalidTarget_Negative(t *testing.T) {
+	poolConfig.MinIPTarget = -20
+	poolConfig.WarmIPTarget = -10
+	poolConfig.WarmPrefixTarget = -100
+	pdPool := getMockPool(poolConfig, nil, nil, 7, false)
+
+	deviation := pdPool.getPDDeviation()
+
+	// since invalid target is specified, will use default values here
+	assert.Equal(t, config.IPv4PDDefaultWarmIPTargetSize, pdPool.warmPoolConfig.WarmIPTarget)
+	assert.Equal(t, config.IPv4PDDefaultMinIPTargetSize, pdPool.warmPoolConfig.MinIPTarget)
+	assert.Equal(t, config.IPv4PDDefaultWarmPrefixTargetSize, pdPool.warmPoolConfig.WarmPrefixTarget)
+	// pool is empty, need 1 more prefix (i.e. 16 ips) to satisfy the default targets
+	assert.Equal(t, 16, deviation)
+}
+
+func TestGetPDDeviation_WarmPrefixTarget_NeedMore(t *testing.T) {
+	// since min ip target and warm ip target are 0, warm prefix target is effective
+	poolConfig.MinIPTarget = 0
+	poolConfig.WarmIPTarget = 0
+	poolConfig.WarmPrefixTarget = 2
+	pdPool := getMockPool(poolConfig, usedResources, warmPoolResourcesPrefix, 224, true)
+
+	deviation := pdPool.getPDDeviation()
+
+	// since 1 prefix free, need 1 more prefix to satisfy the warm prefix target of 2
+	assert.Equal(t, 1, len(findFreeGroup(warmPoolResourcesPrefix, NumIPv4AddrPerPrefix)))
+	assert.Equal(t, 16, deviation)
+}
+
+func TestGetPDDeviation_MinIPTarget_NeedLess(t *testing.T) {
+	poolConfig.MinIPTarget = 10
+	poolConfig.WarmIPTarget = 0
+	poolConfig.WarmPrefixTarget = 0
+	pdPool := getMockPool(poolConfig, nil, warmPoolResourcesPrefix, 224, true)
+	deviation := pdPool.getPDDeviation()
+	// currently 22 warm resources, min ip target needs 10 (1 prefix) - 22 (2 prefix) = -1 prefix changed, which is -16 deviation in ips
+	assert.Equal(t, -16, deviation)
+}
+
+func TestGetPDDeviation_MinIPTarget_NeedLess_NoChange(t *testing.T) {
+	poolConfig.MinIPTarget = 20
+	poolConfig.WarmIPTarget = 0
+	poolConfig.WarmPrefixTarget = 0
+	pdPool := getMockPool(poolConfig, nil, warmPoolResourcesPrefix, 224, true)
+	deviation := pdPool.getPDDeviation()
+	// currently 22 warm resources, min ip target needs 20 (2 prefix) - 22 (2 prefix) = 0 prefix changed, which is 0 deviation in ips
+	assert.Equal(t, 0, deviation)
+}
+
+func TestGetPDDeviation_MinIPTarget_NeedMore(t *testing.T) {
+	poolConfig.MinIPTarget = 33
+	poolConfig.WarmIPTarget = 0
+	poolConfig.WarmPrefixTarget = 0
+	pdPool := getMockPool(poolConfig, nil, warmPoolResourcesPrefix, 224, true)
+
+	deviation := pdPool.getPDDeviation()
+	// currently 22 warm resources, min ip target needs 33 (3 prefix) - 22 (2 prefix) = 1 prefix changed, which is 16 deviation in ips
+	assert.Equal(t, 16, deviation)
+}
+
+func TestGetPDDeviation_MinIPTarget_NeedMore_NoChange(t *testing.T) {
+	poolConfig.MinIPTarget = 25
+	poolConfig.WarmIPTarget = 0
+	poolConfig.WarmPrefixTarget = 0
+	pdPool := getMockPool(poolConfig, nil, warmPoolResourcesPrefix, 224, true)
+
+	deviation := pdPool.getPDDeviation()
+	// currently 22 warm resources, min ip target needs 25 (2 prefix) - 22 (2 prefix) = 0 prefix changed, which is 0 deviation in ips
+	assert.Equal(t, 0, deviation)
+}
+
+func TestGetPDDeviation_WarmIPTarget_NeedLess(t *testing.T) {
+	poolConfig.MinIPTarget = 0
+	poolConfig.WarmIPTarget = 5
+	poolConfig.WarmPrefixTarget = 0
+	pdPool := getMockPool(poolConfig, nil, warmPoolResourcesPrefix, 224, true)
+	deviation := pdPool.getPDDeviation()
+	// currently 22 warm resources, warm ip target needs 5 (1 prefix) - 22 (2 prefix) = -1 prefix changed, which is -16 deviation in ips
+	assert.Equal(t, -16, deviation)
+}
+
+func TestGetPDDeviation_WarmIPTarget_NeedLess_NoChange(t *testing.T) {
+	poolConfig.MinIPTarget = 0
+	poolConfig.WarmIPTarget = 17
+	poolConfig.WarmPrefixTarget = 0
+	pdPool := getMockPool(poolConfig, nil, warmPoolResourcesPrefix, 224, true)
+	deviation := pdPool.getPDDeviation()
+	// currently 22 warm resources, warm ip target needs 17 (2 prefix) - 22 (2 prefix) = 0 prefix changed, which is 0 deviation in ips
+	assert.Equal(t, 0, deviation)
+}
+
+func TestGetPDDeviation_WarmIPTarget_NeedMore(t *testing.T) {
+	poolConfig.MinIPTarget = 0
+	poolConfig.WarmIPTarget = 33
+	poolConfig.WarmPrefixTarget = 0
+	pdPool := getMockPool(poolConfig, nil, warmPoolResourcesPrefix, 224, true)
+
+	deviation := pdPool.getPDDeviation()
+	// currently 22 warm resources, warm ip target needs 33 (3 prefix) - 22 (2 prefix) = 1 prefix changed, which is 16 deviation in ips
+	assert.Equal(t, 16, deviation)
+}
+
+func TestGetPDDeviation_WarmIPTarget_NeedMore_NoChange(t *testing.T) {
+	poolConfig.MinIPTarget = 0
+	poolConfig.WarmIPTarget = 30
+	poolConfig.WarmPrefixTarget = 0
+	pdPool := getMockPool(poolConfig, nil, warmPoolResourcesPrefix, 224, true)
+
+	deviation := pdPool.getPDDeviation()
+	// currently 22 warm resources, warm ip target needs 30 (2 prefix) - 22 (2 prefix) = 0 prefix changed, which is 0 deviation in ips
+	assert.Equal(t, 0, deviation)
+}
+
+func TestNumResourcesFromMap(t *testing.T) {
+	count := numResourcesFromMap(warmPoolResourcesPrefix)
+	assert.Equal(t, 22, count)
+
+	count = numResourcesFromMap(map[string][]Resource{grp5: {Resource{grp5, res5}}})
+	assert.Equal(t, 1, count)
+
+	count = numResourcesFromMap(map[string][]Resource{})
+	assert.Equal(t, 0, count)
+
+	count = numResourcesFromMap(map[string][]Resource{grp5: {}})
+	assert.Equal(t, 0, count)
 }
