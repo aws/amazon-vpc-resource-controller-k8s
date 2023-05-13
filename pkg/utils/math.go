@@ -50,3 +50,20 @@ func MaxOf[T constraints.Ordered](vars ...T) T {
 	}
 	return result
 }
+
+// CeilDivision returns the ceiling result of numerator x divided by denominator y. y should be non-zero
+func CeilDivision(x, y int) int {
+	return (x + y - 1) / y
+}
+
+// IntPower calculates n to the mth power. m should be a non-negative power to have an int return value
+func IntPower(n, m int) int {
+	if m == 0 {
+		return 1
+	}
+	result := n
+	for i := 1; i < m; i++ {
+		result *= n
+	}
+	return result
+}

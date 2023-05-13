@@ -47,3 +47,19 @@ func TestMultipleElements(t *testing.T) {
 	assert.True(t, MinOf(varStr...) == z)
 	assert.True(t, MaxOf(varStr...) == y)
 }
+
+func TestCeilDivision(t *testing.T) {
+	assert.True(t, CeilDivision(0, 16) == 0)
+	assert.True(t, CeilDivision(32, 1) == 32)
+	assert.True(t, CeilDivision(32, 16) == 2)
+	assert.True(t, CeilDivision(32, 30) == 2)
+	assert.True(t, CeilDivision(50, 16) == 4)
+}
+
+func TestIntPower(t *testing.T) {
+	assert.True(t, IntPower(2, 0) == 1)
+	assert.True(t, IntPower(2, 4) == 16)
+	assert.True(t, IntPower(-2, 2) == 4)
+	assert.True(t, IntPower(-2, 3) == -8)
+	assert.True(t, IntPower(-2, 0) == 1)
+}
