@@ -73,6 +73,9 @@ const (
 	VpcCniConfigMapName              = "amazon-vpc-cni"
 	EnableWindowsIPAMKey             = "enable-windows-ipam"
 	EnableWindowsPrefixDelegationKey = "enable-windows-prefix-delegation"
+	WarmPrefixTarget                 = "warm-prefix-target"
+	WarmIPTarget                     = "warm-ip-target"
+	MinimumIPTarget                  = "minimum-ip-target"
 	// Since LeaderElectionNamespace and VpcCniConfigMapName may be different in the future
 	KubeSystemNamespace            = "kube-system"
 	VpcCNIDaemonSetName            = "aws-node"
@@ -131,10 +134,16 @@ type ResourceConfig struct {
 
 // WarmPoolConfig is the configuration of Warm Pool of a resource
 type WarmPoolConfig struct {
-	// Number of resources to keep in warm pool per node
+	// Number of resources to keep in warm pool per node; for prefix IP pool, this is used to check if pool is active
 	DesiredSize int
 	// Number of resources not to use in the warm pool
 	ReservedSize int
 	// The maximum number by which the warm pool can deviate from the desired size
 	MaxDeviation int
+	// The number of IPs to be available in prefix IP pool
+	WarmIPTarget int
+	// The floor of number of IPs to be stored in prefix IP pool
+	MinIPTarget int
+	// The number of prefixes to be available in prefix IP pool
+	WarmPrefixTarget int
 }
