@@ -446,7 +446,8 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 		// pending
 		p.pendingCreate += deviation
 
-		log.Info("created job to add resources to warm pool", "requested count", deviation)
+		log.Info("created job to add resources to warm pool", "pendingCreate", p.pendingCreate,
+			"requested count", deviation)
 		if p.isPDPool {
 			return worker.NewWarmPoolCreateJob(p.nodeName, deviation/NumIPv4AddrPerPrefix)
 		}
@@ -475,9 +476,11 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 						break
 					}
 					log.Info("removing free resource group from warm pool", "group id", groupID,
-						"# resources deleted", p.warmResources[groupID])
+						"# resources deleted", len(p.warmResources[groupID]))
 					resourceToDelete = append(resourceToDelete, groupID)
 					numToDelete -= len(p.warmResources[groupID])
+					// Increment pending to the number of resource being deleted, once successfully deleted the count can be decremented
+					p.pendingDelete += len(p.warmResources[groupID])
 					delete(p.warmResources, groupID)
 				}
 			} else {
@@ -485,13 +488,10 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 			}
 		}
 
-		// Increment pending to the number of resource being deleted, once successfully deleted the count can be decremented
-		p.pendingDelete += deviation
-
 		if len(resourceToDelete) > 0 {
 			// Submit the job to delete resources
-			log.Info("created job to delete resources from warm pool", "resources to delete", resourceToDelete)
-
+			log.Info("created job to delete resources from warm pool", "pendingDelete", p.pendingDelete,
+				"resources to delete", resourceToDelete)
 			return worker.NewWarmPoolDeleteJob(p.nodeName, resourceToDelete)
 		}
 	}
@@ -624,42 +624,56 @@ func (p *pool) assignResourceFromAnyGroup() Resource {
 func (p *pool) getPDDeviation() int {
 	deviationPrefix := 0
 
-	// if target value is valid, then set defined flag to true; else set it to default value
 	var isWarmIPTargetDefined, isMinIPTargetDefined, isWarmPrefixTargetDefined bool
-	if p.warmPoolConfig.WarmIPTarget > 0 {
-		isWarmIPTargetDefined = true
-	} else {
-		p.warmPoolConfig.WarmIPTarget = config.IPv4PDDefaultWarmIPTargetSize
-	}
 
-	if p.warmPoolConfig.MinIPTarget > 0 {
-		isMinIPTargetDefined = true
+	// if DesiredSize is 0, it means PD pool is in draining state, then set targets to 0
+	if p.warmPoolConfig.DesiredSize == 0 {
+		p.warmPoolConfig.WarmIPTarget = 0
+		p.warmPoolConfig.MinIPTarget = 0
+		p.warmPoolConfig.WarmPrefixTarget = 0
 	} else {
-		p.warmPoolConfig.MinIPTarget = config.IPv4PDDefaultMinIPTargetSize
-	}
+		// PD pool is active, check if target values are valid. If so, set defined flag to true
+		if p.warmPoolConfig.WarmIPTarget > 0 {
+			isWarmIPTargetDefined = true
+		}
+		if p.warmPoolConfig.MinIPTarget > 0 {
+			isMinIPTargetDefined = true
+		}
+		if p.warmPoolConfig.WarmPrefixTarget > 0 {
+			isWarmPrefixTargetDefined = true
+		}
 
-	if p.warmPoolConfig.WarmPrefixTarget > 0 {
-		isWarmPrefixTargetDefined = true
-	} else {
-		p.warmPoolConfig.WarmPrefixTarget = config.IPv4PDDefaultWarmPrefixTargetSize
+		// set target to default values if not defined
+		if !isWarmIPTargetDefined {
+			if isMinIPTargetDefined || !isWarmPrefixTargetDefined {
+				p.warmPoolConfig.WarmIPTarget = config.IPv4PDDefaultWarmIPTargetSize
+			}
+		}
+		if !isMinIPTargetDefined {
+			if isWarmIPTargetDefined || !isWarmPrefixTargetDefined {
+				p.warmPoolConfig.MinIPTarget = config.IPv4PDDefaultMinIPTargetSize
+			}
+		}
 	}
 
 	numExistingWarmResources := numResourcesFromMap(p.warmResources)
+	freePrefixes := findFreeGroup(p.warmResources, NumIPv4AddrPerPrefix)
 
 	// if neither WarmIPTarget nor MinIPTarget defined but WarmPrefixTarget is defined, return deviation needed for warm prefix target
 	if !isWarmIPTargetDefined && !isMinIPTargetDefined && isWarmPrefixTargetDefined {
-		freePrefixes := findFreeGroup(p.warmResources, NumIPv4AddrPerPrefix)
 		deviationPrefix = p.warmPoolConfig.WarmPrefixTarget - len(freePrefixes) - utils.CeilDivision(p.pendingCreate, NumIPv4AddrPerPrefix)
 
-		p.log.Info("calculating IP deviation for prefix pool to satisfy warm prefix target", "warm prefix target",
-			p.warmPoolConfig.WarmPrefixTarget, "numFreePrefix", len(freePrefixes), "p.pendingCreate", p.pendingCreate,
-			"p.pendingDelete", p.pendingDelete, "deviation", deviationPrefix*NumIPv4AddrPerPrefix)
+		if deviationPrefix != 0 {
+			p.log.Info("calculating IP deviation for prefix pool to satisfy warm prefix target", "warm prefix target",
+				p.warmPoolConfig.WarmPrefixTarget, "numFreePrefix", len(freePrefixes), "p.pendingCreate", p.pendingCreate,
+				"p.pendingDelete", p.pendingDelete, "deviation", deviationPrefix*NumIPv4AddrPerPrefix)
+		}
 
 		return deviationPrefix * NumIPv4AddrPerPrefix
 	}
 
-	// total resources in pool include used resources, warm resources, and pendingCreate (to avoid duplicate request)
-	numTotalResources := len(p.usedResources) + p.pendingCreate + numExistingWarmResources
+	// total resources in pool include used resources, warm resources, pendingCreate (to avoid duplicate request), and coolDownQueue
+	numTotalResources := len(p.usedResources) + p.pendingCreate + numExistingWarmResources + len(p.coolDownQueue)
 	// number of existing prefixes
 	numCurrPrefix := utils.CeilDivision(numTotalResources, 16)
 
@@ -675,14 +689,21 @@ func (p *pool) getPDDeviation() int {
 		deviationPrefix = numPrefixForWarmIPTarget - numCurrPrefix
 	} else {
 		// difference is the number of prefixes to create in order to meet MinIPTarget
-		deviationPrefix = utils.Maximum(numPrefixForMinIPTarget-numCurrPrefix, 0)
+		deviationPrefix = numPrefixForMinIPTarget - numCurrPrefix
 	}
 
-	p.log.Info("calculating IP deviation for prefix pool", "p.warmPoolConfig", p.warmPoolConfig,
-		"existing warm resources", numExistingWarmResources, "p.pendingCreate", p.pendingCreate, "p.pendingDelete", p.pendingDelete,
-		"numTotalResources", numTotalResources, "numCurrPrefix", numCurrPrefix, "numTotalResForWarmIPTarget", numTotalResForWarmIPTarget,
-		"numPrefixForWarmIPTarget", numPrefixForWarmIPTarget, "numPrefixForMinIPTarget", numPrefixForMinIPTarget,
-		"deviation", deviationPrefix*NumIPv4AddrPerPrefix)
+	// if we need to delete prefixes, should check if any prefix is free to be deleted since they can be fragmented. If not, reset deviation
+	if deviationPrefix < 0 && len(freePrefixes) == 0 {
+		deviationPrefix = 0
+	}
+
+	if deviationPrefix != 0 {
+		p.log.Info("calculating IP deviation for prefix pool", "p.warmPoolConfig", p.warmPoolConfig,
+			"existing warm resources", numExistingWarmResources, "p.pendingCreate", p.pendingCreate, "p.pendingDelete", p.pendingDelete,
+			"numTotalResources", numTotalResources, "numCurrPrefix", numCurrPrefix, "numTotalResForWarmIPTarget", numTotalResForWarmIPTarget,
+			"numPrefixForWarmIPTarget", numPrefixForWarmIPTarget, "numPrefixForMinIPTarget", numPrefixForMinIPTarget,
+			"deviation", deviationPrefix*NumIPv4AddrPerPrefix)
+	}
 
 	return deviationPrefix * NumIPv4AddrPerPrefix
 }

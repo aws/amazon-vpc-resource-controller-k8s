@@ -44,7 +44,6 @@ var (
 	ip3 = "192.168.1.3"
 
 	nodeCapacity = 14
-	isPDEnabled  = false
 )
 
 // TestIpv4Provider_difference tests difference removes the difference between an array and a set
@@ -107,9 +106,10 @@ func TestIpv4Provider_putInstanceProviderAndPool(t *testing.T) {
 	mockManager := mock_eni.NewMockENIManager(ctrl)
 
 	ipProvider := getMockIpProvider()
-	ipProvider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, isPDEnabled)
+	ipProvider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 
-	assert.Equal(t, &ResourceProviderAndPool{resourcePool: mockPool, eniManager: mockManager, capacity: nodeCapacity, isPrevPDEnabled: isPDEnabled}, ipProvider.instanceProviderAndPool[nodeName])
+	assert.Equal(t, &ResourceProviderAndPool{resourcePool: mockPool, eniManager: mockManager, capacity: nodeCapacity, isPrevPDEnabled: false},
+		ipProvider.instanceProviderAndPool[nodeName])
 }
 
 // TestIpv4Provider_updatePoolAndReconcileIfRequired_NoFurtherReconcile tests pool is updated and reconciliation is not
@@ -157,7 +157,7 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool(t *testing.T) {
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	resourcesToDelete := []string{ip1, ip2}
 
 	deleteJob := &worker.WarmPoolJob{
@@ -187,7 +187,7 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool_SomeResourceFail(t *testing
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	resourcesToDelete := []string{ip1, ip2}
 	failedResources := []string{ip2}
 
@@ -218,7 +218,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool(t *testing.T) {
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	createdResources := []string{ip1, ip2}
 
 	createJob := &worker.WarmPoolJob{
@@ -248,7 +248,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool_Fail(t *testing.T) {
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	createdResources := []string{ip1, ip2}
 
 	createJob := &worker.WarmPoolJob{
@@ -276,7 +276,7 @@ func TestIpv4Provider_ReSyncPool(t *testing.T) {
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	resources := []string{ip1, ip2}
 
 	reSyncJob := &worker.WarmPoolJob{
@@ -330,7 +330,7 @@ func TestIPv4Provider_UpdateResourceCapacity_FromFromPDToIP(t *testing.T) {
 
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, !isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, true)
 	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
 
 	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
@@ -360,7 +360,7 @@ func TestIPv4Provider_UpdateResourceCapacity_FromFromIPToPD(t *testing.T) {
 
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
 
 	job := &worker.WarmPoolJob{Operations: worker.OperationDeleted}
@@ -386,7 +386,7 @@ func TestIPv4Provider_UpdateResourceCapacity_FromPDToPD(t *testing.T) {
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
 	mockInstance.EXPECT().Name().Return(nodeName).Times(1)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, !isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, true)
 	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
 
 	err := ipv4Provider.UpdateResourceCapacity(mockInstance)
@@ -407,7 +407,7 @@ func TestIPv4Provider_UpdateResourceCapacity_FromIPToIP(t *testing.T) {
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
 	mockInstance.EXPECT().Name().Return(nodeName).Times(1)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
 
 	err := ipv4Provider.UpdateResourceCapacity(mockInstance)
@@ -420,7 +420,7 @@ func TestIpv4Provider_GetPool(t *testing.T) {
 
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, nil, nodeCapacity, isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, nil, nodeCapacity, false)
 
 	pool, found := ipv4Provider.GetPool(nodeName)
 	assert.True(t, found)
@@ -433,7 +433,7 @@ func TestIpv4Provider_Introspect(t *testing.T) {
 
 	ipv4Provider := getMockIpProvider()
 	mockPool := mock_pool.NewMockPool(ctrl)
-	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, nil, nodeCapacity, isPDEnabled)
+	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, nil, nodeCapacity, false)
 	expectedResp := pool.IntrospectResponse{}
 
 	mockPool.EXPECT().Introspect().Return(expectedResp)

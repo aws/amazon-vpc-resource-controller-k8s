@@ -91,7 +91,7 @@ var (
 func getMockPool(poolConfig *config.WarmPoolConfig, usedResources map[string]Resource,
 	warmResources map[string][]Resource, capacity int, isPDPool bool) *pool {
 
-	usedResourcesCopy := map[string]Resource{}
+	usedResourcesCopy := make(map[string]Resource, len(usedResources))
 	for k, v := range usedResources {
 		usedResourcesCopy[k] = Resource{GroupID: v.GroupID, ResourceID: v.ResourceID}
 	}
@@ -110,6 +110,7 @@ func getMockPool(poolConfig *config.WarmPoolConfig, usedResources map[string]Res
 		warmPoolConfig: poolConfig,
 		usedResources:  usedResourcesCopy,
 		warmResources:  warmResourcesCopy,
+		coolDownQueue:  []CoolDownResource{},
 		capacity:       capacity,
 		isPDPool:       isPDPool,
 	}
@@ -566,9 +567,9 @@ func TestPool_SetToActive_SecondaryIP_Pool(t *testing.T) {
 
 func TestPool_SetToActive_PD_Pool(t *testing.T) {
 	emptyConfig := &config.WarmPoolConfig{}
-	warmPool := getMockPool(emptyConfig, nil, nil, 224, true)
+	warmPool := getMockPool(emptyConfig, usedResources, nil, 224, true)
 	// note that without passing any values for warm targets, the pool still uses its default values
-	newConfig := &config.WarmPoolConfig{MaxDeviation: config.IPv4PDDefaultMaxDev}
+	newConfig := &config.WarmPoolConfig{DesiredSize: config.IPv4PDDefaultWPSize, WarmPrefixTarget: 1}
 	job := warmPool.SetToActive(newConfig)
 
 	// no warm resource, will allocate 1 prefix to satisfy default warm pool config
@@ -685,7 +686,23 @@ func TestGetPDDeviation_InvalidTarget_Negative(t *testing.T) {
 	// since invalid target is specified, will use default values here
 	assert.Equal(t, config.IPv4PDDefaultWarmIPTargetSize, pdPool.warmPoolConfig.WarmIPTarget)
 	assert.Equal(t, config.IPv4PDDefaultMinIPTargetSize, pdPool.warmPoolConfig.MinIPTarget)
-	assert.Equal(t, config.IPv4PDDefaultWarmPrefixTargetSize, pdPool.warmPoolConfig.WarmPrefixTarget)
+	assert.Equal(t, -100, pdPool.warmPoolConfig.WarmPrefixTarget)
+	// pool is empty, need 1 more prefix (i.e. 16 ips) to satisfy the default targets
+	assert.Equal(t, 16, deviation)
+}
+
+func TestGetPDDeviation_InvalidTarget_Negative_WarmPrefixTarget(t *testing.T) {
+	poolConfig.MinIPTarget = 0
+	poolConfig.WarmIPTarget = 0
+	poolConfig.WarmPrefixTarget = -100
+	pdPool := getMockPool(poolConfig, nil, nil, 7, false)
+
+	deviation := pdPool.getPDDeviation()
+
+	// since invalid target is specified, will use default values here
+	assert.Equal(t, config.IPv4PDDefaultWarmIPTargetSize, pdPool.warmPoolConfig.WarmIPTarget)
+	assert.Equal(t, config.IPv4PDDefaultMinIPTargetSize, pdPool.warmPoolConfig.MinIPTarget)
+	assert.Equal(t, -100, pdPool.warmPoolConfig.WarmPrefixTarget)
 	// pool is empty, need 1 more prefix (i.e. 16 ips) to satisfy the default targets
 	assert.Equal(t, 16, deviation)
 }
