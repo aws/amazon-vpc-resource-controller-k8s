@@ -341,8 +341,12 @@ func (p *ipv4PrefixProvider) GetPool(nodeName string) (pool.Pool, bool) {
 }
 
 func (p *ipv4PrefixProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
-	//TODO add check for Nitro instances
-	if instance.Os() == config.OSWindows {
+	limits, found := vpc.Limits[instance.Type()]
+	if !found {
+		return false
+	}
+
+	if instance.Os() == config.OSWindows && (limits.IsBareMetal || limits.Hypervisor == "nitro") {
 		return true
 	}
 

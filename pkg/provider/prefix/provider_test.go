@@ -473,11 +473,9 @@ func getMockIPv4PrefixProvider() ipv4PrefixProvider {
 }
 
 func TestGetPDWarmPoolConfig(t *testing.T) {
-	// TODO
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	//mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
 	mockConditions := mock_condition.NewMockConditions(ctrl)
 	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
@@ -491,5 +489,65 @@ func TestGetPDWarmPoolConfig(t *testing.T) {
 }
 
 func TestIsInstanceSupported(t *testing.T) {
-	// TODO
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Type().Return(instanceType)
+	mockInstance.EXPECT().Os().Return(config.OSWindows)
+
+	assert.Equal(t, true, prefixProvider.IsInstanceSupported(mockInstance))
+}
+
+func TestIsInstanceSupported_BareMetal(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Type().Return("c6a.metal")
+	mockInstance.EXPECT().Os().Return(config.OSWindows)
+
+	assert.Equal(t, true, prefixProvider.IsInstanceSupported(mockInstance))
+}
+
+func TestIsInstanceSupported_NonNitro(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Type().Return("d2.4xlarge")
+	mockInstance.EXPECT().Os().Return(config.OSWindows)
+
+	assert.Equal(t, false, prefixProvider.IsInstanceSupported(mockInstance))
+}
+
+func TestIsInstanceSupported_Linux(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Type().Return(instanceType)
+	mockInstance.EXPECT().Os().Return(config.OSLinux)
+
+	assert.Equal(t, false, prefixProvider.IsInstanceSupported(mockInstance))
 }
