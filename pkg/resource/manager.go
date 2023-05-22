@@ -25,7 +25,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip"
-	//"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/prefix"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/prefix"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	"github.com/go-logr/logr"
 
@@ -94,8 +94,8 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
 				resourceName, resourceProvider, ctx)
 		} else if resourceName == config.ResourceNameIPAddressFromPrefix {
-			//resourceProvider = prefix.NewIPv4PrefixProvider(ctrl.Log.WithName("ipv4 prefix provider"),
-			//	wrapper, workers, resourceConfig, conditions)
+			resourceProvider = prefix.NewIPv4PrefixProvider(ctrl.Log.WithName("ipv4 prefix provider"),
+				wrapper, workers, resourceConfig, conditions)
 			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
 				config.ResourceNameIPAddress, resourceProvider, ctx)
 		} else if resourceName == config.ResourceNamePodENI {

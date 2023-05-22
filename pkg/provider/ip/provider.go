@@ -56,7 +56,7 @@ type ipv4Provider struct {
 	checker healthz.Checker
 }
 
-// InstanceResource contains the instance's ENI manager and the resource pool
+// ResourceProviderAndPool contains the instance's ENI manager and the resource pool
 type ResourceProviderAndPool struct {
 	// lock guards the struct
 	lock         sync.RWMutex
@@ -190,9 +190,11 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	// do not update the capacity as that would be done by prefix provider
 	if !resourceProviderAndPool.isPrevPDEnabled && isCurrPDEnabled {
 		resourceProviderAndPool.isPrevPDEnabled = true
-		job := resourceProviderAndPool.resourcePool.SetToDraining()
 		p.log.Info("Prefix IP provider should be active")
-		p.SubmitAsyncJob(job)
+		job := resourceProviderAndPool.resourcePool.SetToDraining()
+		if job.Operations != worker.OperationReconcileNotRequired {
+			p.SubmitAsyncJob(job)
+		}
 		return nil
 	}
 
@@ -200,7 +202,9 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 
 	// Set the secondary IP provider pool state to active
 	job := resourceProviderAndPool.resourcePool.SetToActive(p.config)
-	p.SubmitAsyncJob(job)
+	if job.Operations != worker.OperationReconcileNotRequired {
+		p.SubmitAsyncJob(job)
+	}
 
 	instanceType := instance.Type()
 	instanceName := instance.Name()

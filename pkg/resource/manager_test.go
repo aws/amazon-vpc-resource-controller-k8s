@@ -47,8 +47,7 @@ func Test_NewResourceManager(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl)
-	//resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress, config.ResourceNameIPAddressFromPrefix}
-	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
+	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress, config.ResourceNameIPAddressFromPrefix}
 
 	mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
 	conditions := condition.NewControllerConditions(zap.New(), mockK8s)
@@ -61,12 +60,11 @@ func Test_NewResourceManager(t *testing.T) {
 	_, ok = manger.GetResourceHandler(config.ResourceNameIPAddress)
 	assert.True(t, ok)
 
-	//_, ok = manger.GetResourceHandler(config.ResourceNameIPAddressFromPrefix)
-	//assert.True(t, ok)
+	_, ok = manger.GetResourceHandler(config.ResourceNameIPAddressFromPrefix)
+	assert.True(t, ok)
 
 	providers := manger.GetResourceProviders()
-	//assert.Equal(t, len(providers), 3)
-	assert.Equal(t, len(providers), 2)
+	assert.Equal(t, len(providers), 3)
 
 	_, ok = manger.GetResourceProvider(config.ResourceNamePodENI)
 	assert.True(t, ok)
@@ -74,6 +72,6 @@ func Test_NewResourceManager(t *testing.T) {
 	_, ok = manger.GetResourceProvider(config.ResourceNameIPAddress)
 	assert.True(t, ok)
 
-	//_, ok = manger.GetResourceProvider(config.ResourceNameIPAddressFromPrefix)
-	//assert.True(t, ok)
+	_, ok = manger.GetResourceProvider(config.ResourceNameIPAddressFromPrefix)
+	assert.True(t, ok)
 }
