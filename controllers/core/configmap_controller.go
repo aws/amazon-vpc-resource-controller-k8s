@@ -94,7 +94,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Check if configurations for Windows prefix delegation have changed
 	var isPDConfigUpdated bool
-	warmIPTarget, minIPTarget, warmPrefixTarget := config.ParseWinPDTargets(configmap)
+	warmIPTarget, minIPTarget, warmPrefixTarget := config.ParseWinPDTargets(r.Log, configmap)
 	if r.curWinPDWarmIPTarget != warmIPTarget || r.curWinPDMinIPTarget != minIPTarget || r.curWinPDWarmPrefixTarget != warmPrefixTarget {
 		r.curWinPDWarmIPTarget = warmIPTarget
 		r.curWinPDMinIPTarget = minIPTarget

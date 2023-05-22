@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 // TestLoadResourceConfig tests the default resource configurations
@@ -62,6 +63,8 @@ func TestLoadResourceConfig(t *testing.T) {
 
 // TestParseWinPDTargets parses prefix delegation configurations from a vpc cni config map
 func TestParseWinPDTargets(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
 	vpcCNIConfig := &v1.ConfigMap{
 		Data: map[string]string{
 			EnableWindowsIPAMKey:             "true",
@@ -71,7 +74,7 @@ func TestParseWinPDTargets(t *testing.T) {
 			WarmPrefixTarget:                 strconv.Itoa(IPv4PDDefaultWarmPrefixTargetSize),
 		},
 	}
-	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(vpcCNIConfig)
+	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(log, vpcCNIConfig)
 	assert.Equal(t, IPv4PDDefaultWarmIPTargetSize, warmIPTarget)
 	assert.Equal(t, IPv4PDDefaultMinIPTargetSize, minIPTarget)
 	assert.Equal(t, IPv4PDDefaultWarmPrefixTargetSize, warmPrefixTarget)
@@ -79,6 +82,8 @@ func TestParseWinPDTargets(t *testing.T) {
 
 // TestParseWinPDTargets parses prefix delegation configurations with negative values and returns the same
 func TestParseWinPDTargets_Negative(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
 	vpcCNIConfig := &v1.ConfigMap{
 		Data: map[string]string{
 			EnableWindowsIPAMKey:             "true",
@@ -88,7 +93,7 @@ func TestParseWinPDTargets_Negative(t *testing.T) {
 			WarmPrefixTarget:                 strconv.Itoa(0),
 		},
 	}
-	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(vpcCNIConfig)
+	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(log, vpcCNIConfig)
 	// negative values are still read in but processed when it's used in the warm pool
 	assert.Equal(t, -10, warmIPTarget)
 	assert.Equal(t, -100, minIPTarget)
@@ -97,6 +102,8 @@ func TestParseWinPDTargets_Negative(t *testing.T) {
 
 // TestParseWinPDTargets_Invalid parses prefix delegation configurations with invalid values and returns 0s as targets
 func TestParseWinPDTargets_Invalid(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
 	vpcCNIConfig := &v1.ConfigMap{
 		Data: map[string]string{
 			EnableWindowsIPAMKey:             "true",
@@ -106,7 +113,7 @@ func TestParseWinPDTargets_Invalid(t *testing.T) {
 			WarmPrefixTarget:                 "can't parse",
 		},
 	}
-	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(vpcCNIConfig)
+	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(log, vpcCNIConfig)
 	assert.Equal(t, 0, warmIPTarget)
 	assert.Equal(t, 0, minIPTarget)
 	assert.Equal(t, 0, warmPrefixTarget)
@@ -114,6 +121,8 @@ func TestParseWinPDTargets_Invalid(t *testing.T) {
 
 // TestLoadResourceConfigFromConfigMap tests the custom configuration for PD is loaded correctly from config map
 func TestLoadResourceConfigFromConfigMap(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
 	warmIPTarget := 2
 	minimumIPTarget := 10
 	warmPrefixTarget := 1
@@ -127,7 +136,7 @@ func TestLoadResourceConfigFromConfigMap(t *testing.T) {
 		},
 	}
 
-	resourceConfig := LoadResourceConfigFromConfigMap(vpcCNIConfig)
+	resourceConfig := LoadResourceConfigFromConfigMap(log, vpcCNIConfig)
 
 	// Verify default resource configuration for resource Pod ENI
 	podENIConfig := resourceConfig[ResourceNamePodENI]

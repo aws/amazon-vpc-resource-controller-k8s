@@ -16,8 +16,8 @@ package config
 import (
 	"strconv"
 
+	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 const (
@@ -66,10 +66,10 @@ func LoadResourceConfig() map[string]ResourceConfig {
 	return getDefaultResourceConfig()
 }
 
-func LoadResourceConfigFromConfigMap(vpcCniConfigMap *v1.ConfigMap) map[string]ResourceConfig {
+func LoadResourceConfigFromConfigMap(log logr.Logger, vpcCniConfigMap *v1.ConfigMap) map[string]ResourceConfig {
 	resourceConfig := getDefaultResourceConfig()
 
-	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(vpcCniConfigMap)
+	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(log, vpcCniConfigMap)
 
 	// If no PD configuration is set in configMap or none is valid, return default resource config
 	if warmIPTarget == 0 && minIPTarget == 0 && warmPrefixTarget == 0 {
@@ -84,9 +84,7 @@ func LoadResourceConfigFromConfigMap(vpcCniConfigMap *v1.ConfigMap) map[string]R
 }
 
 // ParseWinPDTargets parses config map for Windows prefix delegation configurations set by users
-func ParseWinPDTargets(vpcCniConfigMap *v1.ConfigMap) (warmIPTarget int, minIPTarget int, warmPrefixTarget int) {
-	var log = ctrl.Log.WithName("parse windows prefix delegation targets from config map")
-
+func ParseWinPDTargets(log logr.Logger, vpcCniConfigMap *v1.ConfigMap) (warmIPTarget int, minIPTarget int, warmPrefixTarget int) {
 	warmIPTarget, minIPTarget, warmPrefixTarget = 0, 0, 0
 
 	if vpcCniConfigMap.Data == nil {

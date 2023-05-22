@@ -419,7 +419,7 @@ func (p *ipv4PrefixProvider) getPDWarmPoolConfig() *config.WarmPoolConfig {
 	var resourceConfig map[string]config.ResourceConfig
 	vpcCniConfigMap, err := p.apiWrapper.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
 	if err == nil {
-		resourceConfig = config.LoadResourceConfigFromConfigMap(vpcCniConfigMap)
+		resourceConfig = config.LoadResourceConfigFromConfigMap(p.log, vpcCniConfigMap)
 	} else {
 		p.log.Error(err, "failed to read from config map, will use default resource config")
 		resourceConfig = config.LoadResourceConfig()
