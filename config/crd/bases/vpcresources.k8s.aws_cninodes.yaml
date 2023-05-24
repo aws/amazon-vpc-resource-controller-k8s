@@ -46,7 +46,7 @@ spec:
               features:
                 items:
                   description: FeatureName is a type of feature name supported by
-                    EKS networking. It can be Security Group for Pods, custom networking,
+                    AWS VPC CNI. It can be Security Group for Pods, custom networking,
                     or others
                   type: string
                 type: array
