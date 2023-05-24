@@ -171,6 +171,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		}
 
 		log.Error(err, "failed to init resource")
+		utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkFailedInitializationReason, "The node failed initializing trunk interface", v1.EventTypeNormal, b.log)
 		branchProviderOperationsErrCount.WithLabelValues("init").Inc()
 		return err
 	}
@@ -189,6 +190,9 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	b.SubmitAsyncJob(worker.NewOnDemandReconcileNodeJob(nodeName))
 
 	b.log.Info("initialized the resource provider successfully")
+
+	// send an event to notify user this node has trunk interface initialized
+	utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkInitiatedReason, "The node has trunk interface initialized successfully", v1.EventTypeNormal, b.log)
 
 	return nil
 }
@@ -476,7 +480,7 @@ func (b *branchENIProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
 	if !supported {
 		// Send a node event for users' visibility
 		msg := fmt.Sprintf("The instance type %s is not supported for trunk interface (Security Group for Pods)", instance.Type())
-		utils.SendNodeEvent(b.apiWrapper.K8sAPI, instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, b.log)
+		utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, b.log)
 	}
 
 	return supported

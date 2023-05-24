@@ -88,7 +88,7 @@ func (mr *MockConditionsMockRecorder) IsWindowsIPAMEnabled() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsWindowsIPAMEnabled", reflect.TypeOf((*MockConditions)(nil).IsWindowsIPAMEnabled))
 }
 
-// IsWindowsIPAMEnabled mocks base method.
+// IsWindowsPrefixDelegationEnabled mocks base method.
 func (m *MockConditions) IsWindowsPrefixDelegationEnabled() bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "IsWindowsPrefixDelegationEnabled")
@@ -96,7 +96,7 @@ func (m *MockConditions) IsWindowsPrefixDelegationEnabled() bool {
 	return ret0
 }
 
-// IsWindowsIPAMEnabled indicates an expected call of IsWindowsIPAMEnabled.
+// IsWindowsPrefixDelegationEnabled indicates an expected call of IsWindowsPrefixDelegationEnabled.
 func (mr *MockConditionsMockRecorder) IsWindowsPrefixDelegationEnabled() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsWindowsPrefixDelegationEnabled", reflect.TypeOf((*MockConditions)(nil).IsWindowsPrefixDelegationEnabled))

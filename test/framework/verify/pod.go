@@ -24,6 +24,7 @@ import (
 	helper "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
+	"github.com/samber/lo"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -165,7 +166,7 @@ func (v *PodVerification) WindowsPodHaveIPv4AddressFromPrefixes(pod *v1.Pod, ipV
 		allIPsFromPrefix, err := helper.DeconstructIPsFromPrefix(prefix)
 		Expect(err).ToNot(HaveOccurred())
 
-		if helper.Include(ipAddWithCidr, allIPsFromPrefix) {
+		if lo.Contains(allIPsFromPrefix, ipAddWithCidr) {
 			result = true
 			break
 		}

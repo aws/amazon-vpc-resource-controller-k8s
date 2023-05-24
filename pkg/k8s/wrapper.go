@@ -18,6 +18,7 @@ import (
 	"strconv"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -77,6 +78,8 @@ type K8sWrapper interface {
 	ListNodes() (*v1.NodeList, error)
 	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error)
 	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
+	GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error)
+	CreateCNINode(node *v1.Node) error
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -121,12 +124,12 @@ func (k *k8sWrapper) GetDeployment(namespace string, name string) (*appv1.Deploy
 }
 
 func (k *k8sWrapper) GetENIConfig(eniConfigName string) (*v1alpha1.ENIConfig, error) {
-	sgp := &v1alpha1.ENIConfig{}
+	eniConfig := &v1alpha1.ENIConfig{}
 	err := k.cacheClient.Get(k.context, types.NamespacedName{
 		Name: eniConfigName,
-	}, sgp)
+	}, eniConfig)
 
-	return sgp, err
+	return eniConfig, err
 }
 
 func (k *k8sWrapper) GetNode(nodeName string) (*v1.Node, error) {
@@ -219,4 +222,33 @@ func (k *k8sWrapper) ListEvents(ops []client.ListOption) (*eventsv1.EventList, e
 		return nil, err
 	}
 	return events, nil
+}
+
+func (k *k8sWrapper) GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error) {
+	cninode := &rcv1alpha1.CNINode{}
+	if err := k.cacheClient.Get(k.context, namespacedName, cninode); err != nil {
+		return cninode, err
+	}
+	return cninode, nil
+}
+
+func (k *k8sWrapper) CreateCNINode(node *v1.Node) error {
+	cniNode := &rcv1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      node.Name,
+			Namespace: config.KubeDefaultNamespace,
+			// use the node as owner reference to let k8s clean up the CRD when the node is deleted
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: node.APIVersion,
+					Kind:       node.Kind,
+					Name:       node.Name,
+					UID:        node.UID,
+				},
+			},
+		},
+	}
+
+	// TODO: need think more if we should retry on "already exists" error.
+	return client.IgnoreAlreadyExists(k.cacheClient.Create(k.context, cniNode))
 }

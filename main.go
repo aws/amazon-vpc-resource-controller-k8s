@@ -22,9 +22,11 @@ import (
 	"time"
 
 	crdv1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
+	vpcresourcesv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/apps"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
+	crdscontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/crds"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
@@ -69,6 +71,7 @@ func init() {
 	_ = corev1.AddToScheme(scheme)
 	_ = vpcresourcesv1beta1.AddToScheme(scheme)
 	_ = crdv1alpha1.AddToScheme(scheme)
+	_ = vpcresourcesv1alpha1.AddToScheme(scheme)
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -370,6 +373,16 @@ func main() {
 		ResourceManager: resourceManager,
 	}).SetupWithManager(mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create introspect API")
+		os.Exit(1)
+	}
+
+	if err := (&crdscontroller.CNINodeController{
+		Log:         ctrl.Log.WithName("controllers").WithName("CNINode"),
+		NodeManager: nodeManager,
+		K8sAPI:      k8sApi,
+		Context:     ctx,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create CNINode controller")
 		os.Exit(1)
 	}
 

@@ -21,11 +21,13 @@ import (
 	reflect "reflect"
 
 	v1alpha1 "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
+	v1alpha10 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/apps/v1"
 	v10 "k8s.io/api/core/v1"
 	v11 "k8s.io/api/events/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	types "k8s.io/apimachinery/pkg/types"
 	client "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -91,6 +93,35 @@ func (m *MockK8sWrapper) BroadcastEvent(arg0 runtime.Object, arg1, arg2, arg3 st
 func (mr *MockK8sWrapperMockRecorder) BroadcastEvent(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BroadcastEvent", reflect.TypeOf((*MockK8sWrapper)(nil).BroadcastEvent), arg0, arg1, arg2, arg3)
+}
+
+// CreateCNINode mocks base method.
+func (m *MockK8sWrapper) CreateCNINode(arg0 *v10.Node) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateCNINode", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateCNINode indicates an expected call of CreateCNINode.
+func (mr *MockK8sWrapperMockRecorder) CreateCNINode(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateCNINode", reflect.TypeOf((*MockK8sWrapper)(nil).CreateCNINode), arg0)
+}
+
+// GetCNINode mocks base method.
+func (m *MockK8sWrapper) GetCNINode(arg0 types.NamespacedName) (*v1alpha10.CNINode, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCNINode", arg0)
+	ret0, _ := ret[0].(*v1alpha10.CNINode)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetCNINode indicates an expected call of GetCNINode.
+func (mr *MockK8sWrapperMockRecorder) GetCNINode(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCNINode", reflect.TypeOf((*MockK8sWrapper)(nil).GetCNINode), arg0)
 }
 
 // GetConfigMap mocks base method.
