@@ -155,6 +155,15 @@ func (v *PodVerification) WindowsPodHaveIPv4Address(pod *v1.Pod) {
 
 }
 
+func (v *PodVerification) WindowsPodHaveIPv4AddressFromPrefix(pod *v1.Pod) {
+	By("matching the prefix-deconstructed IPv4 from annotation to the pod IP")
+	ipAddWithCidr, found := pod.Annotations["vpc.amazonaws.com/PrivateIPv4Address"]
+	Expect(found).To(BeTrue())
+	// Remove the CIDR and compare pod IP with the IP annotated from VPC Controller
+	Expect(pod.Status.PodIP).To(Equal(strings.Split(ipAddWithCidr, "/")[0]))
+	Expect(strings.Split(ipAddWithCidr, "/")[1]).To(Equal("32"))
+}
+
 func (v *PodVerification) WindowsPodHaveResourceLimits(pod *v1.Pod, expected bool) {
 
 	if pod.Spec.Containers[0].Resources.Limits == nil && expected {
