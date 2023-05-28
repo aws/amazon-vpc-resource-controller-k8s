@@ -270,3 +270,38 @@ func (r *PodReconciler) updateResourceName(isDeletionEvent bool, pod *v1.Pod) st
 	}
 	return resourceName
 }
+
+// updateResourceName updates resource name according to pod event and which IP allocation mode is enabled
+func (r *PodReconciler) updateResourceName(isDeletionEvent bool, pod *v1.Pod) string {
+	resourceName := config.ResourceNameIPAddress
+
+	// Pod deletion must use the handler that assigned the IP resource regardless which IP allocation mode is active
+	if isDeletionEvent {
+		resourceID, present := pod.Annotations[resourceName]
+		if !present {
+			r.Log.Error(fmt.Errorf("resource ID was not found in annotation"),
+				"failed to find resource ID", "resource", resourceName, "is delete event", isDeletionEvent)
+			return resourceName
+		}
+		// Check prefix provider to see if it's a prefix deconstructed IP
+		prefixProvider, found := r.ResourceManager.GetResourceProvider(config.ResourceNameIPAddressFromPrefix)
+		if !found {
+			// If prefix provider not found, log the error and continue to use the secondary IP provider
+			r.Log.Error(fmt.Errorf("resource provider was not found"), "failed to find resource provider",
+				"resource", resourceName)
+			return resourceName
+		}
+		resourcePool, ok := prefixProvider.GetPool(pod.Spec.NodeName)
+		// If IP is managed by prefix IP pool, update resource name so that prefix IP handler will be used
+		if ok && resourcePool.IsManagedResource(resourceID) {
+			resourceName = config.ResourceNameIPAddressFromPrefix
+		}
+	} else {
+		// Pod creation should use the currently active resource handler
+		if r.Condition.IsWindowsPrefixDelegationEnabled() {
+			// If prefix delegation is enabled, update resource name so that prefix IP handler will be used
+			resourceName = config.ResourceNameIPAddressFromPrefix
+		}
+	}
+	return resourceName
+}

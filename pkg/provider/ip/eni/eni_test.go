@@ -502,6 +502,33 @@ func TestEniManager_DeleteIPV4Resource_TypeIPV4Prefix(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, failedToDelete)
 	assert.Equal(t, []*eni{eniDetails1}, manager.attachedENIs)
+	assert.NotContains(t, manager.resourceToENIMap, ip1)
+	assert.NotContains(t, manager.resourceToENIMap, ip3)
+}
+
+// TestEniManager_DeleteIPV4Resource_TypeIPV4Prefix tests prefixes are un assigned
+func TestEniManager_DeleteIPV4Resource_TypeIPV4Prefix(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	manager, mockInstance, mockEc2APIHelper := getMockManager(ctrl)
+
+	eniDetails1 := createENIDetails(eniID1, 1)
+
+	manager.resourceToENIMap = map[string]*eni{ip1: eniDetails1, ip2: eniDetails1, prefix1: eniDetails1}
+	manager.attachedENIs = []*eni{eniDetails1}
+
+	mockInstance.EXPECT().Name().Return(instanceName)
+	mockInstance.EXPECT().Type().Return(instanceType).Times(1)
+	mockInstance.EXPECT().PrimaryNetworkInterfaceID().Return(eniID1)
+	// Unassign the prefix from interface 1
+	mockEc2APIHelper.EXPECT().UnassignIPv4Resources(eniID1, config.ResourceTypeIPv4Prefix, []string{prefix1}).Return(nil)
+
+	failedToDelete, err := manager.DeleteIPV4Resource([]string{prefix1}, config.ResourceTypeIPv4Prefix, mockEc2APIHelper, log)
+
+	assert.NoError(t, err)
+	assert.Empty(t, failedToDelete)
+	assert.Equal(t, []*eni{eniDetails1}, manager.attachedENIs)
 	assert.NotContains(t, manager.resourceToENIMap, prefix1)
 }
 
