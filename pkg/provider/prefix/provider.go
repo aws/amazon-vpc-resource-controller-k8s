@@ -2,6 +2,7 @@ package prefix
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
@@ -9,14 +10,15 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
-
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 type ipv4PrefixProvider struct {
@@ -34,6 +36,8 @@ type ipv4PrefixProvider struct {
 	instanceProviderAndPool map[string]*ResourceProviderAndPool
 	// conditions is used to check which IP allocation mode is enabled
 	conditions condition.Conditions
+	// healthz check subpath
+	checker healthz.Checker
 }
 
 // ResourceProviderAndPool contains the instance's ENI manager and the resource pool
@@ -50,7 +54,7 @@ type ResourceProviderAndPool struct {
 
 func NewIPv4PrefixProvider(log logr.Logger, apiWrapper api.Wrapper, workerPool worker.Worker,
 	resourceConfig config.ResourceConfig, conditions condition.Conditions) provider.ResourceProvider {
-	return &ipv4PrefixProvider{
+	provider := &ipv4PrefixProvider{
 		instanceProviderAndPool: make(map[string]*ResourceProviderAndPool),
 		config:                  resourceConfig.WarmPoolConfig,
 		log:                     log,
@@ -58,6 +62,8 @@ func NewIPv4PrefixProvider(log logr.Logger, apiWrapper api.Wrapper, workerPool w
 		workerPool:              workerPool,
 		conditions:              conditions,
 	}
+	provider.checker = provider.check()
+	return provider
 }
 
 func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
@@ -425,4 +431,22 @@ func (p *ipv4PrefixProvider) getPDWarmPoolConfig() *config.WarmPoolConfig {
 		resourceConfig = config.LoadResourceConfig()
 	}
 	return resourceConfig[config.ResourceNameIPAddressFromPrefix].WarmPoolConfig
+}
+
+func (p *ipv4PrefixProvider) check() healthz.Checker {
+	p.log.Info("IPv4 prefix provider's healthz subpath was added")
+	return func(req *http.Request) error {
+		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
+			var ping interface{}
+			p.SubmitAsyncJob(ping)
+			p.log.V(1).Info("***** health check on IPv4 prefix provider tested SubmitAsyncJob *****")
+			c <- nil
+		}, p.log)
+
+		return err
+	}
+}
+
+func (p *ipv4PrefixProvider) GetHealthChecker() healthz.Checker {
+	return p.checker
 }
