@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
@@ -89,21 +90,21 @@ func NewControllerManagedBy(ctx context.Context, mgr manager.Manager) *Builder {
 
 // Complete adds the controller to manager's Runnable. The Controller
 // runnable will start when the manager starts
-func (b *Builder) Complete(reconciler Reconciler) error {
+func (b *Builder) Complete(reconciler Reconciler) (healthz.Checker, error) {
 	// Loggr is no longer an interface
 	// The suggestion is using LogSink to do nil check now
 	if b.log.GetSink() == nil {
-		return fmt.Errorf("need to set the logger")
+		return nil, fmt.Errorf("need to set the logger")
 	}
 	if b.converter == nil {
-		return fmt.Errorf("converter not provided, " +
+		return nil, fmt.Errorf("converter not provided, " +
 			"must use high level controller if conversion not required")
 	}
 	if b.clientSet == nil {
-		return fmt.Errorf("need to set kubernetes clienset")
+		return nil, fmt.Errorf("need to set kubernetes clienset")
 	}
 	if b.dataStore == nil {
-		return fmt.Errorf("need datastore to start the controller")
+		return nil, fmt.Errorf("need datastore to start the controller")
 	}
 
 	b.SetDefaults()
@@ -172,17 +173,17 @@ func (b *Builder) Complete(reconciler Reconciler) error {
 		},
 	}
 
-	controller := &CustomController{
-		log:        b.log,
-		options:    b.options,
-		config:     config,
-		Do:         reconciler,
-		workQueue:  workQueue,
-		conditions: b.conditions,
-	}
+	controller := NewCustomController(
+		b.log,
+		b.options,
+		config,
+		reconciler,
+		workQueue,
+		b.conditions,
+	)
 
 	// Adds the controller to the manager's Runnable
-	return b.mgr.Add(controller)
+	return controller.checker, b.mgr.Add(controller)
 }
 
 // SetDefaults sets the default options for controller

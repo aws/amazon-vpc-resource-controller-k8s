@@ -20,7 +20,6 @@ package mock_node
 import (
 	reflect "reflect"
 
-	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	resource "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -49,17 +48,17 @@ func (m *MockNode) EXPECT() *MockNodeMockRecorder {
 }
 
 // DeleteResources mocks base method.
-func (m *MockNode) DeleteResources(arg0 resource.ResourceManager, arg1 api.EC2APIHelper) error {
+func (m *MockNode) DeleteResources(arg0 resource.ResourceManager) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteResources", arg0, arg1)
+	ret := m.ctrl.Call(m, "DeleteResources", arg0)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteResources indicates an expected call of DeleteResources.
-func (mr *MockNodeMockRecorder) DeleteResources(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockNodeMockRecorder) DeleteResources(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteResources", reflect.TypeOf((*MockNode)(nil).DeleteResources), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteResources", reflect.TypeOf((*MockNode)(nil).DeleteResources), arg0)
 }
 
 // GetNodeInstanceID mocks base method.
@@ -91,17 +90,17 @@ func (mr *MockNodeMockRecorder) HasInstance() *gomock.Call {
 }
 
 // InitResources mocks base method.
-func (m *MockNode) InitResources(arg0 resource.ResourceManager, arg1 api.EC2APIHelper) error {
+func (m *MockNode) InitResources(arg0 resource.ResourceManager) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InitResources", arg0, arg1)
+	ret := m.ctrl.Call(m, "InitResources", arg0)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // InitResources indicates an expected call of InitResources.
-func (mr *MockNodeMockRecorder) InitResources(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockNodeMockRecorder) InitResources(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitResources", reflect.TypeOf((*MockNode)(nil).InitResources), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitResources", reflect.TypeOf((*MockNode)(nil).InitResources), arg0)
 }
 
 // IsManaged mocks base method.
@@ -145,15 +144,15 @@ func (mr *MockNodeMockRecorder) UpdateCustomNetworkingSpecs(arg0, arg1 interface
 }
 
 // UpdateResources mocks base method.
-func (m *MockNode) UpdateResources(arg0 resource.ResourceManager, arg1 api.EC2APIHelper) error {
+func (m *MockNode) UpdateResources(arg0 resource.ResourceManager) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateResources", arg0, arg1)
+	ret := m.ctrl.Call(m, "UpdateResources", arg0)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UpdateResources indicates an expected call of UpdateResources.
-func (mr *MockNodeMockRecorder) UpdateResources(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockNodeMockRecorder) UpdateResources(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateResources", reflect.TypeOf((*MockNode)(nil).UpdateResources), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateResources", reflect.TypeOf((*MockNode)(nil).UpdateResources), arg0)
 }

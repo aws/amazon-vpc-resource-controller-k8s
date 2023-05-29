@@ -18,9 +18,10 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
@@ -186,6 +187,23 @@ func TestEni_InitResources_Error(t *testing.T) {
 	assert.Error(t, mockError, err)
 }
 
+// TestEni_InitResources_Unsupported_Type_Error tests that error is returned if the instance type is not supported
+func TestEni_InitResources_Unsupported_Type_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	manager, mockInstance, mockEc2APIHelper := getMockManager(ctrl)
+	dummyType := "dummy.large"
+	mockInstance.EXPECT().InstanceID().Return(instanceID)
+	mockInstance.EXPECT().Type().Return(dummyType)
+	mockEc2APIHelper.EXPECT().GetInstanceNetworkInterface(&instanceID).Return(nwInterfaces, nil)
+
+	_, err := manager.InitResources(mockEc2APIHelper)
+
+	assert.Error(t, mockError, err)
+	assert.ErrorIs(t, err, utils.ErrNotFound)
+}
+
 // TestEniManager_CreateIPV4Resource_TypeIPV4Address_FromSingleENI tests IPs are created using a single ENI when it has the desired
 // capacity
 func TestEniManager_CreateIPV4Resource_TypeIPV4Address_FromSingleENI(t *testing.T) {
@@ -309,7 +327,7 @@ func TestEniManager_CreateIPV4Resource_TypeIPV4Address_FromNewENI(t *testing.T) 
 	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
 	mockInstance.EXPECT().SubnetID().Return(subnetID).Times(2)
 	mockInstance.EXPECT().SubnetMask().Return(subnetMask).Times(4)
-	mockInstance.EXPECT().InstanceSecurityGroup().Return(instanceSG).Times(2)
+	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(instanceSG).Times(2)
 
 	gomock.InOrder(
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
@@ -345,7 +363,7 @@ func TestEniManager_CreateIPV4Resource_TypeIPV4Prefix_FromNewENI(t *testing.T) {
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int64(3), nil).Times(1)
 	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(1)
 	mockInstance.EXPECT().SubnetID().Return(subnetID).Times(1)
-	mockInstance.EXPECT().InstanceSecurityGroup().Return(instanceSG).Times(1)
+	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(instanceSG).Times(1)
 
 	mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
 		&ENIDescription, nil, prefixCountFor1).Return(networkInterface3, nil)
@@ -376,7 +394,7 @@ func TestEniManager_CreateIPV4Resource_TypeIPV4Address_InBetweenENIFail(t *testi
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int64(3), nil).Times(2)
 	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
 	mockInstance.EXPECT().SubnetID().Return(subnetID).Times(2)
-	mockInstance.EXPECT().InstanceSecurityGroup().Return(instanceSG).Times(2)
+	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(instanceSG).Times(2)
 
 	gomock.InOrder(
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),
@@ -411,7 +429,7 @@ func TestEniManager_CreateIPV4Resource_TypeIPV4Prefix_InBetweenENIFail(t *testin
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int64(3), nil).Times(2)
 	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
 	mockInstance.EXPECT().SubnetID().Return(subnetID).Times(2)
-	mockInstance.EXPECT().InstanceSecurityGroup().Return(instanceSG).Times(2)
+	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(instanceSG).Times(2)
 
 	gomock.InOrder(
 		mockEc2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&instanceID, &subnetID, instanceSG, nil, aws.Int64(3),

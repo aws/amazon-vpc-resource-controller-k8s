@@ -20,14 +20,17 @@ import (
 
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
 	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -49,6 +52,7 @@ type Mocks struct {
 	MockResourceManager *mock_resource.MockResourceManager
 	MockInstance        *mock_ec2.MockEC2Instance
 	MockEC2API          *mock_api.MockEC2APIHelper
+	MockK8sAPI          *mock_k8s.MockK8sWrapper
 	NodeWithMock        node
 }
 
@@ -67,17 +71,22 @@ func NewMock(ctrl *gomock.Controller, mockProviderCount int) Mocks {
 		ResourceProvider:    convertedProvider,
 		MockResourceManager: mock_resource.NewMockResourceManager(ctrl),
 		MockEC2API:          mock_api.NewMockEC2APIHelper(ctrl),
+		MockK8sAPI:          mock_k8s.NewMockK8sWrapper(ctrl),
 		MockInstance:        mockInstance,
 		NodeWithMock: node{
 			log:      zap.New(zap.UseDevMode(true)).WithName("branch provider"),
 			instance: mockInstance,
+			ec2API:   mock_api.NewMockEC2APIHelper(ctrl),
 		},
 	}
 }
 
 // TestNewManagedNode tests the new node is not nil and node is managed but not ready
 func TestNewManagedNode(t *testing.T) {
-	node := NewManagedNode(zap.New(), nodeName, instanceID, linux)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	node := NewManagedNode(zap.New(), nodeName, instanceID, linux, mock_k8s.NewMockK8sWrapper(ctrl), mock_api.NewMockEC2APIHelper(ctrl))
 
 	assert.NotNil(t, node)
 	assert.True(t, node.GetNodeInstanceID() == instanceID)
@@ -108,12 +117,12 @@ func TestNode_InitResources(t *testing.T) {
 	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
 	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
 
-	err := mock.NodeWithMock.InitResources(mock.MockResourceManager, mock.MockEC2API)
+	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
 	assert.NoError(t, err)
 	assert.True(t, mock.NodeWithMock.IsReady())
 }
 
-func TestNode_InitResources_InstanceNotSupported(t *testing.T) {
+func TestNode_InitResources_InstanceNotTrunkSupported(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -124,9 +133,35 @@ func TestNode_InitResources_InstanceNotSupported(t *testing.T) {
 
 	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(false)
 
-	err := mock.NodeWithMock.InitResources(mock.MockResourceManager, mock.MockEC2API)
+	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
 	assert.NoError(t, err)
 	assert.True(t, mock.NodeWithMock.IsReady())
+}
+
+func TestNode_InitResources_InstanceNotListed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 1)
+
+	testInstanceType := "dummy.large"
+	nodeName = "testInstance"
+	node := &v1.Node{
+		ObjectMeta: metaV1.ObjectMeta{Name: nodeName, UID: types.UID(nodeName)},
+	}
+
+	msg := "The instance type dummy.large is not supported yet by the vpc resource controller"
+
+	mock.MockInstance.EXPECT().Type().Return(testInstanceType).Times(1)
+	mock.MockInstance.EXPECT().Name().Return(nodeName).Times(1)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
+	mock.MockK8sAPI.EXPECT().BroadcastEvent(node, "Unsupported", msg, v1.EventTypeWarning).Times(1)
+	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s, error: %w", testInstanceType, utils.ErrNotFound))
+
+	mock.NodeWithMock.k8sAPI = mock.MockK8sAPI
+	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
+	assert.Error(t, err)
+	assert.False(t, mock.NodeWithMock.IsReady())
 }
 
 // TestNode_InitResources_LoadInstanceDetails_Error tests that error is propagated when load instance details throws an error
@@ -138,7 +173,7 @@ func TestNode_InitResources_LoadInstanceDetails_Error(t *testing.T) {
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(mockError)
 
-	err := mock.NodeWithMock.InitResources(mock.MockResourceManager, mock.MockEC2API)
+	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
 	assert.Error(t, &ErrInitResources{Err: mockError}, err)
 }
 
@@ -162,7 +197,7 @@ func TestNode_InitResources_SecondProviderInitFails(t *testing.T) {
 	// Expect first provider to be de initialized
 	mock.MockProviders["0"].EXPECT().DeInitResource(mock.MockInstance).Return(nil).AnyTimes()
 
-	err := mock.NodeWithMock.InitResources(mock.MockResourceManager, mock.MockEC2API)
+	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
 	assert.NotNil(t, err)
 }
 
@@ -181,7 +216,7 @@ func TestNode_DeleteResources(t *testing.T) {
 	mock.MockProviders["1"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
 	mock.MockProviders["1"].EXPECT().DeInitResource(mock.MockInstance).Return(nil)
 
-	err := mock.NodeWithMock.DeleteResources(mock.MockResourceManager, mock.MockEC2API)
+	err := mock.NodeWithMock.DeleteResources(mock.MockResourceManager)
 	assert.NoError(t, err)
 }
 
@@ -203,7 +238,7 @@ func TestNode_DeleteResources_SomeFail(t *testing.T) {
 	mock.MockProviders["2"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
 	mock.MockProviders["2"].EXPECT().DeInitResource(mock.MockInstance).Return(nil)
 
-	err := mock.NodeWithMock.DeleteResources(mock.MockResourceManager, mock.MockEC2API)
+	err := mock.NodeWithMock.DeleteResources(mock.MockResourceManager)
 	assert.NotNil(t, err)
 }
 
@@ -224,7 +259,7 @@ func TestNode_UpdateResources(t *testing.T) {
 
 	mock.MockProviders["1"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(false)
 
-	err := mock.NodeWithMock.UpdateResources(mock.MockResourceManager, mock.MockEC2API)
+	err := mock.NodeWithMock.UpdateResources(mock.MockResourceManager)
 	assert.NoError(t, err)
 }
 
@@ -247,7 +282,7 @@ func TestNode_UpdateResources_SomeFail(t *testing.T) {
 	mock.MockProviders["2"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
 	mock.MockProviders["2"].EXPECT().UpdateResourceCapacity(mock.MockInstance).Return(nil)
 
-	err := mock.NodeWithMock.UpdateResources(mock.MockResourceManager, mock.MockEC2API)
+	err := mock.NodeWithMock.UpdateResources(mock.MockResourceManager)
 	assert.NotNil(t, err)
 }
 
@@ -259,6 +294,6 @@ func TestNode_UpdateResources_NodeNotReady(t *testing.T) {
 
 	mock := NewMock(ctrl, 1)
 
-	err := mock.NodeWithMock.UpdateResources(mock.MockResourceManager, mock.MockEC2API)
+	err := mock.NodeWithMock.UpdateResources(mock.MockResourceManager)
 	assert.Nil(t, err)
 }

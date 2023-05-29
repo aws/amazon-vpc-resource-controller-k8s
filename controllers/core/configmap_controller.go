@@ -19,6 +19,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 
@@ -29,6 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 // ConfigMapReconciler reconciles a ConfigMap object
@@ -44,6 +46,7 @@ type ConfigMapReconciler struct {
 	curWinPDWarmIPTarget              int
 	curWinPDMinIPTarget               int
 	curWinPDWarmPrefixTarget          int
+	Context                           context.Context
 }
 
 //+kubebuilder:rbac:groups=core,resources=configmaps,namespace=kube-system,resourceNames=amazon-vpc-cni,verbs=get;list;watch
@@ -119,7 +122,12 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHealthz.HealthzHandler) error {
+	// add health check on subpath for CM controller
+	healthzHandler.AddControllersHealthCheckers(
+		map[string]healthz.Checker{"health-cm-controller": r.check()},
+	)
+
 	// Explicitly set MaxConcurrentReconciles to 1 to ensure concurrent reconciliation NOT supported for config map controller.
 	// Don't change to more than 1 unless the struct is guarded against concurrency issues.
 	return ctrl.NewControllerManagedBy(mgr).
@@ -147,4 +155,10 @@ func UpdateNodesOnConfigMapChanges(k8sAPI k8s.K8sWrapper, nodeManager manager.Ma
 		return fmt.Errorf("failed to update one or more nodes %v", errList)
 	}
 	return nil
+}
+
+func (r *ConfigMapReconciler) check() healthz.Checker {
+	r.Log.Info("ConfigMap controller's healthz subpath was added")
+	// We can revisit this to use PingWithTimeout() instead if we have concerns on this controller.
+	return rcHealthz.SimplePing("configmap controller", r.Log)
 }

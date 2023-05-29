@@ -16,15 +16,17 @@ package apps
 import (
 	"context"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
+	controllers "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 
 	"github.com/go-logr/logr"
 	appV1 "k8s.io/api/apps/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 type DeploymentReconciler struct {
@@ -63,7 +65,13 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{}, nil
 }
 
-func (r *DeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *DeploymentReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHealthz.HealthzHandler) error {
+	// add health check on subpath for deployment controller
+	// TODO: this is a simple controller and unlikely hit blocking issue but we can revisit this after subpaths are released for a while
+	healthzHandler.AddControllersHealthCheckers(
+		map[string]healthz.Checker{"health-deploy-controller": rcHealthz.SimplePing("deployment controller", r.Log)},
+	)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appV1.Deployment{}).
 		Complete(r)

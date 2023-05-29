@@ -14,7 +14,9 @@
 package ip
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
@@ -22,13 +24,17 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	v1 "k8s.io/api/core/v1"
 
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 type ipv4Provider struct {
@@ -46,6 +52,8 @@ type ipv4Provider struct {
 	instanceProviderAndPool map[string]*ResourceProviderAndPool
 	// conditions is used to check which IP allocation mode is enabled
 	conditions condition.Conditions
+	// healthz check subpath
+	checker healthz.Checker
 }
 
 // ResourceProviderAndPool contains the instance's ENI manager and the resource pool
@@ -62,7 +70,7 @@ type ResourceProviderAndPool struct {
 
 func NewIPv4Provider(log logr.Logger, apiWrapper api.Wrapper,
 	workerPool worker.Worker, resourceConfig config.ResourceConfig, conditions condition.Conditions) provider.ResourceProvider {
-	return &ipv4Provider{
+	provider := &ipv4Provider{
 		instanceProviderAndPool: make(map[string]*ResourceProviderAndPool),
 		config:                  resourceConfig.WarmPoolConfig,
 		log:                     log,
@@ -70,6 +78,8 @@ func NewIPv4Provider(log logr.Logger, apiWrapper api.Wrapper,
 		workerPool:              workerPool,
 		conditions:              conditions,
 	}
+	provider.checker = provider.check()
+	return provider
 }
 
 func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
@@ -78,6 +88,11 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 	eniManager := eni.NewENIManager(instance)
 	ipV4Resources, err := eniManager.InitResources(p.apiWrapper.EC2API)
 	if err != nil || ipV4Resources == nil {
+		if errors.Is(err, utils.ErrNotFound) {
+			msg := fmt.Sprintf("The instance type %s is not supported for Windows", instance.Type())
+			utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), "Unsupported", msg, v1.EventTypeWarning, p.log)
+		}
+
 		return err
 	}
 
@@ -417,4 +432,22 @@ func (p *ipv4Provider) IntrospectNode(nodeName string) interface{} {
 		return struct{}{}
 	}
 	return resource.resourcePool.Introspect()
+}
+
+func (p *ipv4Provider) check() healthz.Checker {
+	p.log.Info("IPv4 provider's healthz subpath was added")
+	return func(req *http.Request) error {
+		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
+			var ping interface{}
+			p.SubmitAsyncJob(ping)
+			p.log.V(1).Info("***** health check on IPv4 provider tested SubmitAsyncJob *****")
+			c <- nil
+		}, p.log)
+
+		return err
+	}
+}
+
+func (p *ipv4Provider) GetHealthChecker() healthz.Checker {
+	return p.checker
 }

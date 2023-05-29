@@ -16,6 +16,7 @@ package custom
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
@@ -28,6 +29,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+
+	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 )
 
 // Converter for converting k8s object and object list used in watches and list operation
@@ -93,6 +97,8 @@ type CustomController struct {
 	// the controller
 	options    Options
 	conditions condition.Conditions
+
+	checker healthz.Checker
 }
 
 // Request for Add/Update only contains the Namespace/Name
@@ -104,6 +110,25 @@ type Request struct {
 	NamespacedName types.NamespacedName
 	// Delete Event will contain the DeletedObject only.
 	DeletedObject interface{}
+}
+
+func NewCustomController(
+	log logr.Logger,
+	options Options,
+	config *cache.Config,
+	reconciler Reconciler,
+	workQueue workqueue.RateLimitingInterface,
+	conditions condition.Conditions) *CustomController {
+	cc := &CustomController{
+		log:        log,
+		options:    options,
+		config:     config,
+		Do:         reconciler,
+		workQueue:  workQueue,
+		conditions: conditions,
+	}
+	cc.checker = cc.CustomCheck()
+	return cc
 }
 
 // Starts the low level controller
@@ -255,4 +280,17 @@ func (c *CustomController) reconcileHandler(obj interface{}) bool {
 
 	// Return true, don't take a break
 	return true
+}
+
+func (c *CustomController) CustomCheck() healthz.Checker {
+	return func(req *http.Request) error {
+		err := rcHealthz.PingWithTimeout(func(status chan<- error) {
+			var ping interface{}
+			c.workQueue.NumRequeues(ping)
+			c.log.V(1).Info("***** health check on custom pod controller tested workQueue NumRequeues *****")
+			status <- nil
+		}, c.log)
+
+		return err
+	}
 }

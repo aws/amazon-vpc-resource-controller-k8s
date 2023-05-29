@@ -17,11 +17,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
+	mock_handler "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -31,6 +32,8 @@ type Mock struct {
 	Handler *mock_handler.MockHandler
 	Wrapper api.Wrapper
 }
+
+var healthzHandler = healthz.NewHealthzHandler(5)
 
 func NewMock(controller *gomock.Controller) Mock {
 	return Mock{
@@ -48,8 +51,7 @@ func Test_NewResourceManager(t *testing.T) {
 
 	mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
 	conditions := condition.NewControllerConditions(zap.New(), mockK8s)
-
-	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper, conditions)
+	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper, zap.New(zap.UseDevMode(true)), healthzHandler, conditions)
 	assert.NoError(t, err)
 
 	_, ok := manger.GetResourceHandler(config.ResourceNamePodENI)

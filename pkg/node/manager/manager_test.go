@@ -26,6 +26,7 @@ import (
 	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 
 	"github.com/golang/mock/gomock"
@@ -37,15 +38,24 @@ import (
 )
 
 var (
-	instanceID    = "i-01234567890abcdef"
-	providerId    = "aws:///us-west-2c/" + instanceID
-	eniConfigName = "eni-config-name"
-	subnetID      = "subnet-id"
-	nodeName      = "ip-192-168-55-73.us-west-2.compute.internal"
+	instanceID      = "i-01234567890abcdef"
+	providerId      = "aws:///us-west-2c/" + instanceID
+	eniConfigName   = "eni-config-name"
+	subnetID        = "subnet-id"
+	nodeName        = "ip-192-168-55-73.us-west-2.compute.internal"
+	securityGroupId = "sg-1"
 
 	eniConfig = &v1alpha1.ENIConfig{
 		Spec: v1alpha1.ENIConfigSpec{
-			Subnet: subnetID,
+			SecurityGroups: []string{securityGroupId},
+			Subnet:         subnetID,
+		},
+	}
+
+	eniConfig_empty_sg = &v1alpha1.ENIConfig{
+		Spec: v1alpha1.ENIConfigSpec{
+			SecurityGroups: []string{},
+			Subnet:         subnetID,
 		},
 	}
 
@@ -70,7 +80,9 @@ var (
 	mockError = fmt.Errorf("mock error")
 
 	unManagedNode = node.NewUnManagedNode(zap.New(), nodeName, instanceID, config.OSLinux)
-	managedNode   = node.NewManagedNode(zap.New(), nodeName, instanceID, config.OSLinux)
+	managedNode   = node.NewManagedNode(zap.New(), nodeName, instanceID, config.OSLinux, nil, nil)
+
+	healthzHandler = healthz.NewHealthzHandler(5)
 )
 
 type AsyncJobMatcher struct {
@@ -144,7 +156,7 @@ func Test_GetNewManager(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(nil)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.NoError(t, err)
@@ -158,7 +170,7 @@ func Test_GetNewManager_Error(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(mockError)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.Error(t, err, mockError)
@@ -241,6 +253,34 @@ func Test_AddNode_CustomNetworking(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, mock.Manager.dataStore, nodeName)
 	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
+}
+
+// Test adding node when custom networking is enabled but incorrect ENIConfig is defined; it should succeed
+// TODO: combine with other Test_AddNode_CustomNetworking tests
+func Test_AddNode_CustomNetworking_Incorrect_ENIConfig(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+
+	job := AsyncOperationJob{
+		op:       Init,
+		nodeName: nodeName,
+		node:     managedNode,
+	}
+
+	nodeWithENIConfig := v1Node.DeepCopy()
+	nodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
+	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig_empty_sg, nil)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
+
+	err := mock.Manager.AddNode(nodeName)
+	assert.NoError(t, err)
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
+
 }
 
 func Test_AddNode_CustomNetworking_NoENIConfig(t *testing.T) {
@@ -429,19 +469,19 @@ func Test_performAsyncOperation(t *testing.T) {
 	job.op = Init
 
 	mock.MockK8sAPI.EXPECT().AddLabelToManageNode(v1Node, config.HasTrunkAttachedLabel, config.BooleanTrue).Return(true, nil).AnyTimes()
-	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
-	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(nil)
+	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager).Return(nil)
 	_, err := mock.Manager.performAsyncOperation(job)
 	assert.Contains(t, mock.Manager.dataStore, nodeName)
 	assert.NoError(t, err)
 
 	job.op = Update
-	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
+	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager).Return(nil)
 	_, err = mock.Manager.performAsyncOperation(job)
 	assert.NoError(t, err)
 
 	job.op = Delete
-	mock.MockNode.EXPECT().DeleteResources(mock.MockResourceManager, mock.MockEC2API).Return(nil)
+	mock.MockNode.EXPECT().DeleteResources(mock.MockResourceManager).Return(nil)
 	_, err = mock.Manager.performAsyncOperation(job)
 	assert.NoError(t, err)
 
@@ -462,7 +502,7 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 		op:       Init,
 	}
 
-	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager, mock.MockEC2API).Return(&node.ErrInitResources{})
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{})
 
 	_, err := mock.Manager.performAsyncOperation(job)
 	assert.NotContains(t, mock.Manager.dataStore, nodeName) // It should be cleared from cache

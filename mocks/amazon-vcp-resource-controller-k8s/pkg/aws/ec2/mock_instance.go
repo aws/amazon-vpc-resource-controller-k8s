@@ -47,6 +47,20 @@ func (m *MockEC2Instance) EXPECT() *MockEC2InstanceMockRecorder {
 	return m.recorder
 }
 
+// CurrentInstanceSecurityGroups mocks base method.
+func (m *MockEC2Instance) CurrentInstanceSecurityGroups() []string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CurrentInstanceSecurityGroups")
+	ret0, _ := ret[0].([]string)
+	return ret0
+}
+
+// CurrentInstanceSecurityGroups indicates an expected call of CurrentInstanceSecurityGroups.
+func (mr *MockEC2InstanceMockRecorder) CurrentInstanceSecurityGroups() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentInstanceSecurityGroups", reflect.TypeOf((*MockEC2Instance)(nil).CurrentInstanceSecurityGroups))
+}
+
 // FreeDeviceIndex mocks base method.
 func (m *MockEC2Instance) FreeDeviceIndex(arg0 int64) {
 	m.ctrl.T.Helper()
@@ -86,20 +100,6 @@ func (m *MockEC2Instance) InstanceID() string {
 func (mr *MockEC2InstanceMockRecorder) InstanceID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceID", reflect.TypeOf((*MockEC2Instance)(nil).InstanceID))
-}
-
-// InstanceSecurityGroup mocks base method.
-func (m *MockEC2Instance) InstanceSecurityGroup() []string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InstanceSecurityGroup")
-	ret0, _ := ret[0].([]string)
-	return ret0
-}
-
-// InstanceSecurityGroup indicates an expected call of InstanceSecurityGroup.
-func (mr *MockEC2InstanceMockRecorder) InstanceSecurityGroup() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceSecurityGroup", reflect.TypeOf((*MockEC2Instance)(nil).InstanceSecurityGroup))
 }
 
 // LoadDetails mocks base method.

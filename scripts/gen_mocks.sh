@@ -24,4 +24,4 @@ mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/pool/mock_p
 # package resource maocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/resource/mock_resources.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource ResourceManager
 # package condition maocks
-mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/condition/mock_condtion.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition Conditions
+mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/condition/mock_condition.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition Conditions
