@@ -348,7 +348,7 @@ func TestIPv4PrefixProvider_UpdateResourceCapacity_FromFromIPToPD(t *testing.T) 
 	mockPool.EXPECT().SetToActive(pdWarmPoolConfig).Return(job)
 	mockWorker.EXPECT().SubmitJob(job)
 
-	mockInstance.EXPECT().Name().Return(nodeName).Times(3)
+	mockInstance.EXPECT().Name().Return(nodeName).Times(2)
 	mockInstance.EXPECT().Type().Return(instanceType)
 	mockInstance.EXPECT().Os().Return(config.OSWindows)
 	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 224).Return(nil)
@@ -409,7 +409,7 @@ func TestIPv4PrefixProvider_UpdateResourceCapacity_FromPDToPD(t *testing.T) {
 	mockPool.EXPECT().SetToActive(pdWarmPoolConfig).Return(job)
 	mockWorker.EXPECT().SubmitJob(job)
 
-	mockInstance.EXPECT().Name().Return(nodeName).Times(3)
+	mockInstance.EXPECT().Name().Return(nodeName).Times(2)
 	mockInstance.EXPECT().Type().Return(instanceType)
 	mockInstance.EXPECT().Os().Return(config.OSWindows)
 	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 224).Return(nil)
@@ -508,6 +508,7 @@ func TestIsInstanceSupported(t *testing.T) {
 	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
 		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
 		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Name().Return(nodeName)
 	mockInstance.EXPECT().Type().Return(instanceType)
 	mockInstance.EXPECT().Os().Return(config.OSWindows)
 
@@ -525,6 +526,7 @@ func TestIsInstanceSupported_BareMetal(t *testing.T) {
 	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
 		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
 		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Name().Return(nodeName)
 	mockInstance.EXPECT().Type().Return(bareMetalInstanceType)
 	mockInstance.EXPECT().Os().Return(config.OSWindows)
 

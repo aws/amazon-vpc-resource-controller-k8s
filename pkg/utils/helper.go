@@ -20,7 +20,7 @@ import (
 	"strings"
 
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
-
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -201,4 +201,15 @@ func DeconstructIPsFromPrefix(prefix string) ([]string, error) {
 		deconstructedIPs = append(deconstructedIPs, ipAddr)
 	}
 	return deconstructedIPs, nil
+}
+
+func IsNitroInstance(instanceType string) (bool, error) {
+	limits, found := vpc.Limits[instanceType]
+	if !found {
+		return false, ErrNotFound
+	}
+	if limits.IsBareMetal || limits.Hypervisor == "nitro" {
+		return true, nil
+	}
+	return false, nil
 }
