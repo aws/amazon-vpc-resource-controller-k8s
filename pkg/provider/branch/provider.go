@@ -466,8 +466,12 @@ func (b *branchENIProvider) GetPool(_ string) (pool.Pool, bool) {
 
 // IsInstanceSupported returns true for linux node as pod eni is only supported for linux worker node
 func (b *branchENIProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
+	if instance.Os() != config.OSLinux {
+		return false
+	}
+
 	limits, found := vpc.Limits[instance.Type()]
-	supported := found && instance.Os() == config.OSLinux && limits.IsTrunkingCompatible
+	supported := found && limits.IsTrunkingCompatible
 
 	if !supported {
 		// Send a node event for users' visibility

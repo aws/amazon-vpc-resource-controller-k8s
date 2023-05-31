@@ -558,3 +558,55 @@ func TestBranchENIProvider_Introspect(t *testing.T) {
 	resp = provider.IntrospectNode("unregistered-node")
 	assert.Equal(t, resp, struct{}{})
 }
+
+func TestUnSupportedNodeEvents_Linux(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, client := getProviderAndMockK8sWrapper(ctrl)
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+
+	supportedInstanceType := "f5.large"
+	node := &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   NodeName,
+			Labels: map[string]string{config.HasTrunkAttachedLabel: config.BooleanFalse},
+		},
+	}
+
+	mockInstance.EXPECT().Os().Return(config.OSLinux).Times(1)
+	mockInstance.EXPECT().Type().Return(supportedInstanceType).Times(2)
+	mockInstance.EXPECT().Name().Return(NodeName).Times(1)
+	client.EXPECT().GetNode(node.Name).Return(node, nil).Times(1)
+	client.EXPECT().BroadcastEvent(node, "Unsupported", gomock.Any(), v1.EventTypeWarning).Times(1)
+
+	supported := provider.IsInstanceSupported(mockInstance)
+	assert.False(t, supported)
+}
+
+func TestUnSupportedNodeEvents_Windows(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, client := getProviderAndMockK8sWrapper(ctrl)
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+
+	supportedInstanceType := "m5.large"
+	node := &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   NodeName,
+			Labels: map[string]string{config.HasTrunkAttachedLabel: config.BooleanFalse},
+		},
+	}
+
+	mockInstance.EXPECT().Os().Return(config.OSWindows).Times(1)
+	mockInstance.EXPECT().Type().Return(supportedInstanceType).Times(0)
+	mockInstance.EXPECT().Name().Return(NodeName).Times(0)
+	client.EXPECT().GetNode(node.Name).Return(node, nil).Times(0)
+	client.EXPECT().BroadcastEvent(node, "Unsupported", gomock.Any(), v1.EventTypeWarning).Times(0)
+
+	supported := provider.IsInstanceSupported(mockInstance)
+	assert.False(t, supported)
+}
