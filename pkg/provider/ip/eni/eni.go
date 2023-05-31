@@ -148,8 +148,8 @@ func (e *eniManager) CreateIPV4Resource(required int, resourceType config.Resour
 				log.Error(err, "failed to assign all the requested resources",
 					"requested", want, "got", len(assigned))
 			}
-			// Update the remaining capacity
-			e.attachedENIs[index].remainingCapacity = remainingCapacity - canAssign
+			// Update the remaining capacity, assigned can be empty while err is nil
+			e.attachedENIs[index].remainingCapacity = remainingCapacity - len(assigned)
 			// Append the assigned IPs on this ENI to the list of IPs created across all the ENIs
 			assignedIPv4Resources = append(assignedIPv4Resources, assigned...)
 			// Add the mapping from IP to ENI, so that we can easily delete the IP and increment the remaining IP count
@@ -163,69 +163,71 @@ func (e *eniManager) CreateIPV4Resource(required int, resourceType config.Resour
 		}
 	}
 
-	// Number of secondary IPs or IPv4 prefixes supported minus the primary IP
-	ipLimit := vpc.Limits[e.instance.Type()].IPv4PerInterface - 1
-	eniLimit := vpc.Limits[e.instance.Type()].Interface
-
-	// If the existing ENIs could not assign the required resources, loop till the new ENIs can assign the required
-	// number of IPv4 resources
-	for len(assignedIPv4Resources) < required &&
-		len(e.attachedENIs) < eniLimit {
-		deviceIndex, err := e.instance.GetHighestUnusedDeviceIndex()
-		if err != nil {
-			// TODO: Refresh device index for linux nodes only
-			return assignedIPv4Resources, err
-		}
-		want := required - len(assignedIPv4Resources)
-		if want > ipLimit {
-			want = ipLimit
-		}
-
-		// Create new ENI and store newly assigned resources into map
-		switch resourceType {
-		case config.ResourceTypeIPv4Address:
-			ipResourceCount := &config.IPResourceCount{SecondaryIPv4Count: want}
-			nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
-				aws.String(e.instance.SubnetID()), e.instance.CurrentInstanceSecurityGroups(), nil, aws.Int64(deviceIndex),
-				&ENIDescription, nil, ipResourceCount)
-			if err != nil {
-				// TODO: Check if any clean up is required here for linux nodes only?
-				return assignedIPv4Resources, err
-			}
-			eni := &eni{
-				remainingCapacity: ipLimit - want,
-				eniID:             *nwInterface.NetworkInterfaceId,
-			}
-			e.attachedENIs = append(e.attachedENIs, eni)
-			for _, assignedIP := range nwInterface.PrivateIpAddresses {
-				if !*assignedIP.Primary {
-					assignedIPv4Resources = append(assignedIPv4Resources, *assignedIP.PrivateIpAddress)
-					// Also add the mapping from IP to ENI
-					e.resourceToENIMap[*assignedIP.PrivateIpAddress] = eni
-				}
-			}
-
-		case config.ResourceTypeIPv4Prefix:
-			ipResourceCount := &config.IPResourceCount{IPv4PrefixCount: want}
-			nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
-				aws.String(e.instance.SubnetID()), e.instance.CurrentInstanceSecurityGroups(), nil, aws.Int64(deviceIndex),
-				&ENIDescription, nil, ipResourceCount)
-			if err != nil {
-				// TODO: Check if any clean up is required here for linux nodes only?
-				return assignedIPv4Resources, err
-			}
-			eni := &eni{
-				remainingCapacity: ipLimit - want,
-				eniID:             *nwInterface.NetworkInterfaceId,
-			}
-			e.attachedENIs = append(e.attachedENIs, eni)
-			for _, assignedPrefix := range nwInterface.Ipv4Prefixes {
-				assignedIPv4Resources = append(assignedIPv4Resources, *assignedPrefix.Ipv4Prefix)
-				// Also add the mapping from Prefix to ENI
-				e.resourceToENIMap[*assignedPrefix.Ipv4Prefix] = eni
-			}
-		}
-	}
+	// TODO: Windows doesn't support multi-ENI yet, commenting out code that creates new ENI. Uncomment once multi-ENI is supported.
+	//// Number of secondary IPs or IPv4 prefixes supported minus the primary IP
+	//ipLimit := vpc.Limits[e.instance.Type()].IPv4PerInterface - 1
+	//eniLimit := vpc.Limits[e.instance.Type()].Interface
+	//
+	//// If the existing ENIs could not assign the required resources, loop till the new ENIs can assign the required
+	//// number of IPv4 resources
+	//for len(assignedIPv4Resources) < required &&
+	//	len(e.attachedENIs) < eniLimit {
+	//
+	//	deviceIndex, err := e.instance.GetHighestUnusedDeviceIndex()
+	//	if err != nil {
+	//		// TODO: Refresh device index for linux nodes only
+	//		return assignedIPv4Resources, err
+	//	}
+	//	want := required - len(assignedIPv4Resources)
+	//	if want > ipLimit {
+	//		want = ipLimit
+	//	}
+	//
+	//	// Create new ENI and store newly assigned resources into map
+	//	switch resourceType {
+	//	case config.ResourceTypeIPv4Address:
+	//		ipResourceCount := &config.IPResourceCount{SecondaryIPv4Count: want}
+	//		nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
+	//			aws.String(e.instance.SubnetID()), e.instance.CurrentInstanceSecurityGroups(), nil, aws.Int64(deviceIndex),
+	//			&ENIDescription, nil, ipResourceCount)
+	//		if err != nil {
+	//			// TODO: Check if any clean up is required here for linux nodes only?
+	//			return assignedIPv4Resources, err
+	//		}
+	//		eni := &eni{
+	//			remainingCapacity: ipLimit - want,
+	//			eniID:             *nwInterface.NetworkInterfaceId,
+	//		}
+	//		e.attachedENIs = append(e.attachedENIs, eni)
+	//		for _, assignedIP := range nwInterface.PrivateIpAddresses {
+	//			if !*assignedIP.Primary {
+	//				assignedIPv4Resources = append(assignedIPv4Resources, *assignedIP.PrivateIpAddress)
+	//				// Also add the mapping from IP to ENI
+	//				e.resourceToENIMap[*assignedIP.PrivateIpAddress] = eni
+	//			}
+	//		}
+	//
+	//	case config.ResourceTypeIPv4Prefix:
+	//		ipResourceCount := &config.IPResourceCount{IPv4PrefixCount: want}
+	//		nwInterface, err := ec2APIHelper.CreateAndAttachNetworkInterface(aws.String(e.instance.InstanceID()),
+	//			aws.String(e.instance.SubnetID()), e.instance.CurrentInstanceSecurityGroups(), nil, aws.Int64(deviceIndex),
+	//			&ENIDescription, nil, ipResourceCount)
+	//		if err != nil {
+	//			// TODO: Check if any clean up is required here for linux nodes only?
+	//			return assignedIPv4Resources, err
+	//		}
+	//		eni := &eni{
+	//			remainingCapacity: ipLimit - want,
+	//			eniID:             *nwInterface.NetworkInterfaceId,
+	//		}
+	//		e.attachedENIs = append(e.attachedENIs, eni)
+	//		for _, assignedPrefix := range nwInterface.Ipv4Prefixes {
+	//			assignedIPv4Resources = append(assignedIPv4Resources, *assignedPrefix.Ipv4Prefix)
+	//			// Also add the mapping from Prefix to ENI
+	//			e.resourceToENIMap[*assignedPrefix.Ipv4Prefix] = eni
+	//		}
+	//	}
+	//}
 
 	var err error
 	// This can happen if the subnet doesn't have remaining IPs
