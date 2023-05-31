@@ -17,6 +17,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	"github.com/go-logr/logr"
+	v1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
@@ -340,11 +341,20 @@ func (p *ipv4PrefixProvider) GetPool(nodeName string) (pool.Pool, bool) {
 }
 
 func (p *ipv4PrefixProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
-	//TODO add check for Nitro instances
-	if instance.Os() == config.OSWindows {
+	instanceType := instance.Type()
+	limits, found := vpc.Limits[instanceType]
+	if !found {
+		msg := fmt.Sprintf("The instance type %s is not found in VPC limits", instanceType)
+		utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), "Instance type not found", msg, v1.EventTypeWarning, p.log)
+		return false
+	}
+
+	if instance.Os() == config.OSWindows && (limits.IsBareMetal || limits.Hypervisor == "nitro") {
 		return true
 	}
 
+	msg := fmt.Sprintf("The instance type %s is not supported for prefix delegation", instanceType)
+	utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), "Unsupported", msg, v1.EventTypeWarning, p.log)
 	return false
 }
 
