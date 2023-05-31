@@ -58,6 +58,7 @@ var (
 			Name:        mockPodName,
 			Namespace:   mockPodNS,
 			Annotations: map[string]string{config.ResourceNameIPAddress: "192.168.10.0/32"},
+			UID:         "pod-id",
 		},
 		Spec: v1.PodSpec{
 			NodeName: mockNodeName,
@@ -323,7 +324,7 @@ func TestUpdateResourceName_IsDeleteEvent_PrefixProvider(t *testing.T) {
 	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
 	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
 	mockProvider.EXPECT().GetPool(mockPod.Spec.NodeName).Return(mockPool, true)
-	mockPool.EXPECT().IsManagedResource(mockPod.Annotations[config.ResourceNameIPAddress]).Return(true)
+	mockPool.EXPECT().GetAssignedResource(string(mockPod.UID)).Return("ip-1", true)
 	resourceName := mock.PodReconciler.updateResourceName(true, mockPod)
 
 	assert.Equal(t, config.ResourceNameIPAddressFromPrefix, resourceName)
@@ -340,7 +341,7 @@ func TestUpdateResourceName_IsDeleteEvent_SecondaryIPProvider(t *testing.T) {
 	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
 	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
 	mockProvider.EXPECT().GetPool(mockPod.Spec.NodeName).Return(mockPool, true)
-	mockPool.EXPECT().IsManagedResource(mockPod.Annotations[config.ResourceNameIPAddress]).Return(false)
+	mockPool.EXPECT().GetAssignedResource(string(mockPod.UID)).Return("", false)
 	resourceName := mock.PodReconciler.updateResourceName(true, mockPod)
 
 	// since resource ip is not managed by prefix ip pool, resource name remains unchanged

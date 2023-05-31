@@ -577,15 +577,6 @@ func TestPool_SetToActive_PD_Pool(t *testing.T) {
 	assert.Equal(t, 16, warmPool.pendingCreate)
 }
 
-func TestIsManagedResource(t *testing.T) {
-	warmPool := getMockPool(poolConfig, usedResources, nil, 7, false)
-	pdWarmPool := getMockPool(poolConfig, nil, nil, 7, true)
-
-	assert.True(t, warmPool.IsManagedResource(res1))
-	assert.False(t, warmPool.IsManagedResource(res3))
-	assert.False(t, pdWarmPool.IsManagedResource(res1))
-}
-
 func TestFindFreeGroup(t *testing.T) {
 	groupIDs := findFreeGroup(warmPoolResources, 1)
 	assert.ElementsMatch(t, []string{res3}, groupIDs)
