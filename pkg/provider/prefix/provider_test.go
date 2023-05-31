@@ -30,6 +30,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -38,8 +39,10 @@ import (
 )
 
 var (
-	nodeName     = "node-1"
-	instanceType = "t3.medium"
+	nodeName              = "node-1"
+	instanceType          = "t3.medium"
+	nonNitroInstanceType  = "c1.medium"
+	bareMetalInstanceType = "c5.metal"
 
 	prefix1 = "192.168.1.0/28"
 	prefix2 = "192.168.2.0/28"
@@ -61,6 +64,12 @@ var (
 			config.WarmIPTarget:                     strconv.Itoa(config.IPv4PDDefaultWarmIPTargetSize),
 			config.MinimumIPTarget:                  strconv.Itoa(config.IPv4PDDefaultMinIPTargetSize),
 			config.WarmPrefixTarget:                 strconv.Itoa(config.IPv4PDDefaultWarmPrefixTargetSize),
+		},
+	}
+
+	node = &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
 		},
 	}
 )
@@ -473,11 +482,9 @@ func getMockIPv4PrefixProvider() ipv4PrefixProvider {
 }
 
 func TestGetPDWarmPoolConfig(t *testing.T) {
-	// TODO
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	//mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
 	mockConditions := mock_condition.NewMockConditions(ctrl)
 	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
@@ -490,6 +497,95 @@ func TestGetPDWarmPoolConfig(t *testing.T) {
 	assert.Equal(t, pdWarmPoolConfig, config)
 }
 
+// TestIsInstanceSupported tests that if the instance type is nitro, return true
 func TestIsInstanceSupported(t *testing.T) {
-	// TODO
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Type().Return(instanceType)
+	mockInstance.EXPECT().Os().Return(config.OSWindows)
+
+	assert.Equal(t, true, prefixProvider.IsInstanceSupported(mockInstance))
+}
+
+// TestIsInstanceSupported_BareMetal tests that if the instance type is bare metal, return true
+func TestIsInstanceSupported_BareMetal(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Type().Return(bareMetalInstanceType)
+	mockInstance.EXPECT().Os().Return(config.OSWindows)
+
+	assert.Equal(t, true, prefixProvider.IsInstanceSupported(mockInstance))
+}
+
+// TestIsInstanceSupported_Linux tests that if the instance type is Linux, broadcast Unsupported event and return false
+func TestIsInstanceSupported_Linux(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Type().Return(instanceType)
+	mockInstance.EXPECT().Os().Return(config.OSLinux)
+	mockInstance.EXPECT().Name().Return(nodeName)
+	mockK8sWrapper.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
+	mockK8sWrapper.EXPECT().BroadcastEvent(node, "Unsupported", gomock.Any(), v1.EventTypeWarning).Times(1)
+
+	assert.Equal(t, false, prefixProvider.IsInstanceSupported(mockInstance))
+}
+
+// TestIsInstanceSupported_NonNitro tests that if the instance type is non-nitro, broadcast Unsupported event and return false
+func TestIsInstanceSupported_NonNitro(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Type().Return(nonNitroInstanceType)
+	mockInstance.EXPECT().Os().Return(config.OSWindows)
+	mockInstance.EXPECT().Name().Return(nodeName)
+	mockK8sWrapper.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
+	mockK8sWrapper.EXPECT().BroadcastEvent(node, "Unsupported", gomock.Any(), v1.EventTypeWarning).Times(1)
+
+	assert.Equal(t, false, prefixProvider.IsInstanceSupported(mockInstance))
+}
+
+// TestIsInstanceSupported_NotFound tests that if the instance type is not found in vpc limits, broadcast Unsupported event and return false
+func TestIsInstanceSupported_NotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
+	mockInstance.EXPECT().Type().Return("zzz")
+	mockInstance.EXPECT().Name().Return(nodeName)
+	mockK8sWrapper.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
+	mockK8sWrapper.EXPECT().BroadcastEvent(node, "Unsupported", gomock.Any(), v1.EventTypeWarning).Times(1)
+
+	assert.Equal(t, false, prefixProvider.IsInstanceSupported(mockInstance))
 }
