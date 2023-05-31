@@ -25,6 +25,7 @@ import (
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 	"github.com/google/uuid"
@@ -134,7 +135,7 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 		// Pod annotation ResourceNameIPAddress has two resource managers: secondary IP and prefix IP;
 		// backend needs to distinguish which resource provider and handler should be used here accordingly
 		if resourceName == config.ResourceNameIPAddress {
-			resourceName = r.updateResourceName(isDeleteEvent || hasPodCompleted || nodeDeletedInCluster, pod)
+			resourceName = r.updateResourceName(isDeleteEvent || hasPodCompleted || nodeDeletedInCluster, pod, node)
 		}
 
 		resourceHandler, isSupported := r.ResourceManager.GetResourceHandler(resourceName)
@@ -237,7 +238,7 @@ func (r *PodReconciler) check() healthz.Checker {
 }
 
 // updateResourceName updates resource name according to pod event and which IP allocation mode is enabled
-func (r *PodReconciler) updateResourceName(isDeletionEvent bool, pod *v1.Pod) string {
+func (r *PodReconciler) updateResourceName(isDeletionEvent bool, pod *v1.Pod, node node.Node) string {
 	resourceName := config.ResourceNameIPAddress
 
 	// Pod deletion must use the handler that assigned the IP resource regardless which IP allocation mode is active
@@ -258,8 +259,9 @@ func (r *PodReconciler) updateResourceName(isDeletionEvent bool, pod *v1.Pod) st
 			}
 		}
 	} else {
-		// Pod creation should use the currently active resource handler
-		if r.Condition.IsWindowsPrefixDelegationEnabled() {
+		// Pod creation should use the currently active resource handler. But if pod is scheduled on a non-nitro instance,
+		// will skip updating the resource name and continue to use secondary IP instead.
+		if r.Condition.IsWindowsPrefixDelegationEnabled() && node.IsNitroInstance() {
 			// If prefix delegation is enabled, update resource name so that prefix IP handler will be used
 			resourceName = config.ResourceNameIPAddressFromPrefix
 		}
