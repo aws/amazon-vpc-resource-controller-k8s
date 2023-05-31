@@ -467,10 +467,9 @@ func (h *ec2APIHelper) AssignIPv4ResourcesAndWaitTillReady(eniID string, resourc
 		return assignedResources, err
 	}
 
-	if (resourceType == config.ResourceNameIPAddress && assignPrivateIPOutput.AssignedPrivateIpAddresses != nil &&
-		len(assignPrivateIPOutput.AssignedPrivateIpAddresses) == 0) ||
-		(resourceType == config.ResourceTypeIPv4Prefix && assignPrivateIPOutput.AssignedIpv4Prefixes != nil &&
-			len(assignPrivateIPOutput.AssignedIpv4Prefixes) == 0) {
+	if assignPrivateIPOutput == nil ||
+		(resourceType == config.ResourceNameIPAddress && len(assignPrivateIPOutput.AssignedPrivateIpAddresses) == 0) ||
+		(resourceType == config.ResourceTypeIPv4Prefix && len(assignPrivateIPOutput.AssignedIpv4Prefixes) == 0) {
 		return assignedResources, fmt.Errorf("failed to create %v %s to eni %s", count, resourceType, eniID)
 	}
 
