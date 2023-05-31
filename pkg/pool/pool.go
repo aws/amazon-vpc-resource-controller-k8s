@@ -49,7 +49,6 @@ type Pool interface {
 	SetToDraining() *worker.WarmPoolJob
 	SetToActive(warmPoolConfig *config.WarmPoolConfig) *worker.WarmPoolJob
 	Introspect() IntrospectResponse
-	IsManagedResource(resourceID string) bool
 }
 
 type pool struct {
@@ -542,19 +541,6 @@ func (p *pool) Introspect() IntrospectResponse {
 		WarmResources:    warmResources,
 		CoolingResources: p.coolDownQueue,
 	}
-}
-
-// IsManagedResource checks if the resource is managed by the handler
-func (p *pool) IsManagedResource(resourceID string) bool {
-	p.lock.RLock()
-	defer p.lock.RUnlock()
-
-	for _, resource := range p.usedResources {
-		if resource.ResourceID == resourceID {
-			return true
-		}
-	}
-	return false
 }
 
 // findFreeGroup finds groups that have all possible resources free to be allocated or deleted, and returns their group ids
