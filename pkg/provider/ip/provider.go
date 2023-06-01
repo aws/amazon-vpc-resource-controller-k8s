@@ -111,6 +111,21 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 
 	podToResourceMap := map[string]pool.Resource{}
 	usedIPSet := map[string]struct{}{}
+
+	// Construct map of all possible IPs to prefix for each assigned prefix
+	ipToPrefixMap := make(map[string]string)
+	usedPrefixSet := make(map[string]struct{})
+	for _, prefix := range presentPrefixes {
+		prefixIPs, err := utils.DeconstructIPsFromPrefix(prefix)
+		if err != nil {
+			p.log.Error(err, "failed to deconstruct prefix into IPs", "prefix", prefix)
+			continue
+		}
+		for _, ip := range prefixIPs {
+			ipToPrefixMap[ip] = prefix
+		}
+	}
+
 	for _, pod := range pods {
 		annotation, present := pod.Annotations[config.ResourceNameIPAddress]
 		if !present {
@@ -120,6 +135,12 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 		if _, found := presentIPSet[annotation]; found {
 			podToResourceMap[string(pod.UID)] = pool.Resource{GroupID: annotation, ResourceID: annotation}
 			usedIPSet[annotation] = struct{}{}
+		} else {
+			// If running pod's IP is not secondary IP, ignore it
+			p.log.Info("ignoring non-secondary IP", "IPv4 address ", annotation)
+			if prefix, exist := ipToPrefixMap[annotation]; exist {
+				usedPrefixSet[prefix] = struct{}{}
+			}
 		}
 	}
 
@@ -129,7 +150,8 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 		warmResources[ip] = append(warmResources[ip], pool.Resource{GroupID: ip, ResourceID: ip})
 	}
 
-	nodeCapacity := getCapacity(instance.Type(), instance.Os()) - len(presentPrefixes)
+	// Subtract number of used prefixes from total number of interfaces
+	nodeCapacity := getCapacity(instance.Type(), instance.Os()) - len(usedPrefixSet)
 
 	// Set warm pool config to empty config if PD is enabled
 	secondaryIPWPConfig := p.config
@@ -203,7 +225,7 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 			return nil
 		}
 	} else {
-		p.log.Info("Non-nitro instances continue using secondary IP mode", "instance name", instance.Name(),
+		p.log.V(1).Info("Non-nitro instances continue using secondary IP mode", "instance name", instance.Name(),
 			"instance type", instance.Type())
 	}
 

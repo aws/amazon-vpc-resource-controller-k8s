@@ -96,8 +96,12 @@ func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	presentIPs := ipV4Resources.PrivateIPv4Addresses
 	presentPrefixes := ipV4Resources.IPv4Prefixes
+
+	presentSecondaryIPSet := make(map[string]struct{})
+	for _, ip := range ipV4Resources.PrivateIPv4Addresses {
+		presentSecondaryIPSet[ip] = struct{}{}
+	}
 
 	pods, err := p.apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
 	if err != nil {
@@ -117,6 +121,7 @@ func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	}
 
 	podToResourceMap := make(map[string]pool.Resource)
+	numberUsedSecondaryIP := 0
 
 	for _, pod := range pods {
 		annotation, present := pod.Annotations[config.ResourceNameIPAddress]
@@ -131,8 +136,11 @@ func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 			// remove running pod's IP from warm resources
 			delete(warmResourceIDToGroup, annotation)
 		} else {
-			// If running pod's IP is not constructed from an assigned prefix on the instance, ignore it
-			p.log.Info("ignoring secondary IP", "IPv4 address ", annotation)
+			// If running pod's IP is not deconstructed from an assigned prefix on the instance, ignore it
+			p.log.Info("ignoring non-prefix deconstructed IP", "IPv4 address ", annotation)
+			if _, exist := presentSecondaryIPSet[annotation]; exist {
+				numberUsedSecondaryIP++
+			}
 		}
 	}
 
@@ -142,8 +150,8 @@ func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 		warmResources[prefix] = append(warmResources[prefix], pool.Resource{GroupID: prefix, ResourceID: ip})
 	}
 
-	// Subtract number of existing secondary IP address from total number of interfaces, and then multiply by 16
-	nodeCapacity := (getCapacity(instance.Type(), instance.Os()) - len(presentIPs)) * pool.NumIPv4AddrPerPrefix
+	// Subtract number of used secondary IP addresses from total number of interfaces, and then multiply by 16
+	nodeCapacity := (getCapacity(instance.Type(), instance.Os()) - numberUsedSecondaryIP) * pool.NumIPv4AddrPerPrefix
 
 	p.config = p.getPDWarmPoolConfig()
 
