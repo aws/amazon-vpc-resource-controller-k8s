@@ -1,6 +1,20 @@
+// Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"). You may
+// not use this file except in compliance with the License. A copy of the
+// License is located at
+//
+//     http://aws.amazon.com/apache2.0/
+//
+// or in the "license" file accompanying this file. This file is distributed
+// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+// express or implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
 package prefix
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -16,6 +30,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -73,6 +88,11 @@ func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	eniManager := eni.NewENIManager(instance)
 	ipV4Resources, err := eniManager.InitResources(p.apiWrapper.EC2API)
 	if err != nil || ipV4Resources == nil {
+		if errors.Is(err, utils.ErrNotFound) {
+			msg := fmt.Sprintf("The instance type %s is not supported for Windows", instance.Type())
+			utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), "Unsupported", msg, v1.EventTypeWarning, p.log)
+		}
+
 		return err
 	}
 
@@ -174,12 +194,15 @@ func (p *ipv4PrefixProvider) UpdateResourceCapacity(instance ec2.EC2Instance) er
 	// Check if PD is enabled
 	isCurrPDEnabled := p.conditions.IsWindowsPrefixDelegationEnabled()
 
-	// Previous state and current state are both PD disabled, no need to update the warm pool config or node capacity for prefix IP provider
+	// Previous state and current state are both PD disabled, which means secondary IP provider has been active without toggling, hence
+	// no need to update the warm pool config or node capacity as prefix provider
 	if !resourceProviderAndPool.isPrevPDEnabled && !isCurrPDEnabled {
+		p.log.V(1).Info("secondary IP provider has been active without toggling, no update from prefix provider",
+			"isPrevPDEnabled", resourceProviderAndPool.isPrevPDEnabled, "isCurrPDEnabled", isCurrPDEnabled)
 		return nil
 	}
 
-	// If prefix delegation was enabled but now disabled, then set the prefix IP pool state to draining and
+	// If toggling from PD to secondary IP mode, then set the prefix IP pool state to draining and
 	// do not update the capacity as that would be done by secondary IP provider
 	if resourceProviderAndPool.isPrevPDEnabled && !isCurrPDEnabled {
 		resourceProviderAndPool.isPrevPDEnabled = false
@@ -208,7 +231,7 @@ func (p *ipv4PrefixProvider) UpdateResourceCapacity(instance ec2.EC2Instance) er
 	capacity := resourceProviderAndPool.capacity
 
 	// Advertise capacity of private IPv4 addresses deconstructed from prefixes
-	err := p.apiWrapper.K8sAPI.AdvertiseCapacityIfNotSet(instance.Name(), config.ResourceNameIPAddress, capacity)
+	err := p.apiWrapper.K8sAPI.AdvertiseCapacityIfNotSet(instanceName, config.ResourceNameIPAddress, capacity)
 	if err != nil {
 		return err
 	}
@@ -341,20 +364,23 @@ func (p *ipv4PrefixProvider) GetPool(nodeName string) (pool.Pool, bool) {
 }
 
 func (p *ipv4PrefixProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
+	instanceName := instance.Name()
 	instanceType := instance.Type()
-	limits, found := vpc.Limits[instanceType]
-	if !found {
-		msg := fmt.Sprintf("The instance type %s is not found in VPC limits", instanceType)
-		utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), "Instance type not found", msg, v1.EventTypeWarning, p.log)
+	isNitroInstance, err := utils.IsNitroInstance(instanceType)
+
+	if errors.Is(err, utils.ErrNotFound) {
+		msg := fmt.Sprintf("The instance type %s is not supported for Windows", instanceType)
+		utils.SendNodeEvent(p.apiWrapper.K8sAPI, instanceName, "Unsupported", msg, v1.EventTypeWarning, p.log)
 		return false
 	}
 
-	if instance.Os() == config.OSWindows && (limits.IsBareMetal || limits.Hypervisor == "nitro") {
+	if instance.Os() == config.OSWindows && err == nil && isNitroInstance {
 		return true
 	}
 
+	// if instance is non-nitro or non-Windows, PD is not supported
 	msg := fmt.Sprintf("The instance type %s is not supported for prefix delegation", instanceType)
-	utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), "Unsupported", msg, v1.EventTypeWarning, p.log)
+	utils.SendNodeEvent(p.apiWrapper.K8sAPI, instanceName, "Unsupported", msg, v1.EventTypeWarning, p.log)
 	return false
 }
 

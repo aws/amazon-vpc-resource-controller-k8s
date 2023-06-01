@@ -30,9 +30,9 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
-	v1 "k8s.io/api/core/v1"
 
 	"github.com/go-logr/logr"
+	v1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
@@ -180,22 +180,31 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	// Check if PD is enabled
 	isCurrPDEnabled := p.conditions.IsWindowsPrefixDelegationEnabled()
 
-	// Previous state and current state are both PD enabled or disabled, no need to update warm pool config or capacity for secondary
-	// IP provider
-	if resourceProviderAndPool.isPrevPDEnabled == isCurrPDEnabled {
-		return nil
-	}
-
-	// If prefix delegation is enabled, then set the secondary IP pool state to draining and
-	// do not update the capacity as that would be done by prefix provider
-	if !resourceProviderAndPool.isPrevPDEnabled && isCurrPDEnabled {
-		resourceProviderAndPool.isPrevPDEnabled = true
-		p.log.Info("Prefix IP provider should be active")
-		job := resourceProviderAndPool.resourcePool.SetToDraining()
-		if job.Operations != worker.OperationReconcileNotRequired {
-			p.SubmitAsyncJob(job)
+	// Only toggle to PD mode if instance is nitro; otherwise, continue with secondary IP mode
+	isNitroInstance, err := utils.IsNitroInstance(instance.Type())
+	if err == nil && isNitroInstance {
+		// Previous state and current state are both PD enabled, which means prefix provider has been active without toggling, hence
+		// no need to update the warm pool config or node capacity as secondary IP provider
+		if resourceProviderAndPool.isPrevPDEnabled && isCurrPDEnabled {
+			p.log.V(1).Info("prefix provider has been active without toggling, no update from secondary IP provider",
+				"isPrevPDEnabled", resourceProviderAndPool.isPrevPDEnabled, "isCurrPDEnabled", isCurrPDEnabled)
+			return nil
 		}
-		return nil
+
+		// If toggling from secondary IP to PD mode, then set the secondary IP pool state to draining and
+		// do not update the capacity as that would be done by prefix provider
+		if !resourceProviderAndPool.isPrevPDEnabled && isCurrPDEnabled {
+			resourceProviderAndPool.isPrevPDEnabled = true
+			p.log.Info("Prefix IP provider should be active")
+			job := resourceProviderAndPool.resourcePool.SetToDraining()
+			if job.Operations != worker.OperationReconcileNotRequired {
+				p.SubmitAsyncJob(job)
+			}
+			return nil
+		}
+	} else {
+		p.log.Info("Non-nitro instances continue using secondary IP mode", "instance name", instance.Name(),
+			"instance type", instance.Type())
 	}
 
 	resourceProviderAndPool.isPrevPDEnabled = false
@@ -212,7 +221,7 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 
 	capacity := resourceProviderAndPool.capacity
 
-	err := p.apiWrapper.K8sAPI.AdvertiseCapacityIfNotSet(instance.Name(), config.ResourceNameIPAddress, capacity)
+	err = p.apiWrapper.K8sAPI.AdvertiseCapacityIfNotSet(instance.Name(), config.ResourceNameIPAddress, capacity)
 	if err != nil {
 		return err
 	}
