@@ -20,7 +20,6 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
@@ -247,14 +246,6 @@ func (n *node) IsNitroInstance() bool {
 	n.lock.RLock()
 	defer n.lock.RUnlock()
 
-	limits, found := vpc.Limits[n.instance.Type()]
-	if !found {
-		return false
-	}
-
-	if limits.IsBareMetal || limits.Hypervisor == "nitro" {
-		return true
-	}
-
-	return false
+	isNitroInstance, err := utils.IsNitroInstance(n.instance.Type())
+	return err == nil && isNitroInstance
 }

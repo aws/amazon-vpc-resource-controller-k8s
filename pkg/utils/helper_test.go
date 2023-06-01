@@ -525,3 +525,24 @@ func TestDeconstructIPsFromPrefix_InvalidPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestIsNitroInstance(t *testing.T) {
+	instanceType := "a1.2xlarge"
+	isNitro, err := IsNitroInstance(instanceType)
+	assert.NoError(t, err)
+	assert.True(t, isNitro)
+}
+
+func TestIsNitroInstance_ErrorNotFound(t *testing.T) {
+	instanceType := "random"
+	isNitro, err := IsNitroInstance(instanceType)
+	assert.Error(t, err)
+	assert.False(t, isNitro)
+}
+
+func TestIsNitroInstance_NonNitro(t *testing.T) {
+	instanceType := "c1.medium"
+	isNitro, err := IsNitroInstance(instanceType)
+	assert.NoError(t, err)
+	assert.False(t, isNitro)
+}
