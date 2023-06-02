@@ -476,7 +476,7 @@ func (b *branchENIProvider) IsInstanceSupported(instance ec2.EC2Instance) bool {
 	if !supported {
 		// Send a node event for users' visibility
 		msg := fmt.Sprintf("The instance type %s is not supported for trunk interface (Security Group for Pods)", instance.Type())
-		utils.SendNodeEvent(b.apiWrapper.K8sAPI, instance.Name(), "Unsupported", msg, v1.EventTypeWarning, b.log)
+		utils.SendNodeEvent(b.apiWrapper.K8sAPI, instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, b.log)
 	}
 
 	return supported
