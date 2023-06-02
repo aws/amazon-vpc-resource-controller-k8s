@@ -491,7 +491,7 @@ func timeSinceMs(start time.Time) float64 {
 func (e *ec2Wrapper) DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
 	start := time.Now()
 	describeInstancesOutput, err := e.userServiceClient.DescribeInstances(input)
-	ec2APICallLatencies.WithLabelValues("describe_network_interface").Observe(timeSinceMs(start))
+	ec2APICallLatencies.WithLabelValues("describe_instances").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
