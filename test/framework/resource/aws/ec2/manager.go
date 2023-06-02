@@ -36,7 +36,7 @@ type Manager interface {
 	GetENISecurityGroups(eniID string) ([]string, error)
 	WaitTillTheENIIsDeleted(ctx context.Context, eniID string) error
 	UnAssignSecondaryIPv4Address(instance string, secondaryIPv4Address []string) error
-	GetPrivateIPv4AddressAndPrefix(instanceID string) ([]*ec2.NetworkInterfacePrivateIpAddress, []*ec2.Ipv4PrefixSpecification, error)
+	GetPrivateIPv4AddressAndPrefix(instanceID string) ([]string, []string, error)
 }
 
 func NewManager(ec2Client *ec2.EC2, vpcID string) Manager {
@@ -212,9 +212,7 @@ func (d *defaultManager) UnAssignSecondaryIPv4Address(instanceID string, seconda
 	return err
 }
 
-func (d *defaultManager) GetPrivateIPv4AddressAndPrefix(instanceID string) ([]*ec2.NetworkInterfacePrivateIpAddress,
-	[]*ec2.Ipv4PrefixSpecification, error) {
-
+func (d *defaultManager) GetPrivateIPv4AddressAndPrefix(instanceID string) ([]string, []string, error) {
 	describeNetworkInterfaceOutput, err := d.ec2Client.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -230,6 +228,23 @@ func (d *defaultManager) GetPrivateIPv4AddressAndPrefix(instanceID string) ([]*e
 		return nil, nil, fmt.Errorf("no instance found")
 	}
 
-	return describeNetworkInterfaceOutput.NetworkInterfaces[0].PrivateIpAddresses,
-		describeNetworkInterfaceOutput.NetworkInterfaces[0].Ipv4Prefixes, err
+	primaryENI := describeNetworkInterfaceOutput.NetworkInterfaces[0]
+
+	var secondaryIPAddresses []string
+	if len(primaryENI.PrivateIpAddresses) > 0 {
+		for _, ip := range primaryENI.PrivateIpAddresses {
+			if *ip.Primary != true {
+				secondaryIPAddresses = append(secondaryIPAddresses, *ip.PrivateIpAddress)
+			}
+		}
+	}
+
+	var ipV4Prefixes []string
+	if len(describeNetworkInterfaceOutput.NetworkInterfaces[0].Ipv4Prefixes) > 0 {
+		for _, prefix := range primaryENI.Ipv4Prefixes {
+			ipV4Prefixes = append(ipV4Prefixes, *prefix.Ipv4Prefix)
+		}
+	}
+
+	return secondaryIPAddresses, ipV4Prefixes, err
 }
