@@ -203,10 +203,10 @@ var _ = Describe("Windows Integration Test", func() {
 		})
 	})
 
-	Describe("configMap enable-windows-prefix-delegation tests", func() {
+	Describe("configMap enable-windows-prefix-delegation tests", Label("windows-prefix-delegation"), func() {
 		// Test windows prefix delegation feature enable/disable. When feature enabled, pod must have
 		// prefix ips assigned. Otherwise, pod must have secondary ip assigned.
-		var testPod *v1.Pod
+		var testPod, testPod2 *v1.Pod
 		var createdPod *v1.Pod
 		var instanceID string
 		var nodeName string
@@ -242,6 +242,17 @@ var _ = Describe("Windows Integration Test", func() {
 				NodeName(nodeName).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+
+			testPod2, err = manifest.NewWindowsPodBuilder().
+				Namespace("windows-test").
+				Name("windows-pd-pod2").
+				Container(testerContainer).
+				OS("windows").
+				TerminationGracePeriod(0).
+				RestartPolicy(v1.RestartPolicyNever).
+				NodeName(nodeName).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		Context("when prefix delegation is enabled", func() {
@@ -252,9 +263,6 @@ var _ = Describe("Windows Integration Test", func() {
 			})
 
 			JustAfterEach(func() {
-				err := frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
-				Expect(err).ToNot(HaveOccurred())
-
 				// restore the configmap after each test
 				testConfigMap = *manifest.NewConfigMapBuilder().Data(data).Build()
 				configMapWrapper.UpdateConfigMap(frameWork.ConfigMapManager, ctx, &testConfigMap)
@@ -263,14 +271,21 @@ var _ = Describe("Windows Integration Test", func() {
 			Context("[CANARY] When enable-windows-prefix-delegation is true", func() {
 				It("pod should be running and assigned ips are from prefix", func() {
 					By("creating pod and waiting for ready")
+					_, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesBefore)).To(Equal(1))
+
 					// verify if ip assigned is coming from a prefix
 					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
 					Expect(err).ToNot(HaveOccurred())
-					verify.WindowsPodHaveIPv4AddressFromPrefix(createdPod)
+					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesBefore)
+
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+					Expect(err).ToNot(HaveOccurred())
 				})
 			})
 
-			Context("When warm-prefix-target is set to 2", func() {
+			Context("When warm-prefix-target is set to 2", Label("warm-prefix-target"), func() {
 				BeforeEach(func() {
 					data = map[string]string{
 						config.EnableWindowsIPAMKey:             "true",
@@ -289,16 +304,107 @@ var _ = Describe("Windows Integration Test", func() {
 					// verify if ip assigned is coming from a prefix
 					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
 					Expect(err).ToNot(HaveOccurred())
-					verify.WindowsPodHaveIPv4AddressFromPrefix(createdPod)
+					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesBefore)
 
 					// number of prefixes should increase by 1 since need 1 more prefix to fulfill warm-prefix-target of 2
 					_, prefixesAfter, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
 					Expect(err).ToNot(HaveOccurred())
 					Expect(len(prefixesAfter) - len(prefixesBefore)).To(Equal(1))
+
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+					Expect(err).ToNot(HaveOccurred())
 				})
 			})
 
-			Context("When enable-windows-prefix-delegation is toggled to false", func() {
+			Context("When warm-ip-target is set to 15", Label("warm-ip-target"), func() {
+				BeforeEach(func() {
+					data = map[string]string{
+						config.EnableWindowsIPAMKey:             "true",
+						config.EnableWindowsPrefixDelegationKey: "true",
+						config.WarmIPTarget:                     "15"}
+				})
+				It("should assign new prefix when 2nd pod is launched", func() {
+					// allow some time for previous test pod to cool down
+					time.Sleep(bufferForCoolDown)
+					// before running any pod, should have 1 prefix assigned
+					privateIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesBefore)).To(Equal(1))
+
+					By("creating 1 pod and waiting for ready should not create new prefix")
+					// verify if ip assigned is coming from a prefix
+					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+
+					_, prefixesAfterPod1, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesAfterPod1)).To(Equal(len(prefixesBefore)))
+					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesAfterPod1)
+
+					// launch 2nd pod to trigger a new prefix to be assigned since warm-ip-target=15
+					By("creating 2nd pod and waiting for ready should have 1 more prefix assigned")
+					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod2, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+					verify.WindowsPodHaveResourceLimits(createdPod, true)
+
+					privateIPsAfter, prefixesAfterPod2, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					// 1 more prefix should be created to fulfill warm-ip-target=15
+					Expect(len(prefixesAfterPod2) - len(prefixesAfterPod1)).To(Equal(1))
+					// number of secondary ips should not change
+					Expect(len(privateIPsBefore)).To(Equal(len(privateIPsAfter)))
+					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesAfterPod2)
+
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+					Expect(err).ToNot(HaveOccurred())
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod2)
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			Context("When minimum-ip-target is set to 20", Label("minimum-ip-target"), func() {
+				BeforeEach(func() {
+					data = map[string]string{
+						config.EnableWindowsIPAMKey:             "true",
+						config.EnableWindowsPrefixDelegationKey: "true",
+						config.MinimumIPTarget:                  "20"}
+				})
+				It("should keep 2 prefixes to satisfy minimum-ip-target after deleting all pods", func() {
+					// allow some time for previous test pod to cool down
+					time.Sleep(bufferForCoolDown)
+					// before running any pod, should have 2 prefixes assigned
+					privateIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesBefore)).To(Equal(2))
+
+					By("creating 33 pods and waiting for ready should have 3 prefixes attached")
+					deployment := manifest.NewWindowsDeploymentBuilder().
+						Replicas(33).
+						Container(manifest.NewWindowsContainerBuilder().Build()).
+						PodLabel(podLabelKey, podLabelVal).
+						Build()
+					_, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReady(ctx, deployment)
+					Expect(err).ToNot(HaveOccurred())
+
+					_, prefixesAfterDeployment, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesAfterDeployment)).To(Equal(3))
+
+					By("deleting 33 pods should still have 2 prefixes attached")
+					err = frameWork.DeploymentManager.DeleteAndWaitUntilDeploymentDeleted(ctx, deployment)
+					Expect(err).ToNot(HaveOccurred())
+
+					// allow some time for previous test pods to cool down since deletion of deployment doesn't wait for pods to terminate
+					time.Sleep(utils.WindowsPodsDeletionTimeout)
+					privateIPsAfter, prefixesAfterDelete, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesAfterDelete)).To(Equal(2))
+					// number of secondary ips should not change
+					Expect(len(privateIPsBefore)).To(Equal(len(privateIPsAfter)))
+				})
+			})
+
+			Context("[CANARY] When enable-windows-prefix-delegation is toggled to false", func() {
 				BeforeEach(func() {
 					data = map[string]string{
 						config.EnableWindowsIPAMKey:             "true",
@@ -320,17 +426,6 @@ var _ = Describe("Windows Integration Test", func() {
 					verify.WindowsPodHaveIPv4Address(createdPod)
 
 					// launch another pod to exceed maxDeviation of 1 in secondary ip pool
-					testPod2, err := manifest.NewWindowsPodBuilder().
-						Namespace("windows-test").
-						Name("windows-pd-pod2").
-						Container(testerContainer).
-						OS("windows").
-						TerminationGracePeriod(0).
-						RestartPolicy(v1.RestartPolicyNever).
-						NodeName(nodeName).
-						Build()
-					Expect(err).ToNot(HaveOccurred())
-
 					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod2, utils.WindowsPodsCreationTimeout)
 					Expect(err).ToNot(HaveOccurred())
 					verify.WindowsPodHaveResourceLimits(createdPod, true)
