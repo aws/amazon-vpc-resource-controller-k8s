@@ -90,7 +90,7 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 	if err != nil || ipV4Resources == nil {
 		if errors.Is(err, utils.ErrNotFound) {
 			msg := fmt.Sprintf("The instance type %s is not supported for Windows", instance.Type())
-			utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), "Unsupported", msg, v1.EventTypeWarning, p.log)
+			utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, p.log)
 		}
 
 		return err

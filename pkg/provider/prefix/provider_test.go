@@ -544,11 +544,7 @@ func TestIsInstanceSupported_Linux(t *testing.T) {
 	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
 		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
 		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
-	mockInstance.EXPECT().Type().Return(instanceType)
 	mockInstance.EXPECT().Os().Return(config.OSLinux)
-	mockInstance.EXPECT().Name().Return(nodeName)
-	mockK8sWrapper.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
-	mockK8sWrapper.EXPECT().BroadcastEvent(node, "Unsupported", gomock.Any(), v1.EventTypeWarning).Times(1)
 
 	assert.Equal(t, false, prefixProvider.IsInstanceSupported(mockInstance))
 }
@@ -585,6 +581,7 @@ func TestIsInstanceSupported_NotFound(t *testing.T) {
 		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
 		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
 	mockInstance.EXPECT().Type().Return("zzz")
+	mockInstance.EXPECT().Os().Return(config.OSWindows)
 	mockInstance.EXPECT().Name().Return(nodeName)
 	mockK8sWrapper.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
 	mockK8sWrapper.EXPECT().BroadcastEvent(node, "Unsupported", gomock.Any(), v1.EventTypeWarning).Times(1)
