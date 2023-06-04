@@ -369,10 +369,16 @@ var _ = Describe("Windows Integration Test", func() {
 						config.EnableWindowsPrefixDelegationKey: "true",
 						config.MinimumIPTarget:                  "20"}
 				})
-				It("should keep 2 prefixes to satisfy minimum-ip-target after deleting all pods", func() {
+				It("should have 2 prefixes to satisfy minimum-ip-target when no pods running", func() {
+					By("adding labels to selected nodes for testing")
+					node := windowsNodeList.Items[0]
+					err = frameWork.NodeManager.AddLabels([]v1.Node{node}, map[string]string{podLabelKey: podLabelVal})
+					Expect(err).ToNot(HaveOccurred())
+
 					// allow some time for previous test pod to cool down
 					time.Sleep(bufferForCoolDown)
 					// before running any pod, should have 2 prefixes assigned
+					instanceID = manager.GetNodeInstanceID(&node)
 					privateIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
 					Expect(err).ToNot(HaveOccurred())
 					Expect(len(prefixesBefore)).To(Equal(2))
@@ -382,6 +388,7 @@ var _ = Describe("Windows Integration Test", func() {
 						Replicas(33).
 						Container(manifest.NewWindowsContainerBuilder().Build()).
 						PodLabel(podLabelKey, podLabelVal).
+						NodeSelector(map[string]string{"kubernetes.io/os": "windows", podLabelKey: podLabelVal}).
 						Build()
 					_, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReady(ctx, deployment)
 					Expect(err).ToNot(HaveOccurred())
@@ -401,6 +408,10 @@ var _ = Describe("Windows Integration Test", func() {
 					Expect(len(prefixesAfterDelete)).To(Equal(2))
 					// number of secondary ips should not change
 					Expect(len(privateIPsBefore)).To(Equal(len(privateIPsAfter)))
+
+					By("removing labels on selected nodes for testing")
+					err = frameWork.NodeManager.RemoveLabels([]v1.Node{node}, map[string]string{podLabelKey: podLabelVal})
+					Expect(err).ToNot(HaveOccurred())
 				})
 			})
 
