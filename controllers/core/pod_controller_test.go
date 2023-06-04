@@ -360,6 +360,8 @@ func TestUpdateResourceName_NonNitroInstance_SecondaryIP(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl, mockPod)
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
 	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
 	mock.MockNode.EXPECT().IsNitroInstance().Return(false)
 	resourceName := mock.PodReconciler.updateResourceName(false, mockPod, mock.MockNode)
@@ -375,6 +377,8 @@ func TestUpdateResourceName_NitroInstance_PrefixIP(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl, mockPod)
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
 	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
 	mock.MockNode.EXPECT().IsNitroInstance().Return(true)
 	resourceName := mock.PodReconciler.updateResourceName(false, mockPod, mock.MockNode)
@@ -390,9 +394,24 @@ func TestUpdateResourceName_NitroInstance_SecondaryIP(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl, mockPod)
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
 	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
 	resourceName := mock.PodReconciler.updateResourceName(false, mockPod, mock.MockNode)
 
 	// since resource ip is not managed by prefix ip pool, resource name remains unchanged
+	assert.Equal(t, config.ResourceNameIPAddress, resourceName)
+}
+
+// TestUpdateResourceName_WinPDFeatureOFF tests that when Windows PD feature flag is off, should return resource name for secondary IP
+func TestUpdateResourceName_WinPDFeatureOFF(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(nil, false)
+	resourceName := mock.PodReconciler.updateResourceName(true, mockPod, mock.MockNode)
+
+	// since Windows PD feature flag is off, resource name remains ResourceNameIPAddress for secondary IP mode
 	assert.Equal(t, config.ResourceNameIPAddress, resourceName)
 }

@@ -42,7 +42,7 @@ func NewMock(controller *gomock.Controller) Mock {
 	}
 }
 
-func Test_NewResourceManager(t *testing.T) {
+func Test_NewResourceManager_WinPDFeatureON(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -50,7 +50,7 @@ func Test_NewResourceManager(t *testing.T) {
 	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress, config.ResourceNameIPAddressFromPrefix}
 
 	mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
-	conditions := condition.NewControllerConditions(zap.New(), mockK8s)
+	conditions := condition.NewControllerConditions(zap.New(), mockK8s, true)
 	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper, zap.New(zap.UseDevMode(true)), healthzHandler, conditions)
 	assert.NoError(t, err)
 
@@ -74,4 +74,40 @@ func Test_NewResourceManager(t *testing.T) {
 
 	_, ok = manger.GetResourceProvider(config.ResourceNameIPAddressFromPrefix)
 	assert.True(t, ok)
+}
+
+func Test_NewResourceManager_Test_NewResourceManager_WinPDFeatureOFF(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl)
+	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
+
+	mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
+	conditions := condition.NewControllerConditions(zap.New(), mockK8s, false)
+	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper, zap.New(zap.UseDevMode(true)), healthzHandler, conditions)
+	assert.NoError(t, err)
+
+	_, ok := manger.GetResourceHandler(config.ResourceNamePodENI)
+	assert.True(t, ok)
+
+	_, ok = manger.GetResourceHandler(config.ResourceNameIPAddress)
+	assert.True(t, ok)
+
+	// Resource handler for prefix IP should not exist
+	_, ok = manger.GetResourceHandler(config.ResourceNameIPAddressFromPrefix)
+	assert.False(t, ok)
+
+	// Resource provider for prefix IP should not exist
+	providers := manger.GetResourceProviders()
+	assert.Equal(t, len(providers), 2)
+
+	_, ok = manger.GetResourceProvider(config.ResourceNamePodENI)
+	assert.True(t, ok)
+
+	_, ok = manger.GetResourceProvider(config.ResourceNameIPAddress)
+	assert.True(t, ok)
+
+	_, ok = manger.GetResourceProvider(config.ResourceNameIPAddressFromPrefix)
+	assert.False(t, ok)
 }

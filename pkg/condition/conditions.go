@@ -27,10 +27,11 @@ import (
 )
 
 type condition struct {
-	hasDataStoreSynced bool
-	log                logr.Logger
-	K8sAPI             k8s.K8sWrapper
-	lock               sync.Mutex
+	hasDataStoreSynced   bool
+	log                  logr.Logger
+	K8sAPI               k8s.K8sWrapper
+	lock                 sync.Mutex
+	windowsPDFeatureFlag bool
 }
 
 const CheckDataStoreSyncedInterval = time.Second * 10
@@ -85,14 +86,15 @@ func prometheusRegister() {
 	prometheusRegistered = true
 }
 
-func NewControllerConditions(log logr.Logger, k8sApi k8s.K8sWrapper) Conditions {
+func NewControllerConditions(log logr.Logger, k8sApi k8s.K8sWrapper, windowsPDFeatureFlag bool) Conditions {
 	prometheusRegister()
 	conditionWindowsIPAMEnabled.Set(0)
 	conditionWindowsPrefixDelegationEnabled.Set(0)
 
 	return &condition{
-		log:    log,
-		K8sAPI: k8sApi,
+		log:                  log,
+		K8sAPI:               k8sApi,
+		windowsPDFeatureFlag: windowsPDFeatureFlag,
 	}
 }
 
@@ -120,6 +122,11 @@ func (c *condition) IsWindowsIPAMEnabled() bool {
 
 func (c *condition) IsWindowsPrefixDelegationEnabled() bool {
 	if c.IsOldVPCControllerDeploymentPresent() {
+		return false
+	}
+
+	// If the feature flag is OFF, Windows PD cannot be enabled via config map
+	if !c.windowsPDFeatureFlag {
 		return false
 	}
 
