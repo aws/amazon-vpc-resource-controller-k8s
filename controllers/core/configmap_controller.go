@@ -129,8 +129,7 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler 
 	)
 
 	// Explicitly set MaxConcurrentReconciles to 1 to ensure concurrent reconciliation NOT supported for config map controller.
-	// Don't change to more than 1 unless
-	//the struct is guarded against concurrency issues.
+	// Don't change to more than 1 unless the struct is guarded against concurrency issues.
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.ConfigMap{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
