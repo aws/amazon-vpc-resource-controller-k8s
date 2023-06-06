@@ -34,9 +34,10 @@ import (
 )
 
 var (
-	managerHealthCheckSubpath        = "health-resource-manager"
-	branchProviderHealthCheckSubpath = "health-branch-provider"
-	ipv4ProviderHealthCheckSubpath   = "health-ipv4-provider"
+	managerHealthCheckSubpath            = "health-resource-manager"
+	branchProviderHealthCheckSubpath     = "health-branch-provider"
+	ipv4ProviderHealthCheckSubpath       = "health-ipv4-provider"
+	ipv4PrefixProviderHealthCheckSubpath = "health-ipv4-prefix-provider"
 )
 
 type Manager struct {
@@ -96,6 +97,7 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 		} else if resourceName == config.ResourceNameIPAddressFromPrefix {
 			resourceProvider = prefix.NewIPv4PrefixProvider(ctrl.Log.WithName("ipv4 prefix provider"),
 				wrapper, workers, resourceConfig, conditions)
+			healthCheckers[ipv4PrefixProviderHealthCheckSubpath] = resourceProvider.GetHealthChecker()
 			resourceHandler = handler.NewWarmResourceHandler(ctrl.Log.WithName(resourceName), wrapper,
 				config.ResourceNameIPAddress, resourceProvider, ctx)
 		} else if resourceName == config.ResourceNamePodENI {
