@@ -684,11 +684,11 @@ func (p *pool) getPDDeviation() int {
 	}
 
 	if deviationPrefix != 0 {
-		p.log.Info("calculating IP deviation for prefix pool", "p.warmPoolConfig", p.warmPoolConfig,
-			"existing warm resources", numExistingWarmResources, "p.pendingCreate", p.pendingCreate, "p.pendingDelete", p.pendingDelete,
-			"numTotalResources", numTotalResources, "numCurrPrefix", numCurrPrefix, "numTotalResForWarmIPTarget", numTotalResForWarmIPTarget,
-			"numPrefixForWarmIPTarget", numPrefixForWarmIPTarget, "numPrefixForMinIPTarget", numPrefixForMinIPTarget,
-			"deviation", deviationPrefix*NumIPv4AddrPerPrefix)
+		p.log.V(1).Info("calculating IP deviation for prefix pool", "warmPoolConfig", p.warmPoolConfig,
+			"used resources", len(p.usedResources), "existing warm resources", numExistingWarmResources, "pendingCreate", p.pendingCreate,
+			"pendingDelete", p.pendingDelete, "numTotalResources", numTotalResources, "numCurrPrefix", numCurrPrefix,
+			"numTotalResForWarmIPTarget", numTotalResForWarmIPTarget, "numPrefixForWarmIPTarget", numPrefixForWarmIPTarget,
+			"numPrefixForMinIPTarget", numPrefixForMinIPTarget, "deviation", deviationPrefix*NumIPv4AddrPerPrefix)
 	}
 
 	return deviationPrefix * NumIPv4AddrPerPrefix
