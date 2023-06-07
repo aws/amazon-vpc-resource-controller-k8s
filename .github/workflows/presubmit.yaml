@@ -1,0 +1,39 @@
+name: Presubmit
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  presubmit:
+    name: Presubmit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache-dependency-path: "**/go.sum"
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.kubebuilder/bin
+            ~/go/bin
+          key: ${{ runner.os }}-toolchain-cache-${{ hashFiles('hack/toolchain.sh') }}
+      - run: make toolchain
+      - run: make presubmit
+  deprecated-apigroups:
+    name: Detect deprecated apiGroups
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: |
+          version=$(curl -sL https://api.github.com/repos/FairwindsOps/pluto/releases/latest | jq -r ".tag_name")
+          number=${version:1}
+          wget https://github.com/FairwindsOps/pluto/releases/download/${version}/pluto_${number}_linux_amd64.tar.gz
+          sudo tar -C /usr/local -xzf pluto_${number}_linux_amd64.tar.gz
+      - run: |
+          /usr/local/pluto detect-files -d .

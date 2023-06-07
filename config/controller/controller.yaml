@@ -17,11 +17,8 @@ spec:
         control-plane: controller
         app: vpc-resource-controller
     spec:
-      serviceAccountName: vpc-resource-controller
       containers:
-      - command:
-        - /controller
-        args:
+      - args:
           - --cluster-name=CLUSTER_NAME
           - --role-arn=USER_ROLE_ARN
           - --enable-leader-election
@@ -50,6 +47,7 @@ spec:
           - containerPort: 8443
             name: metrics
             protocol: TCP
+      serviceAccountName: vpc-resource-controller
       terminationGracePeriodSeconds: 10
       nodeSelector:
         kubernetes.io/os: linux
