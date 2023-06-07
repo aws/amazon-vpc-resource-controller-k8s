@@ -55,7 +55,7 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 	err := clientgoscheme.AddToScheme(schema)
 	assert.NoError(t, err)
 
-	decoder, _ := admission.NewDecoder(schema)
+	decoder := admission.NewDecoder(schema)
 
 	name := "foo"
 	namespace := "default"

@@ -82,12 +82,7 @@ func New(options Options) *Framework {
 	}()
 	cache.WaitForCacheSync(stopChan)
 
-	realClient, err := client.New(config, client.Options{Scheme: k8sSchema})
-	Expect(err).NotTo(HaveOccurred())
-	k8sClient, err := client.NewDelegatingClient(client.NewDelegatingClientInput{
-		CacheReader: cache,
-		Client:      realClient,
-	})
+	k8sClient, err := client.New(config, client.Options{Scheme: k8sSchema, Cache: &client.CacheOptions{Reader: cache}})
 	Expect(err).NotTo(HaveOccurred())
 
 	sess := session.Must(session.NewSession(&aws.Config{

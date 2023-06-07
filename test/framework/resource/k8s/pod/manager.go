@@ -239,5 +239,9 @@ func (d *defaultManager) getRestClientForPod(namespace string, name string) (res
 	if err != nil {
 		return nil, err
 	}
-	return apiutil.RESTClientForGVK(gkv, false, d.config, serializer.NewCodecFactory(d.k8sSchema))
+	client, err := rest.HTTPClientFor(d.config)
+	if err != nil {
+		return nil, err
+	}
+	return apiutil.RESTClientForGVK(gkv, false, d.config, serializer.NewCodecFactory(d.k8sSchema), client)
 }
