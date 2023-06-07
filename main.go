@@ -53,6 +53,7 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	// +kubebuilder:scaffold:imports
 )
@@ -199,24 +200,6 @@ func main() {
 	retryPeriod := time.Second * time.Duration(leaderLeaseRetryPeriod)
 
 	// filter cache to subscribe to events from specific resources
-	newCache := cache.BuilderWithOptions(cache.Options{
-		SelectorsByObject: cache.SelectorsByObject{
-			&corev1.ConfigMap{}: {Field: fields.Set{
-				"metadata.name":      config.VpcCniConfigMapName,
-				"metadata.namespace": config.KubeSystemNamespace,
-			}.AsSelector()},
-			&appsv1.Deployment{}: {Field: fields.Set{
-				"metadata.name":      config.OldVPCControllerDeploymentName,
-				"metadata.namespace": config.KubeSystemNamespace,
-			}.AsSelector()},
-			&appsv1.DaemonSet{}: {Field: fields.Set{
-				"metadata.name":      config.VpcCNIDaemonSetName,
-				"metadata.namespace": config.KubeSystemNamespace,
-			}.AsSelector(),
-			},
-		},
-	})
-
 	leaderElectionSource := resourcelock.ConfigMapsLeasesResourceLock
 	if leaseOnly {
 		leaderElectionSource = resourcelock.LeasesResourceLock
@@ -235,7 +218,23 @@ func main() {
 		LeaderElectionNamespace:    config.LeaderElectionNamespace,
 		LeaderElectionResourceLock: leaderElectionSource,
 		HealthProbeBindAddress:     ":61779", // the liveness endpoint is default to "/healthz"
-		NewCache:                   newCache,
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.ConfigMap{}: {Field: fields.Set{
+					"metadata.name":      config.VpcCniConfigMapName,
+					"metadata.namespace": config.KubeSystemNamespace,
+				}.AsSelector()},
+				&appsv1.Deployment{}: {Field: fields.Set{
+					"metadata.name":      config.OldVPCControllerDeploymentName,
+					"metadata.namespace": config.KubeSystemNamespace,
+				}.AsSelector()},
+				&appsv1.DaemonSet{}: {Field: fields.Set{
+					"metadata.name":      config.VpcCNIDaemonSetName,
+					"metadata.namespace": config.KubeSystemNamespace,
+				}.AsSelector(),
+				},
+			},
+		},
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
