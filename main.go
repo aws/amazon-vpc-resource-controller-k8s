@@ -98,6 +98,7 @@ func main() {
 	var introspectBindAddr string
 	var leaseOnly bool
 	var healthCheckTimeout int
+	var enableWindowsPrefixDelegation bool
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080",
 		"The address the metric endpoint binds to.")
@@ -130,6 +131,8 @@ func main() {
 	flag.StringVar(&introspectBindAddr, "introspect-bind-addr", ":22775",
 		"Port for serving the introspection API")
 	flag.BoolVar(&leaseOnly, "lease-only", false, "Controller uses lease only for leader election")
+	flag.BoolVar(&enableWindowsPrefixDelegation, "enable-windows-prefix-delegation", false,
+		"Enable the feature flag for Windows prefix delegation")
 
 	flag.Parse()
 
@@ -275,17 +278,23 @@ func main() {
 		SGPAPI: sgpAPI,
 	}
 
-	supportedResources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
+	// hasPodDataStoreSynced is set to true when the custom controller has synced
+	controllerConditions := condition.NewControllerConditions(
+		ctrl.Log.WithName("controller conditions"), k8sApi, enableWindowsPrefixDelegation)
+
+	// when Windows PD feature flag is OFF, do not initialize resource for prefix IPs
+	var supportedResources []string
+	if enableWindowsPrefixDelegation {
+		supportedResources = []string{config.ResourceNamePodENI, config.ResourceNameIPAddress, config.ResourceNameIPAddressFromPrefix}
+	} else {
+		supportedResources = []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
+	}
 	resourceManager, err := resource.NewResourceManager(
-		ctx, supportedResources, apiWrapper, ctrl.Log.WithName("managers").WithName("resource"), healthzHandler)
+		ctx, supportedResources, apiWrapper, ctrl.Log.WithName("managers").WithName("resource"), healthzHandler, controllerConditions)
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init resources", "resources", supportedResources)
 		os.Exit(1)
 	}
-
-	// hasPodDataStoreSynced is set to true when the custom controller has synced
-	controllerConditions := condition.NewControllerConditions(
-		ctrl.Log.WithName("controller conditions"), k8sApi)
 
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
 		10, 1, ctrl.Log.WithName("node async workers"), ctx)

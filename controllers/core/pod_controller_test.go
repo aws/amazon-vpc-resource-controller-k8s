@@ -18,13 +18,16 @@ import (
 	"testing"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
+	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_handler "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
 	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
+	mock_pool "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/pool"
+	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
 	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
-
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
@@ -53,8 +56,10 @@ var (
 	mockPod = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      mockPodName,
-			Namespace: mockPodNS,
+			Name:        mockPodName,
+			Namespace:   mockPodNS,
+			Annotations: map[string]string{config.ResourceNameIPAddress: "192.168.10.0/32"},
+			UID:         "pod-id",
 		},
 		Spec: v1.PodSpec{
 			NodeName: mockNodeName,
@@ -93,6 +98,8 @@ type Mock struct {
 	MockNode            *mock_node.MockNode
 	PodReconciler       *PodReconciler
 	MockHandler         *mock_handler.MockHandler
+	MockProvider        *mock_provider.MockResourceProvider
+	MockCondition       *mock_condition.MockConditions
 }
 
 func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
@@ -101,10 +108,10 @@ func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
 	mockResourceManager := mock_resource.NewMockResourceManager(ctrl)
 	mockNode := mock_node.NewMockNode(ctrl)
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
-
 	converter := pod.PodConverter{}
 	mockIndexer := cache.NewIndexer(converter.Indexer, pod.NodeNameIndexer())
 	mockIndexer.Add(mockPod)
+	mockCondition := mock_condition.NewMockConditions(ctrl)
 
 	return Mock{
 		MockNodeManager:     mockNodeManager,
@@ -112,12 +119,14 @@ func NewMock(ctrl *gomock.Controller, mockPod *v1.Pod) Mock {
 		MockResourceManager: mockResourceManager,
 		MockNode:            mockNode,
 		MockHandler:         mockHandler,
+		MockCondition:       mockCondition,
 		PodReconciler: &PodReconciler{
 			Log:             zap.New(),
 			ResourceManager: mockResourceManager,
 			NodeManager:     mockNodeManager,
 			K8sAPI:          mockK8sWrapper,
 			DataStore:       mockIndexer,
+			Condition:       mockCondition,
 		},
 	}
 }
@@ -307,4 +316,102 @@ func TestPodReconcile_Reconcile_PodDeletedManagedNodeDeletedFromCluster(t *testi
 	result, err := mock.PodReconciler.Reconcile(delReq)
 	assert.NoError(t, err)
 	assert.Equal(t, result, controllerruntime.Result{})
+}
+
+// TestUpdateResourceName_IsDeleteEvent_PrefixIP tests for pod deletion events, prefix IP handler is used when ip is managed by prefix
+// ip pool
+func TestUpdateResourceName_IsDeleteEvent_PrefixIP(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
+	mockProvider.EXPECT().GetPool(mockPod.Spec.NodeName).Return(mockPool, true)
+	mockPool.EXPECT().GetAssignedResource(string(mockPod.UID)).Return("ip-1", true)
+	resourceName := mock.PodReconciler.updateResourceName(true, mockPod, mock.MockNode)
+
+	assert.Equal(t, config.ResourceNameIPAddressFromPrefix, resourceName)
+}
+
+// TestUpdateResourceName_IsDeleteEvent_SecondaryIP tests for pod deletion events, secondary ip handler is used when ip is managed
+// by secondary ip pool even if PD is enabled for the cluster
+func TestUpdateResourceName_IsDeleteEvent_SecondaryIP(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
+	mockProvider.EXPECT().GetPool(mockPod.Spec.NodeName).Return(mockPool, true)
+	mockPool.EXPECT().GetAssignedResource(string(mockPod.UID)).Return("", false)
+	resourceName := mock.PodReconciler.updateResourceName(true, mockPod, mock.MockNode)
+
+	// since resource ip is not managed by prefix ip pool, resource name remains unchanged
+	assert.Equal(t, config.ResourceNameIPAddress, resourceName)
+}
+
+// TestUpdateResourceName_NonNitroInstance_SecondaryIP tests for pod creation events, non-nitro instances should use
+// secondary ip handler
+func TestUpdateResourceName_NonNitroInstance_SecondaryIP(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
+	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
+	mock.MockNode.EXPECT().IsNitroInstance().Return(false)
+	resourceName := mock.PodReconciler.updateResourceName(false, mockPod, mock.MockNode)
+
+	// since resource ip is not managed by prefix ip pool, resource name remains unchanged
+	assert.Equal(t, config.ResourceNameIPAddress, resourceName)
+}
+
+// TestUpdateResourceName_NitroInstance_PrefixIP tests for pod creation events, supported instances (nitro system) should use
+// active ip handler; in this case it is prefix IP handler
+func TestUpdateResourceName_NitroInstance_PrefixIP(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
+	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
+	mock.MockNode.EXPECT().IsNitroInstance().Return(true)
+	resourceName := mock.PodReconciler.updateResourceName(false, mockPod, mock.MockNode)
+
+	// since PD is enabled, resource name is updated to be prefix IP so that prefix IP handler will be used
+	assert.Equal(t, config.ResourceNameIPAddressFromPrefix, resourceName)
+}
+
+// TestUpdateResourceName_NitroInstance_SecondaryIP tests for pod creation events, supported instances (nitro system) should use
+// active ip handler; in this case it is secondary IP handler
+func TestUpdateResourceName_NitroInstance_SecondaryIP(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+	mockProvider := mock_provider.NewMockResourceProvider(ctrl)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(mockProvider, true)
+	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
+	resourceName := mock.PodReconciler.updateResourceName(false, mockPod, mock.MockNode)
+
+	// since resource ip is not managed by prefix ip pool, resource name remains unchanged
+	assert.Equal(t, config.ResourceNameIPAddress, resourceName)
+}
+
+// TestUpdateResourceName_WinPDFeatureOFF tests that when Windows PD feature flag is off, should return resource name for secondary IP
+func TestUpdateResourceName_WinPDFeatureOFF(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, mockPod)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNameIPAddressFromPrefix).Return(nil, false)
+	resourceName := mock.PodReconciler.updateResourceName(true, mockPod, mock.MockNode)
+
+	// since Windows PD feature flag is off, resource name remains ResourceNameIPAddress for secondary IP mode
+	assert.Equal(t, config.ResourceNameIPAddress, resourceName)
 }

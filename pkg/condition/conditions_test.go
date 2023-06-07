@@ -145,7 +145,7 @@ func TestCondition_IsWindowsIPAMEnabled(t *testing.T) {
 			defer ctrl.Finish()
 
 			mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
-			conditions := NewControllerConditions(zap.New(), mockK8s)
+			conditions := NewControllerConditions(zap.New(), mockK8s, false)
 
 			test.mock(mockK8s)
 
@@ -202,7 +202,7 @@ func TestCondition_GetPodDataStoreSyncStatus(t *testing.T) {
 			defer ctrl.Finish()
 
 			mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
-			conditions := NewControllerConditions(zap.New(), mockK8s)
+			conditions := NewControllerConditions(zap.New(), mockK8s, false)
 			start := time.Now()
 
 			// one routine is keeping the flag as false for 5s and then updates it to true

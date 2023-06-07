@@ -25,4 +25,5 @@ const (
 	// Windows Container Images are much larger in size and pulling them the first
 	// time takes much longer, so have higher timeout for Windows Pod to be Ready
 	WindowsPodsCreationTimeout = 240 * time.Second
+	WindowsPodsDeletionTimeout = 60 * time.Second
 )

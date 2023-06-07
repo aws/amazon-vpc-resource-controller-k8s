@@ -149,6 +149,13 @@ var (
 		},
 	)
 
+	numAssignedIPv4Prefixes = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "num_assigned_ipv4_prefixes",
+			Help: "The number of ipv4 prefixes allocated",
+		},
+	)
+
 	ec2AssignPrivateIPAddressAPICallCnt = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "ec2_assign_private_ip_api_req_count",
@@ -167,6 +174,13 @@ var (
 		prometheus.CounterOpts{
 			Name: "num_unassigned_private_ip_address",
 			Help: "The number of secondary private ip addresses unassigned",
+		},
+	)
+
+	numUnassignedIPv4Prefixes = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "num_unassigned_ipv4_prefixes",
+			Help: "The number of ipv4 prefixes unassigned",
 		},
 	)
 
@@ -310,7 +324,9 @@ func prometheusRegister() {
 			ec2DescribeNetworkInterfaceAPICallCnt,
 			ec2DescribeNetworkInterfaceAPIErrCnt,
 			numAssignedSecondaryIPAddress,
+			numAssignedIPv4Prefixes,
 			numUnassignedSecondaryIPAddress,
+			numUnassignedIPv4Prefixes,
 			ec2AssignPrivateIPAddressAPICallCnt,
 			ec2AssignPrivateIPAddressAPIErrCnt,
 			ec2DetachNetworkInterfaceAPICallCnt,
@@ -599,7 +615,14 @@ func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddresse
 	// Metric updates
 	ec2APICallCnt.Inc()
 	ec2AssignPrivateIPAddressAPICallCnt.Inc()
-	numAssignedSecondaryIPAddress.Add(float64(aws.Int64Value(input.SecondaryPrivateIpAddressCount)))
+
+	// Since the same API AssignPrivateIPAddresses is called to either allocate a secondary IPv4 address or a IPv4 prefix,
+	// the metric count needs to be distinguished as to which resource is assigned by the call
+	if input.SecondaryPrivateIpAddressCount != nil && *input.SecondaryPrivateIpAddressCount != 0 {
+		numAssignedSecondaryIPAddress.Add(float64(aws.Int64Value(input.SecondaryPrivateIpAddressCount)))
+	} else if input.Ipv4PrefixCount != nil && *input.Ipv4PrefixCount != 0 {
+		numAssignedIPv4Prefixes.Add(float64(aws.Int64Value(input.Ipv4PrefixCount)))
+	}
 
 	if err != nil {
 		ec2APIErrCnt.Inc()
@@ -617,7 +640,11 @@ func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddr
 	// Metric updates
 	ec2APICallCnt.Inc()
 	ec2UnassignPrivateIPAddressAPICallCnt.Inc()
-	numUnassignedSecondaryIPAddress.Add(float64(len(input.PrivateIpAddresses)))
+	if input.PrivateIpAddresses != nil && len(input.PrivateIpAddresses) != 0 {
+		numUnassignedSecondaryIPAddress.Add(float64(len(input.PrivateIpAddresses)))
+	} else if input.Ipv4Prefixes != nil && len(input.Ipv4Prefixes) != 0 {
+		numUnassignedIPv4Prefixes.Add(float64(len(input.Ipv4Prefixes)))
+	}
 
 	if err != nil {
 		ec2APIErrCnt.Inc()

@@ -15,9 +15,12 @@ package utils
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
-
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -159,4 +162,54 @@ func (s *SecurityGroupForPods) filterPodSecurityGroups(
 
 	sgList = RemoveDuplicatedSg(sgList)
 	return sgList
+}
+
+// DeconstructIPsFromPrefix deconstructs a IPv4 prefix into a list of /32 IPv4 addresses
+func DeconstructIPsFromPrefix(prefix string) ([]string, error) {
+	var deconstructedIPs []string
+
+	// find the index of / in prefix
+	index := strings.Index(prefix, "/")
+	if index < 0 {
+		return nil, fmt.Errorf("invalid IPv4 prefix %v", prefix)
+	}
+
+	// construct network address
+	addr := strings.Split(prefix[:index], ".")
+	if addr == nil || len(addr) != 4 {
+		return nil, fmt.Errorf("invalid IPv4 prefix %v", prefix)
+	}
+	networkAddr := addr[0] + "." + addr[1] + "." + addr[2] + "."
+
+	// get mask and calculate number of IPv4 addresses in the range
+	mask, err := strconv.Atoi(prefix[index+1:])
+	if err != nil {
+		return nil, err
+	}
+	if mask < 0 || mask > 32 {
+		return nil, fmt.Errorf("invalid IPv4 prefix %v", prefix)
+	}
+	numOfAddresses := IntPower(2, 32-mask)
+
+	// concatenate network addr and host addr to get /32 IPv4 address
+	for i := 0; i < numOfAddresses; i++ {
+		hostAddr, err := strconv.Atoi(addr[3])
+		if err != nil {
+			return nil, err
+		}
+		ipAddr := networkAddr + strconv.Itoa(hostAddr+i) + "/32"
+		deconstructedIPs = append(deconstructedIPs, ipAddr)
+	}
+	return deconstructedIPs, nil
+}
+
+func IsNitroInstance(instanceType string) (bool, error) {
+	limits, found := vpc.Limits[instanceType]
+	if !found {
+		return false, ErrNotFound
+	}
+	if limits.IsBareMetal || limits.Hypervisor == "nitro" {
+		return true, nil
+	}
+	return false, nil
 }

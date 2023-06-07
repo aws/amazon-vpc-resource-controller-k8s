@@ -18,7 +18,9 @@ import (
 	"testing"
 
 	mock_handler "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/handler"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/golang/mock/gomock"
@@ -40,14 +42,16 @@ func NewMock(controller *gomock.Controller) Mock {
 	}
 }
 
-func Test_NewResourceManager(t *testing.T) {
+func Test_NewResourceManager_WinPDFeatureON(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl)
-	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
+	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress, config.ResourceNameIPAddressFromPrefix}
 
-	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper, zap.New(zap.UseDevMode(true)), healthzHandler)
+	mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
+	conditions := condition.NewControllerConditions(zap.New(), mockK8s, true)
+	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper, zap.New(zap.UseDevMode(true)), healthzHandler, conditions)
 	assert.NoError(t, err)
 
 	_, ok := manger.GetResourceHandler(config.ResourceNamePodENI)
@@ -56,6 +60,54 @@ func Test_NewResourceManager(t *testing.T) {
 	_, ok = manger.GetResourceHandler(config.ResourceNameIPAddress)
 	assert.True(t, ok)
 
+	_, ok = manger.GetResourceHandler(config.ResourceNameIPAddressFromPrefix)
+	assert.True(t, ok)
+
+	providers := manger.GetResourceProviders()
+	assert.Equal(t, len(providers), 3)
+
+	_, ok = manger.GetResourceProvider(config.ResourceNamePodENI)
+	assert.True(t, ok)
+
+	_, ok = manger.GetResourceProvider(config.ResourceNameIPAddress)
+	assert.True(t, ok)
+
+	_, ok = manger.GetResourceProvider(config.ResourceNameIPAddressFromPrefix)
+	assert.True(t, ok)
+}
+
+func Test_NewResourceManager_Test_NewResourceManager_WinPDFeatureOFF(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl)
+	resources := []string{config.ResourceNamePodENI, config.ResourceNameIPAddress}
+
+	mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
+	conditions := condition.NewControllerConditions(zap.New(), mockK8s, false)
+	manger, err := NewResourceManager(context.TODO(), resources, mock.Wrapper, zap.New(zap.UseDevMode(true)), healthzHandler, conditions)
+	assert.NoError(t, err)
+
+	_, ok := manger.GetResourceHandler(config.ResourceNamePodENI)
+	assert.True(t, ok)
+
+	_, ok = manger.GetResourceHandler(config.ResourceNameIPAddress)
+	assert.True(t, ok)
+
+	// Resource handler for prefix IP should not exist
+	_, ok = manger.GetResourceHandler(config.ResourceNameIPAddressFromPrefix)
+	assert.False(t, ok)
+
+	// Resource provider for prefix IP should not exist
 	providers := manger.GetResourceProviders()
 	assert.Equal(t, len(providers), 2)
+
+	_, ok = manger.GetResourceProvider(config.ResourceNamePodENI)
+	assert.True(t, ok)
+
+	_, ok = manger.GetResourceProvider(config.ResourceNameIPAddress)
+	assert.True(t, ok)
+
+	_, ok = manger.GetResourceProvider(config.ResourceNameIPAddressFromPrefix)
+	assert.False(t, ok)
 }
