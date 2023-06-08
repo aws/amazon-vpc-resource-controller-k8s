@@ -16,7 +16,6 @@ webhooks:
   failurePolicy: Ignore
   matchPolicy: Equivalent
   name: mpod.vpc.k8s.aws
-  timeoutSeconds: 5
   rules:
   - apiGroups:
     - ""
@@ -45,7 +44,6 @@ webhooks:
   failurePolicy: Ignore
   matchPolicy: Equivalent
   name: vpod.vpc.k8s.aws
-  timeoutSeconds: 5
   rules:
   - apiGroups:
     - ""
@@ -67,7 +65,6 @@ webhooks:
   failurePolicy: Ignore
   matchPolicy: Equivalent
   name: vnode.vpc.k8s.aws
-  timeoutSeconds: 5
   rules:
   - apiGroups:
     - ""

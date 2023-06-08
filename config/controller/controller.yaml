@@ -17,11 +17,18 @@ spec:
         control-plane: controller
         app: vpc-resource-controller
     spec:
+      volumes:
+      - name: aws-iam-token
+        projected:
+          defaultMode: 420
+          sources:
+          - serviceAccountToken:
+              audience: sts.amazonaws.com
+              expirationSeconds: 86400
+              path: token
       serviceAccountName: vpc-resource-controller
       containers:
-      - command:
-        - /controller
-        args:
+      - args:
           - --cluster-name=CLUSTER_NAME
           - --role-arn=USER_ROLE_ARN
           - --enable-leader-election

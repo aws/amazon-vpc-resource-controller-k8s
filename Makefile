@@ -1,6 +1,8 @@
 # Image URL to use all building/pushing image targets
-IMAGE_NAME=eks/vpc-resource-controller
-REPO=$(AWS_ACCOUNT).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE_NAME)
+IMAGE_NAME=aws/amazon-vpc-resource-controller-k8s
+AWS_ACCOUNT_ID ?= $(AWS_ACCOUNT) # Left in for backwards compatibility
+AWS_DEFAULT_REGION ?= $(AWS_REGION) # Left in for backwards compatibility
+REPO=$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_DEFAULT_REGION).amazonaws.com/$(IMAGE_NAME)
 GIT_VERSION=$(shell git describe --tags --always)
 MAKEFILE_PATH = $(dir $(realpath -s $(firstword $(MAKEFILE_LIST))))
 
@@ -9,7 +11,7 @@ export GOPROXY = direct
 VERSION ?= $(GIT_VERSION)
 IMAGE ?= $(REPO):$(VERSION)
 BASE_IMAGE ?= public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-nonroot:latest.2
-BUILD_IMAGE ?= public.ecr.aws/bitnami/golang:1.20.1
+BUILD_IMAGE ?= public.ecr.aws/bitnami/golang:1.20.5
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:trivialVersions=true"
 GOARCH ?= amd64
@@ -73,6 +75,9 @@ generate: controller-gen
 # Build the docker image with buildx
 docker-buildx: check-env test
 	docker buildx build --platform=$(PLATFORM) -t $(IMAGE)-$(GOARCH) --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) --build-arg $(GOARCH) --load .
+
+image:
+	KO_DOCKER_REPO=${REPO} ko build --bare main.go
 
 # Build the docker image
 docker-build: check-env test
