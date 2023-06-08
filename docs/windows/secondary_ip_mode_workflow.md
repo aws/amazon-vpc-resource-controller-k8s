@@ -1,5 +1,5 @@
-# Windows Event Workflows
-This document presents high level workflow diagram for Events associated with Windows Nodes and Pods.
+# Windows Event Workflows in Secondary IPv4 address mode
+This document presents high level workflow diagram for Events associated with Windows Nodes and Pods when using the secondary IPv4 address mode.
 
 ## Adding a Windows Node to the Cluster
 ![New Windows Node Create Event Diagram](../images/windows-node-create-event.png)
