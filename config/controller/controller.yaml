@@ -17,6 +17,16 @@ spec:
         control-plane: controller
         app: vpc-resource-controller
     spec:
+      volumes:
+      - name: aws-iam-token
+        projected:
+          defaultMode: 420
+          sources:
+          - serviceAccountToken:
+              audience: sts.amazonaws.com
+              expirationSeconds: 86400
+              path: token
+      serviceAccountName: vpc-resource-controller
       containers:
       - args:
           - --cluster-name=CLUSTER_NAME
@@ -47,7 +57,6 @@ spec:
           - containerPort: 8443
             name: metrics
             protocol: TCP
-      serviceAccountName: vpc-resource-controller
       terminationGracePeriodSeconds: 10
       nodeSelector:
         kubernetes.io/os: linux

@@ -43,9 +43,7 @@ import (
 	"github.com/go-logr/zapr"
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -54,7 +52,6 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	// +kubebuilder:scaffold:imports
 )
@@ -220,22 +217,22 @@ func main() {
 		LeaderElectionNamespace:    config.LeaderElectionNamespace,
 		LeaderElectionResourceLock: leaderElectionSource,
 		HealthProbeBindAddress:     ":61779", // the liveness endpoint is default to "/healthz"
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.ConfigMap{}: {Field: fields.Set{
-					"metadata.name":      config.VpcCniConfigMapName,
-					"metadata.namespace": config.KubeSystemNamespace,
-				}.AsSelector()},
-				&appsv1.Deployment{}: {Field: fields.Set{
-					"metadata.name":      config.OldVPCControllerDeploymentName,
-					"metadata.namespace": config.KubeSystemNamespace,
-				}.AsSelector()},
-				&appsv1.DaemonSet{}: {Field: fields.Set{
-					"metadata.name":      config.VpcCNIDaemonSetName,
-					"metadata.namespace": config.KubeSystemNamespace,
-				}.AsSelector(),
-				},
-			},
+		Cache:                      cache.Options{
+			// ByObject: map[client.Object]cache.ByObject{
+			// 	&corev1.ConfigMap{}: {Field: fields.Set{
+			// 		"metadata.name":      config.VpcCniConfigMapName,
+			// 		"metadata.namespace": config.KubeSystemNamespace,
+			// 	}.AsSelector()},
+			// 	&appsv1.Deployment{}: {Field: fields.Set{
+			// 		"metadata.name":      config.OldVPCControllerDeploymentName,
+			// 		"metadata.namespace": config.KubeSystemNamespace,
+			// 	}.AsSelector()},
+			// 	&appsv1.DaemonSet{}: {Field: fields.Set{
+			// 		"metadata.name":      config.VpcCNIDaemonSetName,
+			// 		"metadata.namespace": config.KubeSystemNamespace,
+			// 	}.AsSelector(),
+			// 	},
+			// },
 		},
 	})
 	if err != nil {

@@ -86,15 +86,13 @@ if [[ -z "$VPC_RC_ROLE_ARN" ]]; then
 fi
 
 ECR_URL=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-ECR_REPOSITORY=amazon/vpc-resource-controller
-ECR_IMAGE_TAG=$(add_suffix "test")
+ECR_REPOSITORY=aws/amazon-vpc-resource-controller-k8s
 
-IMAGE=$ECR_URL/$ECR_REPOSITORY:$ECR_IMAGE_TAG
+IMAGE=$ECR_URL/$ECR_REPOSITORY
 
 function build_and_push_image() {
   echo "building and pushing controller image to ECR"
-  IMAGE=$IMAGE AWS_ACCOUNT=$AWS_ACCOUNT_ID AWS_REGION=$AWS_REGION make docker-build
-  IMAGE=$IMAGE AWS_ACCOUNT=$AWS_ACCOUNT_ID AWS_REGION=$AWS_REGION make docker-push
+  IMAGE=$IMAGE AWS_REGION=$AWS_REGION make image
 }
 
 function install_controller() {
@@ -113,12 +111,12 @@ function disable_eks_controller() {
   echo "disabling the default amazon-vpc-resource-controller-k8s controller"
 
   # Delete Mutating Webhook Configuration
-  kubectl delete mutatingwebhookconfigurations.admissionregistration.k8s.io vpc-resource-mutating-webhook
+  kubectl delete mutatingwebhookconfigurations.admissionregistration.k8s.io vpc-resource-mutating-webhook --ignore-not-found
   # Delete the Validating Webhook Configuration
-  kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io vpc-resource-validating-webhook
+  kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io vpc-resource-validating-webhook --ignore-not-found
 
   # Remove the patch/update permission on ConfigMap from the EKS VPC RC Leader election Role
-  kubectl patch roles -n kube-system vpc-resource-controller-leader-election-role \
+  kubectl patch roles -n kube-system eks-vpc-resource-controller-role \
   --patch "$(cat "$TEMPLATE_DIR/cp-vpc-leader-election-role-patch.yaml")"
 }
 
@@ -233,14 +231,9 @@ function get_leader_lease_transistion_count() {
   | jq .leaderTransitions
 }
 
-function output_logs() {
+function on_exit() {
+  echo "Exiting..."
   cat $CONTROLLER_LOG_FILE
-}
-
-function clean_up() {
-  echo "cleaning up..."
-  delete_ecr_image "$ECR_REPOSITORY" "$ECR_IMAGE_TAG"
-  output_logs
 }
 
 function redirect_vpc_controller_logs() {
@@ -258,7 +251,7 @@ function redirect_vpc_controller_logs() {
 }
 
 # Delete the IAM Policies, Roles and the EKS Cluster
-trap 'clean_up' EXIT
+trap 'on_exit' EXIT
 
 # Cordon the Windows Nodes as cert manager and other future 3rd pary
 # dependency may not have nodeselectors to schedule pods on linux
