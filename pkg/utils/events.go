@@ -8,6 +8,7 @@ import (
 
 var (
 	UnsupportedInstanceTypeReason = "Unsupported"
+	InsufficientCidrBlocksReason  = "InsufficientCidrBlocks"
 )
 
 func SendNodeEvent(client k8s.K8sWrapper, nodeName, reason, msg, eventType string, logger logr.Logger) {
