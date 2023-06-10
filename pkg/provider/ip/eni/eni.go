@@ -70,6 +70,8 @@ func NewENIManager(instance ec2.EC2Instance) *eniManager {
 
 // InitResources loads the list of ENIs, secondary IPs and prefixes, associated with the instance
 func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) (*IPv4Resource, error) {
+	e.lock.Lock()
+	defer e.lock.Unlock()
 
 	nwInterfaces, err := ec2APIHelper.GetInstanceNetworkInterface(aws.String(e.instance.InstanceID()))
 	if err != nil {
