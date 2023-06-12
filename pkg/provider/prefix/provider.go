@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
@@ -288,6 +289,11 @@ func (p *ipv4PrefixProvider) CreateIPv4PrefixAndUpdatePool(job *worker.WarmPoolJ
 	if err != nil {
 		p.log.Error(err, "failed to create all/some of the IPv4 prefixes", "created resources", resources)
 		didSucceed = false
+		//TODO: This adds a dependency on EC2 API error. Refactor later.
+		if strings.HasPrefix(err.Error(), utils.InsufficientCidrBlocksReason) {
+			utils.SendNodeEvent(p.apiWrapper.K8sAPI, job.NodeName, utils.InsufficientCidrBlocksReason,
+				utils.ErrInsufficientCidrBlocks.Error(), v1.EventTypeWarning, p.log)
+		}
 	}
 	job.Resources = resources
 	p.updatePoolAndReconcileIfRequired(instanceResource.resourcePool, job, didSucceed)

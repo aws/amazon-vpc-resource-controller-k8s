@@ -29,6 +29,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -277,6 +278,44 @@ func TestIPv4PrefixProvider_CreateIPv4PrefixAndUpdatePool_Fail(t *testing.T) {
 		NodeName:      nodeName,
 	}, false).Return(false)
 
+	prefixProvider.CreateIPv4PrefixAndUpdatePool(createJob)
+}
+
+// TestIPv4PrefixProvider_CreateIPv4PrefixAndUpdatePool_Fail_InsufficientCidrBlocks tests that if some create fails then the pool is
+// updated with the created resources and success status as false
+func TestIPv4PrefixProvider_CreateIPv4PrefixAndUpdatePool_Fail_InsufficientCidrBlocks(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockPool := mock_pool.NewMockPool(ctrl)
+	mockManager := mock_eni.NewMockENIManager(ctrl)
+	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
+
+	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, config: pdWarmPoolConfig,
+		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
+		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider")}
+
+	prefixProvider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, true)
+	createdResources := []string{prefix1, prefix2}
+
+	createJob := &worker.WarmPoolJob{
+		Operations:    worker.OperationCreate,
+		Resources:     []string{},
+		ResourceCount: 3,
+		NodeName:      nodeName,
+	}
+
+	mockManager.EXPECT().CreateIPV4Resource(3, config.ResourceTypeIPv4Prefix, nil, gomock.Any()).Return(createdResources,
+		fmt.Errorf("InsufficientCidrBlocks: The specified subnet does not have enough free cidr blocks to satisfy the request. Status"))
+	mockPool.EXPECT().UpdatePool(&worker.WarmPoolJob{
+		Operations:    worker.OperationCreate,
+		Resources:     createdResources,
+		ResourceCount: 3,
+		NodeName:      nodeName,
+	}, false).Return(false)
+
+	mockK8sWrapper.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
+	mockK8sWrapper.EXPECT().BroadcastEvent(node, utils.InsufficientCidrBlocksReason, utils.ErrInsufficientCidrBlocks.Error(), v1.EventTypeWarning).Times(1)
 	prefixProvider.CreateIPv4PrefixAndUpdatePool(createJob)
 }
 
