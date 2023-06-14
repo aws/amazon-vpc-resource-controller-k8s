@@ -151,8 +151,8 @@ func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 		warmResources[prefix] = append(warmResources[prefix], pool.Resource{GroupID: prefix, ResourceID: ip})
 	}
 
-	// Subtract number of used secondary IP addresses from total number of interfaces, and then multiply by 16
-	nodeCapacity := (getCapacity(instance.Type(), instance.Os()) - numberUsedSecondaryIP) * pool.NumIPv4AddrPerPrefix
+	// Expected node capacity based on instance type in PD mode
+	nodeCapacity := getCapacity(instance.Type(), instance.Os()) * pool.NumIPv4AddrPerPrefix
 
 	p.config = p.getPDWarmPoolConfig()
 
@@ -161,6 +161,14 @@ func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	isPDEnabled := p.conditions.IsWindowsPrefixDelegationEnabled()
 	if !isPDEnabled {
 		prefixIPWPConfig = &config.WarmPoolConfig{}
+	} else {
+		// Log the discrepancy between the advertised and the actual node capacity when it is in PD mode
+		if numberUsedSecondaryIP > 0 {
+			actualCapacity := (getCapacity(instance.Type(), instance.Os()) - numberUsedSecondaryIP) * pool.NumIPv4AddrPerPrefix
+			p.log.Info("there could be discrepancy between advertised and actual node capacity due to existing pods from "+
+				"secondary IP mode", "node name", instance.Name(), "advertised capacity", nodeCapacity,
+				"actual capacity", actualCapacity)
+		}
 	}
 
 	resourcePool := pool.NewResourcePool(p.log.WithName("prefix ipv4 address resource pool").
