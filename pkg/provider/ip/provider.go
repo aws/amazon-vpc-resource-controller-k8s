@@ -192,7 +192,7 @@ func (p *ipv4Provider) DeInitResource(instance ec2.EC2Instance) error {
 func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 	resourceProviderAndPool, isPresent := p.getInstanceProviderAndPool(instance.Name())
 	if !isPresent {
-		p.log.Error(nil, "cannot find the instance provider and pool form the cache", "node-name", instance.Name())
+		p.log.Error(utils.ErrNotFound, utils.ErrMsgProviderAndPoolNotFound, "node name", instance.Name())
 		return nil
 	}
 
@@ -304,7 +304,7 @@ func (p *ipv4Provider) ProcessAsyncJob(job interface{}) (ctrl.Result, error) {
 func (p *ipv4Provider) CreatePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 	instanceResource, found := p.getInstanceProviderAndPool(job.NodeName)
 	if !found {
-		p.log.Error(fmt.Errorf("cannot find the instance provider and pool form the cache"), "node", job.NodeName)
+		p.log.Error(utils.ErrNotFound, utils.ErrMsgProviderAndPoolNotFound, "node name", job.NodeName)
 		return
 	}
 	didSucceed := true
@@ -320,15 +320,13 @@ func (p *ipv4Provider) CreatePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 func (p *ipv4Provider) ReSyncPool(job *worker.WarmPoolJob) {
 	providerAndPool, found := p.instanceProviderAndPool[job.NodeName]
 	if !found {
-		p.log.Error(fmt.Errorf("instance provider not found"), "node is not initialized",
-			"name", job.NodeName)
+		p.log.Error(utils.ErrNotFound, "node is not initialized", "node name", job.NodeName)
 		return
 	}
 
 	ipV4Resources, err := providerAndPool.eniManager.InitResources(p.apiWrapper.EC2API)
 	if err != nil || ipV4Resources == nil {
-		p.log.Error(err, "failed to get init resources for the node",
-			"name", job.NodeName)
+		p.log.Error(err, "failed to get init resources for the node", "node name", job.NodeName)
 		return
 	}
 
@@ -339,7 +337,7 @@ func (p *ipv4Provider) ReSyncPool(job *worker.WarmPoolJob) {
 func (p *ipv4Provider) DeletePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 	instanceResource, found := p.getInstanceProviderAndPool(job.NodeName)
 	if !found {
-		p.log.Error(fmt.Errorf("cannot find the instance provider and pool form the cache"), "node", job.NodeName)
+		p.log.Error(utils.ErrNotFound, utils.ErrMsgProviderAndPoolNotFound, "node name", job.NodeName)
 		return
 	}
 	didSucceed := true
