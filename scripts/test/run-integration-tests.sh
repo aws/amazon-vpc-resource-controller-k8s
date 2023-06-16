@@ -39,13 +39,13 @@ trap cleanup EXIT
 
 function run_integration_tests(){
   TEST_RESULT=success
-  (cd $INTEGRATION_TEST_DIR/perpodsg && CGO_ENABLED=0 ginkgo --skip=LOCAL -v -timeout=60m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
+  (cd $INTEGRATION_TEST_DIR/perpodsg && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=60m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
   if [[ -z "${SKIP_WINDOWS_TEST}" ]]; then
-    (cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 ginkgo --skip=LOCAL -v -timeout=120m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
+    (cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=120m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
   else
     echo "skipping Windows tests"
   fi
-  (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 ginkgo --skip=LOCAL -v -timeout=15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
+  (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=15m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
 
   if [[ "$TEST_RESULT" == fail ]]; then
       exit 1
