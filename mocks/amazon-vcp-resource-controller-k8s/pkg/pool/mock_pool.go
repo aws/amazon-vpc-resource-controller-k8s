@@ -178,15 +178,15 @@ func (mr *MockPoolMockRecorder) SetToDraining() *gomock.Call {
 }
 
 // UpdatePool mocks base method.
-func (m *MockPool) UpdatePool(arg0 *worker.WarmPoolJob, arg1 bool) bool {
+func (m *MockPool) UpdatePool(arg0 *worker.WarmPoolJob, arg1, arg2 bool) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdatePool", arg0, arg1)
+	ret := m.ctrl.Call(m, "UpdatePool", arg0, arg1, arg2)
 	ret0, _ := ret[0].(bool)
 	return ret0
 }
 
 // UpdatePool indicates an expected call of UpdatePool.
-func (mr *MockPoolMockRecorder) UpdatePool(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockPoolMockRecorder) UpdatePool(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdatePool", reflect.TypeOf((*MockPool)(nil).UpdatePool), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdatePool", reflect.TypeOf((*MockPool)(nil).UpdatePool), arg0, arg1, arg2)
 }

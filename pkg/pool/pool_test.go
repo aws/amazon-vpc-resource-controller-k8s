@@ -221,7 +221,7 @@ func TestPool_UpdatePool_OperationCreate_Succeed(t *testing.T) {
 		Operations:    worker.OperationCreate,
 		Resources:     createdResources,
 		ResourceCount: 2,
-	}, true)
+	}, true, false)
 
 	warmResources := make(map[string][]Resource)
 	warmResources[res3] = []Resource{{GroupID: res3, ResourceID: res3}}
@@ -239,7 +239,7 @@ func TestPool_UpdatePool_OperationCreate_Failed(t *testing.T) {
 		Operations:    worker.OperationCreate,
 		Resources:     nil,
 		ResourceCount: 2,
-	}, false)
+	}, false, false)
 
 	assert.True(t, shouldReconcile)
 	assert.True(t, warmPool.reSyncRequired)
@@ -253,7 +253,7 @@ func TestPool_UpdatePool_OperationDelete_Succeed(t *testing.T) {
 		Operations:    worker.OperationDeleted,
 		Resources:     nil,
 		ResourceCount: 1,
-	}, true)
+	}, true, false)
 
 	// Assert resources are not added back to the warm pool
 	assert.Zero(t, len(warmPool.warmResources))
@@ -268,7 +268,7 @@ func TestPool_UpdatePool_OperationDelete_Failed(t *testing.T) {
 		Operations:    worker.OperationDeleted,
 		Resources:     failedResources,
 		ResourceCount: 2,
-	}, false)
+	}, false, false)
 
 	failed := make(map[string][]Resource)
 	failed[res3] = []Resource{{GroupID: res3, ResourceID: res3}}

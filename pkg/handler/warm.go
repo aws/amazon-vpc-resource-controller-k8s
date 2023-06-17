@@ -29,10 +29,11 @@ import (
 )
 
 const (
-	RequeueAfterWhenWPEmpty         = time.Millisecond * 600
-	RequeueAfterWhenResourceCooling = time.Second * 20
-	ReasonResourceAllocationFailed  = "ResourceAllocationFailed"
-	ReasonResourceAllocated         = "ResourceAllocated"
+	RequeueAfterWhenPrefixNotAvailable = time.Minute * 2
+	RequeueAfterWhenWPEmpty            = time.Millisecond * 600
+	RequeueAfterWhenResourceCooling    = time.Second * 20
+	ReasonResourceAllocationFailed     = "ResourceAllocationFailed"
+	ReasonResourceAllocated            = "ResourceAllocated"
 )
 
 type warmResourceHandler struct {
@@ -100,6 +101,12 @@ func (w *warmResourceHandler) HandleCreate(_ int, pod *v1.Pod) (ctrl.Result, err
 				return ctrl.Result{}, nil
 			}
 			return ctrl.Result{}, err
+		case pool.ErrInsufficientCidrBlocks:
+			log.V(1).Info("prefix is not available in subnet, will retry")
+			w.APIWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocationFailed,
+				fmt.Sprintf("Warm pool for resource %s is currently empty because the specified subnet does not have enough "+
+					"free cidr blocks, will retry in %s", w.resourceName, RequeueAfterWhenPrefixNotAvailable), v1.EventTypeWarning)
+			return ctrl.Result{Requeue: true, RequeueAfter: RequeueAfterWhenPrefixNotAvailable}, nil
 		default:
 			return ctrl.Result{}, err
 		}

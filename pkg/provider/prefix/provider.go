@@ -290,21 +290,34 @@ func (p *ipv4PrefixProvider) CreateIPv4PrefixAndUpdatePool(job *worker.WarmPoolJ
 		p.log.Error(utils.ErrNotFound, utils.ErrMsgProviderAndPoolNotFound, "node name", job.NodeName)
 		return
 	}
-	didSucceed := true
+
+	// For successful jobs or non-retryable errors, do not re-sync or reconcile the pool.
+	notRetry := true
+	// If subnet has sufficient cidr blocks, prefixAvailable is true, otherwise false.
+	prefixAvailable := true
+
 	resources, err := instanceResource.eniManager.CreateIPV4Resource(job.ResourceCount, config.ResourceTypeIPv4Prefix, p.apiWrapper.EC2API,
 		p.log)
 
 	if err != nil {
 		p.log.Error(err, "failed to create all/some of the IPv4 prefixes", "created resources", resources)
-		didSucceed = false
+
+		// For retryable errors, set notRetry as false to re-sync and reconcile the pool.
+		if utils.ShouldRetryOnError(err) {
+			notRetry = false
+		}
+
 		//TODO: This adds a dependency on EC2 API error. Refactor later.
 		if strings.HasPrefix(err.Error(), utils.InsufficientCidrBlocksReason) {
+			// Prefix not available in the subnet, set status and pass it to pool. Note this is a non-retryable error.
+			prefixAvailable = false
+			// Send node event to inform user of insufficient CIDR blocks error
 			utils.SendNodeEvent(p.apiWrapper.K8sAPI, job.NodeName, utils.InsufficientCidrBlocksReason,
 				utils.ErrInsufficientCidrBlocks.Error(), v1.EventTypeWarning, p.log)
 		}
 	}
 	job.Resources = resources
-	p.updatePoolAndReconcileIfRequired(instanceResource.resourcePool, job, didSucceed)
+	p.updatePoolAndReconcileIfRequired(instanceResource.resourcePool, job, notRetry, prefixAvailable)
 }
 
 // DeleteIPv4PrefixAndUpdatePool executes the Delete IPv4 Prefix workflow for the list of prefixes provided in the warm pool job
@@ -324,7 +337,7 @@ func (p *ipv4PrefixProvider) DeleteIPv4PrefixAndUpdatePool(job *worker.WarmPoolJ
 		didSucceed = false
 	}
 	job.Resources = failedResources
-	p.updatePoolAndReconcileIfRequired(instanceResource.resourcePool, job, didSucceed)
+	p.updatePoolAndReconcileIfRequired(instanceResource.resourcePool, job, didSucceed, true)
 }
 
 func (p *ipv4PrefixProvider) ReSyncPool(job *worker.WarmPoolJob) {
@@ -363,9 +376,10 @@ func (p *ipv4PrefixProvider) ProcessDeleteQueue(job *worker.WarmPoolJob) (ctrl.R
 }
 
 // updatePoolAndReconcileIfRequired updates the resource pool and reconcile again and submit a new job if required
-func (p *ipv4PrefixProvider) updatePoolAndReconcileIfRequired(resourcePool pool.Pool, job *worker.WarmPoolJob, didSucceed bool) {
+func (p *ipv4PrefixProvider) updatePoolAndReconcileIfRequired(resourcePool pool.Pool, job *worker.WarmPoolJob, didSucceed bool,
+	prefixAvailable bool) {
 	// Update the pool to add the created/failed resource to the warm pool and decrement the pending count
-	shouldReconcile := resourcePool.UpdatePool(job, didSucceed)
+	shouldReconcile := resourcePool.UpdatePool(job, didSucceed, prefixAvailable)
 
 	if shouldReconcile {
 		job := resourcePool.ReconcilePool()
