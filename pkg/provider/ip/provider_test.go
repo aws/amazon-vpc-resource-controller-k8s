@@ -130,7 +130,7 @@ func TestIpv4Provider_updatePoolAndReconcileIfRequired_NoFurtherReconcile(t *tes
 
 	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
 
-	mockPool.EXPECT().UpdatePool(job, true).Return(false)
+	mockPool.EXPECT().UpdatePool(job, true, false).Return(false)
 
 	provider.updatePoolAndReconcileIfRequired(mockPool, job, true)
 }
@@ -147,7 +147,7 @@ func TestIpv4Provider_updatePoolAndReconcileIfRequired_ReconcileRequired(t *test
 
 	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
 
-	mockPool.EXPECT().UpdatePool(job, true).Return(true)
+	mockPool.EXPECT().UpdatePool(job, true, false).Return(true)
 	mockPool.EXPECT().ReconcilePool().Return(job)
 	mockWorker.EXPECT().SubmitJob(job)
 
@@ -179,7 +179,7 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool(t *testing.T) {
 		Resources:     []string{},
 		ResourceCount: 2,
 		NodeName:      nodeName,
-	}, true).Return(false)
+	}, true, false).Return(false)
 
 	ipv4Provider.DeletePrivateIPv4AndUpdatePool(deleteJob)
 }
@@ -210,7 +210,7 @@ func TestIpv4Provider_DeletePrivateIPv4AndUpdatePool_SomeResourceFail(t *testing
 		Resources:     failedResources,
 		ResourceCount: 2,
 		NodeName:      nodeName,
-	}, true).Return(false)
+	}, true, false).Return(false)
 
 	ipv4Provider.DeletePrivateIPv4AndUpdatePool(&deleteJob)
 }
@@ -240,7 +240,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool(t *testing.T) {
 		Resources:     createdResources,
 		ResourceCount: 2,
 		NodeName:      nodeName,
-	}, true).Return(false)
+	}, true, false).Return(false)
 
 	ipv4Provider.CreatePrivateIPv4AndUpdatePool(createJob)
 }
@@ -270,7 +270,7 @@ func TestIPv4Provider_CreatePrivateIPv4AndUpdatePool_Fail(t *testing.T) {
 		Resources:     createdResources,
 		ResourceCount: 2,
 		NodeName:      nodeName,
-	}, false).Return(false)
+	}, false, false).Return(false)
 
 	ipv4Provider.CreatePrivateIPv4AndUpdatePool(createJob)
 }

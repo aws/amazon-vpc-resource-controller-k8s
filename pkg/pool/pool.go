@@ -29,6 +29,7 @@ var (
 	ErrResourceAreBeingCooledDown = fmt.Errorf("cannot assign resource now, resources are being cooled down")
 	ErrResourcesAreBeingCreated   = fmt.Errorf("cannot assign resource now, resources are being created")
 	ErrWarmPoolEmpty              = fmt.Errorf("warm pool is empty")
+	ErrInsufficientCidrBlocks     = fmt.Errorf("InsufficientCidrBlocks: The specified subnet does not have enough free cidr blocks to satisfy the request")
 	ErrResourceAlreadyAssigned    = fmt.Errorf("resource is already assigned to the requestor")
 	ErrResourceDoesntExist        = fmt.Errorf("requested resource doesn't exist in used pool")
 	ErrIncorrectResourceOwner     = fmt.Errorf("resource doesn't belong to the requestor")
@@ -42,7 +43,7 @@ type Pool interface {
 	AssignResource(requesterID string) (resourceID string, shouldReconcile bool, err error)
 	FreeResource(requesterID string, resourceID string) (shouldReconcile bool, err error)
 	GetAssignedResource(requesterID string) (resourceID string, ownsResource bool)
-	UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldReconcile bool)
+	UpdatePool(job *worker.WarmPoolJob, didSucceed bool, prefixAvailable bool) (shouldReconcile bool)
 	ReSync(resources []string)
 	ReconcilePool() *worker.WarmPoolJob
 	ProcessCoolDownQueue() bool
@@ -77,6 +78,8 @@ type pool struct {
 	reSyncRequired bool
 	// isPDPool indicates whether the pool is for prefix IP provider or secondary IP provider
 	isPDPool bool
+	// prefixAvailable indicates whether subnet has any prefix available
+	prefixAvailable bool
 }
 
 // Resource represents a secondary IPv4 address or a prefix-deconstructed IPv4 address, uniquely identified by GroupID and ResourceID
@@ -245,9 +248,14 @@ func (p *pool) AssignResource(requesterID string) (resourceID string, shouldReco
 		return "", false, ErrResourcesAreBeingCreated
 	}
 
-	// Caller can retry in 600 ms [Average time to create and attach a new ENI] or less
-	// Different from above check because here we want to perform reconciliation
 	if len(p.warmResources) == 0 {
+		// If prefix is not available in subnet, caller can retry in 2 min [Action required from user to change subnet]
+		if p.isPDPool && !p.prefixAvailable {
+			return "", false, ErrInsufficientCidrBlocks
+		}
+
+		// Caller can retry in 600 ms [Average time to assign a new secondary IP or prefix] or less
+		// Different from above check because here we want to perform reconciliation
 		return "", true, ErrWarmPoolEmpty
 	}
 
@@ -309,7 +317,7 @@ func (p *pool) FreeResource(requesterID string, resourceID string) (shouldReconc
 }
 
 // UpdatePool updates the warm pool with the result of the asynchronous job executed by the provider
-func (p *pool) UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldReconcile bool) {
+func (p *pool) UpdatePool(job *worker.WarmPoolJob, didSucceed bool, prefixAvailable bool) (shouldReconcile bool) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
@@ -320,6 +328,13 @@ func (p *pool) UpdatePool(job *worker.WarmPoolJob, didSucceed bool) (shouldRecon
 		p.reSyncRequired = true
 		shouldReconcile = true
 		log.Error(fmt.Errorf("warm pool job failed: %v", job), "operation failed")
+	}
+
+	if p.isPDPool {
+		p.prefixAvailable = prefixAvailable
+		if !p.prefixAvailable {
+			log.Error(fmt.Errorf("warm pool job failed: %v", job), "prefix is not available in subnet")
+		}
 	}
 
 	if job.Resources != nil && len(job.Resources) > 0 {

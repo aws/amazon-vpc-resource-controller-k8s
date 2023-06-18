@@ -361,7 +361,7 @@ func (p *ipv4Provider) DeletePrivateIPv4AndUpdatePool(job *worker.WarmPoolJob) {
 // updatePoolAndReconcileIfRequired updates the resource pool and reconcile again and submit a new job if required
 func (p *ipv4Provider) updatePoolAndReconcileIfRequired(resourcePool pool.Pool, job *worker.WarmPoolJob, didSucceed bool) {
 	// Update the pool to add the created/failed resource to the warm pool and decrement the pending count
-	shouldReconcile := resourcePool.UpdatePool(job, didSucceed)
+	shouldReconcile := resourcePool.UpdatePool(job, didSucceed, false)
 
 	if shouldReconcile {
 		job := resourcePool.ReconcilePool()

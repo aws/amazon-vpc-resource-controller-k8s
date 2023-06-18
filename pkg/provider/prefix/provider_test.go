@@ -135,9 +135,9 @@ func TestIpv4PrefixProvider_updatePoolAndReconcileIfRequired_NoFurtherReconcile(
 
 	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
 
-	mockPool.EXPECT().UpdatePool(job, true).Return(false)
+	mockPool.EXPECT().UpdatePool(job, true, true).Return(false)
 
-	provider.updatePoolAndReconcileIfRequired(mockPool, job, true)
+	provider.updatePoolAndReconcileIfRequired(mockPool, job, true, true)
 }
 
 // TestIpv4Provider_updatePoolAndReconcileIfRequired_ReconcileRequired tests pool is updated and reconciliation is
@@ -152,11 +152,11 @@ func TestIpv4Provider_updatePoolAndReconcileIfRequired_ReconcileRequired(t *test
 
 	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
 
-	mockPool.EXPECT().UpdatePool(job, true).Return(true)
+	mockPool.EXPECT().UpdatePool(job, true, true).Return(true)
 	mockPool.EXPECT().ReconcilePool().Return(job)
 	mockWorker.EXPECT().SubmitJob(job)
 
-	provider.updatePoolAndReconcileIfRequired(mockPool, job, true)
+	provider.updatePoolAndReconcileIfRequired(mockPool, job, true, true)
 }
 
 // TestIpv4PrefixProvider_DeleteIPv4PrefixAndUpdatePool tests job with empty resources is passed back if some resource
@@ -184,7 +184,7 @@ func TestIpv4PrefixProvider_DeleteIPv4PrefixAndUpdatePool(t *testing.T) {
 		Resources:     []string{},
 		ResourceCount: 2,
 		NodeName:      nodeName,
-	}, true).Return(false)
+	}, true, true).Return(false)
 
 	provider.DeleteIPv4PrefixAndUpdatePool(deleteJob)
 }
@@ -215,7 +215,7 @@ func TestIpv4PrefixProvider_DeletePrivateIPv4AndUpdatePool_SomeResourceFail(t *t
 		Resources:     failedResources,
 		ResourceCount: 2,
 		NodeName:      nodeName,
-	}, true).Return(false)
+	}, true, true).Return(false)
 
 	prefixProvider.DeleteIPv4PrefixAndUpdatePool(&deleteJob)
 }
@@ -245,7 +245,7 @@ func TestIPv4PrefixProvider_CreateIPv4PrefixAndUpdatePool(t *testing.T) {
 		Resources:     createdResources,
 		ResourceCount: 2,
 		NodeName:      nodeName,
-	}, true).Return(false)
+	}, true, true).Return(false)
 
 	prefixProvider.CreateIPv4PrefixAndUpdatePool(createJob)
 }
@@ -256,7 +256,9 @@ func TestIPv4PrefixProvider_CreateIPv4PrefixAndUpdatePool_Fail(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	prefixProvider := getMockIPv4PrefixProvider()
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	prefixProvider := ipv4PrefixProvider{instanceProviderAndPool: map[string]*ResourceProviderAndPool{}, workerPool: mockWorker,
+		log: zap.New(zap.UseDevMode(true)).WithName("prefix provider")}
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
 	prefixProvider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, true)
@@ -276,7 +278,11 @@ func TestIPv4PrefixProvider_CreateIPv4PrefixAndUpdatePool_Fail(t *testing.T) {
 		Resources:     createdResources,
 		ResourceCount: 3,
 		NodeName:      nodeName,
-	}, false).Return(false)
+	}, false, true).Return(true)
+
+	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
+	mockPool.EXPECT().ReconcilePool().Return(job)
+	mockWorker.EXPECT().SubmitJob(job)
 
 	prefixProvider.CreateIPv4PrefixAndUpdatePool(createJob)
 }
@@ -307,12 +313,15 @@ func TestIPv4PrefixProvider_CreateIPv4PrefixAndUpdatePool_Fail_InsufficientCidrB
 
 	mockManager.EXPECT().CreateIPV4Resource(3, config.ResourceTypeIPv4Prefix, nil, gomock.Any()).Return(createdResources,
 		fmt.Errorf("InsufficientCidrBlocks: The specified subnet does not have enough free cidr blocks to satisfy the request. Status"))
+
+	// Since InsufficientCidrBlocks error is not retryable, didSucceed was not set as false to not re-sync or reconcile the pool.
+	// Also set prefixAvailable as false to notify pool
 	mockPool.EXPECT().UpdatePool(&worker.WarmPoolJob{
 		Operations:    worker.OperationCreate,
 		Resources:     createdResources,
 		ResourceCount: 3,
 		NodeName:      nodeName,
-	}, false).Return(false)
+	}, true, false).Return(false)
 
 	mockK8sWrapper.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
 	mockK8sWrapper.EXPECT().BroadcastEvent(node, utils.InsufficientCidrBlocksReason, utils.ErrInsufficientCidrBlocks.Error(), v1.EventTypeWarning).Times(1)
