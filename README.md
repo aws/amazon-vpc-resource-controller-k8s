@@ -26,7 +26,22 @@ Note: The SecurityGroupPolicy CRD only supports up to 5 security groups per cust
 
 The controller manages the IPv4 Addresses for all the Windows Node in EKS Cluster and allocates IPv4 Address to Windows Pods. The Networking on the host is setup by [amazon-vpc-cni-plugins](https://github.com/aws/amazon-vpc-cni-plugins).
 
+The controller supports the following modes for IPv4 address management on Windows-
+- **Secondary IPv4 address mode** &rarr; Secondary private IPv4 addresses are assigned to the primary instance ENI and the same are allocated to the Windows pods.
+  <br/><br/>
+  For more details about the high level workflow, please visit our documentation [here](docs/windows/secondary_ip_mode_workflow.md).
+
+
+- **Prefix delegation mode** &rarr; /28 IPv4 prefixes are assigned to the primary instance ENI and the IP addresses from the prefix are allocated to the Windows pods.
+  <br/><br/>
+  For more details about the configuration options with *prefix delegation*, please visit our documentation [here](docs/windows/prefix_delegation_config_options.md).
+  
+  For more details about the high level workflow, please visit our documentation [here](docs/windows/prefix_delegation_hld_workflow.md).
+
 Please follow this [guide](https://docs.aws.amazon.com/eks/latest/userguide/windows-support.html) for enabling Windows Support on your EKS cluster.
+
+## Troubleshooting
+For troubleshooting issues related to Security group for pods or Windows IPv4 address management, please visit our troubleshooting guide [here](docs/troubleshooting.md).
 
 ## License
 
