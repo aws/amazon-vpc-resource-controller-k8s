@@ -19,6 +19,7 @@ SECONDS=0
 : "${RUN_DEVEKS_TEST:=false}"
 : "${ENDPOINT:=""}"
 : "${SKIP_WINDOWS_TEST:=""}"
+: "${EXTRA_GINKGO_FLAGS:=""}"
 
 source "$SCRIPT_DIR"/lib/cluster.sh
 
