@@ -26,7 +26,6 @@ import (
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/apps"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
-	crdscontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/crds"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
@@ -334,6 +333,7 @@ func main() {
 
 	if err := (&corecontroller.NodeReconciler{
 		Client:     mgr.GetClient(),
+		K8sAPI:     k8sApi,
 		Log:        ctrl.Log.WithName("controllers").WithName("Node"),
 		Scheme:     mgr.GetScheme(),
 		Manager:    nodeManager,
@@ -373,16 +373,6 @@ func main() {
 		ResourceManager: resourceManager,
 	}).SetupWithManager(mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create introspect API")
-		os.Exit(1)
-	}
-
-	if err := (&crdscontroller.CNINodeController{
-		Log:         ctrl.Log.WithName("controllers").WithName("CNINode"),
-		NodeManager: nodeManager,
-		K8sAPI:      k8sApi,
-		Context:     ctx,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create CNINode controller")
 		os.Exit(1)
 	}
 

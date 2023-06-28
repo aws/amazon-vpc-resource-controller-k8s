@@ -236,7 +236,7 @@ func (k *k8sWrapper) CreateCNINode(node *v1.Node) error {
 	cniNode := &rcv1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      node.Name,
-			Namespace: config.KubeDefaultNamespace,
+			Namespace: "",
 			// use the node as owner reference to let k8s clean up the CRD when the node is deleted
 			OwnerReferences: []metav1.OwnerReference{
 				{

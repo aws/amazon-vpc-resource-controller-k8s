@@ -199,7 +199,7 @@ func TestK8sWrapper_CreateCNINodeWithExistedObject_NoError(t *testing.T) {
 
 	err := wrapper.CreateCNINode(mockNode)
 	assert.NoError(t, err)
-	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name, Namespace: config.KubeDefaultNamespace})
+	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name})
 	assert.NoError(t, err)
 	assert.Equal(t, mockNode.Name, cniNode.Name)
 	err = wrapper.CreateCNINode(mockNode)
@@ -212,7 +212,7 @@ func TestK8sWrapper_CreateCNINode_NoError(t *testing.T) {
 
 	err := wrapper.CreateCNINode(mockNode)
 	assert.NoError(t, err)
-	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name, Namespace: config.KubeDefaultNamespace})
+	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name})
 	assert.NoError(t, err)
 	assert.Equal(t, mockNode.Name, cniNode.Name)
 }

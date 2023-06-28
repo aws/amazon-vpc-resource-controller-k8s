@@ -45,7 +45,7 @@ type CNINodeStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:printcolumn:name="Features",type=string,JSONPath=`.spec.features`,description="The features delegated to VPC resource controller"
-// +kubebuilder:resource:shortName=cnd
+// +kubebuilder:resource:shortName=cnd,scope=Cluster
 
 // +kubebuilder:object:root=true
 type CNINode struct {

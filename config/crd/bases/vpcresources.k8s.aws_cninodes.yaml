@@ -16,7 +16,7 @@ spec:
     shortNames:
     - cnd
     singular: cninode
-  scope: Namespaced
+  scope: Cluster
   versions:
   - additionalPrinterColumns:
     - description: The features delegated to VPC resource controller
