@@ -69,8 +69,7 @@ var (
 
 	mockCNINode = &v1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      nodeName,
-			Namespace: config.KubeDefaultNamespace,
+			Name: nodeName,
 		},
 	}
 )

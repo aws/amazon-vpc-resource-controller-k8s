@@ -78,7 +78,6 @@ const (
 	MinimumIPTarget                  = "minimum-ip-target"
 	// Since LeaderElectionNamespace and VpcCniConfigMapName may be different in the future
 	KubeSystemNamespace            = "kube-system"
-	KubeDefaultNamespace           = "default"
 	VpcCNIDaemonSetName            = "aws-node"
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
 )

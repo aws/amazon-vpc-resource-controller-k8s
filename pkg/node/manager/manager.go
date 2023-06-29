@@ -494,7 +494,7 @@ func (m *manager) trunkEnabledInCNINode(node *v1.Node) (bool, error) {
 		if lo.ContainsBy(cniNode.Spec.Features, func(addedFeature v1alpha1.Feature) bool {
 			return addedFeature.Name == v1alpha1.SecurityGroupsForPods
 		}) {
-			return true, err
+			return true, nil
 		}
 	}
 	return false, err
