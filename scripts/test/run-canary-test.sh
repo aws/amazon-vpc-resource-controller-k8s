@@ -108,9 +108,9 @@ function run_canary_tests() {
   # For each component, we want to cover the most important test cases. We also don't want to take more than 30 minutes
   # per repository as these tests are run sequentially along with tests from other repositories
   # Currently the overall execution time is ~50 minutes and we will reduce it in future
-  (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 15m $GINKGO_TEST_BUILD_DIR/perpodsg.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
+  (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 10m $GINKGO_TEST_BUILD_DIR/perpodsg.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
   if [[ -z "${SKIP_WINDOWS_TEST}" ]]; then
-    (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 30m $GINKGO_TEST_BUILD_DIR/windows.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
+    (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 25m $GINKGO_TEST_BUILD_DIR/windows.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
   else
     echo "skipping Windows tests"
   fi
@@ -120,17 +120,9 @@ function run_canary_tests() {
 echo "Starting the ginkgo test suite"
 load_cluster_details
 
-if [[ "$K8S_VERSION" == "1.17" ]]; then
-  kubectl apply -f https://raw.githubusercontent.com/aws/amazon-vpc-cni-k8s/release-1.10/config/master/aws-k8s-cni.yaml
-else
-  # Addons is supported from 1.18 onwards
-  load_addon_details
-  # TODO: v1.7.5 (current default) restarts continiously if IMDS goes out of sync,
-  # the issue is mitigated from v.1.8.0 onwards, once the default addon is updated
-  # to v1.8.0+ we can start using default version.
-  # See: https://github.com/aws/amazon-vpc-cni-k8s/issues/1340
-  install_add_on "$LATEST_ADDON_VERSION"
-fi
+# Addons is supported from 1.18 onwards
+load_addon_details
+install_add_on "$LATEST_ADDON_VERSION"
 
 attach_controller_policy_cluster_role
 set_env_aws_node "ENABLE_POD_ENI" "true"
