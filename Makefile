@@ -50,6 +50,7 @@ apply: image check-deployment-env check-env
 	eksctl create iamserviceaccount vpc-resource-controller --namespace kube-system --cluster ${CLUSTER_NAME} \
 		--role-name VPCResourceControllerRole \
 		--attach-policy-arn arn:aws:iam::aws:policy/AmazonEKSVPCResourceController \
+		--attach-policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy \
 		--override-existing-serviceaccounts \
 		--approve
 	kustomize build config/crd | kubectl apply -f -

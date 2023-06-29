@@ -2,6 +2,7 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
+- bases/vpcresources.k8s.aws_cninodes.yaml
 - bases/vpcresources.k8s.aws_securitygrouppolicies.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 

@@ -25,8 +25,6 @@ require (
 	sigs.k8s.io/controller-runtime v0.14.6
 )
 
-require gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
-
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
