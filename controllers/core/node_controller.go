@@ -18,8 +18,10 @@ import (
 	goErr "errors"
 	"net/http"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/google/uuid"
 
@@ -44,6 +46,7 @@ const MaxNodeConcurrentReconciles = 3
 // NodeReconciler reconciles a Node object
 type NodeReconciler struct {
 	client.Client
+	K8sAPI     k8s.K8sWrapper
 	Log        logr.Logger
 	Scheme     *runtime.Scheme
 	Manager    manager.Manager
@@ -75,10 +78,6 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		if errors.IsNotFound(err) {
 			r.Log.V(1).Info("the requested node couldn't be found by k8s client", "Node", req.NamespacedName)
 			_, found := r.Manager.GetNode(req.Name)
-			// if cachedNode != nil && cachedNode.HasInstance() {
-			// 	// delete the not found node instance id from node event cache for housekeeping
-			// 	r.deleteNodeFromNodeEventCache(cachedNode.GetNodeInstanceID())
-			// }
 			if found {
 				err := r.Manager.DeleteNode(req.Name)
 				if err != nil {
@@ -113,7 +112,7 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHe
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: MaxNodeConcurrentReconciles}).
-		Complete(r)
+		Owns(&v1alpha1.CNINode{}).Complete(r)
 }
 
 func (r *NodeReconciler) Check() healthz.Checker {

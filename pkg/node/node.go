@@ -140,7 +140,7 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 		if errors.Is(err, utils.ErrNotFound) {
 			// Send a node event for users' visibility
 			msg := fmt.Sprintf("The instance type %s is not supported yet by the vpc resource controller", n.instance.Type())
-			utils.SendNodeEvent(n.k8sAPI, n.instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, n.log)
+			utils.SendNodeEventWithNodeName(n.k8sAPI, n.instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, n.log)
 		}
 		return &ErrInitResources{
 			Message: "failed to load instance details",
@@ -169,6 +169,7 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 			n.log.Error(errDeInit, "failed to de initialize resource")
 		}
 		n.log.Error(errInit, "failed to init resource")
+
 		// Return ErrInitResources so that the manager removes the node from the
 		// cache allowing it to be retried in next sync period.
 		return &ErrInitResources{

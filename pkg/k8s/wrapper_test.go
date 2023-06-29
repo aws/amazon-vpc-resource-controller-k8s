@@ -17,6 +17,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_custom "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/controllers/custom"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
@@ -65,6 +66,12 @@ var (
 			Namespace: config.KubeSystemNamespace,
 		},
 	}
+
+	mockCNINode = &v1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+		},
+	}
 )
 
 // getMockK8sWrapper returns the mock wrapper interface
@@ -73,6 +80,7 @@ func getMockK8sWrapperWithClient(ctrl *gomock.Controller, objs []runtime.Object)
 	scheme := runtime.NewScheme()
 	_ = v1.AddToScheme(scheme)
 	_ = appV1.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
 
 	client := fakeClient.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
 	clientSet := fakeClientSet.NewSimpleClientset(mockNode)
@@ -182,4 +190,28 @@ func TestK8sWrapper_GetDeployment_Err(t *testing.T) {
 	_, err := wrapper.GetDeployment("default",
 		config.OldVPCControllerDeploymentName)
 	assert.Error(t, err)
+}
+
+func TestK8sWrapper_CreateCNINodeWithExistedObject_NoError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockCNINode})
+
+	err := wrapper.CreateCNINode(mockNode)
+	assert.NoError(t, err)
+	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name})
+	assert.NoError(t, err)
+	assert.Equal(t, mockNode.Name, cniNode.Name)
+	err = wrapper.CreateCNINode(mockNode)
+	assert.NoError(t, err)
+}
+
+func TestK8sWrapper_CreateCNINode_NoError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockCNINode})
+
+	err := wrapper.CreateCNINode(mockNode)
+	assert.NoError(t, err)
+	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name})
+	assert.NoError(t, err)
+	assert.Equal(t, mockNode.Name, cniNode.Name)
 }

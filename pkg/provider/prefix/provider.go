@@ -91,7 +91,7 @@ func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	if err != nil || ipV4Resources == nil {
 		if errors.Is(err, utils.ErrNotFound) {
 			msg := fmt.Sprintf("The instance type %s is not supported for Windows", instance.Type())
-			utils.SendNodeEvent(p.apiWrapper.K8sAPI, instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, p.log)
+			utils.SendNodeEventWithNodeName(p.apiWrapper.K8sAPI, instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, p.log)
 		}
 
 		return err
@@ -312,7 +312,7 @@ func (p *ipv4PrefixProvider) CreateIPv4PrefixAndUpdatePool(job *worker.WarmPoolJ
 			// Prefix not available in the subnet, set status and pass it to pool. Note this is a non-retryable error.
 			prefixAvailable = false
 			// Send node event to inform user of insufficient CIDR blocks error
-			utils.SendNodeEvent(p.apiWrapper.K8sAPI, job.NodeName, utils.InsufficientCidrBlocksReason,
+			utils.SendNodeEventWithNodeName(p.apiWrapper.K8sAPI, job.NodeName, utils.InsufficientCidrBlocksReason,
 				utils.ErrInsufficientCidrBlocks.Error(), v1.EventTypeWarning, p.log)
 		}
 	}
@@ -410,7 +410,7 @@ func (p *ipv4PrefixProvider) IsInstanceSupported(instance ec2.EC2Instance) bool 
 	// if instance type is not found in vpc limits, send node event for instance type not supported for Windows
 	if errors.Is(err, utils.ErrNotFound) {
 		msg := fmt.Sprintf("The instance type %s is not supported for Windows", instanceType)
-		utils.SendNodeEvent(p.apiWrapper.K8sAPI, instanceName, utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, p.log)
+		utils.SendNodeEventWithNodeName(p.apiWrapper.K8sAPI, instanceName, utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, p.log)
 		return false
 	}
 
@@ -420,7 +420,7 @@ func (p *ipv4PrefixProvider) IsInstanceSupported(instance ec2.EC2Instance) bool 
 
 	// if instance type is non-nitro, PD is not supported
 	msg := fmt.Sprintf("The instance type %s is not supported for Windows prefix delegation", instanceType)
-	utils.SendNodeEvent(p.apiWrapper.K8sAPI, instanceName, utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, p.log)
+	utils.SendNodeEventWithNodeName(p.apiWrapper.K8sAPI, instanceName, utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, p.log)
 	return false
 }
 

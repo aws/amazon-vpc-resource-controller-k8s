@@ -16,27 +16,12 @@ package utils
 import (
 	"testing"
 
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 )
-
-// TestInclude tests if Include func works as expected.
-func TestInclude(t *testing.T) {
-	target := "sg-00001"
-	offTarget := "sg-00007"
-	list := []string{
-		"sg-00001",
-		"sg-00002",
-		"sg-00003",
-		"sg-00004",
-		"sg-00005",
-	}
-
-	assert.True(t, Include(target, list))
-	assert.False(t, Include(offTarget, list))
-}
 
 // TestRemoveDuplicatedSg tests if RemoveDuplicatedSg func works as expected.
 func TestRemoveDuplicatedSg(t *testing.T) {
@@ -60,7 +45,7 @@ func TestRemoveDuplicatedSg(t *testing.T) {
 	processedSgs := RemoveDuplicatedSg(duplicatedSGs)
 	assert.Equal(t, len(expectedSgs), len(processedSgs))
 	for _, sg := range processedSgs {
-		assert.True(t, Include(sg, expectedSgs))
+		assert.True(t, lo.Contains(expectedSgs, sg))
 	}
 }
 
@@ -257,7 +242,7 @@ func isEverySecurityGroupIncluded(retrievedSgs []string) bool {
 	}
 
 	for _, s := range retrievedSgs {
-		if !Include(s, testSecurityGroupsOne) {
+		if !lo.Contains(testSecurityGroupsOne, s) {
 			return false
 		}
 	}

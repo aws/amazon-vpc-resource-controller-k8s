@@ -25,20 +25,27 @@ const (
 	CustomNetworking      FeatureName = "CustomNetworking"
 )
 
+// Feature is a type of feature being supported by VPC resource controller and other AWS Services
+type Feature struct {
+	Name  FeatureName `json:"name,omitempty"`
+	Value string      `json:"value,omitempty"`
+}
+
 // Important: Run "make" to regenerate code after modifying this file
 // CNINodeSpec defines the desired state of CNINode
 type CNINodeSpec struct {
-	Features []FeatureName `json:"features,omitempty"`
+	Features []Feature `json:"features,omitempty"`
 }
 
 // CNINodeStatus defines the managed VPC resources.
 type CNINodeStatus struct {
 	//TODO: add VPS resources which will be managed by this CRD and its finalizer
+
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:printcolumn:name="Features",type=string,JSONPath=`.spec.features`,description="The features delegated to VPC resource controller"
-// +kubebuilder:resource:shortName=cnd
+// +kubebuilder:resource:shortName=cnd,scope=Cluster
 
 // +kubebuilder:object:root=true
 type CNINode struct {

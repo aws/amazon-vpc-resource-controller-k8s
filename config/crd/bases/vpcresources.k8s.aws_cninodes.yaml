@@ -16,7 +16,7 @@ spec:
     shortNames:
     - cnd
     singular: cninode
-  scope: Namespaced
+  scope: Cluster
   versions:
   - additionalPrinterColumns:
     - description: The features delegated to VPC resource controller
@@ -45,10 +45,17 @@ spec:
             properties:
               features:
                 items:
-                  description: FeatureName is a type of feature name supported by
-                    AWS VPC CNI. It can be Security Group for Pods, custom networking,
-                    or others
-                  type: string
+                  description: Feature is a type of feature being supported by VPC
+                    resource controller and other AWS Services
+                  properties:
+                    name:
+                      description: FeatureName is a type of feature name supported
+                        by AWS VPC CNI. It can be Security Group for Pods, custom
+                        networking, or others
+                      type: string
+                    value:
+                      type: string
+                  type: object
                 type: array
             type: object
           status:
