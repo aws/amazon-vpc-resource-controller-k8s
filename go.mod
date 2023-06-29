@@ -18,14 +18,12 @@ require (
 	github.com/stretchr/testify v1.8.1
 	go.uber.org/zap v1.24.0
 	golang.org/x/time v0.3.0
-	gomodules.xyz/jsonpatch/v2 v2.2.0
+	gomodules.xyz/jsonpatch/v2 v2.3.0
 	k8s.io/api v0.26.5
 	k8s.io/apimachinery v0.26.5
 	k8s.io/client-go v0.26.5
 	sigs.k8s.io/controller-runtime v0.14.6
 )
-
-require gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
