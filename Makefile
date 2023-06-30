@@ -2,6 +2,7 @@
 AWS_ACCOUNT ?= ${AWS_ACCOUNT_ID}
 AWS_REGION ?= ${AWS_DEFAULT_REGION}
 CLUSTER_NAME ?= $(shell kubectl config view --minify -o jsonpath='{.clusters[].name}' | rev | cut -d"/" -f1 | rev | cut -d"." -f1)
+KUBE_CONFIG_PATH ?= ${HOME}/.kube/config
 REPO=$(AWS_ACCOUNT_ID).dkr.ecr.${AWS_REGION}.amazonaws.com/aws/amazon-vpc-resource-controller-k8s
 KO_DOCKER_REPO ?= ${REPO} # Used for development images
 
@@ -39,29 +40,32 @@ verify:
 test: verify
 	go test ./pkg/... ./controllers/... ./webhooks/... -coverprofile cover.out
 
-toolchain: ## Install developer toolchain
-	./hack/toolchain.sh
+test-e2e:
+	KUBE_CONFIG_PATH=${KUBE_CONFIG_PATH} REGION=${AWS_REGION} CLUSTER_NAME=${CLUSTER_NAME} ./scripts/test/run-integration-tests.sh
 
 image: ## Build the images using ko build
 	$(eval IMAGE=$(shell KO_DOCKER_REPO=$(KO_DOCKER_REPO) $(WITH_GOFLAGS) ko build --bare github.com/aws/amazon-vpc-resource-controller-k8s))
 
-# Deploy controller in the configured Kubernetes cluster in ~/.kube/config
-apply: image check-deployment-env check-env
+toolchain: ## Install developer toolchain
+	./hack/toolchain.sh
+
+apply: image check-deployment-env check-env ## Deploy controller to ~/.kube/config
 	eksctl create iamserviceaccount vpc-resource-controller --namespace kube-system --cluster ${CLUSTER_NAME} \
 		--role-name VPCResourceControllerRole \
-		--attach-policy-arn arn:aws:iam::aws:policy/AmazonEKSVPCResourceController \
-		--attach-policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy \
+		--attach-policy-arn=arn:aws:iam::aws:policy/AdministratorAccess \
 		--override-existing-serviceaccounts \
 		--approve
 	kustomize build config/crd | kubectl apply -f -
 	cd config/controller && kustomize edit set image controller=${IMAGE}
 	kustomize build config/default | sed "s|CLUSTER_NAME|${CLUSTER_NAME}|g;s|USER_ROLE_ARN|${USER_ROLE_ARN}|g" | kubectl apply -f -
 	kubectl patch rolebinding eks-vpc-resource-controller-rolebinding -n kube-system --patch '{"subjects":[{"kind":"ServiceAccount","name":"vpc-resource-controller","namespace":"kube-system"}]}'
+	kubectl patch clusterrolebinding vpc-resource-controller-rolebinding --patch '{"subjects":[{"kind":"ServiceAccount","name":"vpc-resource-controller","namespace":"kube-system"}]}'
 
-delete:
+delete: ## Delete controller from ~/.kube/config
 	kustomize build config/default | kubectl delete --ignore-not-found -f -
 	eksctl delete iamserviceaccount vpc-resource-controller --namespace kube-system --cluster ${CLUSTER_NAME}
 	kubectl patch rolebinding eks-vpc-resource-controller-rolebinding -n kube-system --patch '{"subjects":[{"kind":"ServiceAccount","name":"eks-vpc-resource-controller","namespace":"kube-system"},{"apiGroup":"rbac.authorization.k8s.io","kind":"User","name":"eks:vpc-resource-controller"}]}'
+	kubectl create clusterrolebinding vpc-resource-controller-rolebinding --clusterrole vpc-resource-controller-role --serviceaccount kube-system:eks-vpc-resource-controller --user eks:vpc-resource-controller
 
 # Build the docker image with buildx
 docker-buildx: check-env test

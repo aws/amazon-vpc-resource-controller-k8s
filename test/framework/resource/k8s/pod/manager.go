@@ -119,14 +119,13 @@ func (d *defaultManager) GetPodsWithLabel(context context.Context, namespace str
 }
 
 func (d *defaultManager) DeleteAndWaitTillPodIsDeleted(context context.Context, pod *v1.Pod) error {
-	err := d.k8sClient.Delete(context, pod)
-	if err != nil {
-		return err
+	if err := d.k8sClient.Delete(context, pod); err != nil {
+		return client.IgnoreNotFound(err)
 	}
 
 	observedPod := &v1.Pod{}
 	return wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
-		err = d.k8sClient.Get(context, utils.NamespacedName(pod), observedPod)
+		err = d.k8sClient.Get(context, client.ObjectKeyFromObject(pod), observedPod)
 		if errors.IsNotFound(err) {
 			return true, nil
 		}

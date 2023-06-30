@@ -42,7 +42,6 @@ var (
 
 var _ = Describe("VPC Resource Controller Metrics Tests", func() {
 	Describe("[LOCAL]Test controller key metrics change", func() {
-		//fmt.Println(stdout)
 		var stdout string
 		Context("Get Released RC metrics", func() {
 			It("Use configured released RC image to get call volume", func() {

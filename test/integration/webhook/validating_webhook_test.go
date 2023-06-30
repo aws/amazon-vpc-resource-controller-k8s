@@ -151,7 +151,6 @@ var _ = Describe("validating webhook test cases", func() {
 						}
 						nodeCopy := existingNodeToMutate.DeepCopy()
 						nodeCopy.Labels["dummy-label"] = "dummy-value"
-						fmt.Println(existingNodeToMutate.Labels, nodeCopy.Labels)
 						return k8sClientToMutateNode.Update(ctx, nodeCopy)
 					})
 					Expect(err).To(HaveOccurred())

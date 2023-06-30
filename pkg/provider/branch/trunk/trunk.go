@@ -198,7 +198,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 			t.instance.CurrentInstanceSecurityGroups(), nil, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil)
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("create_trunk_eni").Inc()
-			return fmt.Errorf("failed to create trunk interface, %w", err)
+			return err
 		}
 
 		t.trunkENIId = *trunk.NetworkInterfaceId
@@ -329,6 +329,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		// Assign VLAN
 		vlanID, err = t.assignVlanId()
 		if err != nil {
+			err = fmt.Errorf("assigning vlad id, %w", err)
 			trunkENIOperationsErrCount.WithLabelValues("assign_vlan_id").Inc()
 			break
 		}
@@ -348,6 +349,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		nwInterface, err = t.ec2ApiHelper.CreateNetworkInterface(&BranchEniDescription,
 			aws.String(t.instance.SubnetID()), securityGroups, tags, nil, nil)
 		if err != nil {
+			err = fmt.Errorf("creating network interface, %w", err)
 			t.freeVlanId(vlanID)
 			break
 		}
@@ -360,6 +362,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		// Associate Branch to trunk
 		_, err = t.ec2ApiHelper.AssociateBranchToTrunk(&t.trunkENIId, nwInterface.NetworkInterfaceId, vlanID)
 		if err != nil {
+			err = fmt.Errorf("associating branch to trunk, %w", err)
 			trunkENIOperationsErrCount.WithLabelValues("associate_branch").Inc()
 			break
 		}

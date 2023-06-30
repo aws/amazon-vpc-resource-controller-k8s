@@ -23,7 +23,6 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
@@ -421,13 +420,6 @@ func (e *ec2Wrapper) getInstanceSession() (instanceSession *session.Session, err
 	}
 	// Set the Account ID
 	e.accountID = instanceIdentity.AccountID
-
-	provider := &ec2rolecreds.EC2RoleProvider{
-		Client: ec2Metadata,
-	}
-
-	instanceSession.Config.Credentials = credentials.NewCredentials(provider)
-
 	return instanceSession, nil
 }
 

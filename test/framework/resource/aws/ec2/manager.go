@@ -25,30 +25,16 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-type Manager interface {
-	CreateSecurityGroup(groupName string) (string, error)
-	GetInstanceDetails(instanceID string) (*ec2.Instance, error)
-	GetSecurityGroupID(securityGroupName string) (string, error)
-	AuthorizeSecurityGroupIngress(securityGroupID string, port int, protocol string) error
-	RevokeSecurityGroupIngress(securityGroupID string, port int, protocol string) error
-	AuthorizeSecurityGroupEgress(securityGroupID string, port int, protocol string) error
-	DeleteSecurityGroup(securityGroupID string) error
-	GetENISecurityGroups(eniID string) ([]string, error)
-	WaitTillTheENIIsDeleted(ctx context.Context, eniID string) error
-	UnAssignSecondaryIPv4Address(instance string, secondaryIPv4Address []string) error
-	GetPrivateIPv4AddressAndPrefix(instanceID string) ([]string, []string, error)
+func NewManager(ec2Client *ec2.EC2, vpcID string) *Manager {
+	return &Manager{ec2Client: ec2Client, vpcID: vpcID}
 }
 
-func NewManager(ec2Client *ec2.EC2, vpcID string) Manager {
-	return &defaultManager{ec2Client: ec2Client, vpcID: vpcID}
-}
-
-type defaultManager struct {
+type Manager struct {
 	ec2Client *ec2.EC2
 	vpcID     string
 }
 
-func (d *defaultManager) CreateSecurityGroup(groupName string) (string, error) {
+func (d *Manager) CreateSecurityGroup(groupName string) (string, error) {
 	createSecurityGroupOutput, err := d.ec2Client.CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
 		Description: &groupName,
 		GroupName:   &groupName,
@@ -61,7 +47,7 @@ func (d *defaultManager) CreateSecurityGroup(groupName string) (string, error) {
 	return *createSecurityGroupOutput.GroupId, err
 }
 
-func (d *defaultManager) GetInstanceDetails(instanceID string) (*ec2.Instance, error) {
+func (d *Manager) GetInstanceDetails(instanceID string) (*ec2.Instance, error) {
 	describeInstanceOutput, err := d.ec2Client.DescribeInstances(&ec2.DescribeInstancesInput{
 		InstanceIds: aws.StringSlice([]string{instanceID}),
 	})
@@ -76,7 +62,7 @@ func (d *defaultManager) GetInstanceDetails(instanceID string) (*ec2.Instance, e
 	return describeInstanceOutput.Reservations[0].Instances[0], nil
 }
 
-func (d *defaultManager) AuthorizeSecurityGroupIngress(securityGroupID string, port int,
+func (d *Manager) AuthorizeSecurityGroupIngress(securityGroupID string, port int,
 	protocol string) error {
 
 	_, err := d.ec2Client.AuthorizeSecurityGroupIngress(&ec2.AuthorizeSecurityGroupIngressInput{
@@ -93,7 +79,7 @@ func (d *defaultManager) AuthorizeSecurityGroupIngress(securityGroupID string, p
 	return err
 }
 
-func (d *defaultManager) AuthorizeSecurityGroupEgress(securityGroupID string, port int,
+func (d *Manager) AuthorizeSecurityGroupEgress(securityGroupID string, port int,
 	protocol string) error {
 	_, err := d.ec2Client.AuthorizeSecurityGroupEgress(&ec2.AuthorizeSecurityGroupEgressInput{
 		GroupId: &securityGroupID,
@@ -109,7 +95,7 @@ func (d *defaultManager) AuthorizeSecurityGroupEgress(securityGroupID string, po
 	return err
 }
 
-func (d *defaultManager) RevokeSecurityGroupIngress(securityGroupID string, port int,
+func (d *Manager) RevokeSecurityGroupIngress(securityGroupID string, port int,
 	protocol string) error {
 	_, err := d.ec2Client.RevokeSecurityGroupIngress(&ec2.RevokeSecurityGroupIngressInput{
 		GroupId: aws.String(securityGroupID),
@@ -125,14 +111,20 @@ func (d *defaultManager) RevokeSecurityGroupIngress(securityGroupID string, port
 	return err
 }
 
-func (d *defaultManager) DeleteSecurityGroup(securityGroupID string) error {
-	_, err := d.ec2Client.DeleteSecurityGroup(&ec2.DeleteSecurityGroupInput{
-		GroupId: &securityGroupID,
-	})
-	return err
+func (d *Manager) DeleteSecurityGroup(ctx context.Context, securityGroupID string) error {
+	return wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
+		if _, err = d.ec2Client.DeleteSecurityGroup(&ec2.DeleteSecurityGroupInput{GroupId: &securityGroupID}); err != nil {
+			if err.(awserr.Error).Code() == "DependencyViolation" {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+
+	}, ctx.Done())
 }
 
-func (d *defaultManager) GetENISecurityGroups(eniID string) ([]string, error) {
+func (d *Manager) GetENISecurityGroups(eniID string) ([]string, error) {
 	networkInterface, err := d.ec2Client.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 		NetworkInterfaceIds: []*string{&eniID},
 	})
@@ -148,7 +140,7 @@ func (d *defaultManager) GetENISecurityGroups(eniID string) ([]string, error) {
 	return securityGroups, nil
 }
 
-func (d *defaultManager) GetSecurityGroupID(securityGroupName string) (string, error) {
+func (d *Manager) GetSecurityGroupID(securityGroupName string) (string, error) {
 	securityGroupOutput, err := d.ec2Client.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
 		Filters: []*ec2.Filter{
 			{
@@ -172,7 +164,7 @@ func (d *defaultManager) GetSecurityGroupID(securityGroupName string) (string, e
 	return *securityGroupOutput.SecurityGroups[0].GroupId, nil
 }
 
-func (d *defaultManager) WaitTillTheENIIsDeleted(ctx context.Context, eniID string) error {
+func (d *Manager) WaitTillTheENIIsDeleted(ctx context.Context, eniID string) error {
 	return wait.PollImmediateUntil(utils.PollIntervalMedium, func() (done bool, err error) {
 		_, err = d.ec2Client.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 			NetworkInterfaceIds: []*string{&eniID},
@@ -189,7 +181,7 @@ func (d *defaultManager) WaitTillTheENIIsDeleted(ctx context.Context, eniID stri
 
 }
 
-func (d *defaultManager) UnAssignSecondaryIPv4Address(instanceID string, secondaryIPv4Address []string) error {
+func (d *Manager) UnAssignSecondaryIPv4Address(instanceID string, secondaryIPv4Address []string) error {
 	describeInstanceOutput, err := d.ec2Client.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -212,7 +204,7 @@ func (d *defaultManager) UnAssignSecondaryIPv4Address(instanceID string, seconda
 	return err
 }
 
-func (d *defaultManager) GetPrivateIPv4AddressAndPrefix(instanceID string) ([]string, []string, error) {
+func (d *Manager) GetPrivateIPv4AddressAndPrefix(instanceID string) ([]string, []string, error) {
 	describeNetworkInterfaceOutput, err := d.ec2Client.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{
