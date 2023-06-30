@@ -15,8 +15,8 @@ package controllers
 
 import (
 	"context"
-	goErr "errors"
 	"net/http"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
@@ -66,7 +66,8 @@ type NodeReconciler struct {
 func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	if !r.Conditions.GetPodDataStoreSyncStatus() {
 		// if pod cache is not ready, let's exponentially requeue the requests instead of letting routines wait
-		return ctrl.Result{Requeue: true}, goErr.New("pod datastore hasn't been synced, node controller need wait to retry")
+		r.Log.Info("waiting for pod datastore to sync")
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	node := &corev1.Node{}

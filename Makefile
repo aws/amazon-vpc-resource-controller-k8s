@@ -1,74 +1,67 @@
 # Image URL to use all building/pushing image targets
-IMAGE_NAME=eks/vpc-resource-controller
-REPO=$(AWS_ACCOUNT).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE_NAME)
+AWS_ACCOUNT ?= ${AWS_ACCOUNT_ID}
+AWS_REGION ?= ${AWS_DEFAULT_REGION}
+CLUSTER_NAME ?= $(shell kubectl config view --minify -o jsonpath='{.clusters[].name}' | rev | cut -d"/" -f1 | rev | cut -d"." -f1)
+REPO=$(AWS_ACCOUNT_ID).dkr.ecr.${AWS_REGION}.amazonaws.com/aws/amazon-vpc-resource-controller-k8s
+KO_DOCKER_REPO ?= ${REPO} # Used for development images
+
 GIT_VERSION=$(shell git describe --tags --always)
 MAKEFILE_PATH = $(dir $(realpath -s $(firstword $(MAKEFILE_LIST))))
-
-export GOPROXY = direct
 
 VERSION ?= $(GIT_VERSION)
 IMAGE ?= $(REPO):$(VERSION)
 BASE_IMAGE ?= public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-nonroot:latest.2
-BUILD_IMAGE ?= public.ecr.aws/bitnami/golang:1.20.1
-# Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
-CRD_OPTIONS ?= "crd:trivialVersions=true"
+BUILD_IMAGE ?= public.ecr.aws/bitnami/golang:1.20.5
 GOARCH ?= amd64
 PLATFORM ?= linux/amd64
 
+help: ## Display help
+	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
-# Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
-ifeq (,$(shell go env GOBIN))
-GOBIN=$(shell go env GOPATH)/bin
-else
-GOBIN=$(shell go env GOBIN)
-endif
+## Execute before submitting code
+presubmit: verify test
 
-all: controller
+## Verify dependencies, correctness, and formatting
+verify:
+	go mod tidy
+	go generate ./...
+	go vet ./...
+	go fmt ./...
+	controller-gen crd:trivialVersions=true rbac:roleName=controller-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	controller-gen object:headerFile="scripts/templates/boilerplate.go.txt" paths="./..."
+	@git diff --quiet ||\
+	{ echo "New file modification detected in the Git working tree. Please check in before commit."; git --no-pager diff --name-only | uniq | awk '{print "  - " $$0}'; \
+	if [ "${CI}" = true ]; then\
+		exit 1;\
+	fi;}
 
-# Run tests
-test: generate fmt vet manifests
+## Run unit tests
+test: verify
 	go test ./pkg/... ./controllers/... ./webhooks/... -coverprofile cover.out
 
-# Build controller binary
-controller: generate fmt vet
-	go build -o bin/controller main.go
+toolchain: ## Install developer toolchain
+	./hack/toolchain.sh
 
-# Run against the configured Kubernetes cluster in ~/.kube/config
-run: generate fmt vet manifests
-	go run ./main.go
-
-# Install CRDs into a cluster
-install: manifests
-	kustomize build config/crd | kubectl apply -f -
-
-# Uninstall CRDs from a cluster
-uninstall: manifests
-	kustomize build config/crd | kubectl delete -f -
+image: ## Build the images using ko build
+	$(eval IMAGE=$(shell KO_DOCKER_REPO=$(KO_DOCKER_REPO) $(WITH_GOFLAGS) ko build --bare github.com/aws/amazon-vpc-resource-controller-k8s))
 
 # Deploy controller in the configured Kubernetes cluster in ~/.kube/config
-deploy: check-deployment-env check-env manifests
+apply: image check-deployment-env check-env
+	eksctl create iamserviceaccount vpc-resource-controller --namespace kube-system --cluster ${CLUSTER_NAME} \
+		--role-name VPCResourceControllerRole \
+		--attach-policy-arn arn:aws:iam::aws:policy/AmazonEKSVPCResourceController \
+		--attach-policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy \
+		--override-existing-serviceaccounts \
+		--approve
+	kustomize build config/crd | kubectl apply -f -
 	cd config/controller && kustomize edit set image controller=${IMAGE}
 	kustomize build config/default | sed "s|CLUSTER_NAME|${CLUSTER_NAME}|g;s|USER_ROLE_ARN|${USER_ROLE_ARN}|g" | kubectl apply -f -
+	kubectl patch rolebinding eks-vpc-resource-controller-rolebinding -n kube-system --patch '{"subjects":[{"kind":"ServiceAccount","name":"vpc-resource-controller","namespace":"kube-system"}]}'
 
-undeploy: check-env
-	cd config/controller && kustomize edit set image controller=${IMAGE}
-	kustomize build config/default | kubectl delete -f -
-
-# Generate manifests e.g. CRD, RBAC etc.
-manifests: controller-gen
-	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=controller-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
-
-# Run go fmt against code
-fmt:
-	go fmt ./...
-
-# Run go vet against code
-vet:
-	go vet ./...
-
-# Generate code
-generate: controller-gen
-	$(CONTROLLER_GEN) object:headerFile="scripts/templates/boilerplate.go.txt" paths="./..."
+delete:
+	kustomize build config/default | kubectl delete --ignore-not-found -f -
+	eksctl delete iamserviceaccount vpc-resource-controller --namespace kube-system --cluster ${CLUSTER_NAME}
+	kubectl patch rolebinding eks-vpc-resource-controller-rolebinding -n kube-system --patch '{"subjects":[{"kind":"ServiceAccount","name":"eks-vpc-resource-controller","namespace":"kube-system"},{"apiGroup":"rbac.authorization.k8s.io","kind":"User","name":"eks:vpc-resource-controller"}]}'
 
 # Build the docker image with buildx
 docker-buildx: check-env test
@@ -82,34 +75,12 @@ docker-build: check-env test
 docker-push: check-env
 	docker push ${IMAGE}
 
-# find or download controller-gen
-# download controller-gen if necessary
-controller-gen:
-ifeq (, $(findstring v0.6.2,$(shell controller-gen --version)))
-	@{ \
-	set -e ;\
-	CONTROLLER_GEN_TMP_DIR=$$(mktemp -d) ;\
-	cd $$CONTROLLER_GEN_TMP_DIR ;\
-	go mod init tmp ;\
-	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.6.2 ;\
-	rm -rf $$CONTROLLER_GEN_TMP_DIR ;\
-	}
-CONTROLLER_GEN=$(GOBIN)/controller-gen
-else
-CONTROLLER_GEN=$(shell which controller-gen)
-endif
-
-# If more than 1 files need formatting then error out
-check-format:
-	@exit $(shell gofmt -l . | grep -v internal | wc -l)
-
 check-env:
 	@:$(call check_var, AWS_ACCOUNT, AWS account ID for publishing docker images)
 	@:$(call check_var, AWS_REGION, AWS region for publishing docker images)
 
 check-deployment-env:
 	@:$(call check_var, CLUSTER_NAME, Cluster name where the controller is deployed)
-	@:$(call check_var, USER_ROLE_ARN, User Role ARN which is assumed to manage Trunk/Branch ENI for users)
 
 check_var = \
     $(strip $(foreach 1,$1, \

@@ -191,8 +191,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 			t.instance.CurrentInstanceSecurityGroups(), nil, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil)
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("create_trunk_eni").Inc()
-			log.Error(err, "failed to create trunk interface")
-			return err
+			return fmt.Errorf("failed to create trunk interface, %w", err)
 		}
 
 		t.trunkENIId = *trunk.NetworkInterfaceId

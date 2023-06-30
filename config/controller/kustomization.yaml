@@ -7,6 +7,6 @@ namePrefix: local-
 # for Windows test, as it checks the same deployment name should not be deployed to enable Windows
 # IPAM
 images:
-- name: controller
+- digest: latest
+  name: controller
   newName: controller
-  newTag: latest

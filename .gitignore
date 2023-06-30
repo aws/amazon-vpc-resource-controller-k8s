@@ -20,9 +20,7 @@ scripts/gen_vpc_limits.go
 *.out
 
 # Kubernetes Generated files - skip generated files, except for vendored files
-
 !vendor/**/zz_generated.*
-
 # editor and IDE paraphernalia
 .idea
 *.swp

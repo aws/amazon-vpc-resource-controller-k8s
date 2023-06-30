@@ -168,8 +168,6 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 			errDeInit := resourceProvider.DeInitResource(n.instance)
 			n.log.Error(errDeInit, "failed to de initialize resource")
 		}
-		n.log.Error(errInit, "failed to init resource")
-
 		// Return ErrInitResources so that the manager removes the node from the
 		// cache allowing it to be retried in next sync period.
 		return &ErrInitResources{

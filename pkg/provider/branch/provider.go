@@ -151,8 +151,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	err = trunkENI.InitTrunk(instance, podList)
-	if err != nil {
+	if err := trunkENI.InitTrunk(instance, podList); err != nil {
 		// If it's an AWS Error, get the exit code without the error message to avoid
 		// broadcasting multiple different messaged events
 		if awsErr, ok := err.(awserr.Error); ok {
@@ -170,16 +169,14 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 			b.apiWrapper.K8sAPI.BroadcastEvent(node, ReasonTrunkENICreationFailed, eventMessage, v1.EventTypeWarning)
 		}
 
-		log.Error(err, "failed to init resource")
 		utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkFailedInitializationReason, "The node failed initializing trunk interface", v1.EventTypeNormal, b.log)
 		branchProviderOperationsErrCount.WithLabelValues("init").Inc()
-		return err
+		return fmt.Errorf("initalizing trunk, %w", err)
 	}
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceMs(start))
 
 	// Add the Trunk ENI to cache
-	err = b.addTrunkToCache(nodeName, trunkENI)
-	if err != nil {
+	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil {
 		branchProviderOperationsErrCount.WithLabelValues("add_trunk_to_cache").Inc()
 		return err
 	}
