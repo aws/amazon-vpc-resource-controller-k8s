@@ -104,6 +104,12 @@ type IntrospectResponse struct {
 	CoolingResources []CoolDownResource
 }
 
+type IntrospectSummaryResponse struct {
+	UsedResourcesCount    int
+	WarmResourcesCount    int
+	CoolingResourcesCount int
+}
+
 func NewResourcePool(log logr.Logger, poolConfig *config.WarmPoolConfig, usedResources map[string]Resource,
 	warmResources map[string][]Resource, nodeName string, capacity int, isPDPool bool) Pool {
 	pool := &pool{

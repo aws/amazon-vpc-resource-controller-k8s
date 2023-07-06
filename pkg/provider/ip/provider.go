@@ -460,6 +460,26 @@ func (p *ipv4Provider) Introspect() interface{} {
 	return response
 }
 
+func (p *ipv4Provider) IntrospectSummary() interface{} {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	response := make(map[string]pool.IntrospectSummaryResponse)
+	for nodeName, resource := range p.instanceProviderAndPool {
+		response[nodeName] = ChangeToIntrospectSummary(resource.resourcePool.Introspect())
+
+	}
+	return response
+}
+
+func ChangeToIntrospectSummary(details pool.IntrospectResponse) pool.IntrospectSummaryResponse {
+	return pool.IntrospectSummaryResponse{
+		WarmResourcesCount:    len(details.WarmResources),
+		CoolingResourcesCount: len(details.CoolingResources),
+		UsedResourcesCount:    len(details.UsedResources),
+	}
+}
+
 func (p *ipv4Provider) IntrospectNode(nodeName string) interface{} {
 	p.lock.RLock()
 	defer p.lock.RUnlock()

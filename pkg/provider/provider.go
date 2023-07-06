@@ -42,4 +42,6 @@ type ResourceProvider interface {
 	IntrospectNode(node string) interface{}
 	// GetHealthChecker provider a health check subpath for pinging provider
 	GetHealthChecker() healthz.Checker
+	// IntrospectSummary allows introspection of resources summary per node
+	IntrospectSummary() interface{}
 }

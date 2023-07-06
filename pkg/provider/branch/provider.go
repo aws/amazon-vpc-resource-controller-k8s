@@ -496,6 +496,28 @@ func (b *branchENIProvider) Introspect() interface{} {
 	return allResponse
 }
 
+func (b *branchENIProvider) IntrospectSummary() interface{} {
+	b.lock.RLock()
+	defer b.lock.RUnlock()
+
+	allResponse := make(map[string]trunk.IntrospectSummaryResponse)
+
+	for nodeName, trunkENI := range b.trunkENICache {
+		response := trunkENI.Introspect()
+		allResponse[nodeName] = changeToIntrospectSummary(response)
+	}
+	return allResponse
+}
+
+func changeToIntrospectSummary(details trunk.IntrospectResponse) trunk.IntrospectSummaryResponse {
+	return trunk.IntrospectSummaryResponse{
+		TrunkENIID:     details.TrunkENIID,
+		InstanceID:     details.InstanceID,
+		BranchENICount: len(details.PodToBranchENI),
+		DeleteQueueLen: len(details.DeleteQueue),
+	}
+}
+
 func (b *branchENIProvider) IntrospectNode(nodeName string) interface{} {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
