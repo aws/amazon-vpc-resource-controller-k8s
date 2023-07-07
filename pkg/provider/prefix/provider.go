@@ -28,6 +28,7 @@ import (
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
@@ -431,6 +432,17 @@ func (p *ipv4PrefixProvider) Introspect() interface{} {
 	response := make(map[string]pool.IntrospectResponse)
 	for nodeName, resource := range p.instanceProviderAndPool {
 		response[nodeName] = resource.resourcePool.Introspect()
+	}
+	return response
+}
+
+func (p *ipv4PrefixProvider) IntrospectSummary() interface{} {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	response := make(map[string]pool.IntrospectSummaryResponse)
+	for nodeName, resource := range p.instanceProviderAndPool {
+		response[nodeName] = ip.ChangeToIntrospectSummary(resource.resourcePool.Introspect())
 	}
 	return response
 }

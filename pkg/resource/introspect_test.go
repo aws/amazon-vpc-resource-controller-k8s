@@ -19,8 +19,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
+	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
+	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 
@@ -87,6 +87,24 @@ func TestIntrospectHandler_ResourceHandler(t *testing.T) {
 	mock.mockProvider.EXPECT().Introspect().Return(response)
 
 	mock.handler.ResourceHandler(rr, req)
+	VerifyResponse(t, rr, mock.response)
+}
+
+func TestIntrospectHandler_SummaryHandler(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMockIntrospectHandler(ctrl)
+
+	req, err := http.NewRequest("GET", GetAllResourcesPath+nodeName, nil)
+	assert.NoError(t, err)
+	rr := httptest.NewRecorder()
+
+	mock.mockManager.EXPECT().GetResourceProviders().
+		Return(map[string]provider.ResourceProvider{resourceName: mock.mockProvider})
+	mock.mockProvider.EXPECT().IntrospectSummary().Return(response)
+
+	mock.handler.ResourceSummaryHandler(rr, req)
 	VerifyResponse(t, rr, mock.response)
 }
 

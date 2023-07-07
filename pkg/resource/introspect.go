@@ -25,8 +25,9 @@ import (
 )
 
 const (
-	GetNodeResourcesPath = "/node/"
-	GetAllResourcesPath  = "/resources"
+	GetNodeResourcesPath    = "/node/"
+	GetAllResourcesPath     = "/resources/all"
+	GetResourcesSummaryPath = "/resources/summary"
 )
 
 type IntrospectHandler struct {
@@ -42,6 +43,7 @@ func (i *IntrospectHandler) Start(_ context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc(GetAllResourcesPath, i.ResourceHandler)
 	mux.HandleFunc(GetNodeResourcesPath, i.NodeResourceHandler)
+	mux.HandleFunc(GetResourcesSummaryPath, i.ResourceSummaryHandler)
 
 	// Should this be a fatal error?
 	err := http.ListenAndServe(i.BindAddress, mux)
@@ -81,6 +83,26 @@ func (i *IntrospectHandler) NodeResourceHandler(w http.ResponseWriter, r *http.R
 		if data != nil {
 			response[resourceName] = data
 		}
+	}
+
+	jsonData, err := json.MarshalIndent(response, "", "\t")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(jsonData)
+}
+
+// ResourceSummaryHandler returns all the resources associated with the Node
+func (i *IntrospectHandler) ResourceSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	response := make(map[string]interface{})
+	for resourceName, provider := range i.ResourceManager.GetResourceProviders() {
+		data := provider.IntrospectSummary()
+		response[resourceName] = data
 	}
 
 	jsonData, err := json.MarshalIndent(response, "", "\t")

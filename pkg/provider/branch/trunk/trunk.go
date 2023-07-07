@@ -130,6 +130,13 @@ type IntrospectResponse struct {
 	DeleteQueue    []ENIDetails
 }
 
+type IntrospectSummaryResponse struct {
+	TrunkENIID     string
+	InstanceID     string
+	BranchENICount int
+	DeleteQueueLen int
+}
+
 // NewTrunkENI returns a new Trunk ENI interface.
 func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2APIHelper) TrunkENI {
 
