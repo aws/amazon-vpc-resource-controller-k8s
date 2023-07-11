@@ -16,6 +16,7 @@ package perpodsg_test
 import (
 	"time"
 
+	cninode "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
@@ -26,6 +27,7 @@ import (
 	podWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/pod"
 	sgpWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
+	"github.com/samber/lo"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -34,6 +36,29 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+var _ = Describe("CNINode Veification", func() {
+	Describe("verify CNINode mapping to nodes", func() {
+		Context("when nodes are ready", func() {
+			It("should have same number of CNINode no matter which mode", func() {
+				cniNodes, err := frameWork.NodeManager.GetCNINodeList()
+				Expect(err).NotTo(HaveOccurred())
+				nodes, err := frameWork.NodeManager.GetNodeList()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(len(nodes.Items)).To(Equal(len(cniNodes.Items)))
+				nameMatched := true
+				for _, node := range nodes.Items {
+					if !lo.ContainsBy(cniNodes.Items, func(cniNode cninode.CNINode) bool {
+						return cniNode.Name == node.Name
+					}) {
+						nameMatched = false
+					}
+				}
+				Expect(nameMatched).To(BeTrue())
+			})
+		})
+	})
+})
 
 var _ = Describe("Branch ENI Pods", func() {
 	var (
@@ -427,44 +452,55 @@ var _ = Describe("Branch ENI Pods", func() {
 			It("pod should not run when un-managed and run when managed", func() {
 				node := targetedNodes[0]
 
-				By("verifying node has trunk ENI label present")
-				// This label is added by IPAM-D
-				_, found := node.Labels[config.HasTrunkAttachedLabel]
-				Expect(found).To(BeTrue())
-
-				// This should never happens as once the trunk is attached,
-				// this label will not be removed again. This is for testing
-				// purposes to make a managed node an un-managed node
-				By("removing the has-trunk-attached label from the node")
-				err = frameWork.NodeManager.RemoveLabels(targetedNodes,
-					map[string]string{config.HasTrunkAttachedLabel: "true"})
-
-				firstPod := podTemplate.DeepCopy()
-				By("creating a Pod on the un-managed node and verifying it fails")
-				_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, firstPod, utils.ResourceCreationTimeout)
-				Expect(err).To(HaveOccurred())
-
-				By("deleting the pod")
-				err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, firstPod)
+				By("verifying node has CNINode present")
+				cniNode, err := frameWork.NodeManager.GetCNINode(&node)
 				Expect(err).ToNot(HaveOccurred())
+				Expect(cniNode.Name).To(Equal(node.Name))
 
-				// Currently we wait for some time before removing the trunk from cache
-				// to allow evicted Pods's event to be received and their Branch ENIs be
-				// removed. In this period if we try to make the node managed again, it will
-				// fail
-				time.Sleep(branch.NodeDeleteRequeueRequestDelay)
+				// we don't support changing SGP managed node to unmanaged node
+				// after using CNINode, no longer like node label the feature in CNINode Spec shouldn't be modified
+				// only run this test for old label based mode
+				if !lo.ContainsBy(cniNode.Spec.Features, func(addedFeature cninode.Feature) bool {
+					return addedFeature.Name == cninode.SecurityGroupsForPods
+				}) {
+					if _, found := node.Labels[config.HasTrunkAttachedLabel]; found {
+						// This should never happens as once the trunk is attached,
+						// this label will not be removed again. This is for testing
+						// purposes to make a managed node an un-managed node
+						By("removing the has-trunk-attached label from the node")
+						err = frameWork.NodeManager.RemoveLabels(targetedNodes,
+							map[string]string{config.HasTrunkAttachedLabel: "true"})
+						Expect(err).To(HaveOccurred())
 
-				By("adding the has trunk ENI label")
-				err = frameWork.NodeManager.AddLabels(targetedNodes,
-					map[string]string{config.HasTrunkAttachedLabel: "true"})
-				Expect(err).ToNot(HaveOccurred())
+						firstPod := podTemplate.DeepCopy()
+						By("creating a Pod on the un-managed node and verifying it fails")
+						_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, firstPod, utils.ResourceCreationTimeout)
+						Expect(err).To(HaveOccurred())
 
-				By("creating the Pod on now managed node and verify it runs")
-				secondPod := podTemplate.DeepCopy()
-				secondPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, secondPod, utils.ResourceCreationTimeout)
-				Expect(err).ToNot(HaveOccurred())
+						By("deleting the pod")
+						err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, firstPod)
+						Expect(err).ToNot(HaveOccurred())
 
-				verify.VerifyNetworkingOfPodUsingENI(*secondPod, []string{securityGroupID1})
+						// Currently we wait for some time before removing the trunk from cache
+						// to allow evicted Pods's event to be received and their Branch ENIs be
+						// removed. In this period if we try to make the node managed again, it will
+						// fail
+						time.Sleep(branch.NodeDeleteRequeueRequestDelay)
+
+						By("adding the has trunk ENI label")
+						err = frameWork.NodeManager.AddLabels(targetedNodes,
+							map[string]string{config.HasTrunkAttachedLabel: "true"})
+						Expect(err).ToNot(HaveOccurred())
+
+						By("creating the Pod on now managed node and verify it runs")
+						secondPod := podTemplate.DeepCopy()
+						secondPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, secondPod, utils.ResourceCreationTimeout)
+						Expect(err).ToNot(HaveOccurred())
+
+						verify.VerifyNetworkingOfPodUsingENI(*secondPod, []string{securityGroupID1})
+
+					}
+				}
 			})
 		})
 
@@ -485,7 +521,7 @@ var _ = Describe("Branch ENI Pods", func() {
 				pod := podTemplate.DeepCopy()
 
 				By("creating pod which should not run since controller is down")
-				pod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, pod, time.Second*10)
+				_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, pod, time.Second*10)
 				Expect(err).To(HaveOccurred())
 
 				By("scaling the controller deployment to 2")

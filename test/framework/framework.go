@@ -15,6 +15,7 @@ package framework
 
 import (
 	eniConfig "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
+	cninode "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	sgp "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	ec2Manager "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/configmap"
@@ -72,6 +73,7 @@ func New(options Options) *Framework {
 	clientgoscheme.AddToScheme(k8sSchema)
 	sgp.AddToScheme(k8sSchema)
 	eniConfig.AddToScheme(k8sSchema)
+	cninode.AddToScheme(k8sSchema)
 
 	stopChan := ctrl.SetupSignalHandler()
 	cache, err := cache.New(config, cache.Options{Scheme: k8sSchema})

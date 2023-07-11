@@ -16,6 +16,7 @@ package node
 import (
 	"context"
 
+	cninode "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -28,6 +29,9 @@ type Manager interface {
 	AddLabels(nodeList []v1.Node, label map[string]string) error
 	RemoveLabels(nodeList []v1.Node, label map[string]string) error
 	GetNode(node *v1.Node) (*v1.Node, error)
+	GetNodeList() (*v1.NodeList, error)
+	GetCNINode(node *v1.Node) (*cninode.CNINode, error)
+	GetCNINodeList() (*cninode.CNINodeList, error)
 }
 
 type defaultManager struct {
@@ -94,4 +98,22 @@ func (d *defaultManager) GetNode(node *v1.Node) (*v1.Node, error) {
 	observedNode := &v1.Node{}
 	err := d.k8sClient.Get(context.TODO(), utils.NamespacedName(node), observedNode)
 	return observedNode, err
+}
+
+func (d *defaultManager) GetCNINode(node *v1.Node) (*cninode.CNINode, error) {
+	cniNode := &cninode.CNINode{}
+	err := d.k8sClient.Get(context.TODO(), types.NamespacedName{Name: node.Name}, cniNode)
+	return cniNode, err
+}
+
+func (d *defaultManager) GetCNINodeList() (*cninode.CNINodeList, error) {
+	list := &cninode.CNINodeList{}
+	err := d.k8sClient.List(context.TODO(), list)
+	return list, err
+}
+
+func (d *defaultManager) GetNodeList() (*v1.NodeList, error) {
+	list := &v1.NodeList{}
+	err := d.k8sClient.List(context.TODO(), list)
+	return list, err
 }

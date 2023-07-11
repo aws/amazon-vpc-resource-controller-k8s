@@ -898,3 +898,57 @@ func Test_GetEniConfigName(t *testing.T) {
 		})
 	}
 }
+
+func Test_TrunkEnabledInCNINode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	dataStoreWithUnManagedNode := map[string]node.Node{v1Node.Name: unManagedNode}
+
+	mock := NewMock(ctrl, dataStoreWithUnManagedNode)
+
+	testCases := []struct {
+		features []rcV1alpha1.Feature
+		managed  bool
+		msg      string
+	}{
+		{
+			features: []rcV1alpha1.Feature{},
+			managed:  false,
+			msg:      "no feature is added and node is not managed",
+		},
+		{
+			features: []rcV1alpha1.Feature{
+				{
+					Name:  rcV1alpha1.SecurityGroupsForPods,
+					Value: "",
+				},
+			},
+			managed: true,
+			msg:     "no SGP feature is added and node is not managed",
+		},
+		{
+			features: []rcV1alpha1.Feature{
+				{
+					Name:  rcV1alpha1.CustomNetworking,
+					Value: "default",
+				},
+			},
+			managed: false,
+			msg:     "SGP feature is added and node is managed",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.msg, func(t *testing.T) {
+			mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: v1Node.Name}).Return(&rcV1alpha1.CNINode{
+				Spec: rcV1alpha1.CNINodeSpec{
+					Features: test.features,
+				},
+			}, nil).Times(1)
+			managed, err := mock.Manager.trunkEnabledInCNINode(v1Node)
+			assert.NoError(t, err)
+			assert.Equal(t, test.managed, managed)
+		})
+	}
+}
