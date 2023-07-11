@@ -60,10 +60,8 @@ rules:
   - cninodes
   verbs:
   - create
-  - delete
   - get
   - list
-  - patch
   - watch
 - apiGroups:
   - vpcresources.k8s.aws
