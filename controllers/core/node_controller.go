@@ -113,7 +113,8 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHe
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: MaxNodeConcurrentReconciles}).
-		Owns(&v1alpha1.CNINode{}).Complete(r)
+		Owns(&v1alpha1.CNINode{}).
+		Complete(r)
 }
 
 func (r *NodeReconciler) Check() healthz.Checker {

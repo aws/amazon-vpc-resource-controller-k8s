@@ -21,6 +21,7 @@ import (
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/samber/lo"
 
 	appv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
@@ -244,6 +245,7 @@ func (k *k8sWrapper) CreateCNINode(node *v1.Node) error {
 					Kind:       node.Kind,
 					Name:       node.Name,
 					UID:        node.UID,
+					Controller: lo.ToPtr(true),
 				},
 			},
 		},
