@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
@@ -113,7 +112,7 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHe
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: MaxNodeConcurrentReconciles}).
-		Owns(&v1alpha1.CNINode{}).Complete(r)
+		Complete(r)
 }
 
 func (r *NodeReconciler) Check() healthz.Checker {

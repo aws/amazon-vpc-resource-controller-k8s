@@ -26,6 +26,7 @@ import (
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/apps"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/crds"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
@@ -341,6 +342,15 @@ func main() {
 		Context:    ctx,
 	}).SetupWithManager(mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
+		os.Exit(1)
+	}
+
+	if err := (&crds.CNINodeController{
+		K8sAPI:      k8sApi,
+		Log:         ctrl.Log.WithName("controller").WithName("CNINode"),
+		NodeManager: nodeManager,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CNINode")
 		os.Exit(1)
 	}
 

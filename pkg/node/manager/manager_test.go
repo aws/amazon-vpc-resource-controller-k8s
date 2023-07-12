@@ -270,6 +270,33 @@ func Test_AddNode_AlreadyAdded(t *testing.T) {
 	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], unManagedNode))
 }
 
+func Test_AddNode_NotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: unManagedNode})
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nil, apierrors.NewNotFound(
+		schema.GroupResource{Group: "", Resource: ""}, "node test"))
+
+	err := mock.Manager.AddNode(nodeName)
+	assert.NoError(t, err)
+}
+
+func Test_AddNode_OtherError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: unManagedNode})
+
+	targetErr := errors.New("test error")
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nil, fmt.Errorf("node test: %w", targetErr))
+
+	err := mock.Manager.AddNode(nodeName)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, targetErr)
+}
+
 func Test_AddNode_CustomNetworking_CNINode(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

@@ -34,6 +34,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
 	"github.com/go-logr/logr"
@@ -130,7 +131,12 @@ func (m *manager) AddNode(nodeName string) error {
 
 	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
 	if err != nil {
-		return fmt.Errorf("failed to add node %s, doesn't exist in cache anymore", nodeName)
+		// we shouldn't requeue nodes that k8s client doesn't find
+		if err = client.IgnoreNotFound(err); err != nil {
+			return fmt.Errorf("failed to add node %s, doesn't exist in cache anymore: %w", nodeName, err)
+		} else {
+			return nil
+		}
 	}
 
 	log := m.Log.WithValues("node name", k8sNode.Name, "request", "add")
