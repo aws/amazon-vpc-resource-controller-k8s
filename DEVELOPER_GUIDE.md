@@ -8,9 +8,11 @@ make toolchain # Install required to develop the project
 
 ## Testing a code change
 
-Deploy your changes to a local development cluster and run the tests against it.
+Deploy your changes to a local development cluster and run the tests against it. You will need to allowlist your account
+for ENI trunking before the deployment.
 
 ```sh
+make apply-dependencies # install the cert manager and certificate
 make apply # Apply your changes
 make e2etest # Run the integration test suite
 ```

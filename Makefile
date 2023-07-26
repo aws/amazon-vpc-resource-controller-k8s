@@ -93,3 +93,7 @@ build-test-binaries:
 	mkdir -p ${MAKEFILE_PATH}build
 	find ${MAKEFILE_PATH} -name '*suite_test.go' -type f  | xargs dirname  | xargs ginkgo build
 	find ${MAKEFILE_PATH} -name "*.test" -print0 | xargs -0 -I {} mv {} ${MAKEFILE_PATH}build
+
+apply-dependencies:
+	bash ${MAKEFILE_PATH}/scripts/test/install-cert-manager.sh
+	kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=true
