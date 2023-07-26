@@ -96,3 +96,4 @@ build-test-binaries:
 
 apply-dependencies:
 	bash ${MAKEFILE_PATH}/scripts/test/install-cert-manager.sh
+	kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=true
