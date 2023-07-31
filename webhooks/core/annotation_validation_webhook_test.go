@@ -38,14 +38,6 @@ type MockAnnotationWebHook struct {
 	MockCondition *mock_condition.MockConditions
 }
 
-func TestAnnotationValidator_InjectDecoder(t *testing.T) {
-	a := AnnotationValidator{}
-	decoder := &admission.Decoder{}
-	a.InjectDecoder(decoder)
-
-	assert.Equal(t, decoder, a.decoder)
-}
-
 func TestAnnotationValidator_Handle(t *testing.T) {
 	schema := runtime.NewScheme()
 	err := clientgoscheme.AddToScheme(schema)

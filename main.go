@@ -56,6 +56,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -381,19 +382,19 @@ func main() {
 
 	setupLog.Info("registering webhooks to the webhook server")
 	podMutationWebhook := webhookcore.NewPodMutationWebHook(
-		sgpAPI, ctrl.Log.WithName("resource mutating webhook"), controllerConditions, healthzHandler)
+		sgpAPI, ctrl.Log.WithName("resource mutating webhook"), controllerConditions, admission.NewDecoder(mgr.GetScheme()), healthzHandler)
 	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{
 		Handler: podMutationWebhook,
 	})
 
 	nodeValidateWebhook := webhookcore.NewNodeUpdateWebhook(
-		controllerConditions, ctrl.Log.WithName("node validating webhook"), healthzHandler)
+		controllerConditions, ctrl.Log.WithName("node validating webhook"), admission.NewDecoder(mgr.GetScheme()), healthzHandler)
 	webhookServer.Register("/validate-v1-node", &webhook.Admission{
 		Handler: nodeValidateWebhook})
 
 	// Validating webhook for pod.
 	annotationValidator := webhookcore.NewAnnotationValidator(
-		controllerConditions, ctrl.Log.WithName("annotation validating webhook"), healthzHandler)
+		controllerConditions, ctrl.Log.WithName("annotation validating webhook"), admission.NewDecoder(mgr.GetScheme()), healthzHandler)
 	webhookServer.Register("/validate-v1-pod", &webhook.Admission{
 		Handler: annotationValidator})
 
