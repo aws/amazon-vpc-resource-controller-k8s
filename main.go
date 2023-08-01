@@ -43,7 +43,9 @@ import (
 	"github.com/go-logr/zapr"
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -52,7 +54,9 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -217,22 +221,22 @@ func main() {
 		LeaderElectionNamespace:    config.LeaderElectionNamespace,
 		LeaderElectionResourceLock: leaderElectionSource,
 		HealthProbeBindAddress:     ":61779", // the liveness endpoint is default to "/healthz"
-		Cache:                      cache.Options{
-			// ByObject: map[client.Object]cache.ByObject{
-			// 	&corev1.ConfigMap{}: {Field: fields.Set{
-			// 		"metadata.name":      config.VpcCniConfigMapName,
-			// 		"metadata.namespace": config.KubeSystemNamespace,
-			// 	}.AsSelector()},
-			// 	&appsv1.Deployment{}: {Field: fields.Set{
-			// 		"metadata.name":      config.OldVPCControllerDeploymentName,
-			// 		"metadata.namespace": config.KubeSystemNamespace,
-			// 	}.AsSelector()},
-			// 	&appsv1.DaemonSet{}: {Field: fields.Set{
-			// 		"metadata.name":      config.VpcCNIDaemonSetName,
-			// 		"metadata.namespace": config.KubeSystemNamespace,
-			// 	}.AsSelector(),
-			// 	},
-			// },
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.ConfigMap{}: {Field: fields.Set{
+					"metadata.name":      config.VpcCniConfigMapName,
+					"metadata.namespace": config.KubeSystemNamespace,
+				}.AsSelector()},
+				&appsv1.Deployment{}: {Field: fields.Set{
+					"metadata.name":      config.OldVPCControllerDeploymentName,
+					"metadata.namespace": config.KubeSystemNamespace,
+				}.AsSelector()},
+				&appsv1.DaemonSet{}: {Field: fields.Set{
+					"metadata.name":      config.VpcCNIDaemonSetName,
+					"metadata.namespace": config.KubeSystemNamespace,
+				}.AsSelector(),
+				},
+			},
 		},
 	})
 	if err != nil {
@@ -378,19 +382,19 @@ func main() {
 
 	setupLog.Info("registering webhooks to the webhook server")
 	podMutationWebhook := webhookcore.NewPodMutationWebHook(
-		sgpAPI, ctrl.Log.WithName("resource mutating webhook"), controllerConditions, healthzHandler)
+		sgpAPI, ctrl.Log.WithName("resource mutating webhook"), controllerConditions, admission.NewDecoder(mgr.GetScheme()), healthzHandler)
 	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{
 		Handler: podMutationWebhook,
 	})
 
 	nodeValidateWebhook := webhookcore.NewNodeUpdateWebhook(
-		controllerConditions, ctrl.Log.WithName("node validating webhook"), healthzHandler)
+		controllerConditions, ctrl.Log.WithName("node validating webhook"), admission.NewDecoder(mgr.GetScheme()), healthzHandler)
 	webhookServer.Register("/validate-v1-node", &webhook.Admission{
 		Handler: nodeValidateWebhook})
 
 	// Validating webhook for pod.
 	annotationValidator := webhookcore.NewAnnotationValidator(
-		controllerConditions, ctrl.Log.WithName("annotation validating webhook"), healthzHandler)
+		controllerConditions, ctrl.Log.WithName("annotation validating webhook"), admission.NewDecoder(mgr.GetScheme()), healthzHandler)
 	webhookServer.Register("/validate-v1-pod", &webhook.Admission{
 		Handler: annotationValidator})
 
