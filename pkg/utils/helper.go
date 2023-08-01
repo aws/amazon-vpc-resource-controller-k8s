@@ -22,6 +22,8 @@ import (
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 
+	"github.com/aws/aws-sdk-go/aws/arn"
+
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -29,6 +31,11 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	PartitionIndex = 1
+	AccountIndex   = 4
 )
 
 // RemoveDuplicatedSg removes duplicated items from a string slice.
@@ -203,4 +210,23 @@ func IsNitroInstance(instanceType string) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+// GetSourceAcctAndArn constructs source acct and arn and return them for use
+func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, error) {
+	// ARN format (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html)
+	// arn:partition:service:region:account-id:resource-type/resource-id
+	// IAM format, region is always blank
+	// arn:aws:iam::account:role/role-name-with-path
+	if !arn.IsARN(roleARN) {
+		return "", "", fmt.Errorf("incorrect ARN format for role %s", roleARN)
+	}
+
+	parsedArn, err := arn.Parse(roleARN)
+	if err != nil {
+		return "", "", err
+	}
+
+	sourceArn := fmt.Sprintf("arn:%s:eks:%s:%s:cluster/%s", parsedArn.Partition, region, parsedArn.AccountID, clusterName)
+	return parsedArn.AccountID, sourceArn, nil
 }

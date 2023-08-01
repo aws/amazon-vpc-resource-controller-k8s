@@ -15,6 +15,7 @@ package api
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -22,10 +23,12 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
+	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/sts"
@@ -37,6 +40,8 @@ import (
 const (
 	MaxRetries = 3
 	AppName    = "amazon-vpc-resource-controller-k8s"
+	SourceKey  = "x-amz-source-arn"
+	AccountKey = "x-amz-source-account"
 )
 
 type EC2Wrapper interface {
@@ -355,7 +360,7 @@ type ec2Wrapper struct {
 
 // NewEC2Wrapper takes the roleARN that will be assumed to make all the EC2 API Calls, if no roleARN
 // is passed then the ec2 client will be initialized with the instance's service role account.
-func NewEC2Wrapper(roleARN string, log logr.Logger) (EC2Wrapper, error) {
+func NewEC2Wrapper(roleARN, clusterName, region string, log logr.Logger) (EC2Wrapper, error) {
 	// Register the metrics
 	prometheusRegister()
 
@@ -379,7 +384,7 @@ func NewEC2Wrapper(roleARN string, log logr.Logger) (EC2Wrapper, error) {
 
 		// Create the user service client with higher QPS, this will be used to make rest of the EC2 API Calls
 		log.Info("Creating USER service client with configured QPS", "QPS", config.UserServiceClientQPS, "Burst", config.UserServiceClientQPSBurst)
-		userServiceClient, err := ec2Wrapper.getClientUsingAssumedRole(*instanceSession.Config.Region, roleARN,
+		userServiceClient, err := ec2Wrapper.getClientUsingAssumedRole(*instanceSession.Config.Region, roleARN, clusterName, region,
 			config.UserServiceClientQPS, config.UserServiceClientQPSBurst)
 		if err != nil {
 			return nil, err
@@ -433,7 +438,7 @@ func (e *ec2Wrapper) getInstanceServiceClient(qps int, burst int, instanceSessio
 		WithRegion(*instanceSession.Config.Region).WithHTTPClient(instanceClient)), nil
 }
 
-func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN string, qps int, burst int) (*ec2.EC2, error) {
+func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterName, region string, qps, burst int) (*ec2.EC2, error) {
 	var providers []credentials.Provider
 
 	userStsSession := session.Must(session.NewSession())
@@ -456,10 +461,14 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN st
 	}
 
 	roleARN = strings.Trim(roleARN, "\"")
-	// Add the regional sts end point
+
+	sourceAcct, sourceArn, err := utils.GetSourceAcctAndArn(roleARN, region, clusterName)
+	if err != nil {
+		return nil, err
+	}
+
 	regionalProvider := &stscreds.AssumeRoleProvider{
-		Client: sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
-			WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
+		Client:          e.createSTSClient(userStsSession, client, regionalSTSEndpoint, sourceAcct, sourceArn),
 		RoleARN:         roleARN,
 		Duration:        time.Minute * 60,
 		RoleSessionName: AppName,
@@ -467,6 +476,9 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN st
 	providers = append(providers, regionalProvider)
 
 	// Get the global sts end point
+	// TODO: we should revisit the global sts endpoint and check if we should remove global endpoint
+	// we are not using it since the concern on availability and performance
+	// https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_enable-regions.html
 	globalSTSEndpoint, err := endpoints.DefaultResolver().
 		EndpointFor("sts", aws.StringValue(userStsSession.Config.Region))
 	if err != nil {
@@ -477,8 +489,7 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN st
 	// If the regional STS endpoint is different than the global STS endpoint then add the global sts endpoint
 	if regionalSTSEndpoint.URL != globalSTSEndpoint.URL {
 		globalProvider := &stscreds.AssumeRoleProvider{
-			Client: sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
-				WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries)),
+			Client:   e.createSTSClient(userStsSession, client, regionalSTSEndpoint, sourceAcct, sourceArn),
 			RoleARN:  roleARN,
 			Duration: time.Minute * 60,
 		}
@@ -490,6 +501,31 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion string, roleARN st
 
 	return ec2.New(userStsSession, aws.NewConfig().WithHTTPClient(client)), nil
 
+}
+
+func (e *ec2Wrapper) createSTSClient(
+	userStsSession *session.Session,
+	client *http.Client,
+	endpoint endpoints.ResolvedEndpoint,
+	sourceAcct, sourceArn string) *sts.STS {
+
+	stsClient := sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
+		WithEndpoint(endpoint.URL).WithMaxRetries(MaxRetries))
+
+	// if region is not specified, we fallback to the default client
+	parsedArn, err := arn.Parse(sourceArn)
+	if err == nil && parsedArn.Region != "" {
+		stsClient.Handlers.Sign.PushFront(func(s *request.Request) {
+			s.ApplyOptions(request.WithSetRequestHeaders(map[string]string{
+				SourceKey:  sourceArn,
+				AccountKey: sourceAcct,
+			}))
+		})
+	} else {
+		e.log.Info("Will use default STS client since unexpected error or cluster ARN", "Errors", err, "ParsedARN", parsedArn)
+	}
+
+	return stsClient
 }
 
 func timeSinceMs(start time.Time) float64 {
