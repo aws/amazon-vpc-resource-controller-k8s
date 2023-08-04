@@ -16,7 +16,6 @@ package perpodsg_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
@@ -56,14 +55,8 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
-	By("waiting for all the ENIs to be deleted after being cooled down")
-	time.Sleep(time.Second * 90)
-
-	err := frameWork.EC2Manager.DeleteSecurityGroup(securityGroupID1)
-	Expect(err).ToNot(HaveOccurred())
-
-	frameWork.EC2Manager.DeleteSecurityGroup(securityGroupID2)
-	Expect(err).ToNot(HaveOccurred())
+	Expect(frameWork.EC2Manager.DeleteSecurityGroup(ctx, securityGroupID1)).To(Succeed())
+	Expect(frameWork.EC2Manager.DeleteSecurityGroup(ctx, securityGroupID2)).To(Succeed())
 })
 
 func reCreateSGIfAlreadyExists(securityGroupName string) string {
@@ -73,7 +66,7 @@ func reCreateSGIfAlreadyExists(securityGroupName string) string {
 	// rules from last run don't interfere with the current test
 	if err == nil {
 		By("deleting the older security group" + groupID)
-		err = frameWork.EC2Manager.DeleteSecurityGroup(groupID)
+		err = frameWork.EC2Manager.DeleteSecurityGroup(ctx, groupID)
 		Expect(err).ToNot(HaveOccurred())
 	}
 	// If error is not nil, then the Security Group doesn't exists, we need

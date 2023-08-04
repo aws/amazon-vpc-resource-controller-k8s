@@ -314,7 +314,7 @@ func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subne
 
 	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, ipResourceCount, interfaceType)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating network interface, %w", err)
 	}
 
 	var attachmentId *string
@@ -326,7 +326,7 @@ func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subne
 			return nwInterface, fmt.Errorf("failed to attach the network interface %v: failed to delete the nw interfac %v",
 				err, errDelete)
 		}
-		return nil, err
+		return nil, fmt.Errorf("attaching network interface, %w", err)
 	}
 
 	err = h.SetDeleteOnTermination(attachmentId, nwInterface.NetworkInterfaceId)
@@ -336,7 +336,7 @@ func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subne
 			return nwInterface, fmt.Errorf("failed to set deletion on termination: %v: failed to delete nw interface: %v",
 				err, errDelete)
 		}
-		return nil, err
+		return nil, fmt.Errorf("enabling delete on termination, %w", err)
 	}
 
 	err = h.WaitForNetworkInterfaceStatusChange(nwInterface.NetworkInterfaceId, ec2.AttachmentStatusAttached)
@@ -346,7 +346,7 @@ func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subne
 			return nwInterface, fmt.Errorf("failed to verify status attached: %v: failed to delete nw interface: %v",
 				err, errDelete)
 		}
-		return nil, err
+		return nil, fmt.Errorf("waiting for network attachement, %w", err)
 	}
 
 	return nwInterface, nil

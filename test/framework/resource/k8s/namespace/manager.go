@@ -15,6 +15,7 @@ package namespace
 
 import (
 	"context"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -51,7 +52,7 @@ func (m *defaultManager) DeleteAndWaitTillNamespaceDeleted(ctx context.Context, 
 	namespaceObj := &v1.Namespace{ObjectMeta: metaV1.ObjectMeta{Name: namespace, Namespace: ""}}
 	err := m.k8sClient.Delete(ctx, namespaceObj)
 	if err != nil {
-		return err
+		return client.IgnoreNotFound(err)
 	}
 
 	observedNamespace := &v1.Namespace{}

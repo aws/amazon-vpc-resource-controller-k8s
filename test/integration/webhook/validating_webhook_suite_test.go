@@ -16,7 +16,6 @@ package webhook
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -82,21 +81,20 @@ var _ = BeforeSuite(func() {
 
 var _ = AfterSuite(func() {
 	By("deleting the pod")
-	err := frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, pod)
-	Expect(err).ToNot(HaveOccurred())
+	if pod != nil {
+		Expect(frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, pod)).To(Succeed())
+	}
 
 	By("deleting the security group policy")
-	err = frameWork.SGPManager.DeleteAndWaitTillSecurityGroupIsDeleted(ctx, sgp)
-	Expect(err).ToNot(HaveOccurred())
+	if sgp != nil {
+		Expect(frameWork.SGPManager.DeleteAndWaitTillSecurityGroupIsDeleted(ctx, sgp)).To(Succeed())
+	}
 
 	By("deleting the namespace")
-	err = frameWork.NSManager.DeleteAndWaitTillNamespaceDeleted(ctx, namespace)
-	Expect(err).ToNot(HaveOccurred())
-
-	By("waiting for all the ENIs to be deleted after being cooled down")
-	time.Sleep(time.Second * 90)
+	Expect(frameWork.NSManager.DeleteAndWaitTillNamespaceDeleted(ctx, namespace)).To(Succeed())
 
 	By("deleting the security group from ec2")
-	err = frameWork.EC2Manager.DeleteSecurityGroup(securityGroupID)
-	Expect(err).ToNot(HaveOccurred())
+	if securityGroupID != "" {
+		Expect(frameWork.EC2Manager.DeleteSecurityGroup(ctx, securityGroupID)).To(Succeed())
+	}
 })

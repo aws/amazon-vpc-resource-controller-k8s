@@ -24,22 +24,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type Manager interface {
-	DeleteAndWaitTillSecurityGroupIsDeleted(ctx context.Context, sgp *v1beta1.SecurityGroupPolicy) error
-}
-
-type defaultManager struct {
+type Manager struct {
 	k8sClient client.Client
 }
 
-func NewManager(k8sClient client.Client) Manager {
-	return &defaultManager{k8sClient: k8sClient}
+func NewManager(k8sClient client.Client) *Manager {
+	return &Manager{k8sClient: k8sClient}
 }
 
-func (d *defaultManager) DeleteAndWaitTillSecurityGroupIsDeleted(ctx context.Context, sgp *v1beta1.SecurityGroupPolicy) error {
+func (d *Manager) DeleteAndWaitTillSecurityGroupIsDeleted(ctx context.Context, sgp *v1beta1.SecurityGroupPolicy) error {
 	err := d.k8sClient.Delete(ctx, sgp)
 	if err != nil {
-		return err
+		return client.IgnoreNotFound(err)
 	}
 
 	observedSgp := &v1beta1.SecurityGroupPolicy{}

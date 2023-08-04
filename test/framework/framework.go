@@ -47,10 +47,10 @@ type Framework struct {
 	ec2Client         *ec2.EC2
 	DeploymentManager deployment.Manager
 	PodManager        pod.Manager
-	EC2Manager        ec2Manager.Manager
+	EC2Manager        *ec2Manager.Manager
 	SAManager         serviceaccount.Manager
 	NSManager         namespace.Manager
-	SGPManager        sgpManager.Manager
+	SGPManager        *sgpManager.Manager
 	SVCManager        service.Manager
 	JobManager        jobs.Manager
 	NodeManager       node.Manager
