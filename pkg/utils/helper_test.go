@@ -531,3 +531,46 @@ func TestIsNitroInstance_NonNitro(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, isNitro)
 }
+
+// TestGetSourceAcctAndArn tests that generating account ID and cluster ARN
+func TestGetSourceAcctAndArn(t *testing.T) {
+	accountID := "123456789876"
+	clusterName := "test-cluster"
+	region := "us-west-2"
+	clusterARN := "arn:aws:eks:us-west-2:123456789876:cluster/test-cluster"
+
+	roleARN := "arn:aws:iam::123456789876:role/test-cluster"
+
+	// test correct inputs
+	acct, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
+	assert.NoError(t, err, "no error should be returned with accurate role arn")
+	assert.Equal(t, accountID, acct, "correct account ID should be retrieved")
+	assert.Equal(t, clusterARN, arn, "correct cluster arn should be retrieved")
+
+	region = "us-gov-west-1"
+	roleARN = "arn:aws-us-gov:iam::123456789876:role/test-cluster"
+	clusterARN = "arn:aws-us-gov:eks:us-gov-west-1:123456789876:cluster/test-cluster"
+	acct, arn, err = GetSourceAcctAndArn(roleARN, region, clusterName)
+	assert.NoError(t, err, "no error should be returned with accurate aws-us-gov partition role arn")
+	assert.Equal(t, accountID, acct, "correct account ID should be retrieved")
+	assert.Equal(t, clusterARN, arn, "correct gov partition cluster arn should be retrieved")
+
+	// test error handling
+	roleARN = "arn:aws:iam::123456789876"
+	_, _, err = GetSourceAcctAndArn(roleARN, region, clusterName)
+	assert.Error(t, err, "error should be returned with inaccurate role arn is given")
+}
+
+// TestGetSourceAcctAndArn_NoRegion test empty region
+func TestGetSourceAcctAndArn_NoRegion(t *testing.T) {
+	clusterName := "test-cluster"
+	region := ""
+
+	roleARN := "arn:aws:iam::123456789876:role/test-cluster"
+
+	// test correct inputs
+	acct, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
+	assert.NoError(t, err, "no error should be returned with accurate role arn")
+	assert.Equal(t, "", acct, "correct account ID should be retrieved")
+	assert.Equal(t, "", arn, "correct cluster arn should be retrieved")
+}

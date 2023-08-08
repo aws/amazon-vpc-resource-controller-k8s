@@ -101,6 +101,7 @@ func main() {
 	var leaseOnly bool
 	var healthCheckTimeout int
 	var enableWindowsPrefixDelegation bool
+	var region string
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080",
 		"The address the metric endpoint binds to.")
@@ -135,6 +136,7 @@ func main() {
 	flag.BoolVar(&leaseOnly, "lease-only", false, "Controller uses lease only for leader election")
 	flag.BoolVar(&enableWindowsPrefixDelegation, "enable-windows-prefix-delegation", false,
 		"Enable the feature flag for Windows prefix delegation")
+	flag.StringVar(&region, "aws-region", "", "The aws region of the k8s cluster")
 
 	flag.Parse()
 
@@ -256,7 +258,7 @@ func main() {
 
 	ctx := ctrl.SetupSignalHandler()
 
-	ec2Wrapper, err := ec2API.NewEC2Wrapper(roleARN, setupLog)
+	ec2Wrapper, err := ec2API.NewEC2Wrapper(roleARN, clusterName, region, setupLog)
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
 	}
