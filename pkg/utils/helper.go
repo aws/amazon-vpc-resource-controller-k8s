@@ -220,6 +220,8 @@ func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, e
 	// arn:aws:iam::account:role/role-name-with-path
 	if !arn.IsARN(roleARN) {
 		return "", "", fmt.Errorf("incorrect ARN format for role %s", roleARN)
+	} else if region == "" {
+		return "", "", nil
 	}
 
 	parsedArn, err := arn.Parse(roleARN)

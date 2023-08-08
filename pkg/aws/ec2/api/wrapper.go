@@ -23,7 +23,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
@@ -512,17 +511,19 @@ func (e *ec2Wrapper) createSTSClient(
 	stsClient := sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
 		WithEndpoint(endpoint.URL).WithMaxRetries(MaxRetries))
 
-	// if region is not specified, we fallback to the default client
-	parsedArn, err := arn.Parse(sourceArn)
-	if err == nil && parsedArn.Region != "" {
+	// only both sourceAcct and sourceArn are provided, we send extra header context
+	// otherwise we fallback to the default client
+	if sourceAcct != "" && sourceArn != "" {
 		stsClient.Handlers.Sign.PushFront(func(s *request.Request) {
 			s.ApplyOptions(request.WithSetRequestHeaders(map[string]string{
 				SourceKey:  sourceArn,
 				AccountKey: sourceAcct,
 			}))
 		})
+		// TODO: change this log verbosity to 1 after we have configured clients in place for some time
+		e.log.Info("Will use configured STS client with extra headers")
 	} else {
-		e.log.Info("Will use default STS client since unexpected error or cluster ARN", "Errors", err, "ParsedARN", parsedArn)
+		e.log.Info("Will use default STS client since empty source account or/and empty source arn", "SourceAcct", sourceAcct, "SourceArn", sourceArn)
 	}
 
 	return stsClient

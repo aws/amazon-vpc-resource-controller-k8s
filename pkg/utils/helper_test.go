@@ -560,3 +560,17 @@ func TestGetSourceAcctAndArn(t *testing.T) {
 	_, _, err = GetSourceAcctAndArn(roleARN, region, clusterName)
 	assert.Error(t, err, "error should be returned with inaccurate role arn is given")
 }
+
+// TestGetSourceAcctAndArn_NoRegion test empty region
+func TestGetSourceAcctAndArn_NoRegion(t *testing.T) {
+	clusterName := "test-cluster"
+	region := ""
+
+	roleARN := "arn:aws:iam::123456789876:role/test-cluster"
+
+	// test correct inputs
+	acct, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
+	assert.NoError(t, err, "no error should be returned with accurate role arn")
+	assert.Equal(t, "", acct, "correct account ID should be retrieved")
+	assert.Equal(t, "", arn, "correct cluster arn should be retrieved")
+}
