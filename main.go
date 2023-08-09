@@ -59,9 +59,10 @@ import (
 )
 
 var (
-	scheme     = runtime.NewScheme()
-	setupLog   = ctrl.Log.WithName("setup")
-	syncPeriod = time.Minute * 30
+	scheme            = runtime.NewScheme()
+	setupLog          = ctrl.Log.WithName("setup")
+	syncPeriod        = time.Minute * 30
+	regionPlaceHolder = "CLUSTER_REGION"
 )
 
 func init() {
@@ -257,6 +258,12 @@ func main() {
 	}
 
 	ctx := ctrl.SetupSignalHandler()
+
+	// if the region wasn't replaced from place holder
+	// we need to make it to empty
+	if region == regionPlaceHolder {
+		region = ""
+	}
 
 	ec2Wrapper, err := ec2API.NewEC2Wrapper(roleARN, clusterName, region, setupLog)
 	if err != nil {
