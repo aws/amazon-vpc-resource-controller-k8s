@@ -14,7 +14,7 @@ for ENI trunking before the deployment.
 ```sh
 make apply-dependencies # install the cert manager and certificate
 make apply # Apply your changes
-make e2etest # Run the integration test suite
+make test-e2e # Run the integration test suite
 ```
 
 In another terminal, you can tail the logs with stern
