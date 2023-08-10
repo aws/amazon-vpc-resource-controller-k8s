@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
+	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/golang/mock/gomock"
@@ -38,20 +38,12 @@ type MockAnnotationWebHook struct {
 	MockCondition *mock_condition.MockConditions
 }
 
-func TestAnnotationValidator_InjectDecoder(t *testing.T) {
-	a := AnnotationValidator{}
-	decoder := &admission.Decoder{}
-	a.InjectDecoder(decoder)
-
-	assert.Equal(t, decoder, a.decoder)
-}
-
 func TestAnnotationValidator_Handle(t *testing.T) {
 	schema := runtime.NewScheme()
 	err := clientgoscheme.AddToScheme(schema)
 	assert.NoError(t, err)
 
-	decoder, _ := admission.NewDecoder(schema)
+	decoder := admission.NewDecoder(schema)
 
 	basePod := &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{

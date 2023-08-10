@@ -40,10 +40,11 @@ type AnnotationValidator struct {
 	Checker   healthz.Checker
 }
 
-func NewAnnotationValidator(condition condition.Conditions, log logr.Logger, healthzHandler *rcHealthz.HealthzHandler) *AnnotationValidator {
+func NewAnnotationValidator(condition condition.Conditions, log logr.Logger, d *admission.Decoder, healthzHandler *rcHealthz.HealthzHandler) *AnnotationValidator {
 	annotationValidator := &AnnotationValidator{
 		Condition: condition,
 		Log:       log,
+		decoder:   d,
 	}
 
 	// add health check on subpath for pod annotation validating webhook
@@ -151,10 +152,4 @@ func (a *AnnotationValidator) getAnnotationKeysToBeValidated() []string {
 		annotationsToValidate = append(annotationsToValidate, config.ResourceNameIPAddress)
 	}
 	return annotationsToValidate
-}
-
-// InjectDecoder injects the decoder.
-func (a *AnnotationValidator) InjectDecoder(d *admission.Decoder) error {
-	a.decoder = d
-	return nil
 }

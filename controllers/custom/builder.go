@@ -122,7 +122,7 @@ func (b *Builder) Complete(reconciler Reconciler) (healthz.Checker, error) {
 		ListerWatcher:    optimizedListWatch,
 		ObjectType:       b.converter.ResourceType(),
 		FullResyncPeriod: b.options.ResyncPeriod,
-		Process: func(obj interface{}) error {
+		Process: func(obj interface{}, _ bool) error {
 			// from oldest to newest
 			for _, d := range obj.(cache.Deltas) {
 				// Strip down the pod object and keep only the required details

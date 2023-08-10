@@ -54,7 +54,9 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -66,6 +68,7 @@ var (
 )
 
 func init() {
+	// TODO: We should restrict this even more to use only the schemas the controller really needs to have.
 	_ = clientgoscheme.AddToScheme(scheme)
 
 	_ = corev1.AddToScheme(scheme)
@@ -204,24 +207,6 @@ func main() {
 	retryPeriod := time.Second * time.Duration(leaderLeaseRetryPeriod)
 
 	// filter cache to subscribe to events from specific resources
-	newCache := cache.BuilderWithOptions(cache.Options{
-		SelectorsByObject: cache.SelectorsByObject{
-			&corev1.ConfigMap{}: {Field: fields.Set{
-				"metadata.name":      config.VpcCniConfigMapName,
-				"metadata.namespace": config.KubeSystemNamespace,
-			}.AsSelector()},
-			&appsv1.Deployment{}: {Field: fields.Set{
-				"metadata.name":      config.OldVPCControllerDeploymentName,
-				"metadata.namespace": config.KubeSystemNamespace,
-			}.AsSelector()},
-			&appsv1.DaemonSet{}: {Field: fields.Set{
-				"metadata.name":      config.VpcCNIDaemonSetName,
-				"metadata.namespace": config.KubeSystemNamespace,
-			}.AsSelector(),
-			},
-		},
-	})
-
 	leaderElectionSource := resourcelock.ConfigMapsLeasesResourceLock
 	if leaseOnly {
 		leaderElectionSource = resourcelock.LeasesResourceLock
@@ -240,7 +225,26 @@ func main() {
 		LeaderElectionNamespace:    config.LeaderElectionNamespace,
 		LeaderElectionResourceLock: leaderElectionSource,
 		HealthProbeBindAddress:     ":61779", // the liveness endpoint is default to "/healthz"
-		NewCache:                   newCache,
+		// ConfigMaps  - WATCH only the ConfigMap that VPC RC consumes
+		// Deployments - WATCH only the old VPC Controller deployment
+		// Daemonsets  - WATCH only the VPC CNI
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.ConfigMap{}: {Field: fields.Set{
+					"metadata.name":      config.VpcCniConfigMapName,
+					"metadata.namespace": config.KubeSystemNamespace,
+				}.AsSelector()},
+				&appsv1.Deployment{}: {Field: fields.Set{
+					"metadata.name":      config.OldVPCControllerDeploymentName,
+					"metadata.namespace": config.KubeSystemNamespace,
+				}.AsSelector()},
+				&appsv1.DaemonSet{}: {Field: fields.Set{
+					"metadata.name":      config.VpcCNIDaemonSetName,
+					"metadata.namespace": config.KubeSystemNamespace,
+				}.AsSelector(),
+				},
+			},
+		},
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -391,19 +395,19 @@ func main() {
 
 	setupLog.Info("registering webhooks to the webhook server")
 	podMutationWebhook := webhookcore.NewPodMutationWebHook(
-		sgpAPI, ctrl.Log.WithName("resource mutating webhook"), controllerConditions, healthzHandler)
+		sgpAPI, ctrl.Log.WithName("resource mutating webhook"), controllerConditions, admission.NewDecoder(mgr.GetScheme()), healthzHandler)
 	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{
 		Handler: podMutationWebhook,
 	})
 
 	nodeValidateWebhook := webhookcore.NewNodeUpdateWebhook(
-		controllerConditions, ctrl.Log.WithName("node validating webhook"), healthzHandler)
+		controllerConditions, ctrl.Log.WithName("node validating webhook"), admission.NewDecoder(mgr.GetScheme()), healthzHandler)
 	webhookServer.Register("/validate-v1-node", &webhook.Admission{
 		Handler: nodeValidateWebhook})
 
 	// Validating webhook for pod.
 	annotationValidator := webhookcore.NewAnnotationValidator(
-		controllerConditions, ctrl.Log.WithName("annotation validating webhook"), healthzHandler)
+		controllerConditions, ctrl.Log.WithName("annotation validating webhook"), admission.NewDecoder(mgr.GetScheme()), healthzHandler)
 	webhookServer.Register("/validate-v1-pod", &webhook.Admission{
 		Handler: annotationValidator})
 
