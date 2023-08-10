@@ -470,7 +470,7 @@ var _ = Describe("Branch ENI Pods", func() {
 						By("removing the has-trunk-attached label from the node")
 						err = frameWork.NodeManager.RemoveLabels(targetedNodes,
 							map[string]string{config.HasTrunkAttachedLabel: "true"})
-						Expect(err).To(HaveOccurred())
+						Expect(err).ToNot(HaveOccurred())
 
 						firstPod := podTemplate.DeepCopy()
 						By("creating a Pod on the un-managed node and verifying it fails")

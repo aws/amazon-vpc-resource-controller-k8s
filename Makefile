@@ -67,9 +67,6 @@ delete:
 docker-buildx: check-env test
 	docker buildx build --platform=$(PLATFORM) -t $(IMAGE)-$(GOARCH) --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) --build-arg $(GOARCH) --load .
 
-image:
-	KO_DOCKER_REPO=${REPO} ko build --bare main.go
-
 # Build the docker image
 docker-build: check-env test
 	docker build --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) . -t ${IMAGE}

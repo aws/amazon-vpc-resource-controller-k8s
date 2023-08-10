@@ -51,12 +51,14 @@ func NewPodMutationWebHook(
 	sgpAPI utils.SecurityGroupForPodsAPI,
 	log logr.Logger,
 	condition condition.Conditions,
+	d *admission.Decoder,
 	healthzHandler *rcHealthz.HealthzHandler,
 ) *PodMutationWebHook {
 	podWebhook := &PodMutationWebHook{
 		SGPAPI:    sgpAPI,
 		Log:       log,
 		Condition: condition,
+		decoder:   d,
 	}
 	// add health check on subpath for pod mutation webhook
 	healthzHandler.AddControllersHealthCheckers(
@@ -244,10 +246,4 @@ func hasWindowsNodeSelector(pod *corev1.Pod) bool {
 		return false
 	}
 	return true
-}
-
-// InjectDecoder injects the decoder.
-func (i *PodMutationWebHook) InjectDecoder(d *admission.Decoder) error {
-	i.decoder = d
-	return nil
 }

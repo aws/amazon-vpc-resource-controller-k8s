@@ -21,10 +21,11 @@ type NodeUpdateWebhook struct {
 	Checker   healthz.Checker
 }
 
-func NewNodeUpdateWebhook(condition condition.Conditions, log logr.Logger, healthzHandler *rcHealthz.HealthzHandler) *NodeUpdateWebhook {
+func NewNodeUpdateWebhook(condition condition.Conditions, log logr.Logger, d *admission.Decoder, healthzHandler *rcHealthz.HealthzHandler) *NodeUpdateWebhook {
 	nodeUpdateWebhook := &NodeUpdateWebhook{
 		Condition: condition,
 		Log:       log,
+		decoder:   d,
 	}
 
 	// add health check on subpath for node validation webhook
@@ -91,10 +92,4 @@ func (a *NodeUpdateWebhook) Handle(_ context.Context, req admission.Request) adm
 
 	// If all validation check succeed, allow admission
 	return admission.Allowed("")
-}
-
-// InjectDecoder injects the decoder.
-func (a *NodeUpdateWebhook) InjectDecoder(d *admission.Decoder) error {
-	a.decoder = d
-	return nil
 }
