@@ -171,7 +171,7 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 		if err != nil {
 			errDelete := h.DeleteNetworkInterface(nwInterface.NetworkInterfaceId)
 			if errDelete != nil {
-				return nwInterface, fmt.Errorf("failed to attach the network interface %v: failed to delete the nw interfac %v",
+				return nwInterface, fmt.Errorf("failed to attach the network interface permissions %v: failed to delete the nw interfac %v",
 					err, errDelete)
 			}
 			return nil, fmt.Errorf("failed to get attach network interface permissions for trunk %v", err)
@@ -396,8 +396,8 @@ func (h *ec2APIHelper) DetachNetworkInterfaceFromInstance(attachmentId *string) 
 	return err
 }
 
-// WaitForNetworkInterfaceStatusChange keeps on retrying with backoff to see if the current status of the network
-// interface is equal to the desired state of the network interface
+// WaitForNetworkInterfaceStatusChange checks if the current network interface attachment status
+// equals the desired status with backoff
 func (h *ec2APIHelper) WaitForNetworkInterfaceStatusChange(networkInterfaceId *string, desiredStatus string) error {
 
 	ErrRetryAttachmentStatusCheck := fmt.Errorf("interface not in desired status yet %s, interface id %s",
@@ -607,7 +607,7 @@ func (h *ec2APIHelper) DetachAndDeleteNetworkInterface(attachmentID *string, nwI
 	if err != nil {
 		return err
 	}
-	err = h.WaitForNetworkInterfaceStatusChange(nwInterfaceID, ec2.NetworkInterfaceStatusAvailable)
+	err = h.WaitForNetworkInterfaceStatusChange(nwInterfaceID, ec2.AttachmentStatusDetached)
 	if err != nil {
 		return err
 	}

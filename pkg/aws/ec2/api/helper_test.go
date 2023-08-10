@@ -153,7 +153,7 @@ var (
 				NetworkInterfaceId: &branchInterfaceId,
 				InterfaceType:      aws.String("interface"),
 				Attachment: &ec2.NetworkInterfaceAttachment{
-					Status: aws.String(ec2.NetworkInterfaceStatusAvailable),
+					Status: aws.String(ec2.AttachmentStatusDetached),
 				},
 			},
 		},
@@ -941,7 +941,7 @@ func TestEc2APIHelper_DetachAndDeleteNetworkInterface(t *testing.T) {
 
 	oldStatus := describeNetworkInterfaceOutputUsingOneInterfaceId.NetworkInterfaces[0].Attachment.Status
 	describeNetworkInterfaceOutputUsingOneInterfaceId.NetworkInterfaces[0].Attachment.Status =
-		aws.String(ec2.NetworkInterfaceStatusAvailable)
+		aws.String(ec2.AttachmentStatusDetached)
 
 	mockWrapper.EXPECT().DetachNetworkInterface(detachNetworkInterfaceInput).Return(nil, nil)
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingOneInterfaceId).

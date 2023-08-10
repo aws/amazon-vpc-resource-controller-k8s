@@ -174,14 +174,18 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 
 	// Get trunk network interface
 	for _, nwInterface := range nwInterfaces {
-		// It's possible to get an empty network interface response if the instnace
-		// is being deleted.
+		// It's possible to get an empty network interface response if the instance is being deleted.
 		if nwInterface == nil || nwInterface.InterfaceType == nil {
 			return fmt.Errorf("received an empty network interface response "+
 				"from EC2 %+v", nwInterface)
 		}
 		if *nwInterface.InterfaceType == "trunk" {
-			t.trunkENIId = *nwInterface.NetworkInterfaceId
+			// Check that the trunkENI is in attached state before adding to cache
+			if err = t.ec2ApiHelper.WaitForNetworkInterfaceStatusChange(nwInterface.NetworkInterfaceId, awsEC2.AttachmentStatusAttached); err == nil {
+				t.trunkENIId = *nwInterface.NetworkInterfaceId
+			} else {
+				return fmt.Errorf("failed to verify network interface status attached for %v", *nwInterface.NetworkInterfaceId)
+			}
 		}
 	}
 
