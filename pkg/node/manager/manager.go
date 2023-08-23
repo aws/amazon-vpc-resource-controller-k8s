@@ -52,8 +52,9 @@ type manager struct {
 	// wrapper around the clients for all APIs used by controller
 	wrapper api.Wrapper
 	// worker for performing async operation on node APIs
-	worker     asyncWorker.Worker
-	conditions condition.Conditions
+	worker            asyncWorker.Worker
+	conditions        condition.Conditions
+	controllerVersion string
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -94,15 +95,16 @@ type AsyncOperationJob struct {
 
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
-	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
 
 	manager := &manager{
-		resourceManager: resourceManager,
-		Log:             logger,
-		dataStore:       make(map[string]node.Node),
-		wrapper:         wrapper,
-		worker:          worker,
-		conditions:      conditions,
+		resourceManager:   resourceManager,
+		Log:               logger,
+		dataStore:         make(map[string]node.Node),
+		wrapper:           wrapper,
+		worker:            worker,
+		conditions:        conditions,
+		controllerVersion: controllerVersion,
 	}
 
 	// add health check on subpath for node manager
@@ -386,6 +388,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 	var err error
 	switch asyncJob.op {
 	case Init:
+		utils.SendNodeEventWithNodeName(m.wrapper.K8sAPI, asyncJob.nodeName, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", m.controllerVersion), v1.EventTypeNormal, m.Log)
 		err = asyncJob.node.InitResources(m.resourceManager)
 		if err != nil {
 			log.Error(err, "removing the node from cache as it failed to initialize")

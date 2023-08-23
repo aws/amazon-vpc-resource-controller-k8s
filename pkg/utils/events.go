@@ -27,6 +27,7 @@ const (
 	NodeTrunkInitiatedReason            = "NodeTrunkInitiated"
 	NodeTrunkFailedInitializationReason = "NodeTrunkFailedInit"
 	EniConfigNameNotFoundReason         = "EniConfigNameNotFound"
+	VersionNotice                       = "ControllerVersionNotice"
 )
 
 func SendNodeEventWithNodeName(client k8s.K8sWrapper, nodeName, reason, msg, eventType string, logger logr.Logger) {
