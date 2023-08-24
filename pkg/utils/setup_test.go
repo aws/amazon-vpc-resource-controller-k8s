@@ -50,15 +50,14 @@ func init() {
 
 	testSecurityGroupsOne = []string{"sg-00001", "sg-00002"}
 	testSecurityGroupsTwo = []string{"sg-00003", "sg-00004"}
-	testClient = fake.NewFakeClientWithScheme(
-		testScheme,
+	testClient = fake.NewClientBuilder().WithScheme(testScheme).WithObjects(
 		NewPod(name, saName, namespace),
 		NewPodNotForENI(name+"_NoENI", saName, namespace),
 		NewPodForMultiENI(name+"_ENIs", saName, namespace),
 		NewServiceAccount(saName, namespace),
 		NewSecurityGroupPolicyOne(name+"_1", namespace, testSecurityGroupsOne),
 		NewSecurityGroupPolicyTwo(name+"_2", namespace, append(testSecurityGroupsOne, testSecurityGroupsTwo...)),
-	)
+	).Build()
 
 	helper = SecurityGroupForPods{
 		Client: testClient,

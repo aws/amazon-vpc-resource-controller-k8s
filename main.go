@@ -55,6 +55,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	// +kubebuilder:scaffold:imports
@@ -102,7 +103,6 @@ func main() {
 	var leaderLeaseRetryPeriod int
 	var outputPath string
 	var introspectBindAddr string
-	var leaseOnly bool
 	var healthCheckTimeout int
 	var enableWindowsPrefixDelegation bool
 	var region string
@@ -137,7 +137,6 @@ func main() {
 		"How long healthz check waits before failing the attempt")
 	flag.StringVar(&introspectBindAddr, "introspect-bind-addr", ":22775",
 		"Port for serving the introspection API")
-	flag.BoolVar(&leaseOnly, "lease-only", false, "Controller uses lease only for leader election")
 	flag.BoolVar(&enableWindowsPrefixDelegation, "enable-windows-prefix-delegation", false,
 		"Enable the feature flag for Windows prefix delegation")
 	flag.StringVar(&region, "aws-region", "", "The aws region of the k8s cluster")
@@ -206,24 +205,17 @@ func main() {
 	renewDeadline := time.Second * time.Duration(leaderLeaseRenewDeadline)
 	retryPeriod := time.Second * time.Duration(leaderLeaseRetryPeriod)
 
-	// filter cache to subscribe to events from specific resources
-	leaderElectionSource := resourcelock.ConfigMapsLeasesResourceLock
-	if leaseOnly {
-		leaderElectionSource = resourcelock.LeasesResourceLock
-	}
-
 	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
-		SyncPeriod:                 &syncPeriod,
 		Scheme:                     scheme,
-		MetricsBindAddress:         metricsAddr,
-		Port:                       9443,
+		Metrics:                    metricsserver.Options{BindAddress: metricsAddr},
+		WebhookServer:              webhook.NewServer(webhook.Options{Port: 9443}),
 		LeaderElection:             enableLeaderElection,
 		LeaseDuration:              &leaseDuration,
 		RenewDeadline:              &renewDeadline,
 		RetryPeriod:                &retryPeriod,
 		LeaderElectionID:           config.LeaderElectionKey,
 		LeaderElectionNamespace:    config.LeaderElectionNamespace,
-		LeaderElectionResourceLock: leaderElectionSource,
+		LeaderElectionResourceLock: resourcelock.LeasesResourceLock,
 		HealthProbeBindAddress:     ":61779", // the liveness endpoint is default to "/healthz"
 		// ConfigMaps  - WATCH only the ConfigMap that VPC RC consumes
 		// Deployments - WATCH only the old VPC Controller deployment
@@ -244,6 +236,7 @@ func main() {
 				}.AsSelector(),
 				},
 			},
+			SyncPeriod: &syncPeriod,
 		},
 	})
 	if err != nil {

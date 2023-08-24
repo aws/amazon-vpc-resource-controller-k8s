@@ -18,10 +18,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
+	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
+	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	fakeClient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -73,7 +74,7 @@ type ConfigMapMock struct {
 	curWinPrefixDelegationCond bool
 }
 
-func NewConfigMapMock(ctrl *gomock.Controller, mockObjects ...runtime.Object) ConfigMapMock {
+func NewConfigMapMock(ctrl *gomock.Controller, mockObjects ...client.Object) ConfigMapMock {
 	mockNodeManager := mock_manager.NewMockManager(ctrl)
 	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
 	mockNode := mock_node.NewMockNode(ctrl)
@@ -81,7 +82,7 @@ func NewConfigMapMock(ctrl *gomock.Controller, mockObjects ...runtime.Object) Co
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
-	client := fakeClient.NewFakeClientWithScheme(scheme, mockObjects...)
+	client := fakeClient.NewClientBuilder().WithScheme(scheme).WithObjects(mockObjects...).Build()
 
 	return ConfigMapMock{
 		MockNodeManager: mockNodeManager,

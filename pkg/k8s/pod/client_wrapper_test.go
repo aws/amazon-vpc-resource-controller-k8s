@@ -88,10 +88,11 @@ func getMockPodAPIWithClient() (PodClientAPIWrapper, client.Client) {
 	failedPod.Name = "failed-pod"
 	failedPod.Status.Phase = v1.PodFailed
 
-	mockObjects := []runtime.Object{failedPod, completedPod, runningPod}
+	mockObjects := []client.Object{failedPod, completedPod, runningPod}
+	mockRuntimeObjects := []runtime.Object{failedPod, completedPod, runningPod}
 
-	client := fakeClient.NewFakeClientWithScheme(scheme, mockObjects...)
-	clientSet := fakeClientSet.NewSimpleClientset(mockObjects...)
+	client := fakeClient.NewClientBuilder().WithScheme(scheme).WithObjects(mockObjects...).Build()
+	clientSet := fakeClientSet.NewSimpleClientset(mockRuntimeObjects...)
 	ds := getFakeDataStore()
 
 	return NewPodAPIWrapper(ds, client, clientSet.CoreV1()), client
