@@ -165,7 +165,7 @@ func Test_GetNewManager(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(nil)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, healthzHandler)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, "v1.3.1", healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.NoError(t, err)
@@ -179,7 +179,7 @@ func Test_GetNewManager_Error(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(mockError)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, healthzHandler)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, "v1.3.1", healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.Error(t, err, mockError)
@@ -640,6 +640,8 @@ func Test_performAsyncOperation(t *testing.T) {
 	job.op = Init
 
 	mock.MockK8sAPI.EXPECT().AddLabelToManageNode(v1Node, config.HasTrunkAttachedLabel, config.BooleanTrue).Return(true, nil).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
+	mock.MockK8sAPI.EXPECT().BroadcastEvent(v1Node, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", mock.Manager.controllerVersion), v1.EventTypeNormal).Times(1)
 	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(nil)
 	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager).Return(nil)
 	_, err := mock.Manager.performAsyncOperation(job)
@@ -674,6 +676,8 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 	}
 
 	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{})
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
+	mock.MockK8sAPI.EXPECT().BroadcastEvent(v1Node, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", mock.Manager.controllerVersion), v1.EventTypeNormal).Times(1)
 
 	_, err := mock.Manager.performAsyncOperation(job)
 	assert.NotContains(t, mock.Manager.dataStore, nodeName) // It should be cleared from cache
