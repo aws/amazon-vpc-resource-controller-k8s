@@ -27,6 +27,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	v1 "k8s.io/api/core/v1"
+	rbac "k8s.io/api/rbac/v1"
 )
 
 var frameWork *framework.Framework
@@ -37,8 +38,10 @@ var err error
 var namespace = "per-pod-sg"
 var podMatchLabelKey = "role"
 var podMatchLabelVal = "test"
+var clusterRole = "aws-node"
 var pod *v1.Pod
 var sgp *v1beta1.SecurityGroupPolicy
+var updatedClusterRole *rbac.ClusterRole
 
 func TestValidatingWebHook(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -52,8 +55,24 @@ var _ = BeforeSuite(func() {
 	securityGroupID, err = frameWork.EC2Manager.CreateSecurityGroup(utils.ResourceNamePrefix + "sg")
 	Expect(err).ToNot(HaveOccurred())
 
+	// Adding nodes update permission for webhook suite.
+	updateNodeRule := &rbac.PolicyRule{
+		Verbs:     []string{"update"},
+		APIGroups: []string{""},
+		Resources: []string{"nodes"},
+	}
+
+	By("Getting aws-node cluster role")
+	existingClusterRole, err := frameWork.RBACManager.GetClusterRole(clusterRole)
+	updatedClusterRole = existingClusterRole.DeepCopy()
+	updatedClusterRole.Rules = append(updatedClusterRole.Rules, *updateNodeRule)
+
+	By("Patching aws-node cluster role")
+	err = frameWork.RBACManager.PatchClusterRole(updatedClusterRole)
+	Expect(err).ToNot(HaveOccurred())
+
 	By("creating the namespace")
-	err := frameWork.NSManager.CreateNamespace(ctx, namespace)
+	err = frameWork.NSManager.CreateNamespace(ctx, namespace)
 	Expect(err).ToNot(HaveOccurred())
 
 	sgp, err = manifest.NewSGPBuilder().
@@ -97,4 +116,12 @@ var _ = AfterSuite(func() {
 	if securityGroupID != "" {
 		Expect(frameWork.EC2Manager.DeleteSecurityGroup(ctx, securityGroupID)).To(Succeed())
 	}
+
+	By("Removing the patch on aws-node cluster role")
+	if updatedClusterRole != nil {
+		updatedClusterRole.Rules = updatedClusterRole.Rules[:len(updatedClusterRole.Rules)-1]
+		err = frameWork.RBACManager.PatchClusterRole(updatedClusterRole)
+		Expect(err).ToNot(HaveOccurred())
+	}
+
 })
