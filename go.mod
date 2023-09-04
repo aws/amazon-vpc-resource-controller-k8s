@@ -3,7 +3,7 @@ module github.com/aws/amazon-vpc-resource-controller-k8s
 go 1.20
 
 require (
-	github.com/aws/amazon-vpc-cni-k8s v1.13.2
+	github.com/aws/amazon-vpc-cni-k8s v1.14.0
 	github.com/aws/aws-sdk-go v1.43.29
 	github.com/go-logr/logr v1.2.4
 	github.com/go-logr/zapr v1.2.4

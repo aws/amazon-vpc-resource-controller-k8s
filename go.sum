@@ -2,8 +2,8 @@ github.com/NYTimes/gziphandler v1.1.1 h1:ZUDjpQae29j0ryrS0u/B8HZfJBtBQHjqw2rQ2cq
 github.com/antlr/antlr4/runtime/Go/antlr/v4 v4.0.0-20230305170008-8188dc5388df h1:7RFfzj4SSt6nnvCPbCqijJi1nWCd+TqAT3bYCStRC18=
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5 h1:0CwZNZbxp69SHPdPJAN/hZIm0C4OItdklCFmMRWYpio=
 github.com/asaskevich/govalidator v0.0.0-20200428143746-21a406dcc535 h1:4daAzAu0S6Vi7/lbWECcX0j45yZReDZ56BQsrVBOEEY=
-github.com/aws/amazon-vpc-cni-k8s v1.13.2 h1:rnJGHyB7mdguSVX5TNCVREpfY1K13yuk2TFwco+uQbA=
-github.com/aws/amazon-vpc-cni-k8s v1.13.2/go.mod h1:eVzV7+2QctvKc+yyr3kLNHFwb9xZQRKl0C8ki4ObzDw=
+github.com/aws/amazon-vpc-cni-k8s v1.14.0 h1:tbZcpL9BZy7J57W6CKaqMO/zupX4FcZ0+QJ8MdqcRPc=
+github.com/aws/amazon-vpc-cni-k8s v1.14.0/go.mod h1:eVzV7+2QctvKc+yyr3kLNHFwb9xZQRKl0C8ki4ObzDw=
 github.com/aws/aws-sdk-go v1.43.29 h1:P6tBpMLwVLS/QwPkaBxfDIF3SmPouoacIk+/7NKnDxY=
 github.com/aws/aws-sdk-go v1.43.29/go.mod h1:y4AeaBuwd2Lk+GepC1E9v0qOiTws0MIWAX4oIKwKHZo=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
