@@ -41,7 +41,7 @@ import (
 // on cache only a single go routine should be sufficient. Using more than
 // one routines to help high rate churn and larger nodes groups restarting
 // when the controller has to be restarted for various reasons.
-const MaxNodeConcurrentReconciles = 3
+const MaxNodeConcurrentReconciles = 7
 
 // NodeReconciler reconciles a Node object
 type NodeReconciler struct {
