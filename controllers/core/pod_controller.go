@@ -56,7 +56,7 @@ type PodReconciler struct {
 
 var (
 	PodRequeueRequest          = ctrl.Result{Requeue: true, RequeueAfter: time.Second}
-	MaxPodConcurrentReconciles = 4
+	MaxPodConcurrentReconciles = 10
 )
 
 // Reconcile handles create/update/delete event by delegating the request to the  handler
