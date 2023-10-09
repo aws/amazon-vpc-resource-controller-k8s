@@ -21,7 +21,7 @@ mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/node/mock_n
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/utils/mock_k8shelper.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils SecurityGroupForPodsAPI
 # package pool mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/pool/mock_pool.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool Pool
-# package resource maocks
+# package resource mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/resource/mock_resources.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource ResourceManager
-# package condition maocks
+# package condition mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/condition/mock_condition.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition Conditions
