@@ -508,3 +508,8 @@ func (p *ipv4Provider) check() healthz.Checker {
 func (p *ipv4Provider) GetHealthChecker() healthz.Checker {
 	return p.checker
 }
+
+// ReconcileNode implements provider.ResourceProvider.
+func (*ipv4Provider) ReconcileNode(nodeName string) bool {
+	return false
+}

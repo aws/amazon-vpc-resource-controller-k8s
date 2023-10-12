@@ -479,7 +479,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 
 // TestBranchENIProvider_ReconcileNode tests that the reconcile job returns no error and returns right results (with requeue after)
 // when the trunk ENI is present in cache
-func TestBranchENIProvider_ReconcileNode(t *testing.T) {
+func TestBranchENIProvider_ReconcileNode_NoLeak(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -491,11 +491,30 @@ func TestBranchENIProvider_ReconcileNode(t *testing.T) {
 	list := &v1.PodList{}
 	mockPodAPI.EXPECT().ListPods(NodeName).Return(list, nil)
 
-	fakeTrunk1.EXPECT().Reconcile(list.Items)
+	fakeTrunk1.EXPECT().Reconcile(list.Items).Return(false)
 
-	result, err := provider.ReconcileNode(NodeName)
-	assert.NoError(t, err)
-	assert.Equal(t, reconcileRequeueRequest, result)
+	result := provider.ReconcileNode(NodeName)
+	assert.False(t, result)
+}
+
+// TestBranchENIProvider_ReconcileNode tests that the reconcile job returns no error and returns right results (with requeue after)
+// when the trunk ENI is present in cache
+func TestBranchENIProvider_ReconcileNode_Leak(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+
+	fakeTrunk1 := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk1
+
+	list := &v1.PodList{}
+	mockPodAPI.EXPECT().ListPods(NodeName).Return(list, nil)
+
+	fakeTrunk1.EXPECT().Reconcile(list.Items).Return(true)
+
+	result := provider.ReconcileNode(NodeName)
+	assert.True(t, result)
 }
 
 // TestBranchENIProvider_ReconcileNode_TrunkENIDeleted tests that the reconcile job is removed once trunk eni is removed from
@@ -503,9 +522,8 @@ func TestBranchENIProvider_ReconcileNode(t *testing.T) {
 func TestBranchENIProvider_ReconcileNode_TrunkENIDeleted(t *testing.T) {
 	provider := getProvider()
 
-	result, err := provider.ReconcileNode(NodeName)
-	assert.NoError(t, err)
-	assert.Equal(t, k8sCtrl.Result{}, result)
+	result := provider.ReconcileNode(NodeName)
+	assert.True(t, result)
 }
 
 // TestBranchENIProvider_ProcessDeleteQueue_TrunkENIDeleted tests that the requeue job is removed once the trunk eni

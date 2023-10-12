@@ -61,6 +61,18 @@ func (mr *MockManagerMockRecorder) AddNode(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddNode", reflect.TypeOf((*MockManager)(nil).AddNode), arg0)
 }
 
+// CheckNodeForLeakedENIs mocks base method.
+func (m *MockManager) CheckNodeForLeakedENIs(arg0 string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "CheckNodeForLeakedENIs", arg0)
+}
+
+// CheckNodeForLeakedENIs indicates an expected call of CheckNodeForLeakedENIs.
+func (mr *MockManagerMockRecorder) CheckNodeForLeakedENIs(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckNodeForLeakedENIs", reflect.TypeOf((*MockManager)(nil).CheckNodeForLeakedENIs), arg0)
+}
+
 // DeleteNode mocks base method.
 func (m *MockManager) DeleteNode(arg0 string) error {
 	m.ctrl.T.Helper()

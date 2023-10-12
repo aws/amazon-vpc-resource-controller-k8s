@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
@@ -33,6 +34,7 @@ import (
 	"github.com/samber/lo"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
@@ -63,6 +65,7 @@ type Manager interface {
 	AddNode(nodeName string) error
 	UpdateNode(nodeName string) error
 	DeleteNode(nodeName string) error
+	CheckNodeForLeakedENIs(nodeName string)
 }
 
 // AsyncOperation is operation on a node after the lock has been released.
@@ -113,6 +116,37 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 	)
 
 	return manager, worker.StartWorkerPool(manager.performAsyncOperation)
+}
+
+func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
+	managedNode, found := m.GetNode(nodeName)
+	if !found {
+		m.Log.Info("Node manager couldn't find the node for reconciliation cleanup", "NodeName", nodeName)
+		return
+	}
+
+	// Only start a goroutine when need to
+	if time.Now().After(managedNode.GetNextReconciliationTime()) {
+		go func() {
+			if resourceProvider, found := m.resourceManager.GetResourceProvider(config.ResourceNamePodENI); found {
+				foundLeakedENI := resourceProvider.ReconcileNode(nodeName)
+				if foundLeakedENI {
+					managedNode.SetReconciliationInterval(node.NodeInitialCleanupInterval)
+				} else {
+					interval := wait.Jitter(managedNode.GetReconciliationInterval(), 5)
+					if interval > node.MaxNodeReconciliationInterval {
+						interval = node.MaxNodeReconciliationInterval
+					}
+					managedNode.SetReconciliationInterval(interval)
+				}
+				managedNode.SetNextReconciliationTime(time.Now().Add(managedNode.GetReconciliationInterval()))
+				m.Log.Info("reconciled cleanup node for leaking branch interfaces", "NodeName", nodeName, "NextInterval", managedNode.GetReconciliationInterval(), "NextReconciliationTime", managedNode.GetNextReconciliationTime())
+			} else {
+				// no SGP provider enabled
+				return
+			}
+		}()
+	}
 }
 
 // GetNode returns the node from in memory data store
