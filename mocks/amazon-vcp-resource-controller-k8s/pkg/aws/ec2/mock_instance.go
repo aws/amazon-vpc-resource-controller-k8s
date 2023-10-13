@@ -212,34 +212,6 @@ func (mr *MockEC2InstanceMockRecorder) SubnetMask() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubnetMask", reflect.TypeOf((*MockEC2Instance)(nil).SubnetMask))
 }
 
-// SubnetV6CidrBlock mocks base method.
-func (m *MockEC2Instance) SubnetV6CidrBlock() string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SubnetV6CidrBlock")
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// SubnetV6CidrBlock indicates an expected call of SubnetV6CidrBlock.
-func (mr *MockEC2InstanceMockRecorder) SubnetV6CidrBlock() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubnetV6CidrBlock", reflect.TypeOf((*MockEC2Instance)(nil).SubnetV6CidrBlock))
-}
-
-// SubnetV6Mask mocks base method.
-func (m *MockEC2Instance) SubnetV6Mask() string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SubnetV6Mask")
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// SubnetV6Mask indicates an expected call of SubnetV6Mask.
-func (mr *MockEC2InstanceMockRecorder) SubnetV6Mask() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubnetV6Mask", reflect.TypeOf((*MockEC2Instance)(nil).SubnetV6Mask))
-}
-
 // Type mocks base method.
 func (m *MockEC2Instance) Type() string {
 	m.ctrl.T.Helper()

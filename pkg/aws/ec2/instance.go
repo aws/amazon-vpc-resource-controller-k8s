@@ -38,18 +38,15 @@ type ec2Instance struct {
 	// subnetId is the instance's subnet id
 	instanceSubnetID string
 	// instanceSubnetCidrBlock is the cidr block of the instance's subnet
-	instanceSubnetCidrBlock   string
-	instanceSubnetV6CidrBlock string
+	instanceSubnetCidrBlock string
 	// currentSubnetID can either point to the Subnet ID of the instance or subnet ID from the ENIConfig
 	currentSubnetID string
 	// currentSubnetCIDRBlock can either point to the Subnet CIDR block for instance subnet or subnet from ENIConfig
-	currentSubnetCIDRBlock   string
-	currentSubnetV6CIDRBlock string
+	currentSubnetCIDRBlock string
 	// currentInstanceSecurityGroups can either point to the primary network interface security groups or the security groups in ENIConfig
 	currentInstanceSecurityGroups []string
 	// subnetMask is the mask of the subnet CIDR block
-	subnetMask   string
-	subnetV6Mask string
+	subnetMask string
 	// deviceIndexes is the list of indexes used by the EC2 Instance
 	deviceIndexes []bool
 	// primaryENIGroups is the security group used by the primary network interface
@@ -73,9 +70,7 @@ type EC2Instance interface {
 	InstanceID() string
 	SubnetID() string
 	SubnetMask() string
-	SubnetV6Mask() string
 	SubnetCidrBlock() string
-	SubnetV6CidrBlock() string
 	PrimaryNetworkInterfaceID() string
 	CurrentInstanceSecurityGroups() []string
 	SetNewCustomNetworkingSpec(subnetID string, securityGroup []string)
@@ -115,16 +110,8 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 			i.instanceSubnetID, i.instanceID)
 	}
 	i.instanceSubnetCidrBlock = *instanceSubnet.CidrBlock
-	i.subnetMask = strings.Split(i.instanceSubnetCidrBlock, "/")[1]
-	// Cache IPv6 CIDR block if one is present
-	for _, v6CidrBlock := range instanceSubnet.Ipv6CidrBlockAssociationSet {
-		if v6CidrBlock.Ipv6CidrBlock != nil {
-			i.instanceSubnetV6CidrBlock = *v6CidrBlock.Ipv6CidrBlock
-			i.subnetV6Mask = strings.Split(i.instanceSubnetV6CidrBlock, "/")[1]
-			break
-		}
-	}
 
+	i.subnetMask = strings.Split(i.instanceSubnetCidrBlock, "/")[1]
 	i.instanceType = *instance.InstanceType
 	limits, ok := vpc.Limits[i.instanceType]
 	if !ok {
@@ -191,13 +178,6 @@ func (i *ec2Instance) SubnetCidrBlock() string {
 	return i.currentSubnetCIDRBlock
 }
 
-func (i *ec2Instance) SubnetV6CidrBlock() string {
-	i.lock.RLock()
-	defer i.lock.RUnlock()
-
-	return i.currentSubnetV6CIDRBlock
-}
-
 // Name returns the name of the node
 func (i *ec2Instance) Name() string {
 	return i.name
@@ -251,13 +231,6 @@ func (i *ec2Instance) SubnetMask() string {
 	return i.subnetMask
 }
 
-func (i *ec2Instance) SubnetV6Mask() string {
-	i.lock.Lock()
-	defer i.lock.Unlock()
-
-	return i.subnetV6Mask
-}
-
 // SetNewCustomNetworkingSpec updates the subnet ID and subnet CIDR block for the instance
 func (i *ec2Instance) SetNewCustomNetworkingSpec(subnet string, securityGroups []string) {
 	i.lock.Lock()
@@ -298,14 +271,12 @@ func (i *ec2Instance) updateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHel
 			}
 			i.currentSubnetID = i.newCustomNetworkingSubnetID
 			i.currentSubnetCIDRBlock = *customSubnet.CidrBlock
-			// NOTE: IPv6 does not support custom networking
 		}
 	} else {
 		// Custom networking in not being used, point to the primary network interface security group and
 		// subnet details
 		i.currentSubnetID = i.instanceSubnetID
 		i.currentSubnetCIDRBlock = i.instanceSubnetCidrBlock
-		i.currentSubnetV6CIDRBlock = i.instanceSubnetV6CidrBlock
 		i.currentInstanceSecurityGroups = i.primaryENISecurityGroups
 	}
 

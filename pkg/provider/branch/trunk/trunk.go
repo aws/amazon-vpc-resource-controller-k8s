@@ -127,14 +127,12 @@ type ENIDetails struct {
 	ID string `json:"eniId"`
 	// MacAdd is the MAC address of the network interface
 	MACAdd string `json:"ifAddress"`
-	// IPv4 and/or IPv6 address assigned to the branch Network interface
+	// BranchIp is the primary IP of the branch Network interface
 	IPV4Addr string `json:"privateIp"`
-	IPV6Addr string `json:"ipv6Addr"`
 	// VlanId is the VlanId of the branch network interface
 	VlanID int `json:"vlanId"`
 	// SubnetCIDR is the CIDR block of the subnet
-	SubnetCIDR   string `json:"subnetCidr"`
-	SubnetV6CIDR string `json:"subnetV6Cidr"`
+	SubnetCIDR string `json:"subnetCidr"`
 	// deletionTimeStamp is the time when the pod was marked deleted.
 	deletionTimeStamp time.Time
 	// deleteRetryCount is the
@@ -385,17 +383,9 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 			branchENIOperationsSuccessCount.WithLabelValues("created_branch_eni_succeeded").Inc()
 		}
 
-		// Branch ENI can have an IPv4 address, IPv6 address, or both
-		var v4Addr, v6Addr string
-		if nwInterface.PrivateIpAddress != nil {
-			v4Addr = *nwInterface.PrivateIpAddress
-		}
-		if nwInterface.Ipv6Address != nil {
-			v6Addr = *nwInterface.Ipv6Address
-		}
 		newENI := &ENIDetails{ID: *nwInterface.NetworkInterfaceId, MACAdd: *nwInterface.MacAddress,
-			IPV4Addr: v4Addr, IPV6Addr: v6Addr, SubnetCIDR: t.instance.SubnetCidrBlock(),
-			SubnetV6CIDR: t.instance.SubnetV6CidrBlock(), VlanID: vlanID}
+			IPV4Addr: *nwInterface.PrivateIpAddress, SubnetCIDR: t.instance.SubnetCidrBlock(), VlanID: vlanID}
+
 		newENIs = append(newENIs, newENI)
 
 		// Associate Branch to trunk
