@@ -40,7 +40,6 @@ var (
 	InstanceType          = "c5.xlarge"
 	SubnetId              = "subnet-00000000000000000"
 	SubnetCidrBlock       = "192.168.0.0/16"
-	SubnetV6CidrBlock     = "2600::/64"
 	NodeName              = "test-node"
 	FakeInstance          = ec2.NewEC2Instance(NodeName, InstanceId, config.OSLinux)
 	InstanceSecurityGroup = []string{"sg-1", "sg-2"}
@@ -57,9 +56,9 @@ var (
 			UID:       MockPodUID1,
 			Name:      MockPodName1,
 			Namespace: MockPodNamespace1,
-			Annotations: map[string]string{config.ResourceNamePodENI: "[{\"eniId\":\"eni-00000000000000000\",\"ifAddress\":\"FF:FF:FF:FF:FF:FF\",\"privateIp\":\"192.168.0.15\"," +
-				"\"ipv6Addr\":\"2600::\",\"vlanId\":1,\"subnetCidr\":\"192.168.0.0/16\",\"subnetV6Cidr\":\"2600::/64\"},{\"eniId\":\"eni-00000000000000001\",\"ifAddress\":\"" +
-				"FF:FF:FF:FF:FF:F9\",\"privateIp\":\"192.168.0.16\",\"ipv6Addr\":\"2600::1\",\"vlanId\":2,\"subnetCidr\":\"192.168.0.0/16\",\"subnetV6Cidr\":\"2600::/64\"}]"}},
+			Annotations: map[string]string{config.ResourceNamePodENI: "[{\"eniId\":\"eni-00000000000000000\",\"ifAddress\":\"FF:FF:FF:FF:FF:FF\",\"privateIp\":\"192.168.0.15\"" +
+				",\"vlanId\":1,\"subnetCidr\":\"192.168.0.0/16\"},{\"eniId\":\"eni-00000000000000001\",\"ifAddress\":\"" +
+				"FF:FF:FF:FF:FF:F9\",\"privateIp\":\"192.168.0.16\",\"vlanId\":2,\"subnetCidr\":\"192.168.0.0/16\"}]"}},
 		Spec:   v1.PodSpec{NodeName: NodeName},
 		Status: v1.PodStatus{},
 	}
@@ -89,20 +88,17 @@ var (
 	SecurityGroups = []string{SecurityGroup1, SecurityGroup2}
 
 	// Branch Interface 1
-	Branch1Id   = "eni-00000000000000000"
-	MacAddr1    = "FF:FF:FF:FF:FF:FF"
-	BranchIp1   = "192.168.0.15"
-	BranchV6Ip1 = "2600::"
-	VlanId1     = 1
+	Branch1Id = "eni-00000000000000000"
+	MacAddr1  = "FF:FF:FF:FF:FF:FF"
+	BranchIp1 = "192.168.0.15"
+	VlanId1   = 1
 
 	EniDetails1 = &ENIDetails{
-		ID:           Branch1Id,
-		MACAdd:       MacAddr1,
-		IPV4Addr:     BranchIp1,
-		IPV6Addr:     BranchV6Ip1,
-		VlanID:       VlanId1,
-		SubnetCIDR:   SubnetCidrBlock,
-		SubnetV6CIDR: SubnetV6CidrBlock,
+		ID:         Branch1Id,
+		MACAdd:     MacAddr1,
+		IPV4Addr:   BranchIp1,
+		VlanID:     VlanId1,
+		SubnetCIDR: SubnetCidrBlock,
 	}
 
 	branchENIs1 = []*ENIDetails{EniDetails1}
@@ -111,31 +107,26 @@ var (
 		MacAddress:         &MacAddr1,
 		NetworkInterfaceId: &Branch1Id,
 		PrivateIpAddress:   &BranchIp1,
-		Ipv6Address:        &BranchV6Ip1,
 	}
 
 	// Branch Interface 2
-	Branch2Id   = "eni-00000000000000001"
-	MacAddr2    = "FF:FF:FF:FF:FF:F9"
-	BranchIp2   = "192.168.0.16"
-	BranchV6Ip2 = "2600::1"
-	VlanId2     = 2
+	Branch2Id = "eni-00000000000000001"
+	MacAddr2  = "FF:FF:FF:FF:FF:F9"
+	BranchIp2 = "192.168.0.16"
+	VlanId2   = 2
 
 	EniDetails2 = &ENIDetails{
-		ID:           Branch2Id,
-		MACAdd:       MacAddr2,
-		IPV4Addr:     BranchIp2,
-		IPV6Addr:     BranchV6Ip2,
-		VlanID:       VlanId2,
-		SubnetCIDR:   SubnetCidrBlock,
-		SubnetV6CIDR: SubnetV6CidrBlock,
+		ID:         Branch2Id,
+		MACAdd:     MacAddr2,
+		IPV4Addr:   BranchIp2,
+		VlanID:     VlanId2,
+		SubnetCIDR: SubnetCidrBlock,
 	}
 
 	BranchInterface2 = &awsEc2.NetworkInterface{
 		MacAddress:         &MacAddr2,
 		NetworkInterfaceId: &Branch2Id,
 		PrivateIpAddress:   &BranchIp2,
-		Ipv6Address:        &BranchV6Ip2,
 	}
 
 	branchENIs2 = []*ENIDetails{EniDetails2}
@@ -734,7 +725,6 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
 
 	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
 		vlan1Tag, nil, nil).Return(BranchInterface1, nil)
@@ -767,7 +757,6 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
 	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(InstanceSecurityGroup)
 
 	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, InstanceSecurityGroup,
@@ -801,7 +790,6 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
 
 	gomock.InOrder(
 		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
@@ -829,7 +817,6 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(1)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(1)
 
 	gomock.InOrder(
 		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, vlan1Tag,
