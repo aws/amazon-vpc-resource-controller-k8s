@@ -359,60 +359,6 @@ func TestTrunkENI_popENIFromDeleteQueue(t *testing.T) {
 	assert.False(t, hasENI)
 }
 
-// TestTrunkENI_GetBranchInterfacesFromEC2 tests get branch interface from ec2 returns the branch interface with the
-// eni id and vlan id populated
-func TestTrunkENI_GetBranchInterfacesFromEC2(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunkENI, ec2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	trunkENI.trunkENIId = trunkId
-
-	ec2APIHelper.EXPECT().DescribeTrunkInterfaceAssociation(&trunkId).Return(trunkAssociationsBranch1And2, nil)
-	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
-
-	eniDetails, err := trunkENI.GetBranchInterfacesFromEC2()
-
-	assert.NoError(t, err)
-
-	assert.Equal(t, EniDetails1.ID, eniDetails[0].ID)
-	assert.Equal(t, EniDetails1.VlanID, eniDetails[0].VlanID)
-
-	assert.Equal(t, EniDetails2.ID, eniDetails[1].ID)
-	assert.Equal(t, EniDetails2.VlanID, eniDetails[1].VlanID)
-}
-
-// TestTrunkENI_GetBranchInterfacesFromEC2_Error tests that error is returned if the operation fails
-func TestTrunkENI_GetBranchInterfacesFromEC2_Error(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
-	trunkENI.trunkENIId = trunkId
-
-	ec2APIHelper.EXPECT().DescribeTrunkInterfaceAssociation(&trunkId).Return(nil, MockError)
-
-	_, err := trunkENI.GetBranchInterfacesFromEC2()
-	assert.Error(t, MockError, err)
-}
-
-// TestTrunkENI_GetBranchInterfacesFromEC2_NoBranch tests that error is not returned when there is no branch associated
-// with the trunk
-func TestTrunkENI_GetBranchInterfacesFromEC2_NoBranch(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
-	trunkENI.trunkENIId = trunkId
-
-	ec2APIHelper.EXPECT().DescribeTrunkInterfaceAssociation(&trunkId).Return(nil, nil)
-
-	eniDetails, err := trunkENI.GetBranchInterfacesFromEC2()
-	assert.NoError(t, err)
-	assert.Nil(t, eniDetails)
-}
-
 // TestTrunkENI_getBranchInterfacesUsedByPod tests that branch interface are returned if present in pod annotation
 func TestTrunkENI_getBranchInterfacesUsedByPod(t *testing.T) {
 	trunkENI := getMockTrunk()
@@ -581,8 +527,8 @@ func TestTrunkENI_Reconcile(t *testing.T) {
 	// Pod 1 doesn't exist anymore
 	podList := []v1.Pod{*MockPod2}
 
-	err := trunkENI.Reconcile(podList)
-	assert.NoError(t, err)
+	leaked := trunkENI.Reconcile(podList)
+	assert.True(t, leaked)
 	_, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 
 	assert.Equal(t, []*ENIDetails{EniDetails1, EniDetails2}, trunkENI.deleteQueue)
@@ -596,8 +542,8 @@ func TestTrunkENI_Reconcile_NoStateChange(t *testing.T) {
 
 	podList := []v1.Pod{*MockPod1, *MockPod2}
 
-	err := trunkENI.Reconcile(podList)
-	assert.NoError(t, err)
+	leaked := trunkENI.Reconcile(podList)
+	assert.False(t, leaked)
 
 	_, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 	assert.Zero(t, trunkENI.deleteQueue)

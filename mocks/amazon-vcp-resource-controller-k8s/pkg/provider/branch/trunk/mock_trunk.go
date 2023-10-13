@@ -141,10 +141,10 @@ func (mr *MockTrunkENIMockRecorder) PushENIsToFrontOfDeleteQueue(arg0, arg1 inte
 }
 
 // Reconcile mocks base method.
-func (m *MockTrunkENI) Reconcile(arg0 []v1.Pod) error {
+func (m *MockTrunkENI) Reconcile(arg0 []v1.Pod) bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Reconcile", arg0)
-	ret0, _ := ret[0].(error)
+	ret0, _ := ret[0].(bool)
 	return ret0
 }
 

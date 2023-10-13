@@ -16,6 +16,7 @@ package controllers
 import (
 	"context"
 	"testing"
+	"time"
 
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
@@ -83,8 +84,9 @@ func TestNodeReconciler_Reconcile_AddNode(t *testing.T) {
 	mock := NewNodeMock(ctrl, mockNodeObj)
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
-	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
+	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false).Times(1)
 	mock.Manager.EXPECT().AddNode(mockNodeName).Return(nil)
+	mock.Manager.EXPECT().CheckNodeForLeakedENIs(mockNodeName).Times(0)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
@@ -98,10 +100,12 @@ func TestNodeReconciler_Reconcile_UpdateNode(t *testing.T) {
 	mock := NewNodeMock(ctrl, mockNodeObj)
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
-	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
+	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true).Times(1)
 	mock.Manager.EXPECT().UpdateNode(mockNodeName).Return(nil)
+	mock.Manager.EXPECT().CheckNodeForLeakedENIs(mockNodeName).Times(1)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
+	time.Sleep(time.Second)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
 }

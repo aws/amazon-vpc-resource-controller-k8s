@@ -184,7 +184,6 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	// TODO: For efficiency submit the process delete queue job only when the delete queue has items.
 	// Submit periodic jobs for the given node name
 	b.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
-	b.SubmitAsyncJob(worker.NewOnDemandReconcileNodeJob(nodeName))
 
 	b.log.Info("initialized the resource provider successfully")
 
@@ -226,8 +225,6 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 		return b.DeleteBranchUsedByPods(onDemandJob.NodeName, onDemandJob.UID)
 	case worker.OperationProcessDeleteQueue:
 		return b.ProcessDeleteQueue(onDemandJob.NodeName)
-	case worker.OperationReconcileNode:
-		return b.ReconcileNode(onDemandJob.NodeName)
 	case worker.OperationDeleteNode:
 		return b.DeleteNode(onDemandJob.NodeName)
 	}
@@ -270,27 +267,26 @@ func (b *branchENIProvider) UpdateResourceCapacity(instance ec2.EC2Instance) err
 
 // ReconcileNode reconciles a nodes by getting the list of pods from K8s and comparing the result
 // with the internal cache.
-func (b *branchENIProvider) ReconcileNode(nodeName string) (ctrl.Result, error) {
+func (b *branchENIProvider) ReconcileNode(nodeName string) bool {
 	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
 	log := b.log.WithValues("node", nodeName)
 	if !isPresent {
-		log.Info("stopping the reconcile job")
-		return ctrl.Result{}, nil
+		// return true to set the node next clean up asap since we don't know why trunk is missing
+		log.Info("no trunk ENI is pointing to the given node", "NodeName", nodeName)
+		return true
 	}
 	podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
 	if err != nil {
+		// return true to set the node next cleanup asap since the LIST call may fail for other reasons
+		// we should assume that there are leaked resources need to be cleaned up
 		log.Error(err, "failed fo list pod")
-		return reconcileRequeueRequest, nil
+		return true
 	}
-	err = trunkENI.Reconcile(podList.Items)
-	if err != nil {
-		b.log.Error(err, "failed to reconcile")
-		return reconcileRequeueRequest, nil
-	}
+	foundLeakedENI := trunkENI.Reconcile(podList.Items)
 
-	log.V(1).Info("completed reconcile job")
+	log.Info("completed reconcile node cleanup on branch ENIs", "NodeName", nodeName)
 
-	return reconcileRequeueRequest, nil
+	return foundLeakedENI
 }
 
 // ProcessDeleteQueue removes cooled down ENIs associated with a trunk for a given node
@@ -407,7 +403,11 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) (ctrl.Result, error) {
 	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
 	if !isPresent {
-		return ctrl.Result{}, fmt.Errorf("failed to find trunk ENI on the node %s", nodeName)
+		// trunk cache is local map with lock. it shouldn't return not found error if trunk exists
+		// if the node's trunk is not found, we shouldn't retry
+		// worst case we rely on node based clean up goroutines to clean branch ENIs up
+		b.log.Info("failed to find trunk ENI for the node %s", nodeName)
+		return ctrl.Result{}, nil
 	}
 
 	trunkENI.PushBranchENIsToCoolDownQueue(UID)

@@ -41,7 +41,9 @@ import (
 // on cache only a single go routine should be sufficient. Using more than
 // one routines to help high rate churn and larger nodes groups restarting
 // when the controller has to be restarted for various reasons.
-const MaxNodeConcurrentReconciles = 7
+const (
+	MaxNodeConcurrentReconciles = 10
+)
 
 // NodeReconciler reconciles a Node object
 type NodeReconciler struct {
@@ -96,6 +98,9 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if found {
 		logger.V(1).Info("updating node")
 		err = r.Manager.UpdateNode(req.Name)
+
+		// ReconcileNode actually run a branch ENI leaking check from an independent goroutine on added nodes.
+		r.Manager.CheckNodeForLeakedENIs(req.Name)
 	} else {
 		logger.Info("adding node")
 		err = r.Manager.AddNode(req.Name)
