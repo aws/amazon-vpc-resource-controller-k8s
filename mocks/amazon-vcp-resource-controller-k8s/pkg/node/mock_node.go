@@ -19,6 +19,7 @@ package mock_node
 
 import (
 	reflect "reflect"
+	time "time"
 
 	resource "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 	gomock "github.com/golang/mock/gomock"
@@ -61,6 +62,20 @@ func (mr *MockNodeMockRecorder) DeleteResources(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteResources", reflect.TypeOf((*MockNode)(nil).DeleteResources), arg0)
 }
 
+// GetNextReconciliationTime mocks base method.
+func (m *MockNode) GetNextReconciliationTime() time.Time {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNextReconciliationTime")
+	ret0, _ := ret[0].(time.Time)
+	return ret0
+}
+
+// GetNextReconciliationTime indicates an expected call of GetNextReconciliationTime.
+func (mr *MockNodeMockRecorder) GetNextReconciliationTime() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNextReconciliationTime", reflect.TypeOf((*MockNode)(nil).GetNextReconciliationTime))
+}
+
 // GetNodeInstanceID mocks base method.
 func (m *MockNode) GetNodeInstanceID() string {
 	m.ctrl.T.Helper()
@@ -73,6 +88,20 @@ func (m *MockNode) GetNodeInstanceID() string {
 func (mr *MockNodeMockRecorder) GetNodeInstanceID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNodeInstanceID", reflect.TypeOf((*MockNode)(nil).GetNodeInstanceID))
+}
+
+// GetReconciliationInterval mocks base method.
+func (m *MockNode) GetReconciliationInterval() time.Duration {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetReconciliationInterval")
+	ret0, _ := ret[0].(time.Duration)
+	return ret0
+}
+
+// GetReconciliationInterval indicates an expected call of GetReconciliationInterval.
+func (mr *MockNodeMockRecorder) GetReconciliationInterval() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetReconciliationInterval", reflect.TypeOf((*MockNode)(nil).GetReconciliationInterval))
 }
 
 // HasInstance mocks base method.
@@ -143,6 +172,30 @@ func (m *MockNode) IsReady() bool {
 func (mr *MockNodeMockRecorder) IsReady() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsReady", reflect.TypeOf((*MockNode)(nil).IsReady))
+}
+
+// SetNextReconciliationTime mocks base method.
+func (m *MockNode) SetNextReconciliationTime(arg0 time.Time) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetNextReconciliationTime", arg0)
+}
+
+// SetNextReconciliationTime indicates an expected call of SetNextReconciliationTime.
+func (mr *MockNodeMockRecorder) SetNextReconciliationTime(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetNextReconciliationTime", reflect.TypeOf((*MockNode)(nil).SetNextReconciliationTime), arg0)
+}
+
+// SetReconciliationInterval mocks base method.
+func (m *MockNode) SetReconciliationInterval(arg0 time.Duration) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetReconciliationInterval", arg0)
+}
+
+// SetReconciliationInterval indicates an expected call of SetReconciliationInterval.
+func (mr *MockNodeMockRecorder) SetReconciliationInterval(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetReconciliationInterval", reflect.TypeOf((*MockNode)(nil).SetReconciliationInterval), arg0)
 }
 
 // UpdateCustomNetworkingSpecs mocks base method.

@@ -44,4 +44,5 @@ type ResourceProvider interface {
 	GetHealthChecker() healthz.Checker
 	// IntrospectSummary allows introspection of resources summary per node
 	IntrospectSummary() interface{}
+	ReconcileNode(nodeName string) bool
 }

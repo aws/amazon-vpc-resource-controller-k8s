@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
@@ -44,7 +45,16 @@ type node struct {
 	k8sAPI k8s.K8sWrapper
 	// node has reference to EC2 APIs
 	ec2API api.EC2APIHelper
+	// lastReconciledTime time.Time
+	nextReconciliationTime time.Time
+	// reconciliation interval between cleanups
+	reconciliationInterval time.Duration
 }
+
+const (
+	MaxNodeReconciliationInterval = 15 * time.Minute
+	NodeInitialCleanupInterval    = 1 * time.Minute
+)
 
 // ErrInitResources to wrap error messages for all errors encountered
 // during node initialization so the node can be de-registered on failure
@@ -69,6 +79,11 @@ type Node interface {
 
 	GetNodeInstanceID() string
 	HasInstance() bool
+
+	GetNextReconciliationTime() time.Time
+	SetNextReconciliationTime(time time.Time)
+	GetReconciliationInterval() time.Duration
+	SetReconciliationInterval(time time.Duration)
 }
 
 // NewManagedNode returns node managed by the controller
@@ -77,9 +92,10 @@ func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os stri
 		managed: true,
 		log: log.WithName("node resource handler").
 			WithValues("node name", nodeName),
-		instance: ec2.NewEC2Instance(nodeName, instanceID, os),
-		k8sAPI:   k8sAPI,
-		ec2API:   ec2API,
+		instance:               ec2.NewEC2Instance(nodeName, instanceID, os),
+		k8sAPI:                 k8sAPI,
+		ec2API:                 ec2API,
+		reconciliationInterval: NodeInitialCleanupInterval,
 	}
 }
 
@@ -247,4 +263,32 @@ func (n *node) IsNitroInstance() bool {
 
 	isNitroInstance, err := utils.IsNitroInstance(n.instance.Type())
 	return err == nil && isNitroInstance
+}
+
+func (n *node) GetNextReconciliationTime() time.Time {
+	n.lock.RLock()
+	defer n.lock.RUnlock()
+
+	return n.nextReconciliationTime
+}
+
+func (n *node) SetNextReconciliationTime(time time.Time) {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+
+	n.nextReconciliationTime = time
+}
+
+func (n *node) GetReconciliationInterval() time.Duration {
+	n.lock.RLock()
+	defer n.lock.RUnlock()
+
+	return n.reconciliationInterval
+}
+
+func (n *node) SetReconciliationInterval(time time.Duration) {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+
+	n.reconciliationInterval = time
 }

@@ -17,11 +17,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
@@ -61,6 +63,20 @@ var (
 		},
 		[]string{"operation"},
 	)
+	branchENIOperationsSuccessCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_eni_opeartions_success_count",
+			Help: "The number of branch ENI succeeded operations",
+		},
+		[]string{"operation"},
+	)
+	branchENIOperationsFailureCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_eni_opeartions_failure_count",
+			Help: "The number of branch ENI failed operations",
+		},
+		[]string{"operation"},
+	)
 
 	prometheusRegistered = false
 )
@@ -75,7 +91,7 @@ type TrunkENI interface {
 	// DeleteCooledDownENIs deletes the interfaces that have been sitting in the queue for cool down period
 	DeleteCooledDownENIs()
 	// Reconcile compares the cache state with the list of pods to identify events that were missed and clean up the dangling interfaces
-	Reconcile(pods []v1.Pod) error
+	Reconcile(pods []v1.Pod) bool
 	// PushENIsToFrontOfDeleteQueue pushes the eni network interfaces to the front of the delete queue
 	PushENIsToFrontOfDeleteQueue(*v1.Pod, []*ENIDetails)
 	// DeleteAllBranchENIs deletes all the branch ENI associated with the trunk and also clears the cool down queue
@@ -158,6 +174,9 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 func PrometheusRegister() {
 	if !prometheusRegistered {
 		metrics.Registry.MustRegister(trunkENIOperationsErrCount)
+		metrics.Registry.MustRegister(branchENIOperationsSuccessCount)
+		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
+
 		prometheusRegistered = true
 	}
 }
@@ -277,7 +296,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 
 // Reconcile reconciles the state from the API Server to the internal cache of EC2 Branch Interfaces, if the controller
 // missed some delete events the reconcile method will perform cleanup for the dangling interfaces
-func (t *trunkENI) Reconcile(pods []v1.Pod) error {
+func (t *trunkENI) Reconcile(pods []v1.Pod) bool {
 	// Perform under lock to block new pods being added/removed concurrently
 	t.lock.Lock()
 	defer t.lock.Unlock()
@@ -288,9 +307,12 @@ func (t *trunkENI) Reconcile(pods []v1.Pod) error {
 		currentPodSet[string(pod.UID)] = isPresent
 	}
 
+	leakedENIs := 0
 	for uid, branchENIs := range t.uidToBranchENIMap {
 		_, exists := currentPodSet[uid]
 		if !exists {
+			leakedENIs += 1
+			branchENIOperationsSuccessCount.WithLabelValues("leaked_branch_enis").Inc()
 			for _, eni := range branchENIs {
 				// Pod could have been deleted recently, set the timestamp to current time as controller is not aware of the actual time.
 				eni.deletionTimeStamp = time.Now()
@@ -298,12 +320,12 @@ func (t *trunkENI) Reconcile(pods []v1.Pod) error {
 			}
 			delete(t.uidToBranchENIMap, uid)
 
-			t.log.Info("deleted pod that doesn't exist anymore", "pod uid", uid,
+			t.log.Info("trunk controller found leaked branch ENI. the controller pushed leaked ENI to delete queue and deleted pod that doesn't exist anymore", "pod uid", uid,
 				"eni", branchENIs)
 		}
 	}
 
-	return nil
+	return leakedENIs > 0
 }
 
 // CreateAndAssociateBranchToTrunk creates a new branch network interface and associates the branch to the trunk
@@ -357,7 +379,10 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		if err != nil {
 			err = fmt.Errorf("creating network interface, %w", err)
 			t.freeVlanId(vlanID)
+			branchENIOperationsFailureCount.WithLabelValues("creating_branch_eni_failed").Inc()
 			break
+		} else {
+			branchENIOperationsSuccessCount.WithLabelValues("created_branch_eni_succeeded").Inc()
 		}
 
 		// Branch ENI can have an IPv4 address, IPv6 address, or both
@@ -391,7 +416,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 
 	t.addBranchToCache(string(pod.UID), newENIs)
 
-	log.V(1).Info("successfully created branch interface/s", "interface/s", newENIs,
+	log.Info("successfully created branch interfaces", "interfaces", newENIs,
 		"security group used", securityGroups)
 
 	return newENIs, nil
@@ -401,6 +426,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 // queue, this is the last API call to the the Trunk ENI before it is removed from cache
 func (t *trunkENI) DeleteAllBranchENIs() {
 	// Delete all the branch used by the pod on this trunk ENI
+	// Since after this call, the trunk will be removed from cache. No need to clean up its branch map
 	for _, podENIs := range t.uidToBranchENIMap {
 		for _, eni := range podENIs {
 			err := t.deleteENI(eni)
@@ -429,8 +455,8 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 
 	branchENIs, isPresent := t.uidToBranchENIMap[UID]
 	if !isPresent {
-		t.log.V(1).Info("failed to find Branch ENI in cache, it could have been released if pod"+
-			"succeeded/failed before being deleted", "uid", UID)
+		t.log.Info("couldn't find Branch ENI in cache, it could have been released if pod"+
+			"succeeded/failed before being deleted", "UID", UID, "BranchENIs", branchENIs)
 		trunkENIOperationsErrCount.WithLabelValues("get_branch_from_cache").Inc()
 		return
 	}
@@ -442,8 +468,8 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 
 	delete(t.uidToBranchENIMap, UID)
 
-	t.log.Info("moved branch network interfaces to delete queue", "interface/s",
-		branchENIs, "uid", UID)
+	t.log.Info("moved branch network interfaces to delete queue", "Interfaces",
+		branchENIs, "UID", UID)
 }
 
 func (t *trunkENI) DeleteCooledDownENIs() {
@@ -477,9 +503,17 @@ func (t *trunkENI) deleteENI(eniDetail *ENIDetails) (err error) {
 	// Delete Branch network interface first
 	err = t.ec2ApiHelper.DeleteNetworkInterface(&eniDetail.ID)
 	if err != nil {
-		trunkENIOperationsErrCount.WithLabelValues("delete_branch").Inc()
-		return err
+		branchENIOperationsFailureCount.WithLabelValues("delete_branch_error").Inc()
+
+		if !strings.Contains(err.Error(), ec2Errors.NotFoundInterfaceID) {
+			t.log.Error(err, "calling EC2 delete API to delete the branch ENI failed", "BranchENI", eniDetail)
+			return err
+		} else {
+			t.log.Info("The branch ENI was not found by EC2. Will not call EC2 for deletion again", "BranchENI", eniDetail, "Error", err.Error())
+		}
 	}
+
+	branchENIOperationsSuccessCount.WithLabelValues("deleted_branch_succesfully").Inc()
 
 	t.log.Info("deleted eni", "eni details", eniDetail)
 
@@ -488,7 +522,7 @@ func (t *trunkENI) deleteENI(eniDetail *ENIDetails) (err error) {
 		t.freeVlanId(eniDetail.VlanID)
 	}
 
-	return
+	return nil
 }
 
 func (t *trunkENI) getBranchInterfaceMap(eniList []*ENIDetails) map[string]*ENIDetails {
@@ -508,39 +542,6 @@ func (t *trunkENI) getBranchInterfacesUsedByPod(pod *v1.Pod) (eniDetails []*ENID
 	if err := json.Unmarshal([]byte(branchAnnotation), &eniDetails); err != nil {
 		t.log.Error(err, "failed to unmarshal resource annotation", "annotation", branchAnnotation)
 	}
-	return
-}
-
-// GetBranchInterfacesFromEC2 returns the list of branch interfaces associated with the trunk ENI. This is not supported
-// yet
-func (t *trunkENI) GetBranchInterfacesFromEC2() (eniDetails []*ENIDetails, err error) {
-	// Get the branch associated with the trunk and store the result in the cache
-	associations, err := t.ec2ApiHelper.DescribeTrunkInterfaceAssociation(&t.trunkENIId)
-	if err != nil {
-		trunkENIOperationsErrCount.WithLabelValues("describe_trunk_assoc").Inc()
-		err = fmt.Errorf("failed to describe associations for trunk %s: %v", t.trunkENIId, err)
-		return
-	}
-
-	// Return if no branches are associated with the trunk
-	if associations == nil || len(associations) == 0 {
-		t.log.V(1).Info("trunk has no associated branch interfaces", "trunk id", t.trunkENIId)
-		return
-	}
-
-	// For each association build the map of branch ENIs with the interface id and the vlan id
-	for _, association := range associations {
-		eniDetail := &ENIDetails{
-			ID:           *association.BranchInterfaceId,
-			VlanID:       int(*association.VlanId),
-			SubnetCIDR:   t.instance.SubnetCidrBlock(),
-			SubnetV6CIDR: t.instance.SubnetV6CidrBlock(),
-		}
-		eniDetails = append(eniDetails, eniDetail)
-	}
-
-	t.log.V(1).Info("loaded trunk associations", "trunk id", t.trunkENIId, "associations", eniDetails)
-
 	return
 }
 

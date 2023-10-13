@@ -178,6 +178,20 @@ func (mr *MockResourceProviderMockRecorder) ProcessAsyncJob(arg0 interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ProcessAsyncJob", reflect.TypeOf((*MockResourceProvider)(nil).ProcessAsyncJob), arg0)
 }
 
+// ReconcileNode mocks base method.
+func (m *MockResourceProvider) ReconcileNode(arg0 string) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReconcileNode", arg0)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// ReconcileNode indicates an expected call of ReconcileNode.
+func (mr *MockResourceProviderMockRecorder) ReconcileNode(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReconcileNode", reflect.TypeOf((*MockResourceProvider)(nil).ReconcileNode), arg0)
+}
+
 // SubmitAsyncJob mocks base method.
 func (m *MockResourceProvider) SubmitAsyncJob(arg0 interface{}) {
 	m.ctrl.T.Helper()
