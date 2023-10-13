@@ -1,6 +1,6 @@
 module github.com/aws/amazon-vpc-resource-controller-k8s
 
-go 1.20
+go 1.21
 
 require (
 	github.com/aws/amazon-vpc-cni-k8s v1.13.4

@@ -12,7 +12,7 @@ MAKEFILE_PATH = $(dir $(realpath -s $(firstword $(MAKEFILE_LIST))))
 VERSION ?= $(GIT_VERSION)
 IMAGE ?= $(REPO):$(VERSION)
 BASE_IMAGE ?= public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-nonroot:latest.2
-BUILD_IMAGE ?= public.ecr.aws/bitnami/golang:1.20.5
+BUILD_IMAGE ?= public.ecr.aws/bitnami/golang:1.21.3
 GOARCH ?= amd64
 PLATFORM ?= linux/amd64
 
