@@ -141,7 +141,7 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 						vpcCniLeakedENICleanupCnt.Inc()
 					default:
 						// We will not hit this case as we only filter for above two tag values, adding it for any future use cases
-						e.Log.Info("found leaked NI not owned by VPC-CNI/VPC-RC")
+						e.Log.Info("found available ENI not created by VPC-CNI/VPC-RC")
 					}
 				}
 
