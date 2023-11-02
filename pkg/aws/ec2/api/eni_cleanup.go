@@ -20,6 +20,8 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
+	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/exp/slices"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -38,6 +40,21 @@ type ENICleaner struct {
 	clusterNameTagKey string
 	ctx               context.Context
 }
+
+var (
+	vpcCniLeakedENICleanupCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "vpc_cni_created_leaked_eni_cleanup_count",
+			Help: "The number of leaked ENIs created by VPC-CNI that is cleaned up by the controller",
+		},
+	)
+	vpcrcLeakedENICleanupCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "vpc_rc_created_leaked_eni_cleanup_count",
+			Help: "The number of leaked ENIs created by VPC-RC that is cleaned up by the controller",
+		},
+	)
+)
 
 func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager, healthzHandler *rcHealthz.HealthzHandler) error {
 	e.clusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
@@ -113,6 +130,21 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 
 		for _, networkInterface := range describeNetworkInterfaceOp.NetworkInterfaces {
 			if _, exists := e.availableENIs[*networkInterface.NetworkInterfaceId]; exists {
+				// Increment promethues metrics for number of leaked ENIs cleaned up
+				if tagIdx := slices.IndexFunc(networkInterface.TagSet, func(tag *ec2.Tag) bool {
+					return *tag.Key == config.NetworkInterfaceOwnerTagKey
+				}); tagIdx != -1 {
+					switch *networkInterface.TagSet[tagIdx].Value {
+					case config.NetworkInterfaceOwnerTagValue:
+						vpcrcLeakedENICleanupCnt.Inc()
+					case config.NetworkInterfaceOwnerVPCCNITagValue:
+						vpcCniLeakedENICleanupCnt.Inc()
+					default:
+						// We will not hit this case as we only filter for above two tag values, adding it for any future use cases
+						e.Log.Info("found leaked NI not owned by VPC-CNI/VPC-RC")
+					}
+				}
+
 				// The ENI in available state has been sitting for at least the eni clean up interval and it should
 				// be removed
 				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
