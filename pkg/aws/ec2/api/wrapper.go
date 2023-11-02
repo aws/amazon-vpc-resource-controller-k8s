@@ -344,7 +344,10 @@ func prometheusRegister() {
 			ec2describeTrunkInterfaceAssociationAPIErrCnt,
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
-			ec2APICallLatencies)
+			ec2APICallLatencies,
+			vpcCniLeakedENICleanupCnt,
+			vpcrcLeakedENICleanupCnt,
+		)
 
 		prometheusRegistered = true
 	}
