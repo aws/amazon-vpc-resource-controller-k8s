@@ -38,7 +38,7 @@ To get the Platform Version of your EKS cluster
 aws eks describe-cluster --name cluster-name --region us-west-2 | jq .cluster.platformVersion
 ```
 
-Your Platform Version should be equal to or greater than Platfrom Version [specified here](https://github.com/aws/amazon-vpc-resource-controller-k8s/releases/tag/v1.1.0).
+Your Platform Version should be equal to or greater than Platform Version [specified here](https://github.com/aws/amazon-vpc-resource-controller-k8s/releases/tag/v1.1.0).
 
 **Resolution**
 
