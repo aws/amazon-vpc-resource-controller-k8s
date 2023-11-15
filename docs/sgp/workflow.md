@@ -3,7 +3,7 @@ This document presents high level workflow diagram for Events associated with No
 
 ## Adding a supported Node to Cluster
 
-Security Group for Pods is suported only on Nitro Based Instnaces.
+Security Group for Pods is supported only on Nitro Based Instances.
 
 ![New Nitro Based Node Create Event Diagram](../images/sgp-node-create.png)
 
