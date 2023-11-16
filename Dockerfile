@@ -34,7 +34,7 @@ RUN GIT_VERSION=$(git describe --tags --always) && \
 FROM $BASE_IMAGE
 
 WORKDIR /
-COPY --from=public.ecr.aws/eks-distro/kubernetes/go-runner:v0.9.0-eks-1-21-4 /usr/local/bin/go-runner /usr/local/bin/go-runner
+COPY --from=public.ecr.aws/eks-distro/kubernetes/go-runner:v0.15.0-eks-1-27-3 /go-runner /usr/local/bin/go-runner
 COPY --from=builder /workspace/controller .
 
 ENTRYPOINT ["/controller"]
