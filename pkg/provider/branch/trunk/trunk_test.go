@@ -21,6 +21,7 @@ import (
 
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_cooldown "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
@@ -216,6 +217,7 @@ func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *m
 	EniDetails2.deleteRetryCount = 0
 
 	return &trunkENI, mockHelper, mockInstance
+
 }
 
 func getMockTrunk() trunkENI {
@@ -448,7 +450,7 @@ func TestTrunkENI_DeleteCooledDownENIs_NoDeletionTimeStamp(t *testing.T) {
 	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
 
 	EniDetails1.deletionTimeStamp = time.Time{}
-	EniDetails2.deletionTimeStamp = time.Now().Add(-time.Second * 34)
+	EniDetails2.deletionTimeStamp = time.Now().Add(-(time.Second * 62))
 	trunkENI.usedVlanIds[VlanId1] = true
 	trunkENI.usedVlanIds[VlanId2] = true
 
@@ -467,7 +469,7 @@ func TestTrunkENI_DeleteCooledDownENIs_CooledDownResource(t *testing.T) {
 	defer ctrl.Finish()
 
 	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
-	EniDetails1.deletionTimeStamp = time.Now().Add(-time.Second * 30)
+	EniDetails1.deletionTimeStamp = time.Now().Add(-time.Second * 60)
 	EniDetails2.deletionTimeStamp = time.Now().Add(-time.Second * 24)
 	trunkENI.usedVlanIds[VlanId1] = true
 	trunkENI.usedVlanIds[VlanId2] = true
@@ -488,14 +490,15 @@ func TestTrunkENI_DeleteCooledDownENIs_DeleteFailed(t *testing.T) {
 	defer ctrl.Finish()
 
 	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
-	EniDetails1.deletionTimeStamp = time.Now().Add(-time.Second * 31)
-	EniDetails2.deletionTimeStamp = time.Now().Add(-time.Second * 32)
+	coolDown := mock_cooldown.NewMockCoolDown(ctrl)
+	EniDetails1.deletionTimeStamp = time.Now().Add(time.Second * 61)
+	EniDetails2.deletionTimeStamp = time.Now().Add(time.Second * 62)
 	trunkENI.usedVlanIds[VlanId1] = true
 	trunkENI.usedVlanIds[VlanId2] = true
 
 	trunkENI.deleteQueue = append(trunkENI.deleteQueue, EniDetails1, EniDetails2)
-
 	gomock.InOrder(
+		coolDown.EXPECT().GetCoolDownPeriod().Return(time.Second*60).AnyTimes(),
 		ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(MockError).Times(MaxDeleteRetries),
 		ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails2.ID).Return(nil),
 	)

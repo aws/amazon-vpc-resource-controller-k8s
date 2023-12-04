@@ -80,6 +80,7 @@ const (
 	KubeSystemNamespace            = "kube-system"
 	VpcCNIDaemonSetName            = "aws-node"
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
+	BranchENICooldownPeriodKey     = "branch-eni-cooldown"
 )
 
 type ResourceType string

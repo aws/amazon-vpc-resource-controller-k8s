@@ -34,6 +34,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
@@ -289,6 +290,9 @@ func main() {
 	// hasPodDataStoreSynced is set to true when the custom controller has synced
 	controllerConditions := condition.NewControllerConditions(
 		ctrl.Log.WithName("controller conditions"), k8sApi, enableWindowsPrefixDelegation)
+
+	// initialize the branch ENI cool down period
+	cooldown.InitCoolDownPeriod(k8sApi, ctrl.Log)
 
 	// when Windows PD feature flag is OFF, do not initialize resource for prefix IPs
 	var supportedResources []string

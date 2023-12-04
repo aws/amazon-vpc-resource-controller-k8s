@@ -22,6 +22,7 @@ import (
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
+	cooldown "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -71,6 +72,17 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			logger.Error(err, "Failed to get configMap")
 			return ctrl.Result{}, err
 		}
+	}
+
+	// Check if branch ENI cooldown period is updated
+	curCoolDownPeriod := cooldown.GetCoolDown().GetCoolDownPeriod()
+	newCoolDownPeriod, err := cooldown.GetVpcCniConfigMapCoolDownPeriodOrDefault(r.K8sAPI, r.Log)
+	if curCoolDownPeriod != newCoolDownPeriod {
+		if err != nil {
+			// If any error, newCoolDownPeriod will be set to the default value
+			r.Log.Info("setting cool down period to default", "cool down period", newCoolDownPeriod)
+		}
+		cooldown.GetCoolDown().SetCoolDownPeriod(newCoolDownPeriod)
 	}
 
 	// Check if the Windows IPAM flag has changed
