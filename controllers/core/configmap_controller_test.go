@@ -23,9 +23,11 @@ import (
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
 	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	cooldown "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -112,6 +114,9 @@ func Test_Reconcile_ConfigMap_Updated(t *testing.T) {
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.MockNodeManager.EXPECT().UpdateNode(mockNodeName).Return(nil)
 
+	mock.MockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil).AnyTimes()
+
+	cooldown.InitCoolDownPeriod(mock.MockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
@@ -125,6 +130,9 @@ func Test_Reconcile_ConfigMap_PD_Disabled_If_IPAM_Disabled(t *testing.T) {
 	mock := NewConfigMapMock(ctrl, mockConfigMapPD)
 	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
 	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
+	mock.MockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil).AnyTimes()
+
+	cooldown.InitCoolDownPeriod(mock.MockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.NoError(t, err)
@@ -142,6 +150,9 @@ func Test_Reconcile_ConfigMap_NoData(t *testing.T) {
 
 	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
 	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
+	mock.MockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil).AnyTimes()
+
+	cooldown.InitCoolDownPeriod(mock.MockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
@@ -154,7 +165,9 @@ func Test_Reconcile_ConfigMap_Deleted(t *testing.T) {
 	mock := NewConfigMapMock(ctrl)
 	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
 	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
+	mock.MockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil).AnyTimes()
 
+	cooldown.InitCoolDownPeriod(mock.MockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
@@ -170,9 +183,23 @@ func Test_Reconcile_UpdateNode_Error(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().ListNodes().Return(nodeList, nil)
 	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.MockNodeManager.EXPECT().UpdateNode(mockNodeName).Return(errMock)
+	mock.MockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil).AnyTimes()
 
+	cooldown.InitCoolDownPeriod(mock.MockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.Error(t, err)
 	assert.Equal(t, res, reconcile.Result{})
 
+}
+
+func createCoolDownMockCM(cooldownTime string) *v1.ConfigMap {
+	return &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      config.VpcCniConfigMapName,
+			Namespace: config.KubeSystemNamespace,
+		},
+		Data: map[string]string{
+			config.BranchENICooldownPeriodKey: cooldownTime,
+		},
+	}
 }

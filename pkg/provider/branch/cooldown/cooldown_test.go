@@ -34,6 +34,11 @@ var (
 		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: config.KubeSystemNamespace},
 		Data:       map[string]string{config.BranchENICooldownPeriodKey: "30"},
 	}
+	mockConfigMap29s = &corev1.ConfigMap{
+		TypeMeta:   metav1.TypeMeta{},
+		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: config.KubeSystemNamespace},
+		Data:       map[string]string{config.BranchENICooldownPeriodKey: "29"},
+	}
 	mockConfigMapNilData = &corev1.ConfigMap{
 		TypeMeta:   metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: config.KubeSystemNamespace},
@@ -83,6 +88,13 @@ func TestCoolDown_InitCoolDownPeriod(t *testing.T) {
 			expectedCoolDown: time.Second * 60,
 			err:              nil,
 		},
+		{
+			// critical check to safeguard the cooldown window. at this moment we don't use any time window less than 30 seconds.
+			name:             "VpcCniConfigMap_Force30s_If_Set_Smaller, verifies cooldown period is set to 30 seconds when setting to less than 30",
+			args:             args{vpcCniConfigMap: mockConfigMap29s},
+			expectedCoolDown: time.Second * 30,
+			err:              nil,
+		},
 	}
 
 	for _, test := range tests {
@@ -93,6 +105,6 @@ func TestCoolDown_InitCoolDownPeriod(t *testing.T) {
 		mockK8sApi := mock_k8s.NewMockK8sWrapper(ctrl)
 		mockK8sApi.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(test.args.vpcCniConfigMap, test.err)
 		InitCoolDownPeriod(mockK8sApi, log)
-		assert.Equal(t, test.expectedCoolDown, coolDown.coolDownPeriod)
+		assert.Equal(t, test.expectedCoolDown, coolDown.GetCoolDownPeriod())
 	}
 }

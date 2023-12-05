@@ -23,9 +23,11 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	cooldown "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -80,9 +82,17 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if curCoolDownPeriod != newCoolDownPeriod {
 		if err != nil {
 			// If any error, newCoolDownPeriod will be set to the default value
-			r.Log.Info("setting cool down period to default", "cool down period", newCoolDownPeriod)
+			r.Log.Info("updating branch ENI cool down period to default", "coolDownPeriod", newCoolDownPeriod)
 		}
+		r.Log.Info("Branch ENI cool down period has been updated", "newCoolDownPeriod", newCoolDownPeriod, "OldCoolDownPeriod", curCoolDownPeriod)
 		cooldown.GetCoolDown().SetCoolDownPeriod(newCoolDownPeriod)
+		utils.SendBroadcastNodeEvent(
+			r.K8sAPI,
+			utils.BranchENICoolDownUpdateReason,
+			fmt.Sprintf("Branch ENI cool down period has been updated to %s", cooldown.GetCoolDown().GetCoolDownPeriod()),
+			v1.EventTypeNormal,
+			r.Log,
+		)
 	}
 
 	// Check if the Windows IPAM flag has changed

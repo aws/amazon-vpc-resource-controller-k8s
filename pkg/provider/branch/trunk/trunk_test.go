@@ -21,9 +21,12 @@ import (
 
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_cooldown "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/cooldown"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 
 	"github.com/aws/aws-sdk-go/aws"
 	awsEc2 "github.com/aws/aws-sdk-go/service/ec2"
@@ -438,6 +441,10 @@ func TestTrunkENI_DeleteCooledDownENIs_NotCooledDown(t *testing.T) {
 	EniDetails2.deletionTimeStamp = time.Now()
 	trunkENI.deleteQueue = append(trunkENI.deleteQueue, EniDetails1, EniDetails2)
 
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
+	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
+
 	trunkENI.DeleteCooledDownENIs()
 	assert.Equal(t, 2, len(trunkENI.deleteQueue))
 }
@@ -459,6 +466,10 @@ func TestTrunkENI_DeleteCooledDownENIs_NoDeletionTimeStamp(t *testing.T) {
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(nil)
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails2.ID).Return(nil)
 
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
+	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
+
 	trunkENI.DeleteCooledDownENIs()
 	assert.Equal(t, 0, len(trunkENI.deleteQueue))
 }
@@ -478,6 +489,10 @@ func TestTrunkENI_DeleteCooledDownENIs_CooledDownResource(t *testing.T) {
 
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(nil)
 
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
+	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
+
 	trunkENI.DeleteCooledDownENIs()
 	assert.Equal(t, 1, len(trunkENI.deleteQueue))
 	assert.Equal(t, EniDetails2, trunkENI.deleteQueue[0])
@@ -491,8 +506,8 @@ func TestTrunkENI_DeleteCooledDownENIs_DeleteFailed(t *testing.T) {
 
 	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
 	coolDown := mock_cooldown.NewMockCoolDown(ctrl)
-	EniDetails1.deletionTimeStamp = time.Now().Add(time.Second * 61)
-	EniDetails2.deletionTimeStamp = time.Now().Add(time.Second * 62)
+	EniDetails1.deletionTimeStamp = time.Now().Add(-time.Second * 61)
+	EniDetails2.deletionTimeStamp = time.Now().Add(-time.Second * 62)
 	trunkENI.usedVlanIds[VlanId1] = true
 	trunkENI.usedVlanIds[VlanId2] = true
 
@@ -502,6 +517,10 @@ func TestTrunkENI_DeleteCooledDownENIs_DeleteFailed(t *testing.T) {
 		ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(MockError).Times(MaxDeleteRetries),
 		ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails2.ID).Return(nil),
 	)
+
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("60"), nil)
+	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 
 	trunkENI.DeleteCooledDownENIs()
 	assert.Zero(t, len(trunkENI.deleteQueue))
@@ -862,4 +881,16 @@ func TestTrunkENI_Introspect(t *testing.T) {
 		InstanceID:     InstanceId,
 		PodToBranchENI: map[string][]ENIDetails{PodUID: {*EniDetails1}}},
 	)
+}
+
+func createCoolDownMockCM(cooldownTime string) *v1.ConfigMap {
+	return &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      config.VpcCniConfigMapName,
+			Namespace: config.KubeSystemNamespace,
+		},
+		Data: map[string]string{
+			config.BranchENICooldownPeriodKey: cooldownTime,
+		},
+	}
 }

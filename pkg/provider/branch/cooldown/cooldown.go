@@ -40,6 +40,7 @@ type CoolDown interface {
 
 const (
 	DefaultCoolDownPeriod = time.Second * 60
+	MinimalCoolDownPeriod = time.Second * 30
 )
 
 // Initialize coolDown period by setting the value in configmap or to default
@@ -49,7 +50,7 @@ func InitCoolDownPeriod(k8sApi k8s.K8sWrapper, log logr.Logger) {
 	if err != nil {
 		log.Info("setting coolDown period to default", "cool down period", coolDownPeriod)
 	}
-	coolDown.coolDownPeriod = coolDownPeriod
+	coolDown.SetCoolDownPeriod(coolDownPeriod)
 }
 
 func GetCoolDown() CoolDown {
@@ -73,8 +74,11 @@ func GetVpcCniConfigMapCoolDownPeriodOrDefault(k8sApi k8s.K8sWrapper, log logr.L
 }
 
 func (c *cooldown) GetCoolDownPeriod() time.Duration {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.coolDownPeriod < 30*time.Second {
+		return MinimalCoolDownPeriod
+	}
 	return c.coolDownPeriod
 }
 
