@@ -70,12 +70,10 @@ func GetVpcCniConfigMapCoolDownPeriodOrDefault(k8sApi k8s.K8sWrapper, log logr.L
 		}
 	}
 	// If configmap not found, or configmap data not found, or error in parsing coolDown period, return default coolDown period and error
-	return DefaultCoolDownPeriod, fmt.Errorf("failed to get coolDown period period:%v", err)
+	return DefaultCoolDownPeriod, fmt.Errorf("failed to get cool down period:%v", err)
 }
 
 func (c *cooldown) GetCoolDownPeriod() time.Duration {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	if c.coolDownPeriod < 30*time.Second {
 		return MinimalCoolDownPeriod
 	}

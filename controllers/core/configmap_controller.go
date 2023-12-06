@@ -91,7 +91,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			)
 		}
 	} else {
-		r.Log.Error(err, "retrieving branch ENI cool down period from configmap failed and will keep the current cooldown time setting.")
+		r.Log.Error(err, "failed to retrieve branch ENI cool down period from amazon-vpc-cni configmap, will retain the current cooldown period", "cool down period", curCoolDownPeriod)
 	}
 
 	// Check if the Windows IPAM flag has changed
