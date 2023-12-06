@@ -78,21 +78,20 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Check if branch ENI cooldown period is updated
 	curCoolDownPeriod := cooldown.GetCoolDown().GetCoolDownPeriod()
-	newCoolDownPeriod, err := cooldown.GetVpcCniConfigMapCoolDownPeriodOrDefault(r.K8sAPI, r.Log)
-	if curCoolDownPeriod != newCoolDownPeriod {
-		if err != nil {
-			// If any error, newCoolDownPeriod will be set to the default value
-			r.Log.Info("updating branch ENI cool down period to default", "coolDownPeriod", newCoolDownPeriod)
+	if newCoolDownPeriod, err := cooldown.GetVpcCniConfigMapCoolDownPeriodOrDefault(r.K8sAPI, r.Log); err == nil {
+		if curCoolDownPeriod != newCoolDownPeriod {
+			r.Log.Info("Branch ENI cool down period has been updated", "newCoolDownPeriod", newCoolDownPeriod, "OldCoolDownPeriod", curCoolDownPeriod)
+			cooldown.GetCoolDown().SetCoolDownPeriod(newCoolDownPeriod)
+			utils.SendBroadcastNodeEvent(
+				r.K8sAPI,
+				utils.BranchENICoolDownUpdateReason,
+				fmt.Sprintf("Branch ENI cool down period has been updated to %s", cooldown.GetCoolDown().GetCoolDownPeriod()),
+				v1.EventTypeNormal,
+				r.Log,
+			)
 		}
-		r.Log.Info("Branch ENI cool down period has been updated", "newCoolDownPeriod", newCoolDownPeriod, "OldCoolDownPeriod", curCoolDownPeriod)
-		cooldown.GetCoolDown().SetCoolDownPeriod(newCoolDownPeriod)
-		utils.SendBroadcastNodeEvent(
-			r.K8sAPI,
-			utils.BranchENICoolDownUpdateReason,
-			fmt.Sprintf("Branch ENI cool down period has been updated to %s", cooldown.GetCoolDown().GetCoolDownPeriod()),
-			v1.EventTypeNormal,
-			r.Log,
-		)
+	} else {
+		r.Log.Error(err, "retrieving branch ENI cool down period from configmap failed and will keep the current cooldown time setting.")
 	}
 
 	// Check if the Windows IPAM flag has changed
