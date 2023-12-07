@@ -28,6 +28,7 @@ const (
 	NodeTrunkFailedInitializationReason = "NodeTrunkFailedInit"
 	EniConfigNameNotFoundReason         = "EniConfigNameNotFound"
 	VersionNotice                       = "ControllerVersionNotice"
+	BranchENICoolDownUpdateReason       = "BranchENICoolDownPeriodUpdated"
 )
 
 func SendNodeEventWithNodeName(client k8s.K8sWrapper, nodeName, reason, msg, eventType string, logger logr.Logger) {
@@ -42,4 +43,14 @@ func SendNodeEventWithNodeName(client k8s.K8sWrapper, nodeName, reason, msg, eve
 
 func SendNodeEventWithNodeObject(client k8s.K8sWrapper, node *v1.Node, reason, msg, eventType string, logger logr.Logger) {
 	client.BroadcastEvent(node, reason, msg, eventType)
+}
+
+func SendBroadcastNodeEvent(client k8s.K8sWrapper, reason, msg, eventType string, logger logr.Logger) {
+	if nodeList, err := client.ListNodes(); err == nil {
+		for _, node := range nodeList.Items {
+			client.BroadcastEvent(&node, reason, msg, eventType)
+		}
+	} else {
+		logger.Info("failed to list nodes when broadcasting node event", "Reason", reason, "Message", msg)
+	}
 }

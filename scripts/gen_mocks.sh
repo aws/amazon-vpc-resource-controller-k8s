@@ -13,6 +13,7 @@ mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/handler/moc
 # package provider mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/provider/mock_provider.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider ResourceProvider
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk/mock_trunk.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk TrunkENI
+mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/cooldown/mock_cooldown.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown CoolDown
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/provider/ip/eni/mock_eni.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni ENIManager
 # package node mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager/mock_manager.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager Manager
