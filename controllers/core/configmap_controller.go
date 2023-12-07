@@ -22,9 +22,12 @@ import (
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
+	cooldown "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -71,6 +74,24 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			logger.Error(err, "Failed to get configMap")
 			return ctrl.Result{}, err
 		}
+	}
+
+	// Check if branch ENI cooldown period is updated
+	curCoolDownPeriod := cooldown.GetCoolDown().GetCoolDownPeriod()
+	if newCoolDownPeriod, err := cooldown.GetVpcCniConfigMapCoolDownPeriodOrDefault(r.K8sAPI, r.Log); err == nil {
+		if curCoolDownPeriod != newCoolDownPeriod {
+			r.Log.Info("Branch ENI cool down period has been updated", "newCoolDownPeriod", newCoolDownPeriod, "OldCoolDownPeriod", curCoolDownPeriod)
+			cooldown.GetCoolDown().SetCoolDownPeriod(newCoolDownPeriod)
+			utils.SendBroadcastNodeEvent(
+				r.K8sAPI,
+				utils.BranchENICoolDownUpdateReason,
+				fmt.Sprintf("Branch ENI cool down period has been updated to %s", cooldown.GetCoolDown().GetCoolDownPeriod()),
+				v1.EventTypeNormal,
+				r.Log,
+			)
+		}
+	} else {
+		r.Log.Error(err, "failed to retrieve branch ENI cool down period from amazon-vpc-cni configmap, will retain the current cooldown period", "cool down period", curCoolDownPeriod)
 	}
 
 	// Check if the Windows IPAM flag has changed

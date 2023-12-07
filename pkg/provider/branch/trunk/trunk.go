@@ -26,6 +26,7 @@ import (
 	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 
 	"github.com/aws/aws-sdk-go/aws"
 	awsEC2 "github.com/aws/aws-sdk-go/service/ec2"
@@ -38,8 +39,6 @@ import (
 const (
 	// MaxAllocatableVlanIds is the maximum number of Vlan Ids that can be allocated per trunk.
 	MaxAllocatableVlanIds = 121
-	// CoolDownPeriod is the period to wait before deleting the branch ENI for propagation of ip tables rule for deleted pod
-	CoolDownPeriod = time.Second * 30
 	// MaxDeleteRetries is the maximum number of times the ENI will be retried before being removed from the delete queue
 	MaxDeleteRetries = 3
 )
@@ -475,7 +474,7 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 func (t *trunkENI) DeleteCooledDownENIs() {
 	for eni, hasENI := t.popENIFromDeleteQueue(); hasENI; eni, hasENI = t.popENIFromDeleteQueue() {
 		if eni.deletionTimeStamp.IsZero() ||
-			time.Now().After(eni.deletionTimeStamp.Add(CoolDownPeriod)) {
+			time.Now().After(eni.deletionTimeStamp.Add(cooldown.GetCoolDown().GetCoolDownPeriod())) {
 			err := t.deleteENI(eni)
 			if err != nil {
 				eni.deleteRetryCount++
