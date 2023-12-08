@@ -21,6 +21,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
 	sgpWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
@@ -321,7 +322,7 @@ func VerifyJobNetworkingRemovedOnCompletion(jobs map[string][]*batchV1.Job,
 
 	By("waiting for the ENI to be cooled down and deleted")
 	// Need to account for actual deletion of ENI + Cool down Period
-	time.Sleep(config.CoolDownPeriod * 2)
+	time.Sleep(cooldown.DefaultCoolDownPeriod * 2)
 
 	By("verifying the deleted Pod have their ENI deleted")
 	verify.VerifyPodENIDeletedForAllPods(namespace, podLabelKey, podLabelVal)
