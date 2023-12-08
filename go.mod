@@ -25,6 +25,8 @@ require (
 	sigs.k8s.io/controller-runtime v0.15.1
 )
 
+require github.com/google/gnostic v0.6.9 // indirect
+
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
