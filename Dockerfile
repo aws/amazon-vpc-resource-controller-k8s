@@ -1,6 +1,6 @@
 ARG BASE_IMAGE
 ARG BUILD_IMAGE
-ARG ARCH=amd64
+ARG ARCH
 # Build the controller binary
 FROM $BUILD_IMAGE as builder
 
@@ -24,11 +24,12 @@ COPY webhooks/ webhooks/
 
 # Version package for passing the ldflags
 ENV VERSION_PKG=github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version
+ENV GOARCH $ARCH
 # Build
 RUN GIT_VERSION=$(git describe --tags --always) && \
         GIT_COMMIT=$(git rev-parse HEAD) && \
         BUILD_DATE=$(date +%Y-%m-%dT%H:%M:%S%z) && \
-        CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} GO111MODULE=on go build \
+        CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build \
         -ldflags="-X ${VERSION_PKG}.GitVersion=${GIT_VERSION} -X ${VERSION_PKG}.GitCommit=${GIT_COMMIT} -X ${VERSION_PKG}.BuildDate=${BUILD_DATE}" -a -o controller main.go
 
 FROM $BASE_IMAGE
