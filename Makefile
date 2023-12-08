@@ -73,7 +73,7 @@ docker-buildx: check-env test
 
 # Build the docker image
 docker-build: check-env test
-	docker build --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) . -t ${IMAGE}
+	docker build --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg ARCH=$(GOARCH) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) . -t ${IMAGE}
 
 # Push the docker image
 docker-push: check-env
