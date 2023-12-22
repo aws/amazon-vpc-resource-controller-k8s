@@ -161,6 +161,7 @@ containers:
   - name: ENABLE_POD_ENI
     value: "true" 
 ```
+If you are using ConfigMaps that are referred from VPC CNI containers' `env`, you need have the same key/value pair setup in the referred ConfigMap.
 
 **Resolution**
 If the environment variable is not set,
@@ -168,15 +169,29 @@ If the environment variable is not set,
 - Follow the guide to [enable SGP feature](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html).
 
 ### Verify Trunk ENI is created
+Get the EKS managed CRD CNINode
+```
+kubectl get cninode <NODDE_NAME>
+```
+The CNINode's FEATURE column should have
+```
+[{"name":"SecurityGroupsForPods"}]
+```
 
-Describe the Node,
+Alternatively, you can check node for further confirming.
+Describe the Node
 ```
-kubectl describe node node-name
+kubectl describe node <NODE_NAME>
 ```
 
-The following label will be set if Trunk ENI is created,
+The following annotation will be added in node's `Capacity` and `Allocatable` if Trunk ENI is created successfully
 ```
-Labels:             vpc.amazonaws.com/has-trunk-attached=true
+vpc.amazonaws.com/pod-eni:  9 (could be other values depending on your instance type)
+```
+
+Your node should also receive an event like the following:
+```
+Normal  NodeTrunkInitiated       5m12s  vpc-resource-controller  The node has trunk interface initialized successfully
 ```
 
 **Resolution**
