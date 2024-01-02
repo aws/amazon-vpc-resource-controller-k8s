@@ -3,13 +3,13 @@ module github.com/aws/amazon-vpc-resource-controller-k8s
 go 1.21
 
 require (
-	github.com/aws/amazon-vpc-cni-k8s v1.15.3
+	github.com/aws/amazon-vpc-cni-k8s v1.16.0
 	github.com/aws/aws-sdk-go v1.49.13
 	github.com/go-logr/logr v1.3.0
 	github.com/go-logr/zapr v1.2.4
 	github.com/golang/mock v1.6.0
 	github.com/google/uuid v1.5.0
-	github.com/onsi/ginkgo/v2 v2.13.0
+	github.com/onsi/ginkgo/v2 v2.13.2
 	github.com/onsi/gomega v1.30.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.17.0
@@ -65,10 +65,10 @@ require (
 	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0
 	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/oauth2 v0.12.0 // indirect
-	golang.org/x/sys v0.13.0 // indirect
-	golang.org/x/term v0.13.0 // indirect
-	golang.org/x/text v0.13.0 // indirect
-	golang.org/x/tools v0.12.1-0.20230815132531-74c255bcf846 // indirect
+	golang.org/x/sys v0.15.0 // indirect
+	golang.org/x/term v0.15.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/tools v0.14.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/protobuf v1.31.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
