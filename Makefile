@@ -38,7 +38,7 @@ verify:
 
 ## Run unit tests
 test: verify
-	go test ./pkg/... ./controllers/... ./webhooks/... -coverprofile cover.out
+	go test -race ./pkg/... ./controllers/... ./webhooks/... -coverprofile cover.out
 
 test-e2e:
 	KUBE_CONFIG_PATH=${KUBE_CONFIG_PATH} REGION=${AWS_REGION} CLUSTER_NAME=${CLUSTER_NAME} ./scripts/test/run-integration-tests.sh
