@@ -16,6 +16,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,15 +35,18 @@ var (
 	maxRequeue                      = 3
 )
 
+var mu sync.RWMutex
+
 func GetMockWorkerPool(ctx context.Context) Worker {
 	log := zap.New(zap.UseDevMode(true)).WithValues("worker resource Id", resourceName)
 	return NewDefaultWorkerPool(resourceName, workerCount, maxRequeue, log, ctx)
 }
 
 func MockWorkerFunc(job interface{}) (result ctrl.Result, err error) {
+	mu.Lock()
+	defer mu.Unlock()
 	v := job.(*int)
 	*v++
-	time.Sleep(time.Millisecond * mockTimeToProcessWorkerFunc)
 
 	return ctrl.Result{}, nil
 }
@@ -75,8 +79,11 @@ func TestWorker_SubmitJob(t *testing.T) {
 	time.Sleep(time.Millisecond * (mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Duration(jobCount))
 
 	// Verify job completed.
-	assert.Equal(t, job1, 1)
-	assert.Equal(t, job2, 1)
+	mu.RLock()
+	defer mu.RUnlock()
+	for _, j := range []int{job1, job2} {
+		assert.Equal(t, j, 1)
+	}
 }
 
 func TestWorker_SubmitJob_RequeueOnError(t *testing.T) {
@@ -84,6 +91,8 @@ func TestWorker_SubmitJob_RequeueOnError(t *testing.T) {
 	defer cancel()
 
 	workerFunc := func(job interface{}) (result ctrl.Result, err error) {
+		mu.Lock()
+		defer mu.Unlock()
 		invoked := job.(*int)
 		*invoked++
 
@@ -100,7 +109,9 @@ func TestWorker_SubmitJob_RequeueOnError(t *testing.T) {
 	time.Sleep((mockTimeToProcessWorkerFunc + bufferTimeBwWorkerFuncExecution) * time.Millisecond * time.Duration(maxRequeue))
 
 	// expected invocation = max requeue + the first invocation
+	mu.RLock()
 	assert.Equal(t, maxRequeue+1, invoked)
+	mu.RUnlock()
 }
 
 func TestWorker_SubmitJob_NotRequeueOnError(t *testing.T) {
@@ -108,6 +119,8 @@ func TestWorker_SubmitJob_NotRequeueOnError(t *testing.T) {
 	defer cancel()
 
 	workerFunc := func(job interface{}) (result ctrl.Result, err error) {
+		mu.Lock()
+		defer mu.Unlock()
 		invoked := job.(*int)
 		*invoked++
 
@@ -127,5 +140,7 @@ func TestWorker_SubmitJob_NotRequeueOnError(t *testing.T) {
 	actualInqueue := 1
 	// invoked should be only incremented once
 	assert.NotEqual(t, maxRequeue, actualInqueue)
+	mu.RLock()
 	assert.Equal(t, actualInqueue, invoked)
+	mu.RUnlock()
 }
