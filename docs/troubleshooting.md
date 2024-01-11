@@ -14,6 +14,8 @@
   - [Verify Pod has the resource limit](#verify-pod-has-the-resource-limit)
   - [Verify Pod has the pod-eni annotation](#verify-pod-has-the-pod-eni-annotation)
   - [Check Issues with VPC CNI](#check-issues-with-vpc-cni)
+  - [Connection timeouts](#connection-timeouts)
+  - [IP starvation issue](#ip-starvation-issue)
 - [Troubleshooting Prefix Delegation for Windows](#troubleshooting-prefix-delegation-for-windows)
   - [Verify Windows prefix delegation is enabled in the ConfigMap](#verify-windows-prefix-delegation-is-enabled-in-the-configmap)
   - [Check both pod events and node events for any specific error](#check-both-pod-events-and-node-events-for-any-specific-error)
@@ -271,6 +273,31 @@ If the Pod is still stuck in `ContainerCreating` you can,
 - Fetch more detailed logs on the Host using the [EKS Log collector script](https://github.com/awslabs/amazon-eks-ami/tree/master/log-collector-script/linux#readme)
 - Check the CNI Logs from the collected logs.
 - Open an [Issue](https://github.com/aws/amazon-vpc-resource-controller-k8s/issues/new/choose) in this repository if the problem still persists.
+
+### Connection Timeouts
+
+If you observe connection failures like intermittent DNS timeouts on pods using security groups, you might need to update the branch ENI cooldown period or kernel ARP cache timeout so the **values are equal**. Else this could result in re-use of IP address of a recently terminated pod by a new pod before the kernel's ARP cache is updated, which causes DNS failures or general packet drops.
+
+The branch ENI cooldown period is the period of time to wait before deleting the branch ENI for propagation of iptables rules for the deleted pod. This can be set on the `amazon-vpc-cni` configmap. See more details [here](../docs/sgp/sgp_config_options.md).
+
+To update the kernel ARP cache timeout, set the following parameters for each existing interface on the node. If the branch ENI cooldown period is 30s, set: 
+```
+sudo sysctl -w net.ipv4.neigh.eth0.gc_stale_time=30
+sudo sysctl -w net.ipv4.neigh.eth0.base_reachable_time_ms=15000
+```
+
+Also set the default so all new interfaces created are configured with these values:
+```
+sudo sysctl -w net.ipv4.neigh.default.gc_stale_time=30
+sudo sysctl -w net.ipv4.neigh.default.base_reachable_time_ms=15000
+```
+
+### IP starvation issue
+
+If the pods are not `Running` due to IP addresses being unavailable, but you have few pods running and expect to have IP address available, tune the branch ENI cooldown period accordingly. 
+The branch ENI cooldown period is the period of time to wait before deleting the branch ENI for propagation of iptables rules for the deleted pod. The default value is 60s, so IP addresses are not released for atleast 60s. This can be configured via the `amazon-vpc-cni` configmap as described [here](../docs/sgp/sgp_config_options.md). Note that the minimum cooldown period is 30s.
+
+Be sure to also update the kernel ARP cache timeouts if you notice DNS issues as outlined in the [above section](#intermittent-dns-failures).
 
 ## Troubleshooting Prefix Delegation for Windows
 Please follow the troubleshooting steps here for issues with Windows Node and Pods when using `prefix delegation` mode.

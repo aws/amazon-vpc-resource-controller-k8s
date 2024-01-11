@@ -7,10 +7,10 @@ Security Group for Pods is supported only on Nitro Based Instances.
 
 ![New Nitro Based Node Create Event Diagram](../images/sgp-node-create.png)
 
-1. User adds a new supported Node or enables ENI Trunking with existing nodes present in the cluster.
-2. VPC CNI Plugin adds label `vpc.amazonaws.com/has-trunk-attached: false` if the Node has capacity to create 1 additional ENI.
-3. Controller watches for Node events and acts on node with the above label by creating a Trunk ENI. 
-4. Controller updates the resource capacity on this node to `vpc.amazonaws.com/pod-eni: # Supported Branch ENI`.
+1. User adds a new supported node or enables ENI Trunking with existing nodes present in the cluster.
+2. VPC CNI Plugin updates EKS-managed CRD `CNINode <NODE-NAME>` to add feature `SecurityGroupsForPods` if the node has capacity to create 1 additional ENI.
+3. Controller watches for node events and acts on node if the feature is added in `CNINode` CRD by creating a Trunk ENI. 
+4. Controller updates the resource capacity on this node to `vpc.amazonaws.com/pod-eni: # Supported Branch ENI`. Controller also publishes an event on the node upon successful trunk ENI creation. 
 
 ## Creating a Pod using Security Groups
 
