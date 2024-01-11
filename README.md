@@ -40,6 +40,10 @@ The controller supports the following modes for IPv4 address management on Windo
 
 Please follow this [guide](https://docs.aws.amazon.com/eks/latest/userguide/windows-support.html) for enabling Windows Support on your EKS cluster.
 
+## Configuring the controller via amazon-vpc-cni configmap
+
+The controller supports various configuration options for managing security groups for pods and Windows nodes which can be set via the EKS-managed configmap `amazon-vpc-cni`. For more details, refer to the security group for pods configuration options [here](docs/sgp/sgp_config_options.md) and Windows IPAM/PD related configuration options [here](docs/windows/prefix_delegation_config_options.md)
+
 ## Troubleshooting
 For troubleshooting issues related to Security group for pods or Windows IPv4 address management, please visit our troubleshooting guide [here](docs/troubleshooting.md).
 
