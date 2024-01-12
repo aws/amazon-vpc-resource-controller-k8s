@@ -14,3 +14,13 @@ metadata:
   name: amazon-vpc-cni
   namespace: kube-system
 ```
+
+After changing the value of `branch-eni-cooldown`, you can verify if the change has been applied by the controller. You need describe any node in your cluster and check node events in Events list. Note: this value is applied to the cluster instead of only certain nodes.
+
+For example, after setting the value to `90`, the change will be reflected immediately in node events:
+```
+Events:
+  Type    Reason                          Age   From                     Message
+  ----    ------                          ----  ----                     -------
+  Normal  BranchENICoolDownPeriodUpdated  18s   vpc-resource-controller  Branch ENI cool down period has been updated to 1m30s
+```
