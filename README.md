@@ -8,6 +8,8 @@
 
 Controller running on EKS Control Plane for managing Branch & Trunk Network Interface for [Kubernetes Pod](https://kubernetes.io/docs/concepts/workloads/pods/) using the [Security Group for Pod](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) feature and IPv4 Address Management(IPAM) of [Windows Nodes](https://docs.aws.amazon.com/eks/latest/userguide/windows-support.html).
 
+The controller broadcasts its version to nodes. Describing any node will provide the version information in node `Events`. The mapping between the controller's version and the cluster's platform version is also available in release notes.
+
 ## Security Group for Pods
 
 The controller only manages the Trunk/Branch Network Interface for EKS Cluster using the Security Group for Pods feature. The Networking on the host is setup by [amazon-vpc-cni-k8s](https://github.com/aws/amazon-vpc-cni-k8s) plugin.
