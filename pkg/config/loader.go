@@ -26,7 +26,7 @@ const (
 	WorkQueueDefaultMaxRetries = 5
 
 	// Default Configuration for Pod ENI resource type
-	PodENIDefaultWorker = 20
+	PodENIDefaultWorker = 30
 
 	// Default Configuration for IPv4 resource type
 	IPv4DefaultWorker  = 2
