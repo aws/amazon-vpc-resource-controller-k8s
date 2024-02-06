@@ -108,7 +108,7 @@ func main() {
 	var enableWindowsPrefixDelegation bool
 	var region string
 
-	flag.StringVar(&metricsAddr, "metrics-addr", ":8080",
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to.")
 	flag.StringVar(&roleARN, "role-arn", "",
 		"Role ARN that will be assumed to make EC2 API calls "+
@@ -116,7 +116,7 @@ func main() {
 			"controller on your worker node.")
 	flag.StringVar(&logLevel, "log-level", "info",
 		"Set the controller log level - info(default), debug")
-	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
+	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.IntVar(&leaderLeaseDurationSeconds, "leader-lease-duration-seconds", 30,

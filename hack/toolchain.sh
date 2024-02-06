@@ -10,8 +10,8 @@ main() {
 }
 
 tools() {
-    go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20220421205612-c162794a9b12
-    go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.6.2
+    go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+    go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.9.0
     go install github.com/google/ko@latest
 
     if ! echo "$PATH" | grep -q "${GOPATH:-undefined}/bin\|$HOME/go/bin"; then
