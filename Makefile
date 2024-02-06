@@ -28,7 +28,7 @@ verify:
 	go generate ./...
 	go vet ./...
 	go fmt ./...
-	controller-gen crd:trivialVersions=true rbac:roleName=controller-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	controller-gen crd rbac:roleName=controller-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 	controller-gen object:headerFile="scripts/templates/boilerplate.go.txt" paths="./..."
 	@git diff --quiet ||\
 	{ echo "New file modification detected in the Git working tree. Please check in before commit."; git --no-pager diff --name-only | uniq | awk '{print "  - " $$0}'; \
@@ -50,7 +50,7 @@ toolchain: ## Install developer toolchain
 	./hack/toolchain.sh
 
 apply: image check-deployment-env check-env ## Deploy controller to ~/.kube/config
-	eksctl create iamserviceaccount vpc-resource-controller --namespace kube-system --cluster ${CLUSTER_NAME} \
+	eksctl create iamserviceaccount vpc-resource-controller --namespace kube-system --cluster ${CLUSTER_NAME} --region ${AWS_REGION} \
 		--role-name VPCResourceControllerRole \
 		--attach-policy-arn=arn:aws:iam::aws:policy/AdministratorAccess \
 		--override-existing-serviceaccounts \
@@ -63,7 +63,7 @@ apply: image check-deployment-env check-env ## Deploy controller to ~/.kube/conf
 
 delete: ## Delete controller from ~/.kube/config
 	kustomize build config/default | kubectl delete --ignore-not-found -f -
-	eksctl delete iamserviceaccount vpc-resource-controller --namespace kube-system --cluster ${CLUSTER_NAME}
+	eksctl delete iamserviceaccount vpc-resource-controller --namespace kube-system --cluster ${CLUSTER_NAME} --region ${AWS_REGION}
 	kubectl patch rolebinding eks-vpc-resource-controller-rolebinding -n kube-system --patch '{"subjects":[{"kind":"ServiceAccount","name":"eks-vpc-resource-controller","namespace":"kube-system"},{"apiGroup":"rbac.authorization.k8s.io","kind":"User","name":"eks:vpc-resource-controller"}]}'
 	kubectl create clusterrolebinding vpc-resource-controller-rolebinding --clusterrole vpc-resource-controller-role --serviceaccount kube-system:eks-vpc-resource-controller --user eks:vpc-resource-controller
 
