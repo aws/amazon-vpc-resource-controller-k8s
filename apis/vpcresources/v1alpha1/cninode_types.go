@@ -39,8 +39,7 @@ type CNINodeSpec struct {
 
 // CNINodeStatus defines the managed VPC resources.
 type CNINodeStatus struct {
-	//TODO: add VPS resources which will be managed by this CRD and its finalizer
-
+	//TODO: add VPC resources which will be managed by this CRD and its finalizer
 }
 
 // +kubebuilder:object:root=true

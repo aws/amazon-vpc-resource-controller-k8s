@@ -95,7 +95,7 @@ func ensureControllerReadyTobeScraped() error {
 		// If the metrics endpoint is not created, we should create it for following tests.
 		newController := deployment.DeepCopy()
 		newController.Spec.Template.Spec.Containers[0].Args = append(
-			newController.Spec.Template.Spec.Containers[0].Args, "--metrics-addr=:8443")
+			newController.Spec.Template.Spec.Containers[0].Args, "--metrics-bind-address=:8443")
 		port := v1.ContainerPort{
 			Name:          "metrics",
 			ContainerPort: 8443,

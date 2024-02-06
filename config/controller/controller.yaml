@@ -31,8 +31,8 @@ spec:
       - args:
           - --cluster-name=CLUSTER_NAME
           - --role-arn=USER_ROLE_ARN
-          - --enable-leader-election
-          - --metrics-addr=:8443
+          - --leader-elect
+          - --metrics-bind-address=:8443
         image: controller:latest
         name: controller
         resources:
