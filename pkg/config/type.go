@@ -73,9 +73,14 @@ const (
 	VpcCniConfigMapName              = "amazon-vpc-cni"
 	EnableWindowsIPAMKey             = "enable-windows-ipam"
 	EnableWindowsPrefixDelegationKey = "enable-windows-prefix-delegation"
-	WarmPrefixTarget                 = "warm-prefix-target"
-	WarmIPTarget                     = "warm-ip-target"
-	MinimumIPTarget                  = "minimum-ip-target"
+	// TODO: we will deprecate the confusing naming of Windows flags eventually
+	WarmPrefixTarget = "warm-prefix-target"
+	WarmIPTarget     = "warm-ip-target"
+	MinimumIPTarget  = "minimum-ip-target"
+	// these windows prefixed flags will be used for Windows support only eventully
+	WinWarmPrefixTarget = "windows-warm-prefix-target"
+	WinWarmIPTarget     = "windows-warm-ip-target"
+	WinMinimumIPTarget  = "windows-minimum-ip-target"
 	// Since LeaderElectionNamespace and VpcCniConfigMapName may be different in the future
 	KubeSystemNamespace            = "kube-system"
 	VpcCNIDaemonSetName            = "aws-node"

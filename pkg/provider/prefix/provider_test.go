@@ -22,9 +22,9 @@ import (
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/pool"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/ip/eni"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
+	mock_pool "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/pool"
+	mock_eni "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/ip/eni"
+	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
@@ -65,6 +65,16 @@ var (
 			config.WarmIPTarget:                     strconv.Itoa(config.IPv4PDDefaultWarmIPTargetSize),
 			config.MinimumIPTarget:                  strconv.Itoa(config.IPv4PDDefaultMinIPTargetSize),
 			config.WarmPrefixTarget:                 strconv.Itoa(config.IPv4PDDefaultWarmPrefixTargetSize),
+		},
+	}
+
+	vpcCNIConfigWindows = &v1.ConfigMap{
+		Data: map[string]string{
+			config.EnableWindowsIPAMKey:             "true",
+			config.EnableWindowsPrefixDelegationKey: "true",
+			config.WinWarmIPTarget:                  strconv.Itoa(config.IPv4PDDefaultWarmIPTargetSize),
+			config.WinMinimumIPTarget:               strconv.Itoa(config.IPv4PDDefaultMinIPTargetSize),
+			config.WinWarmPrefixTarget:              strconv.Itoa(config.IPv4PDDefaultWarmPrefixTargetSize),
 		},
 	}
 
@@ -386,23 +396,25 @@ func TestIPv4PrefixProvider_UpdateResourceCapacity_FromFromIPToPD(t *testing.T) 
 		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
 		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
 
-	mockK8sWrapper.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(vpcCNIConfig, nil)
-	mockPool := mock_pool.NewMockPool(ctrl)
-	mockManager := mock_eni.NewMockENIManager(ctrl)
-	prefixProvider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, true)
-	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
+	for _, c := range []*v1.ConfigMap{vpcCNIConfig, vpcCNIConfigWindows} {
+		mockK8sWrapper.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(c, nil)
+		mockPool := mock_pool.NewMockPool(ctrl)
+		mockManager := mock_eni.NewMockENIManager(ctrl)
+		prefixProvider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, true)
+		mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
 
-	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
-	mockPool.EXPECT().SetToActive(pdWarmPoolConfig).Return(job)
-	mockWorker.EXPECT().SubmitJob(job)
+		job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
+		mockPool.EXPECT().SetToActive(pdWarmPoolConfig).Return(job)
+		mockWorker.EXPECT().SubmitJob(job)
 
-	mockInstance.EXPECT().Name().Return(nodeName).Times(2)
-	mockInstance.EXPECT().Type().Return(instanceType)
-	mockInstance.EXPECT().Os().Return(config.OSWindows)
-	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 224).Return(nil)
+		mockInstance.EXPECT().Name().Return(nodeName).Times(2)
+		mockInstance.EXPECT().Type().Return(instanceType)
+		mockInstance.EXPECT().Os().Return(config.OSWindows)
+		mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 224).Return(nil)
 
-	err := prefixProvider.UpdateResourceCapacity(mockInstance)
-	assert.NoError(t, err)
+		err := prefixProvider.UpdateResourceCapacity(mockInstance)
+		assert.NoError(t, err)
+	}
 }
 
 // TestIPv4PrefixProvider_UpdateResourceCapacity_FromFromPDToIP tests the warm pool is drained when PD is disabled
@@ -449,21 +461,23 @@ func TestIPv4PrefixProvider_UpdateResourceCapacity_FromPDToPD(t *testing.T) {
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
 	prefixProvider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, true)
-	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
 
-	mockK8sWrapper.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(vpcCNIConfig, nil)
+	for _, c := range []*v1.ConfigMap{vpcCNIConfig, vpcCNIConfigWindows} {
+		mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
+		mockK8sWrapper.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(c, nil)
 
-	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
-	mockPool.EXPECT().SetToActive(pdWarmPoolConfig).Return(job)
-	mockWorker.EXPECT().SubmitJob(job)
+		job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
+		mockPool.EXPECT().SetToActive(pdWarmPoolConfig).Return(job)
+		mockWorker.EXPECT().SubmitJob(job)
 
-	mockInstance.EXPECT().Name().Return(nodeName).Times(2)
-	mockInstance.EXPECT().Type().Return(instanceType)
-	mockInstance.EXPECT().Os().Return(config.OSWindows)
-	mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 224).Return(nil)
+		mockInstance.EXPECT().Name().Return(nodeName).Times(2)
+		mockInstance.EXPECT().Type().Return(instanceType)
+		mockInstance.EXPECT().Os().Return(config.OSWindows)
+		mockK8sWrapper.EXPECT().AdvertiseCapacityIfNotSet(nodeName, config.ResourceNameIPAddress, 224).Return(nil)
 
-	err := prefixProvider.UpdateResourceCapacity(mockInstance)
-	assert.NoError(t, err)
+		err := prefixProvider.UpdateResourceCapacity(mockInstance)
+		assert.NoError(t, err)
+	}
 }
 
 // TestIPv4PrefixProvider_UpdateResourceCapacity_FromIPToIP tests the resource capacity is not updated when secondary IP mode stays enabled
@@ -539,10 +553,12 @@ func TestGetPDWarmPoolConfig(t *testing.T) {
 		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
 		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
 
-	mockK8sWrapper.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(vpcCNIConfig, nil)
+	for _, c := range []*v1.ConfigMap{vpcCNIConfig, vpcCNIConfigWindows} {
+		mockK8sWrapper.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(c, nil)
 
-	config := prefixProvider.getPDWarmPoolConfig()
-	assert.Equal(t, pdWarmPoolConfig, config)
+		config := prefixProvider.getPDWarmPoolConfig()
+		assert.Equal(t, pdWarmPoolConfig, config)
+	}
 }
 
 // TestIsInstanceSupported tests that if the instance type is nitro, return true
