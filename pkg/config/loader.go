@@ -92,8 +92,17 @@ func ParseWinPDTargets(log logr.Logger, vpcCniConfigMap *v1.ConfigMap) (warmIPTa
 	}
 
 	warmIPTargetStr, foundWarmIP := vpcCniConfigMap.Data[WarmIPTarget]
+	if !foundWarmIP {
+		warmIPTargetStr, foundWarmIP = vpcCniConfigMap.Data[WinWarmIPTarget]
+	}
 	minIPTargetStr, foundMinIP := vpcCniConfigMap.Data[MinimumIPTarget]
+	if !foundMinIP {
+		minIPTargetStr, foundMinIP = vpcCniConfigMap.Data[WinMinimumIPTarget]
+	}
 	warmPrefixTargetStr, foundWarmPrefix := vpcCniConfigMap.Data[WarmPrefixTarget]
+	if !foundWarmPrefix {
+		warmPrefixTargetStr, foundWarmPrefix = vpcCniConfigMap.Data[WinWarmPrefixTarget]
+	}
 
 	// If no configuration is found, return 0
 	if !foundWarmIP && !foundMinIP && !foundWarmPrefix {
