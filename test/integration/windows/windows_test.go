@@ -285,6 +285,7 @@ var _ = Describe("Windows Integration Test", func() {
 				})
 			})
 
+			// TODO: remove this context when VPC CNI also updates the flag name to windows prefixed.
 			Context("When warm-prefix-target is set to 2", Label("warm-prefix-target"), func() {
 				BeforeEach(func() {
 					data = map[string]string{
@@ -316,6 +317,7 @@ var _ = Describe("Windows Integration Test", func() {
 				})
 			})
 
+			// TODO: remove this context when VPC CNI also updates the flag name to windows prefixed.
 			Context("When warm-ip-target is set to 15", Label("warm-ip-target"), func() {
 				BeforeEach(func() {
 					data = map[string]string{
@@ -362,6 +364,7 @@ var _ = Describe("Windows Integration Test", func() {
 				})
 			})
 
+			// TODO: remove this context when VPC CNI also updates the flag name to windows prefixed.
 			Context("When minimum-ip-target is set to 20", Label("minimum-ip-target"), func() {
 				BeforeEach(func() {
 					data = map[string]string{
@@ -370,6 +373,137 @@ var _ = Describe("Windows Integration Test", func() {
 						config.MinimumIPTarget:                  "20"}
 				})
 				It("should have 2 prefixes to satisfy minimum-ip-target when no pods running", func() {
+					By("adding labels to selected nodes for testing")
+					node := windowsNodeList.Items[0]
+					err = frameWork.NodeManager.AddLabels([]v1.Node{node}, map[string]string{podLabelKey: podLabelVal})
+					Expect(err).ToNot(HaveOccurred())
+
+					// allow some time for previous test pod to cool down
+					time.Sleep(bufferForCoolDown)
+					// before running any pod, should have 2 prefixes assigned
+					instanceID = manager.GetNodeInstanceID(&node)
+					privateIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesBefore)).To(Equal(2))
+
+					By("creating 33 pods and waiting for ready should have 3 prefixes attached")
+					deployment := manifest.NewWindowsDeploymentBuilder().
+						Replicas(33).
+						Container(manifest.NewWindowsContainerBuilder().Build()).
+						PodLabel(podLabelKey, podLabelVal).
+						NodeSelector(map[string]string{"kubernetes.io/os": "windows", podLabelKey: podLabelVal}).
+						Build()
+					_, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReady(ctx, deployment)
+					Expect(err).ToNot(HaveOccurred())
+
+					_, prefixesAfterDeployment, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesAfterDeployment)).To(Equal(3))
+
+					By("deleting 33 pods should still have 2 prefixes attached")
+					err = frameWork.DeploymentManager.DeleteAndWaitUntilDeploymentDeleted(ctx, deployment)
+					Expect(err).ToNot(HaveOccurred())
+
+					// allow some time for previous test pods to cool down since deletion of deployment doesn't wait for pods to terminate
+					time.Sleep(utils.WindowsPodsDeletionTimeout)
+					privateIPsAfter, prefixesAfterDelete, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesAfterDelete)).To(Equal(2))
+					// number of secondary ips should not change
+					Expect(len(privateIPsBefore)).To(Equal(len(privateIPsAfter)))
+
+					By("removing labels on selected nodes for testing")
+					err = frameWork.NodeManager.RemoveLabels([]v1.Node{node}, map[string]string{podLabelKey: podLabelVal})
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			Context("When windows-warm-prefix-target is set to 2", Label("windows-warm-prefix-target"), func() {
+				BeforeEach(func() {
+					data = map[string]string{
+						config.EnableWindowsIPAMKey:             "true",
+						config.EnableWindowsPrefixDelegationKey: "true",
+						config.WinWarmPrefixTarget:              "2"}
+
+				})
+
+				It("two prefixes should be assigned", func() {
+					// allow some time for previous test pod to cool down
+					time.Sleep(bufferForCoolDown)
+					_, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesBefore)).To(Equal(2))
+
+					By("creating pod and waiting for ready should have 1 new prefix assigned")
+					// verify if ip assigned is coming from a prefix
+					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesBefore)
+
+					// number of prefixes should increase by 1 since need 1 more prefix to fulfill warm-prefix-target of 2
+					_, prefixesAfter, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesAfter) - len(prefixesBefore)).To(Equal(1))
+
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			Context("When windows-warm-ip-target is set to 15", Label("windows-warm-ip-target"), func() {
+				BeforeEach(func() {
+					data = map[string]string{
+						config.EnableWindowsIPAMKey:             "true",
+						config.EnableWindowsPrefixDelegationKey: "true",
+						config.WinWarmIPTarget:                  "15"}
+				})
+				It("should assign new prefix when 2nd pod is launched", func() {
+					// allow some time for previous test pod to cool down
+					time.Sleep(bufferForCoolDown)
+					// before running any pod, should have 1 prefix assigned
+					privateIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesBefore)).To(Equal(1))
+
+					By("creating 1 pod and waiting for ready should not create new prefix")
+					// verify if ip assigned is coming from a prefix
+					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+
+					_, prefixesAfterPod1, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(prefixesAfterPod1)).To(Equal(len(prefixesBefore)))
+					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesAfterPod1)
+
+					// launch 2nd pod to trigger a new prefix to be assigned since warm-ip-target=15
+					By("creating 2nd pod and waiting for ready should have 1 more prefix assigned")
+					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod2, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+					verify.WindowsPodHaveResourceLimits(createdPod, true)
+
+					privateIPsAfter, prefixesAfterPod2, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					// 1 more prefix should be created to fulfill warm-ip-target=15
+					Expect(len(prefixesAfterPod2) - len(prefixesAfterPod1)).To(Equal(1))
+					// number of secondary ips should not change
+					Expect(len(privateIPsBefore)).To(Equal(len(privateIPsAfter)))
+					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesAfterPod2)
+
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+					Expect(err).ToNot(HaveOccurred())
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod2)
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			Context("When windows-minimum-ip-target is set to 20", Label("windows-minimum-ip-target"), func() {
+				BeforeEach(func() {
+					data = map[string]string{
+						config.EnableWindowsIPAMKey:             "true",
+						config.EnableWindowsPrefixDelegationKey: "true",
+						config.WinMinimumIPTarget:               "20"}
+				})
+				It("should have 2 prefixes to satisfy windows-minimum-ip-target when no pods running", func() {
 					By("adding labels to selected nodes for testing")
 					node := windowsNodeList.Items[0]
 					err = frameWork.NodeManager.AddLabels([]v1.Node{node}, map[string]string{podLabelKey: podLabelVal})
