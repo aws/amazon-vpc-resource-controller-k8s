@@ -138,6 +138,8 @@ type ENIDetails struct {
 	deletionTimeStamp time.Time
 	// deleteRetryCount is the
 	deleteRetryCount int
+	// ID of association between branch and trunk ENI
+	AssociationID string
 }
 
 type IntrospectResponse struct {
@@ -398,12 +400,14 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		newENIs = append(newENIs, newENI)
 
 		// Associate Branch to trunk
-		_, err = t.ec2ApiHelper.AssociateBranchToTrunk(&t.trunkENIId, nwInterface.NetworkInterfaceId, vlanID)
+		var associationOutput *awsEC2.AssociateTrunkInterfaceOutput
+		associationOutput, err = t.ec2ApiHelper.AssociateBranchToTrunk(&t.trunkENIId, nwInterface.NetworkInterfaceId, vlanID)
 		if err != nil {
 			err = fmt.Errorf("associating branch to trunk, %w", err)
 			trunkENIOperationsErrCount.WithLabelValues("associate_branch").Inc()
 			break
 		}
+		newENI.AssociationID = *associationOutput.InterfaceAssociation.AssociationId
 	}
 
 	if err != nil {
@@ -499,7 +503,19 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 
 // deleteENIs deletes the provided ENIs and frees up the Vlan assigned to then
 func (t *trunkENI) deleteENI(eniDetail *ENIDetails) (err error) {
-	// Delete Branch network interface first
+	// Disassociate branch ENI from trunk if association ID exists and delete branch network interface
+	if eniDetail.AssociationID != "" {
+		err = t.ec2ApiHelper.DisassociateTrunkInterface(&eniDetail.AssociationID)
+		if err != nil {
+			trunkENIOperationsErrCount.WithLabelValues("disassociate_trunk_error").Inc()
+			if !strings.Contains(err.Error(), ec2Errors.NotFoundAssociationID) {
+				t.log.Error(err, "failed to disassciate branch ENI from trunk, will try to delete the branch ENI")
+				// Not returning error here, fallback to force branch ENI deletion
+			} else {
+				t.log.Info("AssociationID not found when disassociating branch from trunk ENI, it is already disassociated so delete the branch ENI")
+			}
+		}
+	}
 	err = t.ec2ApiHelper.DeleteNetworkInterface(&eniDetail.ID)
 	if err != nil {
 		branchENIOperationsFailureCount.WithLabelValues("delete_branch_error").Inc()
