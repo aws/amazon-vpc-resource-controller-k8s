@@ -139,7 +139,7 @@ type ENIDetails struct {
 	// deleteRetryCount is the
 	deleteRetryCount int
 	// ID of association between branch and trunk ENI
-	AssociationID string
+	AssociationID string `json:"associationID"`
 }
 
 type IntrospectResponse struct {

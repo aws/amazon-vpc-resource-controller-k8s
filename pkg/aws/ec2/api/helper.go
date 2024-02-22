@@ -620,8 +620,8 @@ func (h *ec2APIHelper) DetachAndDeleteNetworkInterface(attachmentID *string, nwI
 }
 
 func (h *ec2APIHelper) DisassociateTrunkInterface(associationID *string) error {
-	ip := &ec2.DisassociateTrunkInterfaceInput{
+	input := &ec2.DisassociateTrunkInterfaceInput{
 		AssociationId: associationID,
 	}
-	return h.ec2Wrapper.DisassociateTrunkInterface(ip)
+	return h.ec2Wrapper.DisassociateTrunkInterface(input)
 }
