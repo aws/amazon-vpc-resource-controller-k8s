@@ -58,6 +58,7 @@ type EC2Wrapper interface {
 	DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
+	DisassociateTrunkInterface(input *ec2.DisassociateTrunkInterfaceInput) error
 }
 
 var (
@@ -253,7 +254,7 @@ var (
 	ec2AssociateTrunkInterfaceAPIErrCnt = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "ec2_associate_trunk_interface_api_err_count",
-			Help: "The number of errors encountered while disassociating Trunk with Branch ENI",
+			Help: "The number of errors encountered while associating Trunk with Branch ENI",
 		},
 	)
 
@@ -307,6 +308,20 @@ var (
 		},
 	)
 
+	ec2DisassociateTrunkInterfaceCallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_disassociate_trunk_interface_api_req_count",
+			Help: "The number of calls made to EC2 to remove association between a branch and trunk network interface",
+		},
+	)
+
+	ec2DisassociateTrunkInterfaceErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_disassociate_trunk_interface_api_err_count",
+			Help: "The number of errors encountered while removing association between a branch and trunk network interface",
+		},
+	)
+
 	prometheusRegistered = false
 )
 
@@ -345,9 +360,10 @@ func prometheusRegister() {
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
 			ec2APICallLatencies,
-			vpccniAvailableENICnt,
-			vpcrcAvailableENICnt,
-			leakedENICnt,
+			vpcCniLeakedENICleanupCnt,
+			vpcrcLeakedENICleanupCnt,
+			ec2DisassociateTrunkInterfaceCallCnt,
+			ec2DisassociateTrunkInterfaceErrCnt,
 		)
 
 		prometheusRegistered = true
@@ -376,7 +392,7 @@ func NewEC2Wrapper(roleARN, clusterName, region string, log logr.Logger) (EC2Wra
 
 	// Role ARN is passed, assume the role ARN to make EC2 API Calls
 	if roleARN != "" {
-		// Create the instance service client with low QPS, it will be only used fro associate branch to trunk calls
+		// Create the instance service client with low QPS, it will be only used for associate branch to trunk calls
 		log.Info("Creating INSTANCE service client with configured QPS", "QPS", config.InstanceServiceClientQPS, "Burst", config.InstanceServiceClientBurst)
 		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(config.InstanceServiceClientQPS,
 			config.InstanceServiceClientBurst, instanceSession)
@@ -788,4 +804,20 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkIn
 	}
 
 	return output, err
+}
+
+func (e *ec2Wrapper) DisassociateTrunkInterface(input *ec2.DisassociateTrunkInterfaceInput) error {
+	start := time.Now()
+	// Using the instance role
+	_, err := e.instanceServiceClient.DisassociateTrunkInterface(input)
+	ec2APICallLatencies.WithLabelValues("disassociate_branch_from_trunk").Observe(timeSinceMs(start))
+
+	ec2APICallCnt.Inc()
+	ec2DisassociateTrunkInterfaceCallCnt.Inc()
+
+	if err != nil {
+		ec2APIErrCnt.Inc()
+		ec2DisassociateTrunkInterfaceErrCnt.Inc()
+	}
+	return err
 }
