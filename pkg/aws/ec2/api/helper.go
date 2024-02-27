@@ -61,16 +61,38 @@ var (
 
 type ec2APIHelper struct {
 	ec2Wrapper EC2Wrapper
+	workerNodeVpcId          string
+	securityGroupNameToIdMap map[string]string
 }
 
-func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
+func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName, workerNodeVpcId string) EC2APIHelper {
 	// Set the key and value of the cluster name tag which will be used to tag all the network interfaces created by
 	// the controller
 	clusterNameTag = &ec2.Tag{
 		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
 		Value: aws.String(config.ClusterNameTagValue),
 	}
-	return &ec2APIHelper{ec2Wrapper: ec2Wrapper}
+	return &ec2APIHelper{
+		ec2Wrapper:               ec2Wrapper,
+		workerNodeVpcId:          workerNodeVpcId,
+		securityGroupNameToIdMap: make(map[string]string),
+	}
+}
+
+// For unit testing
+func newEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName, workerNodeVpcId string,
+	securityGroupNameToIdMap map[string]string) EC2APIHelper {
+	// Set the key and value of the cluster name tag which will be used to tag all the network interfaces created by
+	// the controller
+	clusterNameTag = &ec2.Tag{
+		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
+		Value: aws.String(config.ClusterNameTagValue),
+	}
+	return &ec2APIHelper{
+		ec2Wrapper:               ec2Wrapper,
+		workerNodeVpcId:          workerNodeVpcId,
+		securityGroupNameToIdMap: securityGroupNameToIdMap,
+	}
 }
 
 type EC2APIHelper interface {
@@ -93,6 +115,7 @@ type EC2APIHelper interface {
 	GetInstanceDetails(instanceId *string) (*ec2.Instance, error)
 	AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error)
 	UnassignIPv4Resources(eniID string, resourceType config.ResourceType, resources []string) error
+	GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames []string) ([]string, error)
 }
 
 // CreateNetworkInterface creates a new network interface
@@ -616,4 +639,49 @@ func (h *ec2APIHelper) DetachAndDeleteNetworkInterface(attachmentID *string, nwI
 		return err
 	}
 	return nil
+}
+
+func (h *ec2APIHelper) GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames []string) ([]string, error) {
+	sgIds := make([]string, 0)
+	if len(securityGroupNames) < 1 {
+		return sgIds, nil
+	}
+	sgNamesNotInCache := make([]string, 0)
+	for _, sgName := range securityGroupNames {
+		if sgId, ok := h.securityGroupNameToIdMap[sgName]; !ok {
+			sgNamesNotInCache = append(sgNamesNotInCache, sgName)
+		} else {
+			sgIds = append(sgIds, sgId)
+		}
+	}
+	if len(sgIds) == len(securityGroupNames) {
+		//All SGNames found in cache
+		return sgIds, nil
+	}
+	filters := []*ec2.Filter{
+		{
+			Name:   aws.String("group-name"),
+			Values: aws.StringSlice(securityGroupNames),
+		},
+		{
+			Name:   aws.String("vpc-id"),
+			Values: aws.StringSlice([]string{h.workerNodeVpcId}),
+		},
+	}
+	input := &ec2.DescribeSecurityGroupsInput{Filters: filters}
+	for {
+		output, err := h.ec2Wrapper.DescribeSecurityGroups(input)
+		if err != nil {
+			return nil, err
+		}
+		for _, sg := range output.SecurityGroups {
+			h.securityGroupNameToIdMap[*sg.GroupName] = *sg.GroupId
+			sgIds = append(sgIds, *sg.GroupId)
+		}
+		if output.NextToken == nil {
+			break
+		}
+		input.NextToken = output.NextToken
+	}
+	return sgIds, nil
 }

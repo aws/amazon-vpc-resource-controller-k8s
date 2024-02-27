@@ -30,6 +30,7 @@ import (
 
 var (
 	clusterName = "cluster-name"
+	workerNodeVpcId = "vpc-abcdef"
 	// instance id of EC2 worker node
 	instanceId   = "i-00000000000000000"
 	instanceType = "m5.xlarge"
@@ -57,6 +58,10 @@ var (
 	securityGroup1 = "sg-00000000000000001"
 	securityGroup2 = "sg-00000000000000002"
 	securityGroups = []string{securityGroup1, securityGroup2}
+
+	securityGroupName1 = "db-sg"
+	securityGroupName2 = "redis-sg"
+	securityGroupNames = []string{securityGroupName1, securityGroupName2}
 
 	tags = []*ec2.Tag{
 		{
@@ -323,6 +328,32 @@ var (
 	}
 
 	maxRetryOnError = 3
+
+	
+	describeSecurityGroupInput = &ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("group-name"),
+				Values: aws.StringSlice(securityGroupNames),
+			},
+			{
+				Name:   aws.String("vpc-id"),
+				Values: aws.StringSlice([]string{workerNodeVpcId}),
+			},
+		},
+	}
+	describeSecurityGroupOutput = &ec2.DescribeSecurityGroupsOutput{
+		SecurityGroups: []*ec2.SecurityGroup{
+			{
+				GroupId:   aws.String(securityGroup1),
+				GroupName: aws.String(securityGroupName1),
+			},
+			{
+				GroupId:   aws.String(securityGroup2),
+				GroupName: aws.String(securityGroupName2),
+			},
+		},
+	}
 )
 
 // getMockWrapper returns the Mock EC2Wrapper along with the EC2APIHelper with mock EC2Wrapper set up
@@ -351,7 +382,7 @@ func getMockWrapper(ctrl *gomock.Controller) (EC2APIHelper, *mock_api.MockEC2Wra
 	}
 
 	mockWrapper := mock_api.NewMockEC2Wrapper(ctrl)
-	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName)
+	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName, workerNodeVpcId)
 
 	return ec2ApiHelper, mockWrapper
 }
@@ -1190,4 +1221,35 @@ func TestEc2APIHelper_GetBranchNetworkInterface_PaginatedResults(t *testing.T) {
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []*ec2.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
+}
+
+func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_EmptyCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	mockWrapper.EXPECT().DescribeSecurityGroups(describeSecurityGroupInput).Return(describeSecurityGroupOutput, nil)
+
+	securityGroupIds, err := ec2ApiHelper.GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames)
+
+	assert.Nil(t, err)
+	assert.Equal(t, securityGroupIds[0], securityGroup1)
+	assert.Equal(t, securityGroupIds[1], securityGroup2)
+	assert.Equal(t, len(securityGroupIds), 2)
+}
+
+func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_FullCache(t *testing.T) {
+	securityGroupNameToIdMap := map[string]string{
+		securityGroupName1: securityGroup1,
+		securityGroupName2: securityGroup2,
+	}
+	ec2ApiHelper := newEC2APIHelper(nil, clusterName, workerNodeVpcId, securityGroupNameToIdMap)
+
+	securityGroupIds, err := ec2ApiHelper.GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames)
+
+	assert.Nil(t, err)
+	assert.Equal(t, securityGroupIds[0], securityGroup1)
+	assert.Equal(t, securityGroupIds[1], securityGroup2)
+	assert.Equal(t, len(securityGroupIds), 2)
 }
