@@ -43,16 +43,22 @@ type ENICleaner struct {
 }
 
 var (
-	vpcCniLeakedENICleanupCnt = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "vpc_cni_created_leaked_eni_cleanup_count",
-			Help: "The number of leaked ENIs created by VPC-CNI that is cleaned up by the controller",
+	vpccniAvailableENICnt = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "vpc_cni_created_available_eni_count",
+			Help: "The number of available ENIs created by VPC-CNI that controller will try to delete in each cleanup cycle",
 		},
 	)
-	vpcrcLeakedENICleanupCnt = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "vpc_rc_created_leaked_eni_cleanup_count",
-			Help: "The number of leaked ENIs created by VPC-RC that is cleaned up by the controller",
+	vpcrcAvailableENICnt = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "vpc_rc_created_available_eni_count",
+			Help: "The number of available ENIs created by VPC-RC that controller will try to delete in each cleanup cycle",
+		},
+	)
+	leakedENICnt = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "leaked_eni_count",
+			Help: "The number of available ENIs that failed to be deleted by the controller in each cleanup cycle",
 		},
 	)
 )
@@ -102,6 +108,9 @@ func (e *ENICleaner) Start(ctx context.Context) error {
 // interval between cycle 1 and 2 and hence can be safely deleted. And we can also conclude that Interface 1 was
 // created but not attached at the the time when 1st cycle ran and hence it should not be deleted.
 func (e *ENICleaner) cleanUpAvailableENIs() {
+	vpccniAvailableENICnt.Set(0)
+	vpcrcAvailableENICnt.Set(0)
+	leakedENICnt.Set(0)
 	describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -140,12 +149,13 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 			}); tagIdx != -1 {
 				switch *networkInterface.TagSet[tagIdx].Value {
 				case config.NetworkInterfaceOwnerTagValue:
-					vpcrcLeakedENICleanupCnt.Inc()
+					vpcrcAvailableENICnt.Inc()
 				case config.NetworkInterfaceOwnerVPCCNITagValue:
-					vpcCniLeakedENICleanupCnt.Inc()
+					vpccniAvailableENICnt.Inc()
 				default:
-					// We will not hit this case as we only filter for above two tag values, adding it for any future use cases
-					e.Log.Info("found available ENI not created by VPC-CNI/VPC-RC")
+					// We should not hit this case as we only filter for relevant tag values, log error and continue if unexpected ENIs found
+					e.Log.Error(fmt.Errorf("found available ENI not created by VPC-CNI/VPC-RC"), "eni id", *networkInterface.NetworkInterfaceId)
+					continue
 				}
 			}
 
@@ -155,6 +165,7 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 				NetworkInterfaceId: networkInterface.NetworkInterfaceId,
 			})
 			if err != nil {
+				leakedENICnt.Inc()
 				// Log and continue, if the ENI is still present it will be cleaned up in next 2 cycles
 				e.Log.Error(err, "failed to delete the dangling network interface",
 					"id", *networkInterface.NetworkInterfaceId)

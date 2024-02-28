@@ -360,8 +360,9 @@ func prometheusRegister() {
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
 			ec2APICallLatencies,
-			vpcCniLeakedENICleanupCnt,
-			vpcrcLeakedENICleanupCnt,
+			vpccniAvailableENICnt,
+			vpcrcAvailableENICnt,
+			leakedENICnt,
 			ec2DescribeNetworkInterfacesPagesAPICallCnt,
 			ec2DescribeNetworkInterfacesPagesAPIErrCnt,
 		)
@@ -661,7 +662,7 @@ func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfa
 // Only required fields, network interface ID and tag set, is populated to avoid consuming extra memory
 func (e *ec2Wrapper) DescribeNetworkInterfacesPages(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2.NetworkInterface, error) {
 	var networkInterfaces []*ec2.NetworkInterface
-	input.MaxResults = aws.Int64(1000)
+	input.MaxResults = aws.Int64(config.DescribeNetworkInterfacesMaxResults)
 
 	start := time.Now()
 	if err := e.userServiceClient.DescribeNetworkInterfacesPages(input, func(output *ec2.DescribeNetworkInterfacesOutput, _ bool) bool {
