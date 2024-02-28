@@ -34,6 +34,7 @@ type ENICleaner struct {
 	EC2Wrapper  EC2Wrapper
 	ClusterName string
 	Log         logr.Logger
+	VPCID       string
 
 	availableENIs     map[string]struct{}
 	shutdown          bool
@@ -116,61 +117,57 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 				Values: aws.StringSlice([]string{config.NetworkInterfaceOwnerTagValue,
 					config.NetworkInterfaceOwnerVPCCNITagValue}),
 			},
+			{
+				Name:   aws.String("vpc-id"),
+				Values: []*string{aws.String(e.VPCID)},
+			},
 		},
 	}
 
 	availableENIs := make(map[string]struct{})
 
-	for {
-		describeNetworkInterfaceOp, err := e.EC2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfaceIp)
-		if err != nil {
-			e.Log.Error(err, "failed to describe network interfaces, will retry")
-			return
-		}
+	networkInterfaces, err := e.EC2Wrapper.DescribeNetworkInterfacesPages(describeNetworkInterfaceIp)
+	if err != nil {
+		e.Log.Error(err, "failed to describe network interfaces, will retry")
+		return
+	}
 
-		for _, networkInterface := range describeNetworkInterfaceOp.NetworkInterfaces {
-			if _, exists := e.availableENIs[*networkInterface.NetworkInterfaceId]; exists {
-				// Increment promethues metrics for number of leaked ENIs cleaned up
-				if tagIdx := slices.IndexFunc(networkInterface.TagSet, func(tag *ec2.Tag) bool {
-					return *tag.Key == config.NetworkInterfaceOwnerTagKey
-				}); tagIdx != -1 {
-					switch *networkInterface.TagSet[tagIdx].Value {
-					case config.NetworkInterfaceOwnerTagValue:
-						vpcrcLeakedENICleanupCnt.Inc()
-					case config.NetworkInterfaceOwnerVPCCNITagValue:
-						vpcCniLeakedENICleanupCnt.Inc()
-					default:
-						// We will not hit this case as we only filter for above two tag values, adding it for any future use cases
-						e.Log.Info("found available ENI not created by VPC-CNI/VPC-RC")
-					}
+	for _, networkInterface := range networkInterfaces {
+		if _, exists := e.availableENIs[*networkInterface.NetworkInterfaceId]; exists {
+			// Increment promethues metrics for number of leaked ENIs cleaned up
+			if tagIdx := slices.IndexFunc(networkInterface.TagSet, func(tag *ec2.Tag) bool {
+				return *tag.Key == config.NetworkInterfaceOwnerTagKey
+			}); tagIdx != -1 {
+				switch *networkInterface.TagSet[tagIdx].Value {
+				case config.NetworkInterfaceOwnerTagValue:
+					vpcrcLeakedENICleanupCnt.Inc()
+				case config.NetworkInterfaceOwnerVPCCNITagValue:
+					vpcCniLeakedENICleanupCnt.Inc()
+				default:
+					// We will not hit this case as we only filter for above two tag values, adding it for any future use cases
+					e.Log.Info("found available ENI not created by VPC-CNI/VPC-RC")
 				}
-
-				// The ENI in available state has been sitting for at least the eni clean up interval and it should
-				// be removed
-				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
-					NetworkInterfaceId: networkInterface.NetworkInterfaceId,
-				})
-				if err != nil {
-					// Log and continue, if the ENI is still present it will be cleaned up in next 2 cycles
-					e.Log.Error(err, "failed to delete the dangling network interface",
-						"id", *networkInterface.NetworkInterfaceId)
-					continue
-				}
-				e.Log.Info("deleted dangling ENI successfully",
-					"eni id", networkInterface.NetworkInterfaceId)
-			} else {
-				// Seeing the ENI for the first time, add it to the new list of available network interfaces
-				availableENIs[*networkInterface.NetworkInterfaceId] = struct{}{}
-				e.Log.V(1).Info("adding eni to to the map of available ENIs, will be removed if present in "+
-					"next run too", "id", *networkInterface.NetworkInterfaceId)
 			}
-		}
 
-		if describeNetworkInterfaceOp.NextToken == nil {
-			break
+			// The ENI in available state has been sitting for at least the eni clean up interval and it should
+			// be removed
+			_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+				NetworkInterfaceId: networkInterface.NetworkInterfaceId,
+			})
+			if err != nil {
+				// Log and continue, if the ENI is still present it will be cleaned up in next 2 cycles
+				e.Log.Error(err, "failed to delete the dangling network interface",
+					"id", *networkInterface.NetworkInterfaceId)
+				continue
+			}
+			e.Log.Info("deleted dangling ENI successfully",
+				"eni id", networkInterface.NetworkInterfaceId)
+		} else {
+			// Seeing the ENI for the first time, add it to the new list of available network interfaces
+			availableENIs[*networkInterface.NetworkInterfaceId] = struct{}{}
+			e.Log.V(1).Info("adding eni to to the map of available ENIs, will be removed if present in "+
+				"next run too", "id", *networkInterface.NetworkInterfaceId)
 		}
-
-		describeNetworkInterfaceIp.NextToken = describeNetworkInterfaceOp.NextToken
 	}
 
 	// Set the available ENIs to the list of ENIs seen in the current cycle
