@@ -108,9 +108,9 @@ func (e *ENICleaner) Start(ctx context.Context) error {
 // interval between cycle 1 and 2 and hence can be safely deleted. And we can also conclude that Interface 1 was
 // created but not attached at the the time when 1st cycle ran and hence it should not be deleted.
 func (e *ENICleaner) cleanUpAvailableENIs() {
-	vpccniAvailableENICnt.Set(0)
-	vpcrcAvailableENICnt.Set(0)
-	leakedENICnt.Set(0)
+	vpcrcAvailableCount := 0
+	vpccniAvailableCount := 0
+	leakedENICount := 0
 	describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -137,7 +137,7 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 
 	networkInterfaces, err := e.EC2Wrapper.DescribeNetworkInterfacesPages(describeNetworkInterfaceIp)
 	if err != nil {
-		e.Log.Error(err, "failed to describe network interfaces, will retry")
+		e.Log.Error(err, "failed to describe network interfaces, cleanup will be retried in next cycle")
 		return
 	}
 
@@ -149,12 +149,12 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 			}); tagIdx != -1 {
 				switch *networkInterface.TagSet[tagIdx].Value {
 				case config.NetworkInterfaceOwnerTagValue:
-					vpcrcAvailableENICnt.Inc()
+					vpcrcAvailableCount += 1
 				case config.NetworkInterfaceOwnerVPCCNITagValue:
-					vpccniAvailableENICnt.Inc()
+					vpccniAvailableCount += 1
 				default:
 					// We should not hit this case as we only filter for relevant tag values, log error and continue if unexpected ENIs found
-					e.Log.Error(fmt.Errorf("found available ENI not created by VPC-CNI/VPC-RC"), "eni id", *networkInterface.NetworkInterfaceId)
+					e.Log.Error(fmt.Errorf("found available ENI not created by VPC-CNI/VPC-RC"), "eniID", *networkInterface.NetworkInterfaceId)
 					continue
 				}
 			}
@@ -165,7 +165,7 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 				NetworkInterfaceId: networkInterface.NetworkInterfaceId,
 			})
 			if err != nil {
-				leakedENICnt.Inc()
+				leakedENICount += 1
 				// Log and continue, if the ENI is still present it will be cleaned up in next 2 cycles
 				e.Log.Error(err, "failed to delete the dangling network interface",
 					"id", *networkInterface.NetworkInterfaceId)
@@ -181,6 +181,10 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 		}
 	}
 
+	// Update leaked ENI metrics
+	vpcrcAvailableENICnt.Set(float64(vpcrcAvailableCount))
+	vpccniAvailableENICnt.Set(float64(vpccniAvailableCount))
+	leakedENICnt.Set(float64(leakedENICount))
 	// Set the available ENIs to the list of ENIs seen in the current cycle
 	e.availableENIs = availableENIs
 }
