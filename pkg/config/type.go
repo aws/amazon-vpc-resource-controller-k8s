@@ -86,6 +86,8 @@ const (
 	VpcCNIDaemonSetName            = "aws-node"
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
 	BranchENICooldownPeriodKey     = "branch-eni-cooldown"
+	// DescribeNetworkInterfacesMaxResults defines the max number of requests to return for DescribeNetworkInterfaces API call
+	DescribeNetworkInterfacesMaxResults = int64(1000)
 )
 
 type ResourceType string
