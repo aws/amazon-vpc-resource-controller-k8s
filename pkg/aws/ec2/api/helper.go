@@ -79,7 +79,7 @@ type EC2APIHelper interface {
 		ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2.Subnet, error)
-	GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error)
+	GetBranchNetworkInterface(trunkID *string, subnetID *string) ([]*ec2.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]*ec2.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error)
@@ -563,43 +563,20 @@ func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.R
 	return err
 }
 
-func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error) {
-	filters := []*ec2.Filter{{
-		Name:   aws.String("tag:" + config.TrunkENIIDTag),
-		Values: []*string{trunkID},
-	}}
-
-	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}
-	var nwInterfaces []*ec2.NetworkInterface
-	for {
-		describeNetworkInterfaceOutput, err := h.ec2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
-		if err != nil {
-			return nil, err
-		}
-
-		if describeNetworkInterfaceOutput == nil || describeNetworkInterfaceOutput.NetworkInterfaces == nil ||
-			len(describeNetworkInterfaceOutput.NetworkInterfaces) == 0 {
-			// No more interface associated with the trunk, return the result
-			break
-		}
-
-		// One or more interface associated with the trunk, return the result
-		for _, nwInterface := range describeNetworkInterfaceOutput.NetworkInterfaces {
-			// Only attach the required details to avoid consuming extra memory
-			nwInterfaces = append(nwInterfaces, &ec2.NetworkInterface{
-				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
-				TagSet:             nwInterface.TagSet,
-			})
-		}
-
-		if describeNetworkInterfaceOutput.NextToken == nil {
-			break
-		}
-
-		describeNetworkInterfacesInput.NextToken = describeNetworkInterfaceOutput.NextToken
+func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string, subnetID *string) ([]*ec2.NetworkInterface, error) {
+	filters := []*ec2.Filter{
+		{
+			Name:   aws.String("tag:" + config.TrunkENIIDTag),
+			Values: []*string{trunkID},
+		},
+		{
+			Name:   aws.String("subnet-id"),
+			Values: []*string{subnetID},
+		},
 	}
 
-	return nwInterfaces, nil
+	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}
+	return h.ec2Wrapper.DescribeNetworkInterfacesPages(describeNetworkInterfacesInput)
 }
 
 // DetachAndDeleteNetworkInterface detaches the network interface first and then deletes it

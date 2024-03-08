@@ -29,6 +29,7 @@ const (
 	EniConfigNameNotFoundReason         = "EniConfigNameNotFound"
 	VersionNotice                       = "ControllerVersionNotice"
 	BranchENICoolDownUpdateReason       = "BranchENICoolDownPeriodUpdated"
+	CNINodeDeleted                      = "CNINodeDeleted"
 )
 
 func SendNodeEventWithNodeName(client k8s.K8sWrapper, nodeName, reason, msg, eventType string, logger logr.Logger) {
