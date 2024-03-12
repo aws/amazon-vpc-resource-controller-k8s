@@ -144,7 +144,7 @@ func main() {
 	flag.BoolVar(&enableWindowsPrefixDelegation, "enable-windows-prefix-delegation", false,
 		"Enable the feature flag for Windows prefix delegation")
 	flag.StringVar(&region, "aws-region", "", "The aws region of the k8s cluster")
-	flag.StringVar(&vpcID, "vpc-id", "", "The vpc-id where EKS cluster is deployed")
+	flag.StringVar(&vpcID, "vpc-id", "", "The VPC ID where EKS cluster is deployed")
 
 	flag.Parse()
 
@@ -401,15 +401,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	finalizerManager := k8s.NewDefaultFinalizerManager(mgr.GetClient(), ctrl.Log.WithName("finalizer manager"))
 	if err = (&crdcontroller.CNINodeReconciler{
-		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
-		Context:     ctx,
-		Log:         ctrl.Log.WithName("controllers").WithName("CNINode"),
-		EC2Wrapper:  ec2Wrapper,
-		K8sAPI:      k8sApi,
-		ClusterName: clusterName,
-		VPCID:       vpcID,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Context:          ctx,
+		Log:              ctrl.Log.WithName("controllers").WithName("CNINode"),
+		EC2Wrapper:       ec2Wrapper,
+		K8sAPI:           k8sApi,
+		ClusterName:      clusterName,
+		VPCID:            vpcID,
+		FinalizerManager: finalizerManager,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CNINode")
 		os.Exit(1)
