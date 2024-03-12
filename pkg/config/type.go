@@ -52,7 +52,7 @@ const (
 	// OSLinux is the the linux Operating System
 	OSLinux = "linux"
 	// Node termination finalizer on CNINode CRD
-	NodeTerminationFinalizer = "node.k8s.aws.com/termination"
+	NodeTerminationFinalizer = "networking.k8s.aws/node-termination"
 )
 
 // EC2 Tags

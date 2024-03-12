@@ -202,10 +202,10 @@ func (r *CNINodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *CNINodeReconciler) waitTillCNINodeDeleted(ctx context.Context, nameSpacedCNINode types.NamespacedName) error {
 	oldCNINode := &v1alpha1.CNINode{}
 
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*3)
 	defer cancel()
 
-	return wait.PollUntilContextCancel(ctx, time.Second, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextCancel(ctx, 500*time.Millisecond, true, func(ctx context.Context) (bool, error) {
 		if err := r.Client.Get(ctx, nameSpacedCNINode, oldCNINode); err != nil {
 			if errors.IsNotFound(err) {
 				return true, nil
