@@ -111,6 +111,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			r.Log.Error(err, "failed to add finalizer on CNINode, will retry", "cniNode", cniNode.Name, "finalizer", config.NodeTerminationFinalizer)
 			return ctrl.Result{}, err
 		}
+		r.Log.Info("added finalizer on cninode", "finalizer", config.NodeTerminationFinalizer, "cniNode", cniNode.Name)
 		return ctrl.Result{}, nil
 
 	} else { // CNINode is marked for deletion
@@ -138,6 +139,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					r.Log.Error(err, "failed to remove finalizer on CNINode, will retry", "cniNode", cniNode.Name, "finalizer", config.NodeTerminationFinalizer)
 					return ctrl.Result{}, err
 				}
+				r.Log.Info("removed finalizer on cniNode", "finalizer", config.NodeTerminationFinalizer, "cniNode", cniNode.Name)
 				return ctrl.Result{}, nil
 			} else {
 				r.Log.Error(err, "failed to get the node object in CNINode reconciliation, will retry")
@@ -165,14 +167,15 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				return ctrl.Result{}, err
 			}
 			// wait till CNINode is deleted before recreation as the new object will be created with same name to avoid "object already exists" error
-			if err := r.waitTillCNINodeDeleted(ctx, k8s.NamespacedName(newCNINode)); err != nil {
+			if err := r.waitTillCNINodeDeleted(k8s.NamespacedName(newCNINode)); err != nil {
 				// raise event if CNINode could not be deleted after removing the finalizer
-				r.K8sAPI.BroadcastEvent(cniNode, utils.CNINodeDeleteFailed, "CNINode deletion failed and object could not be recreated by the vpc-resource-controller",
+				r.K8sAPI.BroadcastEvent(cniNode, utils.CNINodeDeleteFailed, "CNINode deletion failed and object could not be recreated by the vpc-resource-controller, will retry",
 					v1.EventTypeWarning)
 				// requeue here to check if CNINode deletion is successful and retry CNINode deletion if node exists
 				return ctrl.Result{}, err
 			}
 
+			r.Log.Info("creating CNINode after it has been deleted as node still exists", "cniNode", newCNINode.Name)
 			recreateCNINodeCallCount.Inc()
 			if err := r.createCNINodeFromObj(ctx, newCNINode); err != nil {
 				recreateCNINodeErrCount.Inc()
@@ -182,6 +185,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				// return nil as deleted and we cannot recreate the object now
 				return ctrl.Result{}, nil
 			}
+			r.Log.Info("successfully recreated CNINode", "cniNode", newCNINode.Name)
 		}
 	}
 	return ctrl.Result{}, nil
@@ -199,19 +203,12 @@ func (r *CNINodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // waitTillCNINodeDeleted waits for CNINode to be deleted with timeout and returns error
-func (r *CNINodeReconciler) waitTillCNINodeDeleted(ctx context.Context, nameSpacedCNINode types.NamespacedName) error {
+func (r *CNINodeReconciler) waitTillCNINodeDeleted(nameSpacedCNINode types.NamespacedName) error {
 	oldCNINode := &v1alpha1.CNINode{}
 
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*3)
-	defer cancel()
-
-	return wait.PollUntilContextCancel(ctx, 500*time.Millisecond, true, func(ctx context.Context) (bool, error) {
-		if err := r.Client.Get(ctx, nameSpacedCNINode, oldCNINode); err != nil {
-			if errors.IsNotFound(err) {
-				return true, nil
-			} else {
-				return false, err
-			}
+	return wait.PollUntilContextTimeout(context.TODO(), 500*time.Millisecond, time.Second*3, true, func(ctx context.Context) (bool, error) {
+		if err := r.Client.Get(ctx, nameSpacedCNINode, oldCNINode); err != nil && errors.IsNotFound(err) {
+			return true, nil
 		}
 		return false, nil
 	})
@@ -219,7 +216,6 @@ func (r *CNINodeReconciler) waitTillCNINodeDeleted(ctx context.Context, nameSpac
 
 // createCNINodeFromObj will create CNINode with backoff and returns error if CNINode is not recreated
 func (r *CNINodeReconciler) createCNINodeFromObj(ctx context.Context, newCNINode client.Object) error {
-	r.Log.Info("creating CNINode after it has been deleted as node still exists", "cniNode", newCNINode.GetName())
 	return retry.OnError(retry.DefaultBackoff, func(error) bool { return true },
 		func() error {
 			return r.Client.Create(ctx, newCNINode)
