@@ -51,6 +51,8 @@ const (
 	OSWindows = "windows"
 	// OSLinux is the the linux Operating System
 	OSLinux = "linux"
+	// Node termination finalizer on CNINode CRD
+	NodeTerminationFinalizer = "networking.k8s.aws/resource-cleanup"
 )
 
 // EC2 Tags
@@ -65,6 +67,7 @@ const (
 	NetworkInterfaceOwnerTagKey         = "eks:eni:owner"
 	NetworkInterfaceOwnerTagValue       = "eks-vpc-resource-controller"
 	NetworkInterfaceOwnerVPCCNITagValue = "amazon-vpc-cni"
+	NetworkInterfaceNodenameKey         = "node.k8s.amazonaws.com/nodename"
 )
 
 const (
@@ -86,6 +89,17 @@ const (
 	VpcCNIDaemonSetName            = "aws-node"
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
 	BranchENICooldownPeriodKey     = "branch-eni-cooldown"
+	// DescribeNetworkInterfacesMaxResults defines the max number of requests to return for DescribeNetworkInterfaces API call
+	DescribeNetworkInterfacesMaxResults = int64(1000)
+)
+
+// MaxNodeConcurrentReconciles is the number of go routines that can invoke
+// Reconcile in parallel. Since Node Reconciler, performs local operation
+// on cache only a single go routine should be sufficient. Using more than
+// one routines to help high rate churn and larger nodes groups restarting
+// when the controller has to be restarted for various reasons.
+const (
+	MaxNodeConcurrentReconciles = 10
 )
 
 type ResourceType string

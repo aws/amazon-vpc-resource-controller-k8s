@@ -26,8 +26,10 @@ import (
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/apps"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
+	crdcontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/crds"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	eniCleaner "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
@@ -107,6 +109,7 @@ func main() {
 	var healthCheckTimeout int
 	var enableWindowsPrefixDelegation bool
 	var region string
+	var vpcID string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to.")
@@ -141,6 +144,7 @@ func main() {
 	flag.BoolVar(&enableWindowsPrefixDelegation, "enable-windows-prefix-delegation", false,
 		"Enable the feature flag for Windows prefix delegation")
 	flag.StringVar(&region, "aws-region", "", "The aws region of the k8s cluster")
+	flag.StringVar(&vpcID, "vpc-id", "", "The VPC ID where EKS cluster is deployed")
 
 	flag.Parse()
 
@@ -180,6 +184,11 @@ func main() {
 
 	if clusterName == "" {
 		setupLog.Error(fmt.Errorf("cluster-name is a required parameter"), "unable to start the controller")
+		os.Exit(1)
+	}
+
+	if vpcID == "" {
+		setupLog.Error(fmt.Errorf("vpc-id is a required parameter"), "unable to start the controller")
 		os.Exit(1)
 	}
 
@@ -311,7 +320,7 @@ func main() {
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
 		10, 1, ctrl.Log.WithName("node async workers"), ctx)
 	nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager,
-		apiWrapper, nodeManagerWorkers, controllerConditions, version.GitVersion, healthzHandler)
+		apiWrapper, nodeManagerWorkers, controllerConditions, clusterName, version.GitVersion, healthzHandler)
 
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init node manager")
@@ -332,11 +341,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&ec2API.ENICleaner{
-		EC2Wrapper:  ec2Wrapper,
+	cleaner := &eniCleaner.ClusterENICleaner{
 		ClusterName: clusterName,
-		Log:         ctrl.Log.WithName("eni cleaner"),
-	}).SetupWithManager(ctx, mgr, healthzHandler); err != nil {
+	}
+	cleaner.ENICleaner = &eniCleaner.ENICleaner{
+		EC2Wrapper: ec2Wrapper,
+		Manager:    cleaner,
+		VPCID:      vpcID,
+		Log:        ctrl.Log.WithName("eniCleaner").WithName("cluster"),
+	}
+
+	if err := cleaner.SetupWithManager(ctx, mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to start eni cleaner")
 		os.Exit(1)
 	}
@@ -386,6 +401,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	finalizerManager := k8s.NewDefaultFinalizerManager(mgr.GetClient(), ctrl.Log.WithName("finalizer manager"))
+	if err = (&crdcontroller.CNINodeReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Context:          ctx,
+		Log:              ctrl.Log.WithName("controllers").WithName("CNINode"),
+		EC2Wrapper:       ec2Wrapper,
+		K8sAPI:           k8sApi,
+		ClusterName:      clusterName,
+		VPCID:            vpcID,
+		FinalizerManager: finalizerManager,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CNINode")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 	setupLog.Info("setting up webhook server")
 	webhookServer := mgr.GetWebhookServer()

@@ -76,7 +76,7 @@ var (
 
 	// NodeDeleteRequeueRequestDelay represents the time after which the resources belonging to a node will be cleaned
 	// up after receiving the actual node delete event.
-	NodeDeleteRequeueRequestDelay = time.Minute * 5
+	NodeDeleteRequeueRequestDelay = time.Minute * 1
 
 	prometheusRegistered = false
 )
@@ -175,8 +175,8 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	}
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceMs(start))
 
-	// Add the Trunk ENI to cache
-	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil {
+	// Add the Trunk ENI to cache if it does not already exist
+	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil && err != ErrTrunkExistInCache {
 		branchProviderOperationsErrCount.WithLabelValues("add_trunk_to_cache").Inc()
 		return err
 	}
@@ -239,7 +239,7 @@ func (b *branchENIProvider) DeleteNode(nodeName string) (ctrl.Result, error) {
 		return ctrl.Result{}, fmt.Errorf("failed to find node %s", nodeName)
 	}
 
-	trunkENI.DeleteAllBranchENIs()
+	trunkENI.DisassociateAllBranchENIs()
 	b.removeTrunkFromCache(nodeName)
 
 	b.log.Info("de-initialized resource provider successfully", "node name", nodeName)
