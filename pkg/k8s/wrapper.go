@@ -15,6 +15,7 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
@@ -80,7 +81,7 @@ type K8sWrapper interface {
 	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error)
 	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
 	GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error)
-	CreateCNINode(node *v1.Node) error
+	CreateCNINode(node *v1.Node, clusterName string) error
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -233,7 +234,7 @@ func (k *k8sWrapper) GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha
 	return cninode, nil
 }
 
-func (k *k8sWrapper) CreateCNINode(node *v1.Node) error {
+func (k *k8sWrapper) CreateCNINode(node *v1.Node, clusterName string) error {
 	cniNode := &rcv1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      node.Name,
@@ -247,6 +248,12 @@ func (k *k8sWrapper) CreateCNINode(node *v1.Node) error {
 					UID:        node.UID,
 					Controller: lo.ToPtr(true),
 				},
+			},
+			Finalizers: []string{config.NodeTerminationFinalizer}, // finalizer to clean up leaked ENIs at node termination
+		},
+		Spec: rcv1alpha1.CNINodeSpec{
+			Tags: map[string]string{
+				fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName): config.ClusterNameTagValue,
 			},
 		},
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 
 	"github.com/aws/aws-sdk-go/aws"
+	awsEC2 "github.com/aws/aws-sdk-go/service/ec2"
 	awsEc2 "github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -158,6 +159,12 @@ var (
 			Status: aws.String(awsEc2.AttachmentStatusAttached),
 		},
 	}
+	nodeNametag = []*awsEC2.Tag{
+		{
+			Key:   aws.String(config.NetworkInterfaceNodenameKey),
+			Value: aws.String(FakeInstance.Name()),
+		},
+	}
 
 	trunkIDTag = &awsEc2.Tag{
 		Key:   aws.String(config.TrunkENIIDTag),
@@ -255,11 +262,17 @@ func getMockTrunk() trunkENI {
 		log:               log,
 		usedVlanIds:       make([]bool, MaxAllocatableVlanIds),
 		uidToBranchENIMap: map[string][]*ENIDetails{},
+		nodeNameTag: []*awsEC2.Tag{
+			{
+				Key:   aws.String(config.NetworkInterfaceNodenameKey),
+				Value: aws.String(FakeInstance.Name()),
+			},
+		},
 	}
 }
 
 func TestNewTrunkENI(t *testing.T) {
-	trunkENI := NewTrunkENI(zap.New(), nil, nil)
+	trunkENI := NewTrunkENI(zap.New(), FakeInstance, nil)
 	assert.NotNil(t, trunkENI)
 }
 
@@ -700,7 +713,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]*awsEc2.InstanceNetworkInterface{}, nil)
 				f.mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(freeIndex, nil)
 				f.mockInstance.EXPECT().SubnetID().Return(SubnetId)
-				f.mockEC2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&InstanceId, &SubnetId, SecurityGroups, nil,
+				f.mockEC2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&InstanceId, &SubnetId, SecurityGroups, f.trunkENI.nodeNameTag,
 					&freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil).Return(trunkInterface, nil)
 			},
 			// Pass nil to set the instance to fields.mockInstance in the function later
@@ -831,23 +844,19 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 	}
 }
 
-// TestTrunkENI_DeleteAllBranchENIs tests all branch ENI associated with the trunk are deleted
-func TestTrunkENI_DeleteAllBranchENIs(t *testing.T) {
+// TestTrunkENI_DisassociateAllBranchENIs tests all branch ENI are disassociated with the trunk
+func TestTrunkENI_DisassociateAllBranchENIs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	trunkENI, mockEC2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.uidToBranchENIMap[PodUID] = branchENIs1
 	trunkENI.uidToBranchENIMap[PodUID2] = branchENIs2
-	trunkENI.deleteQueue = append(trunkENI.deleteQueue, branchENIs1[0])
 
-	// Since we added the same branch ENIs in the cool down queue and in the pod to eni map
-	mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil).Times(2)
-	mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil).Times(2)
+	mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
 	mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID2).Return(nil)
-	mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
 
-	trunkENI.DeleteAllBranchENIs()
+	trunkENI.DisassociateAllBranchENIs()
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs test branch is created and associated with the trunk and valid eni details
@@ -865,9 +874,9 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
 
 	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
-		vlan1Tag, nil, nil).Return(BranchInterface1, nil)
+		append(vlan1Tag, trunkENI.nodeNameTag...), nil, nil).Return(BranchInterface1, nil)
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil)
-	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, vlan2Tag,
+	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, append(vlan2Tag, trunkENI.nodeNameTag...),
 		nil, nil).Return(BranchInterface2, nil)
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(mockAssociationOutput2, nil)
 
@@ -899,10 +908,10 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.
 	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(InstanceSecurityGroup)
 
 	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, InstanceSecurityGroup,
-		vlan1Tag, nil, nil).Return(BranchInterface1, nil)
+		append(vlan1Tag, trunkENI.nodeNameTag...), nil, nil).Return(BranchInterface1, nil)
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil)
 	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, InstanceSecurityGroup,
-		vlan2Tag, nil, nil).Return(BranchInterface2, nil)
+		append(vlan2Tag, trunkENI.nodeNameTag...), nil, nil).Return(BranchInterface2, nil)
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(mockAssociationOutput2, nil)
 
 	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, []string{}, 2)
@@ -933,10 +942,10 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 
 	gomock.InOrder(
 		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
-			vlan1Tag, nil, nil).Return(BranchInterface1, nil),
+			append(vlan1Tag, trunkENI.nodeNameTag...), nil, nil).Return(BranchInterface1, nil),
 		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil),
 		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
-			vlan2Tag, nil, nil).Return(BranchInterface2, nil),
+			append(vlan2Tag, trunkENI.nodeNameTag...), nil, nil).Return(BranchInterface2, nil),
 		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(nil, MockError),
 	)
 
@@ -960,10 +969,10 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(1)
 
 	gomock.InOrder(
-		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, vlan1Tag,
+		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, append(vlan1Tag, trunkENI.nodeNameTag...),
 			nil, nil).Return(BranchInterface1, nil),
 		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil),
-		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, vlan2Tag,
+		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, append(vlan2Tag, trunkENI.nodeNameTag...),
 			nil, nil).Return(nil, MockError),
 	)
 
