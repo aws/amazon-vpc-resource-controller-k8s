@@ -253,7 +253,7 @@ func (k *k8sWrapper) CreateCNINode(node *v1.Node, clusterName string) error {
 		},
 		Spec: rcv1alpha1.CNINodeSpec{
 			Tags: map[string]string{
-				fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName): config.ClusterNameTagValue,
+				fmt.Sprintf(config.CNINodeClusterNameKey): clusterName,
 			},
 		},
 	}
