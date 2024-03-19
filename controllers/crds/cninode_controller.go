@@ -15,7 +15,6 @@ package crds
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -94,15 +93,14 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	if cniNode.GetDeletionTimestamp().IsZero() {
 		// Add cluster name tag if it does not exist
-		clusterNameTagKey := fmt.Sprintf(config.ClusterNameTagKeyFormat, r.ClusterName)
-		val, ok := cniNode.Spec.Tags[clusterNameTagKey]
-		if !ok || val != config.ClusterNameTagValue {
+		val, ok := cniNode.Spec.Tags[config.CNINodeClusterNameKey]
+		if !ok || val != r.ClusterName {
 			cniNodeCopy := cniNode.DeepCopy()
 			if len(cniNodeCopy.Spec.Tags) != 0 {
-				cniNodeCopy.Spec.Tags[clusterNameTagKey] = config.ClusterNameTagValue
+				cniNodeCopy.Spec.Tags[config.CNINodeClusterNameKey] = r.ClusterName
 			} else {
 				cniNodeCopy.Spec.Tags = map[string]string{
-					clusterNameTagKey: config.ClusterNameTagValue,
+					config.CNINodeClusterNameKey: r.ClusterName,
 				}
 			}
 			return ctrl.Result{}, r.Client.Patch(ctx, cniNodeCopy, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{}))
@@ -181,7 +179,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				recreateCNINodeErrCount.Inc()
 				// raise event on node publish warning that CNINode is deleted and could not be recreated by controller
 				utils.SendNodeEventWithNodeName(r.K8sAPI, node.Name, utils.CNINodeCreateFailed,
-					fmt.Sprint("CNINode was deleted and failed to be recreated by the vpc-resource-controller"), v1.EventTypeWarning, r.Log)
+					"CNINode was deleted and failed to be recreated by the vpc-resource-controller", v1.EventTypeWarning, r.Log)
 				// return nil as deleted and we cannot recreate the object now
 				return ctrl.Result{}, nil
 			}
