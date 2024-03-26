@@ -107,8 +107,7 @@ func main() {
 	var healthCheckTimeout int
 	var enableWindowsPrefixDelegation bool
 	var region string
-	var workerNodeVpcId string
-
+	var vpcID string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to.")
@@ -143,8 +142,8 @@ func main() {
 	flag.BoolVar(&enableWindowsPrefixDelegation, "enable-windows-prefix-delegation", false,
 		"Enable the feature flag for Windows prefix delegation")
 	flag.StringVar(&region, "aws-region", "", "The aws region of the k8s cluster")
-	flag.StringVar(&workerNodeVpcId, "worker-node-vpc-id", "", "The VPC ID for the worker nodes,"+
-		"to be used when using with security group names")
+	flag.StringVar(&vpcID, "vpc-id", "", "The vpc-id where EKS cluster is deployed")
+
 
 	flag.Parse()
 
@@ -184,6 +183,11 @@ func main() {
 
 	if clusterName == "" {
 		setupLog.Error(fmt.Errorf("cluster-name is a required parameter"), "unable to start the controller")
+		os.Exit(1)
+	}
+
+	if vpcID == "" {
+		setupLog.Error(fmt.Errorf("vpc-id is a required parameter"), "unable to start the controller")
 		os.Exit(1)
 	}
 
@@ -340,6 +344,7 @@ func main() {
 		EC2Wrapper:  ec2Wrapper,
 		ClusterName: clusterName,
 		Log:         ctrl.Log.WithName("eni cleaner"),
+		VPCID:       vpcID,
 	}).SetupWithManager(ctx, mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to start eni cleaner")
 		os.Exit(1)
