@@ -144,7 +144,6 @@ func main() {
 	flag.StringVar(&region, "aws-region", "", "The aws region of the k8s cluster")
 	flag.StringVar(&vpcID, "vpc-id", "", "The vpc-id where EKS cluster is deployed")
 
-
 	flag.Parse()
 
 	// Dev mode logging disabled by default, to enable set the enableDevLogging argument
@@ -275,7 +274,7 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
 	}
-	ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName, workerNodeVpcId)
+	ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName, vpcID)
 
 	sgpAPI := utils.NewSecurityGroupForPodsAPI(
 		mgr.GetClient(),
