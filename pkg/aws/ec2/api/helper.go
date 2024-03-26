@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
@@ -60,7 +61,7 @@ var (
 )
 
 type ec2APIHelper struct {
-	ec2Wrapper EC2Wrapper
+	ec2Wrapper               EC2Wrapper
 	workerNodeVpcId          string
 	securityGroupNameToIdMap map[string]string
 }
@@ -661,4 +662,25 @@ func (h *ec2APIHelper) GetSecurityGroupIdsForSecurityGroupNames(securityGroupNam
 		input.NextToken = output.NextToken
 	}
 	return sgIds, nil
+}
+
+// GetSourceAcctAndArn constructs source acct and arn and return them for use
+func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, error) {
+	// ARN format (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html)
+	// arn:partition:service:region:account-id:resource-type/resource-id
+	// IAM format, region is always blank
+	// arn:aws:iam::account:role/role-name-with-path
+	if !arn.IsARN(roleARN) {
+		return "", "", fmt.Errorf("incorrect ARN format for role %s", roleARN)
+	} else if region == "" {
+		return "", "", nil
+	}
+
+	parsedArn, err := arn.Parse(roleARN)
+	if err != nil {
+		return "", "", err
+	}
+
+	sourceArn := fmt.Sprintf("arn:%s:eks:%s:%s:cluster/%s", parsedArn.Partition, region, parsedArn.AccountID, clusterName)
+	return parsedArn.AccountID, sourceArn, nil
 }

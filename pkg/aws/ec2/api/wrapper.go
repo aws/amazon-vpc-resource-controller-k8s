@@ -23,7 +23,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/httpclient"
 	"k8s.io/apimachinery/pkg/util/wait"
 
-
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
@@ -322,6 +321,9 @@ var (
 		prometheus.CounterOpts{
 			Name: "ec2_describe_security_groups_api_err_count",
 			Help: "The number of errors encountered while making calls to describe security groups",
+		},
+	)
+
 	ec2DescribeNetworkInterfacesPagesAPICallCnt = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "ec2_describe_network_interfaces_pages_api_call_count",
@@ -497,7 +499,7 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 
 	roleARN = strings.Trim(roleARN, "\"")
 
-	sourceAcct, sourceArn, err := utils.GetSourceAcctAndArn(roleARN, region, clusterName)
+	sourceAcct, sourceArn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
 	if err != nil {
 		return nil, err
 	}
