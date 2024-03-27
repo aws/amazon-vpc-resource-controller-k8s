@@ -91,11 +91,24 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	nodeFound := true
+	node := &v1.Node{}
+	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
+		if errors.IsNotFound(err) {
+			nodeFound = false
+		} else {
+			r.Log.Error(err, "failed to get the node object in CNINode reconciliation, will retry")
+			// Requeue request so it can be retried
+			return ctrl.Result{}, err
+		}
+	}
+
 	if cniNode.GetDeletionTimestamp().IsZero() {
+		shouldPatch := false
+		cniNodeCopy := cniNode.DeepCopy()
 		// Add cluster name tag if it does not exist
 		val, ok := cniNode.Spec.Tags[config.CNINodeClusterNameKey]
 		if !ok || val != r.ClusterName {
-			cniNodeCopy := cniNode.DeepCopy()
 			if len(cniNodeCopy.Spec.Tags) != 0 {
 				cniNodeCopy.Spec.Tags[config.CNINodeClusterNameKey] = r.ClusterName
 			} else {
@@ -103,21 +116,42 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					config.CNINodeClusterNameKey: r.ClusterName,
 				}
 			}
+			shouldPatch = true
+		}
+		// if node exists, get & add OS label if it does not exist on CNINode
+		if nodeFound {
+			nodeLabelOS := node.ObjectMeta.Labels[config.NodeLabelOS]
+			val, ok = cniNode.ObjectMeta.Labels[config.NodeLabelOS]
+			if !ok || val != nodeLabelOS {
+				if len(cniNodeCopy.ObjectMeta.Labels) != 0 {
+					cniNodeCopy.ObjectMeta.Labels[config.NodeLabelOS] = nodeLabelOS
+				} else {
+					cniNodeCopy.ObjectMeta.Labels = map[string]string{
+						config.NodeLabelOS: nodeLabelOS,
+					}
+				}
+				shouldPatch = true
+			}
+		}
+
+		if shouldPatch {
+			r.Log.Info("patching CNINode to add required fields Tags and Labels", "cninode", cniNode.Name)
 			return ctrl.Result{}, r.Client.Patch(ctx, cniNodeCopy, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{}))
 		}
+
+		// Add finalizer if it does not exist
 		if err := r.FinalizerManager.AddFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
 			r.Log.Error(err, "failed to add finalizer on CNINode, will retry", "cniNode", cniNode.Name, "finalizer", config.NodeTerminationFinalizer)
 			return ctrl.Result{}, err
 		}
-		r.Log.Info("added finalizer on cninode", "finalizer", config.NodeTerminationFinalizer, "cniNode", cniNode.Name)
 		return ctrl.Result{}, nil
 
 	} else { // CNINode is marked for deletion
-		// check if node object exists
-		node := &v1.Node{}
-		if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
-			if errors.IsNotFound(err) {
-				//  node is also deleted, proceed with running the cleanup routine and remove the finalizer
+		if !nodeFound {
+			//  node is also deleted, proceed with running the cleanup routine and remove the finalizer
+
+			// run cleanup for Linux nodes only
+			if val, ok := cniNode.ObjectMeta.Labels[config.NodeLabelOS]; ok && val == config.OSLinux {
 				r.Log.Info("running the finalizer routine on cniNode", "cniNode", cniNode.Name)
 				cleaner := &cleanup.NodeTerminationCleaner{
 					NodeName: cniNode.Name,
@@ -128,22 +162,19 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					VPCID:      r.VPCID,
 					Log:        ctrl.Log.WithName("eniCleaner").WithName("node"),
 				}
-				// Return err if failed to delete leaked ENIs on node so it can be retried
+
 				if err := cleaner.DeleteLeakedResources(); err != nil {
 					r.Log.Error(err, "failed to cleanup resources during node termination, request will be requeued")
+					// Return err if failed to delete leaked ENIs on node so it can be retried
 					return ctrl.Result{}, err
 				}
-				if err = r.FinalizerManager.RemoveFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
-					r.Log.Error(err, "failed to remove finalizer on CNINode, will retry", "cniNode", cniNode.Name, "finalizer", config.NodeTerminationFinalizer)
-					return ctrl.Result{}, err
-				}
-				r.Log.Info("removed finalizer on cniNode", "finalizer", config.NodeTerminationFinalizer, "cniNode", cniNode.Name)
-				return ctrl.Result{}, nil
-			} else {
-				r.Log.Error(err, "failed to get the node object in CNINode reconciliation, will retry")
-				// Requeue request so it can be retried
+			}
+
+			if err := r.FinalizerManager.RemoveFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
+				r.Log.Error(err, "failed to remove finalizer on CNINode, will retry", "cniNode", cniNode.Name, "finalizer", config.NodeTerminationFinalizer)
 				return ctrl.Result{}, err
 			}
+			return ctrl.Result{}, nil
 		} else {
 			// node exists, do not run the cleanup routine(periodic cleanup routine will anyway delete leaked ENIs), remove the finalizer
 			// to proceed with object deletion, and recreate similar object
