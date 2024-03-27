@@ -46,6 +46,9 @@ var (
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: nodeName,
+			Labels: map[string]string{
+				config.NodeLabelOS: config.OSLinux,
+			},
 		},
 		Spec: v1.NodeSpec{},
 		Status: v1.NodeStatus{
