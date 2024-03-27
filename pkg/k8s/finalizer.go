@@ -49,6 +49,7 @@ func (m *defaultFinalizerManager) AddFinalizers(ctx context.Context, obj client.
 		needsUpdate := false
 		for _, finalizer := range finalizers {
 			if !controllerutil.ContainsFinalizer(obj, finalizer) {
+				m.log.Info("adding finalizer", "object", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName(), "finalizer", finalizer)
 				controllerutil.AddFinalizer(obj, finalizer)
 				needsUpdate = true
 			}
@@ -70,6 +71,7 @@ func (m *defaultFinalizerManager) RemoveFinalizers(ctx context.Context, obj clie
 		needsUpdate := false
 		for _, finalizer := range finalizers {
 			if controllerutil.ContainsFinalizer(obj, finalizer) {
+				m.log.Info("removing finalizer", "object", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName(), "finalizer", finalizer)
 				controllerutil.RemoveFinalizer(obj, finalizer)
 				needsUpdate = true
 			}

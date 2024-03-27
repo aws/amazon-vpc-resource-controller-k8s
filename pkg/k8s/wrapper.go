@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -32,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
@@ -228,10 +230,18 @@ func (k *k8sWrapper) ListEvents(ops []client.ListOption) (*eventsv1.EventList, e
 
 func (k *k8sWrapper) GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error) {
 	cninode := &rcv1alpha1.CNINode{}
-	if err := k.cacheClient.Get(k.context, namespacedName, cninode); err != nil {
-		return cninode, err
-	}
-	return cninode, nil
+	// There could be cases when CNINode is deleted and re-created shortly after by CNINode controller so retry to get CNINode with backoff
+	err := retry.OnError(wait.Backoff{
+		Duration: time.Millisecond * 100,
+		Factor:   3.0,
+		Jitter:   0.1,
+		Steps:    5,
+	}, func(error) bool { return true },
+		func() error {
+			return k.cacheClient.Get(k.context, namespacedName, cninode)
+		})
+
+	return cninode, err
 }
 
 func (k *k8sWrapper) CreateCNINode(node *v1.Node, clusterName string) error {
@@ -248,6 +258,10 @@ func (k *k8sWrapper) CreateCNINode(node *v1.Node, clusterName string) error {
 					UID:        node.UID,
 					Controller: lo.ToPtr(true),
 				},
+			},
+			Labels: map[string]string{
+				// OS is a standard label & is set by Kubernetes, so we can skip checking if it is set
+				config.NodeLabelOS: node.ObjectMeta.Labels[config.NodeLabelOS],
 			},
 			Finalizers: []string{config.NodeTerminationFinalizer}, // finalizer to clean up leaked ENIs at node termination
 		},

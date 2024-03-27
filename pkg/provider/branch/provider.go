@@ -406,7 +406,7 @@ func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) 
 		// trunk cache is local map with lock. it shouldn't return not found error if trunk exists
 		// if the node's trunk is not found, we shouldn't retry
 		// worst case we rely on node based clean up goroutines to clean branch ENIs up
-		b.log.Info("failed to find trunk ENI for the node %s", nodeName)
+		b.log.Info("failed to find trunk ENI for the node", "nodeName", nodeName)
 		return ctrl.Result{}, nil
 	}
 
