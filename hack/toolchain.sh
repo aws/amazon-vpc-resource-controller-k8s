@@ -10,7 +10,7 @@ main() {
 }
 
 tools() {
-    go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+    go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20230216140739-c98506dc3b8e
     go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.9.0
     go install github.com/google/ko@latest
 
