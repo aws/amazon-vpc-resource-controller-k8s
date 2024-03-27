@@ -24,6 +24,15 @@ type SecurityGroupPolicySpec struct {
 	PodSelector            *metav1.LabelSelector `json:"podSelector,omitempty"`
 	ServiceAccountSelector *metav1.LabelSelector `json:"serviceAccountSelector,omitempty"`
 	SecurityGroups         GroupIds              `json:"securityGroups,omitempty"`
+	SecurityGroupNames     GroupNames            `json:"securityGroupNames,omitempty"`
+}
+
+// GroupNames contains the list of security group names that will be applied to the network interface of the pod matching the criteria.
+type GroupNames struct {
+	// Groups is the list of EC2 Security Group Names that need to be applied to the ENI of a Pod.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=5
+	GroupNames []string `json:"groupNames,omitempty"`
 }
 
 // GroupIds contains the list of security groups that will be applied to the network interface of the pod matching the criteria.
@@ -45,6 +54,7 @@ type ServiceAccountSelector struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:printcolumn:name="Security-Group-Ids",type=string,JSONPath=`.spec.securityGroups.groupIds`,description="The security group IDs to apply to the elastic network interface of pods that match this policy"
+// +kubebuilder:printcolumn:name="Security-Group-Names",type=string,JSONPath=`.spec.securityGroups.groupNames`,description="The security group names to apply to the elastic network interface of pods that match this policy"
 // +kubebuilder:resource:shortName=sgp
 
 // Custom Resource Definition for applying security groups to pods

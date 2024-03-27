@@ -14,6 +14,8 @@
 package utils
 
 import (
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/golang/mock/gomock"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,20 +25,31 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 )
 
 var (
-	testSA                *corev1.ServiceAccount
-	testPod               *corev1.Pod
-	testScheme            *runtime.Scheme
-	testClient            client.Client
-	testSecurityGroupsOne []string
-	testSecurityGroupsTwo []string
-	helper                SecurityGroupForPods
-	name                  string
-	namespace             string
-	saName                string
+	testSA                        *corev1.ServiceAccount
+	testPod                       *corev1.Pod
+	testScheme                    *runtime.Scheme
+	testClient                    client.Client
+	testSecurityGroupsOne         []string
+	testSecurityGroupsTwo         []string
+	testSecurityGroupNamesToIdMap map[string]string
+	helper                        SecurityGroupForPods
+	name                          string
+	namespace                     string
+	saName                        string
 )
+
+// TODO: Use the mocks and actually correctly mock this
+type FakeEc2Helper struct {
+	api.EC2APIHelper
+}
+
+func (f *FakeEc2Helper) GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames []string) ([]string, error) {
+	return nil, nil
+}
 
 func init() {
 	name = "test"
@@ -50,6 +63,10 @@ func init() {
 
 	testSecurityGroupsOne = []string{"sg-00001", "sg-00002"}
 	testSecurityGroupsTwo = []string{"sg-00003", "sg-00004"}
+	testSecurityGroupNamesToIdMap = map[string]string{
+		"db-sg":    "sg-aaaa",
+		"cache-sg": "sg-bbbb",
+	}
 	testClient = fake.NewClientBuilder().WithScheme(testScheme).WithObjects(
 		NewPod(name, saName, namespace),
 		NewPodNotForENI(name+"_NoENI", saName, namespace),
@@ -60,9 +77,19 @@ func init() {
 	).Build()
 
 	helper = SecurityGroupForPods{
-		Client: testClient,
-		Log:    ctrl.Log.WithName("testLog"),
+		Client:    testClient,
+		Log:       ctrl.Log.WithName("testLog"),
+		Ec2Helper: &FakeEc2Helper{},
 	}
+}
+
+func createHelper(mockCtrl *gomock.Controller) (SecurityGroupForPods, *mock_api.MockEC2APIHelper) {
+	mockWrapper := mock_api.NewMockEC2APIHelper(mockCtrl)
+	return SecurityGroupForPods{
+		Client:    testClient,
+		Log:       ctrl.Log.WithName("testLog"),
+		Ec2Helper: mockWrapper,
+	}, mockWrapper
 }
 
 // NewSecurityGroupPolicyOne creates a test security group policy's pointer.

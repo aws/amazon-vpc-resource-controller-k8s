@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/httpclient"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -60,6 +60,7 @@ type EC2Wrapper interface {
 	DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
+	DescribeSecurityGroups(input *ec2.DescribeSecurityGroupsInput) (*ec2.DescribeSecurityGroupsOutput, error)
 }
 
 var (
@@ -309,6 +310,20 @@ var (
 		},
 	)
 
+	ec2DescribeSecurityGroupsCallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_describe_security_groups_api_call_count",
+			Help: "The number of calls made to describe security groups",
+		},
+	)
+
+	ec2DescribeSecurityGroupsErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_describe_security_groups_api_err_count",
+			Help: "The number of errors encountered while making calls to describe security groups",
+		},
+	)
+
 	ec2DescribeNetworkInterfacesPagesAPICallCnt = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "ec2_describe_network_interfaces_pages_api_call_count",
@@ -359,6 +374,8 @@ func prometheusRegister() {
 			ec2describeTrunkInterfaceAssociationAPIErrCnt,
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
+			ec2DescribeSecurityGroupsCallCnt,
+			ec2DescribeSecurityGroupsErrCnt,
 			ec2APICallLatencies,
 			vpccniAvailableENICnt,
 			vpcrcAvailableENICnt,
@@ -449,7 +466,7 @@ func (e *ec2Wrapper) getInstanceSession() (instanceSession *session.Session, err
 }
 
 func (e *ec2Wrapper) getInstanceServiceClient(qps int, burst int, instanceSession *session.Session) (*ec2.EC2, error) {
-	instanceClient, err := utils.NewRateLimitedClient(qps, burst)
+	instanceClient, err := httpclient.NewRateLimitedClient(qps, burst)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v",
 			qps, burst, err)
@@ -466,7 +483,7 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 	injectUserAgent(&userStsSession.Handlers)
 
 	// Create a rate limited http client for the
-	client, err := utils.NewRateLimitedClient(qps, burst)
+	client, err := httpclient.NewRateLimitedClient(qps, burst)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v", qps, burst, err)
 	}
@@ -482,7 +499,7 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 
 	roleARN = strings.Trim(roleARN, "\"")
 
-	sourceAcct, sourceArn, err := utils.GetSourceAcctAndArn(roleARN, region, clusterName)
+	sourceAcct, sourceArn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
 	if err != nil {
 		return nil, err
 	}
@@ -834,6 +851,21 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkIn
 	if err != nil {
 		ec2APIErrCnt.Inc()
 		ec2CreateNetworkInterfacePermissionErrCnt.Inc()
+	}
+
+	return output, err
+}
+
+func (e *ec2Wrapper) DescribeSecurityGroups(input *ec2.DescribeSecurityGroupsInput) (*ec2.DescribeSecurityGroupsOutput, error) {
+	output, err := e.userServiceClient.DescribeSecurityGroups(input)
+
+	// Metric Update
+	ec2APICallCnt.Inc()
+	ec2DescribeSecurityGroupsCallCnt.Inc()
+
+	if err != nil {
+		ec2APIErrCnt.Inc()
+		ec2DescribeSecurityGroupsErrCnt.Inc()
 	}
 
 	return output, err
