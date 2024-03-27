@@ -20,9 +20,8 @@ import (
 	"strings"
 
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
-
-	"github.com/aws/aws-sdk-go/aws/arn"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -57,8 +56,9 @@ type SecurityGroupForPodsAPI interface {
 }
 
 type SecurityGroupForPods struct {
-	Client client.Client
-	Log    logr.Logger
+	Client    client.Client
+	Log       logr.Logger
+	Ec2Helper api.EC2APIHelper
 }
 
 // NewSecurityGroupForPodsAPI returns the SecurityGroupForPod APIs for common operations on objects
@@ -102,7 +102,12 @@ func (s *SecurityGroupForPods) GetMatchingSecurityGroupForPods(pod *corev1.Pod) 
 		return nil, err
 	}
 
-	sgList := s.filterPodSecurityGroups(sgpList, pod, sa)
+	sgList, err := s.filterPodSecurityGroups(sgpList, pod, sa)
+	if err != nil {
+		helperLog.Error(err, "Failed in associating pod to security groups")
+		return nil, err
+	}
+
 	if len(sgList) > 0 {
 		helperLog.V(1).Info("Pod matched a SecurityGroupPolicy and will get the following Security Groups:",
 			"Security Groups", sgList)
@@ -113,13 +118,15 @@ func (s *SecurityGroupForPods) GetMatchingSecurityGroupForPods(pod *corev1.Pod) 
 func (s *SecurityGroupForPods) filterPodSecurityGroups(
 	sgpList *vpcresourcesv1beta1.SecurityGroupPolicyList,
 	pod *corev1.Pod,
-	sa *corev1.ServiceAccount) []string {
+	sa *corev1.ServiceAccount) ([]string, error) {
 	var sgList []string
+	var sgNameList []string
 	sgpLogger := s.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
 	for _, sgp := range sgpList.Items {
 		hasPodSelector := sgp.Spec.PodSelector != nil
 		hasSASelector := sgp.Spec.ServiceAccountSelector != nil
-		hasSecurityGroup := sgp.Spec.SecurityGroups.Groups != nil && len(sgp.Spec.SecurityGroups.Groups) > 0
+		hasSecurityGroup := (sgp.Spec.SecurityGroups.Groups != nil && len(sgp.Spec.SecurityGroups.Groups) > 0) ||
+			(sgp.Spec.SecurityGroupNames.GroupNames != nil && len(sgp.Spec.SecurityGroupNames.GroupNames) > 0)
 
 		if (!hasPodSelector && !hasSASelector) || !hasSecurityGroup {
 			sgpLogger.Info(
@@ -155,11 +162,18 @@ func (s *SecurityGroupForPods) filterPodSecurityGroups(
 			continue
 		}
 
+		sgNameList = append(sgNameList, sgp.Spec.SecurityGroupNames.GroupNames...)
 		sgList = append(sgList, sgp.Spec.SecurityGroups.Groups...)
 	}
 
+	sgNameList = RemoveDuplicatedSg(sgNameList)
+	sgIdsForNames, err := s.Ec2Helper.GetSecurityGroupIdsForSecurityGroupNames(sgNameList)
+	if err != nil {
+		return nil, err
+	}
+	sgList = append(sgList, sgIdsForNames...)
 	sgList = RemoveDuplicatedSg(sgList)
-	return sgList
+	return sgList, nil
 }
 
 // DeconstructIPsFromPrefix deconstructs a IPv4 prefix into a list of /32 IPv4 addresses
@@ -210,25 +224,4 @@ func IsNitroInstance(instanceType string) (bool, error) {
 		return true, nil
 	}
 	return false, nil
-}
-
-// GetSourceAcctAndArn constructs source acct and arn and return them for use
-func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, error) {
-	// ARN format (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html)
-	// arn:partition:service:region:account-id:resource-type/resource-id
-	// IAM format, region is always blank
-	// arn:aws:iam::account:role/role-name-with-path
-	if !arn.IsARN(roleARN) {
-		return "", "", fmt.Errorf("incorrect ARN format for role %s", roleARN)
-	} else if region == "" {
-		return "", "", nil
-	}
-
-	parsedArn, err := arn.Parse(roleARN)
-	if err != nil {
-		return "", "", err
-	}
-
-	sourceArn := fmt.Sprintf("arn:%s:eks:%s:%s:cluster/%s", parsedArn.Partition, region, parsedArn.AccountID, clusterName)
-	return parsedArn.AccountID, sourceArn, nil
 }

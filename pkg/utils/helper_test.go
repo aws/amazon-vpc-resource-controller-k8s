@@ -16,6 +16,7 @@ package utils
 import (
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,22 +61,76 @@ func TestCanInjectENI_CombinedSelectors(t *testing.T) {
 	}
 
 	// Combined SA selector and PodSelector
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	assert.Nil(t, err)
 	assert.True(t, isEverySecurityGroupIncluded(sgs))
 }
 
 // TestCanInjectENI_CombinedSelectors tests SGP with Pod selector.
 func TestCanInjectENI_PodSelectors(t *testing.T) {
-	// PodSelector alone
-	securityGroupPolicyPod := NewSecurityGroupPolicyPodSelector(
-		"test", "test_namespace", testSecurityGroupsOne)
-	sgpList := &vpcresourcesv1beta1.SecurityGroupPolicyList{
-		TypeMeta: metav1.TypeMeta{},
-		ListMeta: metav1.ListMeta{},
-		Items:    []vpcresourcesv1beta1.SecurityGroupPolicy{securityGroupPolicyPod},
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	sgp, ec2WrapperMock := createHelper(ctrl)
+
+	var sgNames, sgIds []string
+	for key, value := range testSecurityGroupNamesToIdMap {
+		sgNames = append(sgNames, key)
+		sgIds = append(sgIds, value)
 	}
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
-	assert.True(t, isEverySecurityGroupIncluded(sgs))
+
+	var tests = []struct {
+		testName                     string
+		sgpListInput                 *vpcresourcesv1beta1.SecurityGroupPolicyList
+		mockSecurityGroupIdsToReturn []string
+		expectedSgIds                []string
+	}{
+		{
+			testName: "OnlySecurityGroupIds",
+			sgpListInput: &vpcresourcesv1beta1.SecurityGroupPolicyList{
+				TypeMeta: metav1.TypeMeta{},
+				ListMeta: metav1.ListMeta{},
+				Items: []vpcresourcesv1beta1.SecurityGroupPolicy{NewSecurityGroupPolicyPodSelector(
+					"test", "test_namespace", testSecurityGroupsOne, nil)},
+			},
+			mockSecurityGroupIdsToReturn: nil,
+			expectedSgIds:                testSecurityGroupsOne,
+		},
+		{
+			testName: "OnlySecurityGroupNames",
+			sgpListInput: &vpcresourcesv1beta1.SecurityGroupPolicyList{
+				TypeMeta: metav1.TypeMeta{},
+				ListMeta: metav1.ListMeta{},
+				Items: []vpcresourcesv1beta1.SecurityGroupPolicy{NewSecurityGroupPolicyPodSelector(
+					"test", "test_namespace", nil, sgNames)},
+			},
+			mockSecurityGroupIdsToReturn: sgIds,
+			expectedSgIds:                sgIds,
+		},
+		{
+			testName: "BothSecurityGroupIdsAndSecurityGroupNames",
+			sgpListInput: &vpcresourcesv1beta1.SecurityGroupPolicyList{
+				TypeMeta: metav1.TypeMeta{},
+				ListMeta: metav1.ListMeta{},
+				Items: []vpcresourcesv1beta1.SecurityGroupPolicy{NewSecurityGroupPolicyPodSelector(
+					"test", "test_namespace", testSecurityGroupsOne, sgNames)},
+			},
+			mockSecurityGroupIdsToReturn: sgIds,
+			expectedSgIds:                append(sgIds, testSecurityGroupsOne...),
+		},
+	}
+
+	for _, test := range tests {
+		ec2WrapperMock.EXPECT().GetSecurityGroupIdsForSecurityGroupNames(test.sgpListInput.Items[0].
+			Spec.SecurityGroupNames.GroupNames).Return(test.mockSecurityGroupIdsToReturn, nil)
+		sgIds, err := sgp.filterPodSecurityGroups(test.sgpListInput, testPod, testSA)
+		if err != nil {
+			t.Fatalf("Test %s failed", test.testName)
+		}
+		if !isEverySecurityGroupIncluded2(test.expectedSgIds, sgIds) {
+			t.Fatalf("Test Name: %s Failed. Expected SGs %v got %v. Test %s failed", test.testName, test.expectedSgIds, sgIds,
+				test.testName)
+		}
+	}
 }
 
 // TestCanInjectENI_SASelectors tests SGP with SA selector.
@@ -88,7 +143,8 @@ func TestCanInjectENI_SASelectors(t *testing.T) {
 		ListMeta: metav1.ListMeta{},
 		Items:    []vpcresourcesv1beta1.SecurityGroupPolicy{securityGroupPolicySa},
 	}
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	assert.Nil(t, err)
 	assert.True(t, isEverySecurityGroupIncluded(sgs))
 }
 
@@ -97,7 +153,7 @@ func TestCanInjectENI_Multi_SGPs(t *testing.T) {
 	securityGroupPolicySa := NewSecurityGroupPolicySaSelector(
 		name, namespace, []string{"sg-00001"})
 	securityGroupPolicyPod := NewSecurityGroupPolicyPodSelector(
-		name, namespace, []string{"sg-00002"})
+		name, namespace, []string{"sg-00002"}, nil)
 	sgsList := []vpcresourcesv1beta1.SecurityGroupPolicy{
 		securityGroupPolicySa,
 		securityGroupPolicyPod}
@@ -106,7 +162,8 @@ func TestCanInjectENI_Multi_SGPs(t *testing.T) {
 		ListMeta: metav1.ListMeta{},
 		Items:    sgsList,
 	}
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	assert.Nil(t, err)
 	assert.True(t, isEverySecurityGroupIncluded(sgs))
 }
 
@@ -120,7 +177,8 @@ func TestCanInjectENI_EmptyPodSelector(t *testing.T) {
 		ListMeta: metav1.ListMeta{},
 		Items:    []vpcresourcesv1beta1.SecurityGroupPolicy{securityGroupPolicyEmptyPodSelector},
 	}
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	assert.Nil(t, err)
 	assert.True(t, isEverySecurityGroupIncluded(sgs))
 }
 
@@ -134,7 +192,8 @@ func TestCanInjectENI_EmptySASelector(t *testing.T) {
 		ListMeta: metav1.ListMeta{},
 		Items:    []vpcresourcesv1beta1.SecurityGroupPolicy{securityGroupPolicyEmptySaSelector},
 	}
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	assert.Nil(t, err)
 	assert.True(t, isEverySecurityGroupIncluded(sgs))
 }
 
@@ -148,7 +207,8 @@ func TestCanInjectENI_MatchLabelSASelector(t *testing.T) {
 		ListMeta: metav1.ListMeta{},
 		Items:    []vpcresourcesv1beta1.SecurityGroupPolicy{securityGroupPolicyEmptySaSelector},
 	}
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	assert.Nil(t, err)
 	assert.True(t, isEverySecurityGroupIncluded(sgs))
 }
 
@@ -162,7 +222,8 @@ func TestCanInjectENI_MatchExpressionsSASelector(t *testing.T) {
 		ListMeta: metav1.ListMeta{},
 		Items:    []vpcresourcesv1beta1.SecurityGroupPolicy{securityGroupPolicyEmptySaSelector},
 	}
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	assert.Nil(t, err)
 	assert.True(t, isEverySecurityGroupIncluded(sgs))
 }
 
@@ -176,7 +237,8 @@ func TestCanInjectENI_MatchLabelPodSelector(t *testing.T) {
 		ListMeta: metav1.ListMeta{},
 		Items:    []vpcresourcesv1beta1.SecurityGroupPolicy{securityGroupPolicyEmptySaSelector},
 	}
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	assert.Nil(t, err)
 	assert.True(t, isEverySecurityGroupIncluded(sgs))
 }
 
@@ -190,7 +252,8 @@ func TestCanInjectENI_MatchExpressionsPodSelector(t *testing.T) {
 		ListMeta: metav1.ListMeta{},
 		Items:    []vpcresourcesv1beta1.SecurityGroupPolicy{securityGroupPolicyEmptySaSelector},
 	}
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	assert.Nil(t, err)
 	assert.True(t, isEverySecurityGroupIncluded(sgs))
 }
 
@@ -206,21 +269,23 @@ func TestCanInjectENI_MismatchedSASelector(t *testing.T) {
 	}
 	mismatchedSa := testSA.DeepCopy()
 	mismatchedSa.Labels["environment"] = "dev"
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, mismatchedSa)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, mismatchedSa)
+	assert.Nil(t, err)
 	assert.True(t, len(sgs) == 0)
 }
 
 // TestEmptySecurityGroupInSGP tests empty security group groupids in SGP.
 func TestEmptySecurityGroupInSGP(t *testing.T) {
 	securityGroupPolicyPod := NewSecurityGroupPolicyPodSelector(
-		"test", "test_namespace", testSecurityGroupsOne)
+		"test", "test_namespace", testSecurityGroupsOne, nil)
 	securityGroupPolicyPod.Spec.SecurityGroups.Groups = []string{}
 	sgpList := &vpcresourcesv1beta1.SecurityGroupPolicyList{
 		TypeMeta: metav1.TypeMeta{},
 		ListMeta: metav1.ListMeta{},
 		Items:    []vpcresourcesv1beta1.SecurityGroupPolicy{securityGroupPolicyPod},
 	}
-	sgs := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	sgs, err := helper.filterPodSecurityGroups(sgpList, testPod, testSA)
+	assert.Nil(t, err)
 	assert.True(t, len(sgs) == 0)
 }
 
@@ -243,6 +308,19 @@ func isEverySecurityGroupIncluded(retrievedSgs []string) bool {
 
 	for _, s := range retrievedSgs {
 		if !lo.Contains(testSecurityGroupsOne, s) {
+			return false
+		}
+	}
+	return true
+}
+
+func isEverySecurityGroupIncluded2(expectedSgs, retrievedSgs []string) bool {
+	if len(expectedSgs) != len(retrievedSgs) {
+		return false
+	}
+
+	for _, s := range retrievedSgs {
+		if !lo.Contains(expectedSgs, s) {
 			return false
 		}
 	}
@@ -285,7 +363,7 @@ func NewSecurityGroupPolicyCombined(
 
 // NewSecurityGroupPolicyPodSelector creates a test SGP with only pod selector.
 func NewSecurityGroupPolicyPodSelector(
-	name string, namespace string, securityGroups []string) vpcresourcesv1beta1.SecurityGroupPolicy {
+	name string, namespace string, securityGroupIds []string, securityGroupNames []string) vpcresourcesv1beta1.SecurityGroupPolicy {
 	sgp := vpcresourcesv1beta1.SecurityGroupPolicy{
 		TypeMeta: metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{
@@ -302,7 +380,10 @@ func NewSecurityGroupPolicyPodSelector(
 				}},
 			},
 			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+				Groups: securityGroupIds,
+			},
+			SecurityGroupNames: vpcresourcesv1beta1.GroupNames{
+				GroupNames: securityGroupNames,
 			},
 		},
 	}
@@ -530,47 +611,4 @@ func TestIsNitroInstance_NonNitro(t *testing.T) {
 	isNitro, err := IsNitroInstance(instanceType)
 	assert.NoError(t, err)
 	assert.False(t, isNitro)
-}
-
-// TestGetSourceAcctAndArn tests that generating account ID and cluster ARN
-func TestGetSourceAcctAndArn(t *testing.T) {
-	accountID := "123456789876"
-	clusterName := "test-cluster"
-	region := "us-west-2"
-	clusterARN := "arn:aws:eks:us-west-2:123456789876:cluster/test-cluster"
-
-	roleARN := "arn:aws:iam::123456789876:role/test-cluster"
-
-	// test correct inputs
-	acct, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
-	assert.NoError(t, err, "no error should be returned with accurate role arn")
-	assert.Equal(t, accountID, acct, "correct account ID should be retrieved")
-	assert.Equal(t, clusterARN, arn, "correct cluster arn should be retrieved")
-
-	region = "us-gov-west-1"
-	roleARN = "arn:aws-us-gov:iam::123456789876:role/test-cluster"
-	clusterARN = "arn:aws-us-gov:eks:us-gov-west-1:123456789876:cluster/test-cluster"
-	acct, arn, err = GetSourceAcctAndArn(roleARN, region, clusterName)
-	assert.NoError(t, err, "no error should be returned with accurate aws-us-gov partition role arn")
-	assert.Equal(t, accountID, acct, "correct account ID should be retrieved")
-	assert.Equal(t, clusterARN, arn, "correct gov partition cluster arn should be retrieved")
-
-	// test error handling
-	roleARN = "arn:aws:iam::123456789876"
-	_, _, err = GetSourceAcctAndArn(roleARN, region, clusterName)
-	assert.Error(t, err, "error should be returned with inaccurate role arn is given")
-}
-
-// TestGetSourceAcctAndArn_NoRegion test empty region
-func TestGetSourceAcctAndArn_NoRegion(t *testing.T) {
-	clusterName := "test-cluster"
-	region := ""
-
-	roleARN := "arn:aws:iam::123456789876:role/test-cluster"
-
-	// test correct inputs
-	acct, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
-	assert.NoError(t, err, "no error should be returned with accurate role arn")
-	assert.Equal(t, "", acct, "correct account ID should be retrieved")
-	assert.Equal(t, "", arn, "correct cluster arn should be retrieved")
 }
