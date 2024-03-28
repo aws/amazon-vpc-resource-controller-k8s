@@ -61,6 +61,7 @@ var (
 
 	securityGroupName1 = "db-sg"
 	securityGroupName2 = "redis-sg"
+	securityGroupName3 = "web-sg"
 	securityGroupNames = []string{securityGroupName1, securityGroupName2}
 
 	tags = []*ec2.Tag{
