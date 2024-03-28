@@ -639,14 +639,15 @@ func (h *ec2APIHelper) GetSecurityGroupIdsForSecurityGroupNames(securityGroupNam
 	filters := []*ec2.Filter{
 		{
 			Name:   aws.String("group-name"),
-			Values: aws.StringSlice(securityGroupNames),
+			Values: aws.StringSlice(sgNamesNotInCache),
 		},
 		{
 			Name:   aws.String("vpc-id"),
 			Values: aws.StringSlice([]string{h.workerNodeVpcId}),
 		},
 	}
-	input := &ec2.DescribeSecurityGroupsInput{Filters: filters}
+		input := &ec2.DescribeSecurityGroupsInput{Filters: filters}
+	foundSgNames := map[string]bool{}
 	for {
 		output, err := h.ec2Wrapper.DescribeSecurityGroups(input)
 		if err != nil {
@@ -660,6 +661,16 @@ func (h *ec2APIHelper) GetSecurityGroupIdsForSecurityGroupNames(securityGroupNam
 			break
 		}
 		input.NextToken = output.NextToken
+	}
+	var missingSgNames []string
+	for _, sgName := range sgNamesNotInCache {
+		if _, ok := foundSgNames[sgName]; !ok {
+			missingSgNames = append(missingSgNames, sgName)
+		}
+	}
+	if len(missingSgNames) > 0 {
+		sort.Strings(missingSgNames)
+		return nil, fmt.Errorf("security groups %s not found", missingSgNames)
 	}
 	return sgIds, nil
 }
