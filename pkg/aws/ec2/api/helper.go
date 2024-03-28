@@ -657,6 +657,7 @@ func (h *ec2APIHelper) GetSecurityGroupIdsForSecurityGroupNames(securityGroupNam
 		for _, sg := range output.SecurityGroups {
 			h.securityGroupNameToIdMap[*sg.GroupName] = *sg.GroupId
 			sgIds = append(sgIds, *sg.GroupId)
+			foundSgNames[*sg.GroupName] = true
 		}
 		if output.NextToken == nil {
 			break
