@@ -647,7 +647,7 @@ func (h *ec2APIHelper) GetSecurityGroupIdsForSecurityGroupNames(securityGroupNam
 			Values: aws.StringSlice([]string{h.workerNodeVpcId}),
 		},
 	}
-		input := &ec2.DescribeSecurityGroupsInput{Filters: filters}
+	input := &ec2.DescribeSecurityGroupsInput{Filters: filters}
 	foundSgNames := map[string]bool{}
 	for {
 		output, err := h.ec2Wrapper.DescribeSecurityGroups(input)
