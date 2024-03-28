@@ -857,7 +857,14 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkIn
 }
 
 func (e *ec2Wrapper) DescribeSecurityGroups(input *ec2.DescribeSecurityGroupsInput) (*ec2.DescribeSecurityGroupsOutput, error) {
+	accountIdFilter := ec2.Filter{
+		Name:   aws.String("owner-id"),
+		Values: aws.StringSlice([]string{e.accountID}),
+	}
+	start := time.Now()
+	input.Filters = append(input.Filters, &accountIdFilter)
 	output, err := e.userServiceClient.DescribeSecurityGroups(input)
+	ec2APICallLatencies.WithLabelValues("describe_security_groups").Observe(timeSinceMs(start))
 
 	// Metric Update
 	ec2APICallCnt.Inc()
