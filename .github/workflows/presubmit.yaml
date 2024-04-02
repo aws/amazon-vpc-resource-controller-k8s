@@ -58,8 +58,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-      - name: Run Gosec Security Scanner
-        uses: securego/gosec@master
+      - name: Setup Go Version
+        run: echo "GO_VERSION=$(cat .go-version)" >> $GITHUB_ENV
+      - uses: actions/setup-go@v4
         with:
-          args: -exclude-dir test -exclude-generated -severity medium -exclude=G108,G114 ./...
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: "**/go.sum"
+      - name: Install `gosec`
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - name: Run Gosec Security Scanner
+        run: ~/go/bin/gosec -exclude-dir test -exclude-generated -severity medium -exclude=G108,G114 ./...
 
