@@ -48,6 +48,7 @@ func SendNodeEventWithNodeObject(client k8s.K8sWrapper, node *v1.Node, reason, m
 func SendBroadcastNodeEvent(client k8s.K8sWrapper, reason, msg, eventType string, logger logr.Logger) {
 	if nodeList, err := client.ListNodes(); err == nil {
 		for _, node := range nodeList.Items {
+			node := node // Fix gosec G601, so we can use &node
 			client.BroadcastEvent(&node, reason, msg, eventType)
 		}
 	} else {
