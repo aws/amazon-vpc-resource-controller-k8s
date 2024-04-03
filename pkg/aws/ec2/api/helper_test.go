@@ -192,7 +192,9 @@ var (
 		},
 	}
 
-	describeTrunkInterfaceOutput = []*ec2.NetworkInterface{&networkInterface1, &networkInterface2}
+	describeTrunkInterfaceOutput = &ec2.DescribeNetworkInterfacesOutput{
+		NetworkInterfaces: []*ec2.NetworkInterface{&networkInterface1, &networkInterface2},
+	}
 
 	describeTrunkInterfaceAssociationsInput = &ec2.DescribeTrunkInterfaceAssociationsInput{
 		Filters: []*ec2.Filter{{
@@ -1177,7 +1179,7 @@ func TestEc2APIHelper_GetBranchNetworkInterface(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DescribeNetworkInterfacesPages(describeTrunkInterfaceInput).Return(describeTrunkInterfaceOutput, nil)
+	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput).Return(describeTrunkInterfaceOutput, nil)
 
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
 	assert.NoError(t, err)

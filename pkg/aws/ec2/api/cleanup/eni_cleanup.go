@@ -124,49 +124,53 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 	describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
 		Filters: filters,
 	}
-	networkInterfaces, err := e.EC2Wrapper.DescribeNetworkInterfacesPages(describeNetworkInterfaceIp)
-	if err != nil {
-		e.Log.Error(err, "failed to describe network interfaces, cleanup will be retried in next cycle")
-		return err
-	}
-
-	for _, networkInterface := range networkInterfaces {
-		if e.Manager.ShouldDeleteENI(networkInterface.NetworkInterfaceId) {
-			tagMap := utils.GetTagKeyValueMap(networkInterface.TagSet)
-			if val, ok := tagMap[config.NetworkInterfaceOwnerTagKey]; ok {
-				// Increment promethues metrics for number of leaked ENIs cleaned up
-				switch val {
-				case config.NetworkInterfaceOwnerTagValue:
-					vpcrcAvailableCount += 1
-				case config.NetworkInterfaceOwnerVPCCNITagValue:
-					vpccniAvailableCount += 1
-				default:
-					// We should not hit this case as we only filter for relevant tag values, log error and continue if unexpected ENIs found
-					e.Log.Error(fmt.Errorf("found available ENI not created by VPC-CNI/VPC-RC"), "eniID", *networkInterface.NetworkInterfaceId)
+	for {
+		describeNetworkInterfaceOp, err := e.EC2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfaceIp)
+		if err != nil {
+			e.Log.Error(err, "failed to describe network interfaces, cleanup will be retried in next cycle")
+			return err
+		}
+		for _, nwInterface := range describeNetworkInterfaceOp.NetworkInterfaces {
+			if e.Manager.ShouldDeleteENI(nwInterface.NetworkInterfaceId) {
+				tagMap := utils.GetTagKeyValueMap(nwInterface.TagSet)
+				if val, ok := tagMap[config.NetworkInterfaceOwnerTagKey]; ok {
+					// Increment promethues metrics for number of leaked ENIs cleaned up
+					switch val {
+					case config.NetworkInterfaceOwnerTagValue:
+						vpcrcAvailableCount += 1
+					case config.NetworkInterfaceOwnerVPCCNITagValue:
+						vpccniAvailableCount += 1
+					default:
+						// We should not hit this case as we only filter for relevant tag values, log error and continue if unexpected ENIs found
+						e.Log.Error(fmt.Errorf("found available ENI not created by VPC-CNI/VPC-RC"), "eniID", *nwInterface.NetworkInterfaceId)
+						continue
+					}
+				}
+				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+					NetworkInterfaceId: nwInterface.NetworkInterfaceId,
+				})
+				if err != nil {
+					// append err and continue, we will retry deletion in the next period/reconcile
+					leakedENICount += 1
+					errors = append(errors, fmt.Errorf("failed to delete leaked network interface %v:%v", *nwInterface.NetworkInterfaceId, err))
+					e.Log.Error(err, "failed to delete the leaked network interface",
+						"id", *nwInterface.NetworkInterfaceId)
 					continue
 				}
+				e.Log.Info("deleted leaked ENI successfully", "eni id", nwInterface.NetworkInterfaceId)
+			} else {
+				// Seeing the ENI for the first time, add it to the new list of available network interfaces
+				availableENIs[*nwInterface.NetworkInterfaceId] = struct{}{}
+				e.Log.Info("adding eni to to the map of available ENIs, will be removed if present in "+
+					"next run too", "id", *nwInterface.NetworkInterfaceId)
 			}
-			_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
-				NetworkInterfaceId: networkInterface.NetworkInterfaceId,
-			})
-			if err != nil {
-				// append err and continue, we will retry deletion in the next period/reconcile
-				leakedENICount += 1
-				errors = append(errors, fmt.Errorf("failed to delete leaked network interface %v:%v", *networkInterface.NetworkInterfaceId, err))
-				e.Log.Error(err, "failed to delete the leaked network interface",
-					"id", *networkInterface.NetworkInterfaceId)
-				continue
-			}
-			e.Log.Info("deleted leaked ENI successfully", "eni id", networkInterface.NetworkInterfaceId)
-		} else {
-			// Seeing the ENI for the first time, add it to the new list of available network interfaces
-			availableENIs[*networkInterface.NetworkInterfaceId] = struct{}{}
-			e.Log.V(1).Info("adding eni to to the map of available ENIs, will be removed if present in "+
-				"next run too", "id", *networkInterface.NetworkInterfaceId)
 		}
 
+		if describeNetworkInterfaceOp.NextToken == nil {
+			break
+		}
+		describeNetworkInterfaceIp.NextToken = describeNetworkInterfaceOp.NextToken
 	}
-
 	e.Manager.UpdateCleanupMetrics(vpcrcAvailableCount, vpccniAvailableCount, leakedENICount)
 	e.Manager.UpdateAvailableENIsIfNeeded(&availableENIs)
 	return kerrors.NewAggregate(errors)
