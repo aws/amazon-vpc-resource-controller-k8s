@@ -16,6 +16,7 @@ package cleanup
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
@@ -23,6 +24,7 @@ import (
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
+	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/go-logr/logr"
@@ -149,7 +151,7 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 					NetworkInterfaceId: nwInterface.NetworkInterfaceId,
 				})
-				if err != nil {
+				if err != nil && !strings.Contains(err.Error(), ec2Errors.NotFoundInterfaceID) { // ignore InvalidNetworkInterfaceID.NotFound error
 					// append err and continue, we will retry deletion in the next period/reconcile
 					leakedENICount += 1
 					errors = append(errors, fmt.Errorf("failed to delete leaked network interface %v:%v", *nwInterface.NetworkInterfaceId, err))
