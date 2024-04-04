@@ -345,8 +345,9 @@ func prometheusRegister() {
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
 			ec2APICallLatencies,
-			vpcCniLeakedENICleanupCnt,
-			vpcrcLeakedENICleanupCnt,
+			vpccniAvailableENICnt,
+			vpcrcAvailableENICnt,
+			leakedENICnt,
 		)
 
 		prometheusRegistered = true

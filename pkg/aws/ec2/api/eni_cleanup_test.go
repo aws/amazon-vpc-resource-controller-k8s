@@ -37,6 +37,8 @@ var (
 	mockNetworkInterfaceId2 = "eni-000000000000001"
 	mockNetworkInterfaceId3 = "eni-000000000000002"
 
+	mockVPCID = "vpc-0000000000000000"
+
 	mockDescribeNetworkInterfaceIp = &ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -51,6 +53,10 @@ var (
 				Name: aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
 				Values: aws.StringSlice([]string{config.NetworkInterfaceOwnerTagValue,
 					config.NetworkInterfaceOwnerVPCCNITagValue}),
+			},
+			{
+				Name:   aws.String("vpc-id"),
+				Values: []*string{aws.String(mockVPCID)},
 			},
 		},
 	}
@@ -74,6 +80,7 @@ func getMockENICleaner(ctrl *gomock.Controller) (*ENICleaner, *mock_api.MockEC2W
 		EC2Wrapper:        mockEC2Wrapper,
 		availableENIs:     map[string]struct{}{},
 		Log:               zap.New(zap.UseDevMode(true)),
+		VPCID:             mockVPCID,
 		clusterNameTagKey: mockClusterNameTagKey,
 		ctx:               context.Background(),
 	}, mockEC2Wrapper

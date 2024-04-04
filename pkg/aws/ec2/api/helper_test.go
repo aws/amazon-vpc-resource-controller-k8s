@@ -180,16 +180,28 @@ var (
 	tokenID = "token"
 
 	describeTrunkInterfaceInput1 = &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{{
-			Name:   aws.String("tag:" + config.TrunkENIIDTag),
-			Values: []*string{&trunkInterfaceId},
-		}},
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("tag:" + config.TrunkENIIDTag),
+				Values: []*string{&trunkInterfaceId},
+			},
+			{
+				Name:   aws.String("subnet-id"),
+				Values: aws.StringSlice([]string{subnetId}),
+			},
+		},
 	}
 	describeTrunkInterfaceInput2 = &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{{
-			Name:   aws.String("tag:" + config.TrunkENIIDTag),
-			Values: []*string{&trunkInterfaceId},
-		}},
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("tag:" + config.TrunkENIIDTag),
+				Values: []*string{&trunkInterfaceId},
+			},
+			{
+				Name:   aws.String("subnet-id"),
+				Values: aws.StringSlice([]string{subnetId}),
+			},
+		},
 		NextToken: &tokenID,
 	}
 
@@ -1187,7 +1199,7 @@ func TestEc2APIHelper_GetBranchNetworkInterface_PaginatedResults(t *testing.T) {
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput1).Return(describeTrunkInterfaceOutput1, nil)
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput2).Return(describeTrunkInterfaceOutput2, nil)
 
-	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId)
+	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []*ec2.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
 }

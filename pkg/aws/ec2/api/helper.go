@@ -79,7 +79,7 @@ type EC2APIHelper interface {
 		ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2.Subnet, error)
-	GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error)
+	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]*ec2.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error)
@@ -562,11 +562,17 @@ func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.R
 	return err
 }
 
-func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2.NetworkInterface, error) {
-	filters := []*ec2.Filter{{
-		Name:   aws.String("tag:" + config.TrunkENIIDTag),
-		Values: []*string{trunkID},
-	}}
+func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2.NetworkInterface, error) {
+	filters := []*ec2.Filter{
+		{
+			Name:   aws.String("tag:" + config.TrunkENIIDTag),
+			Values: []*string{trunkID},
+		},
+		{
+			Name:   aws.String("subnet-id"),
+			Values: []*string{subnetID},
+		},
+	}
 
 	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}
 	var nwInterfaces []*ec2.NetworkInterface
