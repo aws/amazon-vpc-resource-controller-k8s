@@ -179,7 +179,7 @@ var (
 
 	tokenID = "token"
 
-	describeTrunkInterfaceInput = &ec2.DescribeNetworkInterfacesInput{
+	describeTrunkInterfaceInput1 = &ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{
 				Name:   aws.String("tag:" + config.TrunkENIIDTag),
@@ -191,8 +191,27 @@ var (
 			},
 		},
 	}
+	describeTrunkInterfaceInput2 = &ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("tag:" + config.TrunkENIIDTag),
+				Values: []*string{&trunkInterfaceId},
+			},
+			{
+				Name:   aws.String("subnet-id"),
+				Values: aws.StringSlice([]string{subnetId}),
+			},
+		},
+		NextToken: &tokenID,
+	}
 
-	describeTrunkInterfaceOutput = []*ec2.NetworkInterface{&networkInterface1, &networkInterface2}
+	describeTrunkInterfaceOutput1 = &ec2.DescribeNetworkInterfacesOutput{
+		NetworkInterfaces: []*ec2.NetworkInterface{&networkInterface1},
+		NextToken:         &tokenID,
+	}
+	describeTrunkInterfaceOutput2 = &ec2.DescribeNetworkInterfacesOutput{
+		NetworkInterfaces: []*ec2.NetworkInterface{&networkInterface2},
+	}
 
 	describeTrunkInterfaceAssociationsInput = &ec2.DescribeTrunkInterfaceAssociationsInput{
 		Filters: []*ec2.Filter{{
@@ -1171,13 +1190,14 @@ func TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady_TypeIPv4Prefix_Describ
 }
 
 // TestEc2APIHelper_GetBranchNetworkInterface_PaginatedResults returns the branch interface when paginated results is returned
-func TestEc2APIHelper_GetBranchNetworkInterface(t *testing.T) {
+func TestEc2APIHelper_GetBranchNetworkInterface_PaginatedResults(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DescribeNetworkInterfacesPages(describeTrunkInterfaceInput).Return(describeTrunkInterfaceOutput, nil)
+	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput1).Return(describeTrunkInterfaceOutput1, nil)
+	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput2).Return(describeTrunkInterfaceOutput2, nil)
 
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
 	assert.NoError(t, err)
