@@ -142,7 +142,7 @@ func main() {
 	flag.BoolVar(&enableWindowsPrefixDelegation, "enable-windows-prefix-delegation", false,
 		"Enable the feature flag for Windows prefix delegation")
 	flag.StringVar(&region, "aws-region", "", "The aws region of the k8s cluster")
-	flag.StringVar(&vpcID, "vpc-id", "", "The vpc-id where EKS cluster is deployed")
+	flag.StringVar(&vpcID, "vpc-id", "", "The VPC ID where EKS cluster is deployed")
 
 	flag.Parse()
 
