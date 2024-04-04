@@ -151,12 +151,14 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 					NetworkInterfaceId: nwInterface.NetworkInterfaceId,
 				})
-				if err != nil && !strings.Contains(err.Error(), ec2Errors.NotFoundInterfaceID) { // ignore InvalidNetworkInterfaceID.NotFound error
-					// append err and continue, we will retry deletion in the next period/reconcile
-					leakedENICount += 1
-					errors = append(errors, fmt.Errorf("failed to delete leaked network interface %v:%v", *nwInterface.NetworkInterfaceId, err))
-					e.Log.Error(err, "failed to delete the leaked network interface",
-						"id", *nwInterface.NetworkInterfaceId)
+				if err != nil {
+					if !strings.Contains(err.Error(), ec2Errors.NotFoundInterfaceID) { // ignore InvalidNetworkInterfaceID.NotFound error
+						// append err and continue, we will retry deletion in the next period/reconcile
+						leakedENICount += 1
+						errors = append(errors, fmt.Errorf("failed to delete leaked network interface %v:%v", *nwInterface.NetworkInterfaceId, err))
+						e.Log.Error(err, "failed to delete the leaked network interface",
+							"id", *nwInterface.NetworkInterfaceId)
+					}
 					continue
 				}
 				e.Log.Info("deleted leaked ENI successfully", "eni id", nwInterface.NetworkInterfaceId)
