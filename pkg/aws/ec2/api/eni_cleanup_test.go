@@ -37,8 +37,6 @@ var (
 	mockNetworkInterfaceId2 = "eni-000000000000001"
 	mockNetworkInterfaceId3 = "eni-000000000000002"
 
-	mockVPCID = "vpc-0000000000000000"
-
 	mockDescribeNetworkInterfaceIp = &ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -54,19 +52,19 @@ var (
 				Values: aws.StringSlice([]string{config.NetworkInterfaceOwnerTagValue,
 					config.NetworkInterfaceOwnerVPCCNITagValue}),
 			},
-			{
-				Name:   aws.String("vpc-id"),
-				Values: []*string{aws.String(mockVPCID)},
-			},
 		},
 	}
-	mockDescribeInterfaceOpWith1And2 = []*ec2.NetworkInterface{
-		{NetworkInterfaceId: &mockNetworkInterfaceId1},
-		{NetworkInterfaceId: &mockNetworkInterfaceId2},
+	mockDescribeInterfaceOpWith1And2 = &ec2.DescribeNetworkInterfacesOutput{
+		NetworkInterfaces: []*ec2.NetworkInterface{
+			{NetworkInterfaceId: &mockNetworkInterfaceId1},
+			{NetworkInterfaceId: &mockNetworkInterfaceId2},
+		},
 	}
-	mockDescribeInterfaceOpWith1And3 = []*ec2.NetworkInterface{
-		{NetworkInterfaceId: &mockNetworkInterfaceId1},
-		{NetworkInterfaceId: &mockNetworkInterfaceId3},
+	mockDescribeInterfaceOpWith1And3 = &ec2.DescribeNetworkInterfacesOutput{
+		NetworkInterfaces: []*ec2.NetworkInterface{
+			{NetworkInterfaceId: &mockNetworkInterfaceId1},
+			{NetworkInterfaceId: &mockNetworkInterfaceId3},
+		},
 	}
 )
 
@@ -76,7 +74,6 @@ func getMockENICleaner(ctrl *gomock.Controller) (*ENICleaner, *mock_api.MockEC2W
 		EC2Wrapper:        mockEC2Wrapper,
 		availableENIs:     map[string]struct{}{},
 		Log:               zap.New(zap.UseDevMode(true)),
-		VPCID:             mockVPCID,
 		clusterNameTagKey: mockClusterNameTagKey,
 		ctx:               context.Background(),
 	}, mockEC2Wrapper
@@ -88,10 +85,10 @@ func TestENICleaner_cleanUpAvailableENIs(t *testing.T) {
 
 	gomock.InOrder(
 		// Return network interface 1 and 2 in first cycle
-		mockWrapper.EXPECT().DescribeNetworkInterfacesPages(mockDescribeNetworkInterfaceIp).
+		mockWrapper.EXPECT().DescribeNetworkInterfaces(mockDescribeNetworkInterfaceIp).
 			Return(mockDescribeInterfaceOpWith1And2, nil),
 		// Return network interface 1 and 3 in the second cycle
-		mockWrapper.EXPECT().DescribeNetworkInterfacesPages(mockDescribeNetworkInterfaceIp).
+		mockWrapper.EXPECT().DescribeNetworkInterfaces(mockDescribeNetworkInterfaceIp).
 			Return(mockDescribeInterfaceOpWith1And3, nil),
 		// Expect to delete the network interface 1
 		mockWrapper.EXPECT().DeleteNetworkInterface(
