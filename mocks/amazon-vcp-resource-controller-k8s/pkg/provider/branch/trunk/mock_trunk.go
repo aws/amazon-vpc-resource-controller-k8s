@@ -76,18 +76,6 @@ func (mr *MockTrunkENIMockRecorder) DeleteCooledDownENIs() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteCooledDownENIs", reflect.TypeOf((*MockTrunkENI)(nil).DeleteCooledDownENIs))
 }
 
-// DisassociateAllBranchENIs mocks base method.
-func (m *MockTrunkENI) DisassociateAllBranchENIs() {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "DisassociateAllBranchENIs")
-}
-
-// DisassociateAllBranchENIs indicates an expected call of DisassociateAllBranchENIs.
-func (mr *MockTrunkENIMockRecorder) DisassociateAllBranchENIs() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DisassociateAllBranchENIs", reflect.TypeOf((*MockTrunkENI)(nil).DisassociateAllBranchENIs))
-}
-
 // InitTrunk mocks base method.
 func (m *MockTrunkENI) InitTrunk(arg0 ec2.EC2Instance, arg1 []v1.Pod) error {
 	m.ctrl.T.Helper()

@@ -453,7 +453,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		log.V(1).Info("successfully performed node operation")
 		return ctrl.Result{}, nil
 	}
-	log.Error(err, "failed to performed node operation")
+	log.Error(err, "failed to perform node operation")
 
 	return ctrl.Result{}, nil
 }
