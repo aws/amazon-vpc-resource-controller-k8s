@@ -29,7 +29,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 
 	"github.com/aws/aws-sdk-go/aws"
-	awsEC2 "github.com/aws/aws-sdk-go/service/ec2"
 	awsEc2 "github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -148,8 +147,6 @@ var (
 		Ipv6Address:        &BranchV6Ip2,
 	}
 
-	branchENIs2 = []*ENIDetails{EniDetails2}
-
 	// Trunk Interface
 	trunkId        = "eni-00000000000000002"
 	trunkInterface = &awsEc2.NetworkInterface{
@@ -157,12 +154,6 @@ var (
 		NetworkInterfaceId: &trunkId,
 		Attachment: &awsEc2.NetworkInterfaceAttachment{
 			Status: aws.String(awsEc2.AttachmentStatusAttached),
-		},
-	}
-	nodeNametag = []*awsEC2.Tag{
-		{
-			Key:   aws.String(config.NetworkInterfaceNodenameKey),
-			Value: aws.String(FakeInstance.Name()),
 		},
 	}
 
@@ -198,17 +189,6 @@ var (
 			InterfaceType:      aws.String("branch"),
 			NetworkInterfaceId: &EniDetails2.ID,
 			TagSet:             vlan2Tag,
-		},
-	}
-
-	trunkAssociationsBranch1And2 = []*awsEc2.TrunkInterfaceAssociation{
-		{
-			BranchInterfaceId: &EniDetails1.ID,
-			VlanId:            aws.Int64(int64(EniDetails1.VlanID)),
-		},
-		{
-			BranchInterfaceId: &EniDetails2.ID,
-			VlanId:            aws.Int64(int64(EniDetails2.VlanID)),
 		},
 	}
 
@@ -262,7 +242,7 @@ func getMockTrunk() trunkENI {
 		log:               log,
 		usedVlanIds:       make([]bool, MaxAllocatableVlanIds),
 		uidToBranchENIMap: map[string][]*ENIDetails{},
-		nodeNameTag: []*awsEC2.Tag{
+		nodeNameTag: []*awsEc2.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodenameKey),
 				Value: aws.String(FakeInstance.Name()),
@@ -842,21 +822,6 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestTrunkENI_DisassociateAllBranchENIs tests all branch ENI are disassociated with the trunk
-func TestTrunkENI_DisassociateAllBranchENIs(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunkENI, mockEC2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
-	trunkENI.uidToBranchENIMap[PodUID] = branchENIs1
-	trunkENI.uidToBranchENIMap[PodUID2] = branchENIs2
-
-	mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
-	mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID2).Return(nil)
-
-	trunkENI.DisassociateAllBranchENIs()
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs test branch is created and associated with the trunk and valid eni details
