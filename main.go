@@ -17,7 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof"
+	_ "net/http/pprof" // #nosec G108
 	"os"
 	"time"
 
@@ -194,8 +194,7 @@ func main() {
 	if enableProfiling {
 		// To use the profiler - https://golang.org/pkg/net/http/pprof/
 		go func() {
-			setupLog.Info("starting profiler",
-				"error", http.ListenAndServe("localhost:6060", nil))
+			setupLog.Info("starting profiler", "error", http.ListenAndServe("localhost:6060", nil)) // #nosec G114
 		}()
 	}
 
