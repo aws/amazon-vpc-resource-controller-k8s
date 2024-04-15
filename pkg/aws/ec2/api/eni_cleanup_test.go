@@ -60,13 +60,17 @@ var (
 			},
 		},
 	}
-	mockDescribeInterfaceOpWith1And2 = []*ec2.NetworkInterface{
-		{NetworkInterfaceId: &mockNetworkInterfaceId1},
-		{NetworkInterfaceId: &mockNetworkInterfaceId2},
+	mockDescribeInterfaceOpWith1And2 = &ec2.DescribeNetworkInterfacesOutput{
+		NetworkInterfaces: []*ec2.NetworkInterface{
+			{NetworkInterfaceId: &mockNetworkInterfaceId1},
+			{NetworkInterfaceId: &mockNetworkInterfaceId2},
+		},
 	}
-	mockDescribeInterfaceOpWith1And3 = []*ec2.NetworkInterface{
-		{NetworkInterfaceId: &mockNetworkInterfaceId1},
-		{NetworkInterfaceId: &mockNetworkInterfaceId3},
+	mockDescribeInterfaceOpWith1And3 = &ec2.DescribeNetworkInterfacesOutput{
+		NetworkInterfaces: []*ec2.NetworkInterface{
+			{NetworkInterfaceId: &mockNetworkInterfaceId1},
+			{NetworkInterfaceId: &mockNetworkInterfaceId3},
+		},
 	}
 )
 
@@ -88,10 +92,10 @@ func TestENICleaner_cleanUpAvailableENIs(t *testing.T) {
 
 	gomock.InOrder(
 		// Return network interface 1 and 2 in first cycle
-		mockWrapper.EXPECT().DescribeNetworkInterfacesPages(mockDescribeNetworkInterfaceIp).
+		mockWrapper.EXPECT().DescribeNetworkInterfaces(mockDescribeNetworkInterfaceIp).
 			Return(mockDescribeInterfaceOpWith1And2, nil),
 		// Return network interface 1 and 3 in the second cycle
-		mockWrapper.EXPECT().DescribeNetworkInterfacesPages(mockDescribeNetworkInterfaceIp).
+		mockWrapper.EXPECT().DescribeNetworkInterfaces(mockDescribeNetworkInterfaceIp).
 			Return(mockDescribeInterfaceOpWith1And3, nil),
 		// Expect to delete the network interface 1
 		mockWrapper.EXPECT().DeleteNetworkInterface(
