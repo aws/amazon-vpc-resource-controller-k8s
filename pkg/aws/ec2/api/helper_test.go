@@ -1318,10 +1318,6 @@ func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_MissingGroup(t *t
 				Name:   aws.String("group-name"),
 				Values: aws.StringSlice(securityGroupNames),
 			},
-			{
-				Name:   aws.String("vpc-id"),
-				Values: aws.StringSlice([]string{workerNodeVpcId}),
-			},
 		},
 		VpcId: &workerNodeVpcId,
 	}
