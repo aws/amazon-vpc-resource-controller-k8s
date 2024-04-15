@@ -60,7 +60,7 @@ type EC2Wrapper interface {
 	DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
-	DescribeSecurityGroups(input *ec2.DescribeSecurityGroupsInput) (*ec2.DescribeSecurityGroupsOutput, error)
+	GetSecurityGroupsForVpc(input *ec2.GetSecurityGroupsForVpcInput) (*ec2.GetSecurityGroupsForVpcOutput, error)
 }
 
 var (
@@ -310,17 +310,17 @@ var (
 		},
 	)
 
-	ec2DescribeSecurityGroupsCallCnt = prometheus.NewCounter(
+	ec2GetSecurityGroupsForVpcCallCnt = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Name: "ec2_describe_security_groups_api_call_count",
-			Help: "The number of calls made to describe security groups",
+			Name: "ec2_get_security_groups_for_vpc_api_call_count",
+			Help: "The number of calls made to get security groups for vpc",
 		},
 	)
 
-	ec2DescribeSecurityGroupsErrCnt = prometheus.NewCounter(
+	ec2GetSecurityGroupsForVpcErrCnt = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Name: "ec2_describe_security_groups_api_err_count",
-			Help: "The number of errors encountered while making calls to describe security groups",
+			Name: "ec2_get_security_groups_for_vpc_api_err_count",
+			Help: "The number of errors encountered while making calls to get security groups for vpc",
 		},
 	)
 
@@ -374,8 +374,8 @@ func prometheusRegister() {
 			ec2describeTrunkInterfaceAssociationAPIErrCnt,
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
-			ec2DescribeSecurityGroupsCallCnt,
-			ec2DescribeSecurityGroupsErrCnt,
+			ec2GetSecurityGroupsForVpcCallCnt,
+			ec2GetSecurityGroupsForVpcErrCnt,
 			ec2APICallLatencies,
 			vpccniAvailableENICnt,
 			vpcrcAvailableENICnt,
@@ -856,23 +856,25 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkIn
 	return output, err
 }
 
-func (e *ec2Wrapper) DescribeSecurityGroups(input *ec2.DescribeSecurityGroupsInput) (*ec2.DescribeSecurityGroupsOutput, error) {
+func (e *ec2Wrapper) GetSecurityGroupsForVpc(input *ec2.GetSecurityGroupsForVpcInput) (*ec2.GetSecurityGroupsForVpcOutput, error) {
 	accountIdFilter := ec2.Filter{
 		Name:   aws.String("owner-id"),
 		Values: aws.StringSlice([]string{e.accountID}),
 	}
+
 	start := time.Now()
 	input.Filters = append(input.Filters, &accountIdFilter)
-	output, err := e.userServiceClient.DescribeSecurityGroups(input)
-	ec2APICallLatencies.WithLabelValues("describe_security_groups").Observe(timeSinceMs(start))
+	// e.userServiceClient.Get
+	output, err := e.userServiceClient.GetSecurityGroupsForVpc(input)
+	ec2APICallLatencies.WithLabelValues("get_security_groups_for_vpc").Observe(timeSinceMs(start))
 
 	// Metric Update
 	ec2APICallCnt.Inc()
-	ec2DescribeSecurityGroupsCallCnt.Inc()
+	ec2GetSecurityGroupsForVpcCallCnt.Inc()
 
 	if err != nil {
 		ec2APIErrCnt.Inc()
-		ec2DescribeSecurityGroupsErrCnt.Inc()
+		ec2GetSecurityGroupsForVpcErrCnt.Inc()
 	}
 
 	return output, err

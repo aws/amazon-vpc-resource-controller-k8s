@@ -184,21 +184,6 @@ func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfacesPages(arg0 interf
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNetworkInterfacesPages", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeNetworkInterfacesPages), arg0)
 }
 
-// DescribeSecurityGroups mocks base method.
-func (m *MockEC2Wrapper) DescribeSecurityGroups(arg0 *ec2.DescribeSecurityGroupsInput) (*ec2.DescribeSecurityGroupsOutput, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeSecurityGroups", arg0)
-	ret0, _ := ret[0].(*ec2.DescribeSecurityGroupsOutput)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DescribeSecurityGroups indicates an expected call of DescribeSecurityGroups.
-func (mr *MockEC2WrapperMockRecorder) DescribeSecurityGroups(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeSecurityGroups", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeSecurityGroups), arg0)
-}
-
 // DescribeSubnets mocks base method.
 func (m *MockEC2Wrapper) DescribeSubnets(arg0 *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
 	m.ctrl.T.Helper()
@@ -242,6 +227,21 @@ func (m *MockEC2Wrapper) DetachNetworkInterface(arg0 *ec2.DetachNetworkInterface
 func (mr *MockEC2WrapperMockRecorder) DetachNetworkInterface(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetachNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).DetachNetworkInterface), arg0)
+}
+
+// GetSecurityGroupsForVpc mocks base method.
+func (m *MockEC2Wrapper) GetSecurityGroupsForVpc(arg0 *ec2.GetSecurityGroupsForVpcInput) (*ec2.GetSecurityGroupsForVpcOutput, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSecurityGroupsForVpc", arg0)
+	ret0, _ := ret[0].(*ec2.GetSecurityGroupsForVpcOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetSecurityGroupsForVpc indicates an expected call of GetSecurityGroupsForVpc.
+func (mr *MockEC2WrapperMockRecorder) GetSecurityGroupsForVpc(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSecurityGroupsForVpc", reflect.TypeOf((*MockEC2Wrapper)(nil).GetSecurityGroupsForVpc), arg0)
 }
 
 // ModifyNetworkInterfaceAttribute mocks base method.

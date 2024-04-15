@@ -126,7 +126,7 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 	eniDescription := CreateENIDescriptionPrefix + *description
 
 	var ec2SecurityGroups []*string
-	if securityGroups != nil && len(securityGroups) != 0 {
+	if len(securityGroups) != 0 {
 		// Only add security groups if there are one or more security group provided, otherwise API call will fail instead
 		// of creating the interface with default security groups
 		ec2SecurityGroups = aws.StringSlice(securityGroups)
@@ -642,19 +642,15 @@ func (h *ec2APIHelper) GetSecurityGroupIdsForSecurityGroupNames(securityGroupNam
 			Name:   aws.String("group-name"),
 			Values: aws.StringSlice(sgNamesNotInCache),
 		},
-		{
-			Name:   aws.String("vpc-id"),
-			Values: aws.StringSlice([]string{h.workerNodeVpcId}),
-		},
 	}
-	input := &ec2.DescribeSecurityGroupsInput{Filters: filters}
+	input := &ec2.GetSecurityGroupsForVpcInput{VpcId: &h.workerNodeVpcId, Filters: filters}
 	foundSgNames := map[string]bool{}
 	for {
-		output, err := h.ec2Wrapper.DescribeSecurityGroups(input)
+		output, err := h.ec2Wrapper.GetSecurityGroupsForVpc(input)
 		if err != nil {
 			return nil, err
 		}
-		for _, sg := range output.SecurityGroups {
+		for _, sg := range output.SecurityGroupForVpcs {
 			h.securityGroupNameToIdMap[*sg.GroupName] = *sg.GroupId
 			sgIds = append(sgIds, *sg.GroupId)
 			foundSgNames[*sg.GroupName] = true
