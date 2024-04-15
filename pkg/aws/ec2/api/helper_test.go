@@ -342,20 +342,17 @@ var (
 
 	maxRetryOnError = 3
 
-	describeSecurityGroupInput = &ec2.DescribeSecurityGroupsInput{
+	getSecurityGroupForVpcInput = &ec2.GetSecurityGroupsForVpcInput{
 		Filters: []*ec2.Filter{
 			{
 				Name:   aws.String("group-name"),
 				Values: aws.StringSlice(securityGroupNames),
 			},
-			{
-				Name:   aws.String("vpc-id"),
-				Values: aws.StringSlice([]string{workerNodeVpcId}),
-			},
 		},
+		VpcId: &workerNodeVpcId,
 	}
-	describeSecurityGroupOutput = &ec2.DescribeSecurityGroupsOutput{
-		SecurityGroups: []*ec2.SecurityGroup{
+	getSecurityGroupForVpcOutput = &ec2.GetSecurityGroupsForVpcOutput{
+		SecurityGroupForVpcs: []*ec2.SecurityGroupForVpc{
 			{
 				GroupId:   aws.String(securityGroup1),
 				GroupName: aws.String(securityGroupName1),
@@ -1241,7 +1238,7 @@ func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_EmptyCache(t *tes
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DescribeSecurityGroups(describeSecurityGroupInput).Return(describeSecurityGroupOutput, nil)
+	mockWrapper.EXPECT().GetSecurityGroupsForVpc(getSecurityGroupForVpcInput).Return(getSecurityGroupForVpcOutput, nil)
 
 	securityGroupIds, err := ec2ApiHelper.GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames)
 
@@ -1315,21 +1312,18 @@ func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_MissingGroup(t *t
 
 	securityGroupNames := []string{securityGroupName1, securityGroupName2, securityGroupName3}
 
-	describeSecurityGroupInput := &ec2.DescribeSecurityGroupsInput{
+	getSecurityGroupsForVpcInput := &ec2.GetSecurityGroupsForVpcInput{
 		Filters: []*ec2.Filter{
 			{
 				Name:   aws.String("group-name"),
 				Values: aws.StringSlice(securityGroupNames),
 			},
-			{
-				Name:   aws.String("vpc-id"),
-				Values: aws.StringSlice([]string{workerNodeVpcId}),
-			},
 		},
+		VpcId: &workerNodeVpcId,
 	}
 
-	describeSecurityGroupOutput := &ec2.DescribeSecurityGroupsOutput{
-		SecurityGroups: []*ec2.SecurityGroup{
+	getSecurityGroupsForVpcOutput := &ec2.GetSecurityGroupsForVpcOutput{
+		SecurityGroupForVpcs: []*ec2.SecurityGroupForVpc{
 			{
 				GroupId:   aws.String(securityGroup1),
 				GroupName: aws.String(securityGroupName1),
@@ -1339,7 +1333,7 @@ func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_MissingGroup(t *t
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DescribeSecurityGroups(describeSecurityGroupInput).Return(describeSecurityGroupOutput, nil)
+	mockWrapper.EXPECT().GetSecurityGroupsForVpc(getSecurityGroupsForVpcInput).Return(getSecurityGroupsForVpcOutput, nil)
 
 	securityGroupIds, err := ec2ApiHelper.GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames)
 

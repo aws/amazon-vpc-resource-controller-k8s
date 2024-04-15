@@ -126,7 +126,7 @@ func (s *SecurityGroupForPods) filterPodSecurityGroups(
 		hasPodSelector := sgp.Spec.PodSelector != nil
 		hasSASelector := sgp.Spec.ServiceAccountSelector != nil
 		hasSecurityGroup := (sgp.Spec.SecurityGroups.Groups != nil && len(sgp.Spec.SecurityGroups.Groups) > 0) ||
-			(sgp.Spec.SecurityGroupNames.GroupNames != nil && len(sgp.Spec.SecurityGroupNames.GroupNames) > 0)
+			(sgp.Spec.SecurityGroups.GroupNames != nil && len(sgp.Spec.SecurityGroups.GroupNames) > 0)
 
 		if (!hasPodSelector && !hasSASelector) || !hasSecurityGroup {
 			sgpLogger.Info(
@@ -162,7 +162,7 @@ func (s *SecurityGroupForPods) filterPodSecurityGroups(
 			continue
 		}
 
-		sgNameList = append(sgNameList, sgp.Spec.SecurityGroupNames.GroupNames...)
+		sgNameList = append(sgNameList, sgp.Spec.SecurityGroups.GroupNames...)
 		sgList = append(sgList, sgp.Spec.SecurityGroups.Groups...)
 	}
 

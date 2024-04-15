@@ -121,7 +121,7 @@ func TestCanInjectENI_PodSelectors(t *testing.T) {
 
 	for _, test := range tests {
 		ec2WrapperMock.EXPECT().GetSecurityGroupIdsForSecurityGroupNames(test.sgpListInput.Items[0].
-			Spec.SecurityGroupNames.GroupNames).Return(test.mockSecurityGroupIdsToReturn, nil)
+			Spec.SecurityGroups.GroupNames).Return(test.mockSecurityGroupIdsToReturn, nil)
 		sgIds, err := sgp.filterPodSecurityGroups(test.sgpListInput, testPod, testSA)
 		if err != nil {
 			t.Fatalf("Test %s failed", test.testName)
@@ -380,9 +380,7 @@ func NewSecurityGroupPolicyPodSelector(
 				}},
 			},
 			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroupIds,
-			},
-			SecurityGroupNames: vpcresourcesv1beta1.GroupNames{
+				Groups:     securityGroupIds,
 				GroupNames: securityGroupNames,
 			},
 		},

@@ -24,15 +24,6 @@ type SecurityGroupPolicySpec struct {
 	PodSelector            *metav1.LabelSelector `json:"podSelector,omitempty"`
 	ServiceAccountSelector *metav1.LabelSelector `json:"serviceAccountSelector,omitempty"`
 	SecurityGroups         GroupIds              `json:"securityGroups,omitempty"`
-	SecurityGroupNames     GroupNames            `json:"securityGroupNames,omitempty"`
-}
-
-// GroupNames contains the list of security group names that will be applied to the network interface of the pod matching the criteria.
-type GroupNames struct {
-	// Groups is the list of EC2 Security Group Names that need to be applied to the ENI of a Pod.
-	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=5
-	GroupNames []string `json:"groupNames,omitempty"`
 }
 
 // GroupIds contains the list of security groups that will be applied to the network interface of the pod matching the criteria.
@@ -40,7 +31,13 @@ type GroupIds struct {
 	// Groups is the list of EC2 Security Groups Ids that need to be applied to the ENI of a Pod.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=5
+	// +kubebuilder:validation:UniqueItems=true
 	Groups []string `json:"groupIds,omitempty"`
+	// GroupNames is the list of EC2 Security Group Names that need to be applied to the ENI of a Pod.
+	// +kubebuilder:validation:MinItems=0
+	// +kubebuilder:validation:MaxItems=5
+	// +kubebuilder:validation:UniqueItems=true
+	GroupNames []string `json:"groupNames,omitempty"`
 }
 
 // ServiceAccountSelector contains the selection criteria for matching pod with service account that matches the label selector
