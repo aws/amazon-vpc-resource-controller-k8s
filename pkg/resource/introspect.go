@@ -46,7 +46,7 @@ func (i *IntrospectHandler) Start(_ context.Context) error {
 	mux.HandleFunc(GetResourcesSummaryPath, i.ResourceSummaryHandler)
 
 	// Should this be a fatal error?
-	err := http.ListenAndServe(i.BindAddress, mux)
+	err := http.ListenAndServe(i.BindAddress, mux) // #nosec G114
 	if err != nil {
 		i.Log.Error(err, "failed to run introspect API")
 	}

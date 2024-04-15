@@ -17,7 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof"
+	_ "net/http/pprof" // #nosec G108
 	"os"
 	"time"
 
@@ -142,7 +142,7 @@ func main() {
 	flag.BoolVar(&enableWindowsPrefixDelegation, "enable-windows-prefix-delegation", false,
 		"Enable the feature flag for Windows prefix delegation")
 	flag.StringVar(&region, "aws-region", "", "The aws region of the k8s cluster")
-	flag.StringVar(&vpcID, "vpc-id", "", "The vpc-id where EKS cluster is deployed")
+	flag.StringVar(&vpcID, "vpc-id", "", "The VPC ID where EKS cluster is deployed")
 
 	flag.Parse()
 
@@ -194,8 +194,7 @@ func main() {
 	if enableProfiling {
 		// To use the profiler - https://golang.org/pkg/net/http/pprof/
 		go func() {
-			setupLog.Info("starting profiler",
-				"error", http.ListenAndServe("localhost:6060", nil))
+			setupLog.Info("starting profiler", "error", http.ListenAndServe("localhost:6060", nil)) // #nosec G114
 		}()
 	}
 

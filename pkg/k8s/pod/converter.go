@@ -56,6 +56,7 @@ func (c *PodConverter) ConvertList(originalList interface{}) (convertedList inte
 		},
 	}
 	for _, pod := range podList.Items {
+		pod := pod // Fix gosec G601, so we can use &node
 		strippedPod := c.StripDownPod(&pod)
 		strippedPodList.Items = append(strippedPodList.Items, *strippedPod)
 	}
