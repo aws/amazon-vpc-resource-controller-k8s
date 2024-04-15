@@ -166,7 +166,6 @@ func (s *SecurityGroupForPods) filterPodSecurityGroups(
 		sgList = append(sgList, sgp.Spec.SecurityGroups.Groups...)
 	}
 
-	sgNameList = RemoveDuplicatedSg(sgNameList)
 	sgIdsForNames, err := s.Ec2Helper.GetSecurityGroupIdsForSecurityGroupNames(sgNameList)
 	if err != nil {
 		return nil, err
