@@ -18,8 +18,7 @@ ENI Trunking is a private feature even though the APIs are publicly accessible u
 
 Please follow the [guide](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) for enabling Security Group for Pods on your EKS Cluster. 
 
-Note: The SecurityGroupPolicy CRD only supports up to 16 security groups per custom resource. 
-1. currently Fargate only allows up to 5 security groups. If you are using Fargate, you can only use up to 5 security groups per pod.
+Note: The SecurityGroupPolicy CRD only supports up to 16 security groups per custom resource. currently Fargate only allows up to 5 security groups. If you are using Fargate, you can only use up to 5 security groups per pod.
 
 ## Windows IPv4 Address Management
 
