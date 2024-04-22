@@ -30,7 +30,7 @@ type SecurityGroupPolicySpec struct {
 type GroupIds struct {
 	// Groups is the list of EC2 Security Groups Ids that need to be applied to the ENI of a Pod.
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=5
+	// +kubebuilder:validation:MaxItems=16
 	Groups []string `json:"groupIds,omitempty"`
 }
 
