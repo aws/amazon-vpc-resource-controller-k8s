@@ -285,11 +285,12 @@ func main() {
 	dataStore := clientgocache.NewIndexer(podConverter.Indexer, pod.NodeNameIndexer())
 
 	k8sApi := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), ctx)
+	podApi := pod.NewPodAPIWrapper(dataStore, mgr.GetClient(), clientSet.CoreV1())
 
 	apiWrapper := api.Wrapper{
 		EC2API: ec2APIHelper,
 		K8sAPI: k8sApi,
-		PodAPI: pod.NewPodAPIWrapper(dataStore, mgr.GetClient(), clientSet.CoreV1()),
+		PodAPI: podApi,
 		SGPAPI: sgpAPI,
 	}
 
@@ -388,6 +389,7 @@ func main() {
 		Log:             ctrl.Log.WithName("introspect"),
 		BindAddress:     introspectBindAddr,
 		ResourceManager: resourceManager,
+		PodAPIWrapper:   podApi,
 	}).SetupWithManager(mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create introspect API")
 		os.Exit(1)

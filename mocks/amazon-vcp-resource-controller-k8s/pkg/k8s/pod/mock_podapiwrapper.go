@@ -108,6 +108,20 @@ func (mr *MockPodClientAPIWrapperMockRecorder) GetRunningPodsOnNode(arg0 interfa
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRunningPodsOnNode", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).GetRunningPodsOnNode), arg0)
 }
 
+// Introspect mocks base method.
+func (m *MockPodClientAPIWrapper) Introspect() interface{} {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Introspect")
+	ret0, _ := ret[0].(interface{})
+	return ret0
+}
+
+// Introspect indicates an expected call of Introspect.
+func (mr *MockPodClientAPIWrapperMockRecorder) Introspect() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockPodClientAPIWrapper)(nil).Introspect))
+}
+
 // ListPods mocks base method.
 func (m *MockPodClientAPIWrapper) ListPods(arg0 string) (*v1.PodList, error) {
 	m.ctrl.T.Helper()

@@ -19,21 +19,24 @@ import (
 	"net/http"
 
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
+	podWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 const (
-	GetNodeResourcesPath    = "/node/"
-	GetAllResourcesPath     = "/resources/all"
-	GetResourcesSummaryPath = "/resources/summary"
+	GetNodeResourcesPath      = "/node/"
+	GetAllResourcesPath       = "/resources/all"
+	GetResourcesSummaryPath   = "/resources/summary"
+	PodAPIWrapperResourcesKey = "podApiWrapperResources"
 )
 
 type IntrospectHandler struct {
 	Log             logr.Logger
 	BindAddress     string
 	ResourceManager ResourceManager
+	PodAPIWrapper   podWrapper.PodClientAPIWrapper
 }
 
 // StartENICleaner starts the ENI Cleaner routine that cleans up dangling ENIs created by the controller
@@ -60,6 +63,10 @@ func (i *IntrospectHandler) ResourceHandler(w http.ResponseWriter, _ *http.Reque
 		data := provider.Introspect()
 		response[resourceName] = data
 	}
+
+	// Add pod datastore to introspect response
+	podApiWrapperResources := i.PodAPIWrapper.Introspect()
+	response[PodAPIWrapperResourcesKey] = podApiWrapperResources
 
 	jsonData, err := json.MarshalIndent(response, "", "\t")
 	if err != nil {
