@@ -22,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -62,9 +63,14 @@ var (
 )
 
 type ec2APIHelper struct {
-	ec2Wrapper               EC2Wrapper
-	workerNodeVpcId          string
-	securityGroupNameToIdMap map[string]string
+	ec2Wrapper                 EC2Wrapper
+	workerNodeVpcId            string
+	securityGroupNameToIdCache cache.Store
+}
+
+type securityGroupToId struct {
+	securityGroupName string
+	securityGroupId   string
 }
 
 func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName, workerNodeVpcId string) EC2APIHelper {
@@ -74,26 +80,16 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName, workerNodeVpcId string)
 		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
 		Value: aws.String(config.ClusterNameTagValue),
 	}
-	return &ec2APIHelper{
-		ec2Wrapper:               ec2Wrapper,
-		workerNodeVpcId:          workerNodeVpcId,
-		securityGroupNameToIdMap: make(map[string]string),
+	securityGroupCacheKeyFunc := func(obj interface{}) (string, error) {
+		securityGroup := obj.(*securityGroupToId)
+		return securityGroup.securityGroupName, nil
 	}
-}
 
-// For unit testing
-func newEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName, workerNodeVpcId string,
-	securityGroupNameToIdMap map[string]string) EC2APIHelper {
-	// Set the key and value of the cluster name tag which will be used to tag all the network interfaces created by
-	// the controller
-	clusterNameTag = &ec2.Tag{
-		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
-		Value: aws.String(config.ClusterNameTagValue),
-	}
+	securityGroupNameToIdCache := cache.NewTTLStore(securityGroupCacheKeyFunc, 15*time.Minute)
 	return &ec2APIHelper{
-		ec2Wrapper:               ec2Wrapper,
-		workerNodeVpcId:          workerNodeVpcId,
-		securityGroupNameToIdMap: securityGroupNameToIdMap,
+		ec2Wrapper:                 ec2Wrapper,
+		workerNodeVpcId:            workerNodeVpcId,
+		securityGroupNameToIdCache: securityGroupNameToIdCache,
 	}
 }
 
@@ -656,10 +652,16 @@ func (h *ec2APIHelper) GetSecurityGroupIdsForSecurityGroupNames(securityGroupNam
 	}
 	sgNamesNotInCache := make([]string, 0)
 	for _, sgName := range securityGroupNames {
-		if sgId, ok := h.securityGroupNameToIdMap[sgName]; !ok {
+		sgLookup := securityGroupToId{securityGroupName: sgName}
+		sgId, exist, err := h.securityGroupNameToIdCache.Get(&sgLookup)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to find cache key from %v", sgLookup)
+		}
+		if !exist {
 			sgNamesNotInCache = append(sgNamesNotInCache, sgName)
 		} else {
-			sgIds = append(sgIds, sgId)
+			sgIds = append(sgIds, sgId.(string))
 		}
 	}
 	if len(sgIds) == len(securityGroupNames) {
@@ -680,7 +682,7 @@ func (h *ec2APIHelper) GetSecurityGroupIdsForSecurityGroupNames(securityGroupNam
 			return nil, err
 		}
 		for _, sg := range output.SecurityGroupForVpcs {
-			h.securityGroupNameToIdMap[*sg.GroupName] = *sg.GroupId
+			h.securityGroupNameToIdCache.Add(&securityGroupToId{securityGroupName: *sg.GroupName, securityGroupId: *sg.GroupId})
 			sgIds = append(sgIds, *sg.GroupId)
 			foundSgNames[*sg.GroupName] = true
 		}

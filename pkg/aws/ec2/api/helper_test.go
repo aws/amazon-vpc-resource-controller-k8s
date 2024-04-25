@@ -1249,12 +1249,11 @@ func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_EmptyCache(t *tes
 }
 
 func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_FullCache(t *testing.T) {
-	securityGroupNameToIdMap := map[string]string{
-		securityGroupName1: securityGroup1,
-		securityGroupName2: securityGroup2,
-	}
-	ec2ApiHelper := newEC2APIHelper(nil, clusterName, workerNodeVpcId, securityGroupNameToIdMap)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
+	mockWrapper.EXPECT().GetSecurityGroupsForVpc(getSecurityGroupForVpcInput).Return(getSecurityGroupForVpcOutput, nil).MaxTimes(1)
 	securityGroupIds, err := ec2ApiHelper.GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames)
 
 	assert.Nil(t, err)
