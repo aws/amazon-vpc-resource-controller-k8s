@@ -273,7 +273,7 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
 	}
-	ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName)
+	ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName, vpcID)
 
 	sgpAPI := utils.NewSecurityGroupForPodsAPI(
 		mgr.GetClient(),
