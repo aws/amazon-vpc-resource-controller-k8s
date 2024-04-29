@@ -488,10 +488,10 @@ func TestBranchENIProvider_ReconcileNode_NoLeak(t *testing.T) {
 	fakeTrunk1 := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk1
 
-	list := &v1.PodList{}
-	mockPodAPI.EXPECT().ListPods(NodeName).Return(list, nil)
+	list := []v1.Pod{}
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(list, nil)
 
-	fakeTrunk1.EXPECT().Reconcile(list.Items).Return(false)
+	fakeTrunk1.EXPECT().Reconcile(list).Return(false)
 
 	result := provider.ReconcileNode(NodeName)
 	assert.False(t, result)
@@ -508,10 +508,10 @@ func TestBranchENIProvider_ReconcileNode_Leak(t *testing.T) {
 	fakeTrunk1 := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk1
 
-	list := &v1.PodList{}
-	mockPodAPI.EXPECT().ListPods(NodeName).Return(list, nil)
+	list := []v1.Pod{}
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(list, nil)
 
-	fakeTrunk1.EXPECT().Reconcile(list.Items).Return(true)
+	fakeTrunk1.EXPECT().Reconcile(list).Return(true)
 
 	result := provider.ReconcileNode(NodeName)
 	assert.True(t, result)

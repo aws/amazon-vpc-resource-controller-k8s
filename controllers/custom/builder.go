@@ -134,7 +134,7 @@ func (b *Builder) Complete(reconciler Reconciler) (healthz.Checker, error) {
 				if !ok {
 					return fmt.Errorf("failed to get object meta %v", obj)
 				}
-				b.log.Info("processing item", "objName", metaObj.GetName(), "deltaType", d.Type)
+				b.log.Info("processing item", "objName", metaObj.GetName(), "namespace", metaObj.GetNamespace(), "deltaType", d.Type)
 				switch d.Type {
 				case cache.Sync, cache.Added, cache.Updated:
 
@@ -165,8 +165,9 @@ func (b *Builder) Complete(reconciler Reconciler) (healthz.Checker, error) {
 					})
 
 				case cache.Deleted:
+					b.log.Info("deleting item", "objName", metaObj.GetName(), "namespace", metaObj.GetNamespace())
 					if err := b.dataStore.Delete(convertedObj); err != nil {
-						b.log.Error(err, "failed to add object to datastore, returning error", "obj", metaObj.GetName())
+						b.log.Error(err, "failed to delete object from datastore, returning error", "obj", metaObj.GetName())
 						return err
 					}
 					// Add entire object instead of namespace/name as from this

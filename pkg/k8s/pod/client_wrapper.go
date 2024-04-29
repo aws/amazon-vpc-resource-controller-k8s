@@ -69,7 +69,7 @@ var (
 )
 
 type IntrospectResponse struct {
-	PodDatastoreKeys []string
+	PodList []string
 }
 
 type PodClientAPIWrapper interface {
@@ -213,6 +213,6 @@ func (p *podClientAPIWrapper) GetPodFromAPIServer(ctx context.Context, namespace
 
 func (p *podClientAPIWrapper) Introspect() interface{} {
 	return IntrospectResponse{
-		PodDatastoreKeys: p.dataStore.ListKeys(),
+		PodList: p.dataStore.ListKeys(),
 	}
 }
