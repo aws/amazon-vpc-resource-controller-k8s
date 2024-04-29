@@ -139,7 +139,7 @@ func timeSinceMs(start time.Time) float64 {
 // cache for use in future Create/Delete Requests
 func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
-	log := b.log.WithValues("node name", nodeName)
+	log := b.log.WithValues("nodeName", nodeName)
 	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API)
 
 	// Initialize the Trunk ENI
@@ -244,7 +244,7 @@ func (b *branchENIProvider) DeleteNode(nodeName string) (ctrl.Result, error) {
 	// remove trunk from cache and de-initializer the resource provider
 	b.removeTrunkFromCache(nodeName)
 
-	b.log.Info("de-initialized resource provider successfully", "node name", nodeName)
+	b.log.Info("de-initialized resource provider successfully", "nodeName", nodeName)
 
 	return ctrl.Result{}, nil
 }
@@ -274,7 +274,7 @@ func (b *branchENIProvider) ReconcileNode(nodeName string) bool {
 	log := b.log.WithValues("node", nodeName)
 	if !isPresent {
 		// return true to set the node next clean up asap since we don't know why trunk is missing
-		log.Info("no trunk ENI is pointing to the given node", "NodeName", nodeName)
+		log.Info("no trunk ENI is pointing to the given node", "nodeName", nodeName)
 		return true
 	}
 	podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
@@ -286,7 +286,7 @@ func (b *branchENIProvider) ReconcileNode(nodeName string) bool {
 	}
 	foundLeakedENI := trunkENI.Reconcile(podList.Items)
 
-	log.Info("completed reconcile node cleanup on branch ENIs", "NodeName", nodeName)
+	log.Info("completed reconcile node cleanup on branch ENIs", "nodeName", nodeName)
 
 	return foundLeakedENI
 }
@@ -346,7 +346,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 			"Security Groups %v", securityGroups), v1.EventTypeNormal)
 	}
 
-	log := b.log.WithValues("pod namespace", pod.Namespace, "pod name", pod.Name, "node name", pod.Spec.NodeName)
+	log := b.log.WithValues("pod namespace", pod.Namespace, "pod name", pod.Name, "nodeName", pod.Spec.NodeName)
 
 	start := time.Now()
 	trunkENI, isPresent := b.getTrunkFromCache(pod.Spec.NodeName)
