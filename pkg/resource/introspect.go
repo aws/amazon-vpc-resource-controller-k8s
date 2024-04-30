@@ -35,10 +35,9 @@ const (
 	GetAllResourcesPath     = "/resources/all"
 	GetResourcesSummaryPath = "/resources/summary"
 	// Use path "/datastore/all" to get all pods stored in the cache,
-	// "/datastore/listpods/<nodename>" to get list of all pods on a node (ie ListPods output)
-	// "datastore/listrunningpods/<nodename>" to get list of all running pods on a node (ie GetRunningPodsOnNode output)
+	// "/datastore/node/<nodename>" to get list of all pods on a node (ie ListPods output), and list of all running pods on a node (ie GetRunningPodsOnNode output)
 	GetDatastoreResourcePrefix = "/datastore/"
-	InvalidDSRequestMessage    = "Invalid request, valid requests for datastore are /datastore/all, /datastore/listpods/<nodename>, datastore/listrunningpods/<nodename>"
+	InvalidDSRequestMessage    = "Invalid request, valid requests for datastore are /datastore/all, /datastore/node/<nodename>"
 )
 
 type IntrospectHandler struct {
@@ -136,7 +135,7 @@ func (i *IntrospectHandler) DatastoreResourceHandler(w http.ResponseWriter, r *h
 	request := r.URL.Path[len(GetDatastoreResourcePrefix):]
 	request, nodeName, found := strings.Cut(request, "/")
 	if !found {
-		if request != "all" && !slices.Contains([]string{"listpods", "listrunningpods"}, request) {
+		if request != "all" && !slices.Contains([]string{"node"}, request) {
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(InvalidDSRequestMessage))
 			return
@@ -145,20 +144,22 @@ func (i *IntrospectHandler) DatastoreResourceHandler(w http.ResponseWriter, r *h
 	var err error
 	var isError bool
 	switch request {
-	case "listpods":
+	case "node":
+		nodeResponse := make(map[string]interface{})
 		var podList *v1.PodList
 		if podList, err = i.PodAPIWrapper.ListPods(nodeName); err != nil {
 			isError = true
 			break
 		}
-		response[nodeName] = getPodNameSpaceName(podList.Items)
-	case "listrunningpods":
+		nodeResponse["Pods"] = getPodNameSpaceName(podList.Items)
+
 		var pods []v1.Pod
 		if pods, err = i.PodAPIWrapper.GetRunningPodsOnNode(nodeName); err != nil {
 			isError = true
 			break
 		}
-		response[nodeName] = getPodNameSpaceName(pods)
+		nodeResponse["RunningPods"] = getPodNameSpaceName(pods)
+		response[nodeName] = nodeResponse
 	case "all":
 		response["PodDatastore"] = i.PodAPIWrapper.Introspect()
 	default:

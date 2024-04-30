@@ -72,16 +72,14 @@ var (
 			types.NamespacedName{Namespace: mockNS, Name: mockPod2}.String(),
 		},
 	}
-	mockListPodsResponse = map[string]interface{}{
-		mockNodeName: map[string]interface{}{
+	mockNodePodsResponse = map[string]interface{}{
+		"Pods": map[string]interface{}{
 			"PodList": []interface{}{
 				types.NamespacedName{Namespace: defaultNS, Name: mockPod1}.String(),
 				types.NamespacedName{Namespace: mockNS, Name: mockPod2}.String(),
 			},
 		},
-	}
-	mockGetRunningPodsOnNode = map[string]interface{}{
-		mockNodeName: map[string]interface{}{
+		"RunningPods": map[string]interface{}{
 			"PodList": []interface{}{
 				types.NamespacedName{Namespace: mockNS, Name: mockPod1}.String(),
 			},
@@ -185,21 +183,13 @@ func TestIntrospectHandler_DatastoreResourceHandler(t *testing.T) {
 			name: "TestListPods, verify response for list of pods on the node",
 			prepare: func(f *fields) {
 				f.mockPodAPIWrapper.EXPECT().ListPods(mockNodeName).Return(mockListPods, nil)
-			},
-			args: args{
-				request:    GetDatastoreResourcePrefix + "listpods/" + mockNodeName,
-				response:   mockListPodsResponse,
-				statusCode: http.StatusOK,
-			},
-		},
-		{
-			name: "TestGetRunningPodsOnNode, verify response for list of running pods on the node",
-			prepare: func(f *fields) {
 				f.mockPodAPIWrapper.EXPECT().GetRunningPodsOnNode(mockNodeName).Return(mockPods, nil)
 			},
 			args: args{
-				request:    GetDatastoreResourcePrefix + "listrunningpods/" + mockNodeName,
-				response:   mockGetRunningPodsOnNode,
+				request: GetDatastoreResourcePrefix + "node/" + mockNodeName,
+				response: map[string]interface{}{
+					mockNodeName: mockNodePodsResponse,
+				},
 				statusCode: http.StatusOK,
 			},
 		},
