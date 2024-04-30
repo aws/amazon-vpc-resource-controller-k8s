@@ -23,7 +23,7 @@ function load_deveks_cluster_details() {
 
   PROVIDER_ID=$(kubectl get nodes -ojson | jq -r '.items[0].spec.providerID')
   INSTANCE_ID=${PROVIDER_ID##*/}
-  VPC_ID=$(aws ec2 describe-instances --instance-ids ${INSTANCE_ID} --no-cli-pager | jq -r '.Reservations[].Instances[].VpcId')
+  VPC_ID=$(aws ec2 describe-instances --instance-ids ${INSTANCE_ID} | jq -r '.Reservations[].Instances[].VpcId')
   REGION_NAME=$(echo $REGION | tr -d '-')
   ROLE_NAME="deveks-${CLUSTER_NAME}-cluster-ServiceRole-${REGION_NAME}"
   ACCOUNT_ID=$(aws sts get-caller-identity | jq -r '.Account')
