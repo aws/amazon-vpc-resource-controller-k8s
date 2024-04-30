@@ -253,6 +253,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 
 	// From the list of pods on the given node, and the branch ENIs from EC2 API call rebuild the internal cache
 	for _, pod := range podList {
+		pod := pod // Fix gosec G601, so we can use &node
 		eniListFromPod := t.getBranchInterfacesUsedByPod(&pod)
 		if len(eniListFromPod) == 0 {
 			continue
