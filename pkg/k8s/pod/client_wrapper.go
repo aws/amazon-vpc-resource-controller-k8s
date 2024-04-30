@@ -68,12 +68,17 @@ var (
 	)
 )
 
+type IntrospectResponse struct {
+	PodList []string
+}
+
 type PodClientAPIWrapper interface {
 	GetPod(namespace string, name string) (*v1.Pod, error)
 	ListPods(nodeName string) (*v1.PodList, error)
 	AnnotatePod(podNamespace string, podName string, uid types.UID, key string, val string) error
 	GetPodFromAPIServer(ctx context.Context, namespace string, name string) (*v1.Pod, error)
 	GetRunningPodsOnNode(nodeName string) ([]v1.Pod, error)
+	Introspect() interface{}
 }
 
 type podClientAPIWrapper struct {
@@ -204,4 +209,10 @@ func (p *podClientAPIWrapper) GetPodFromAPIServer(ctx context.Context, namespace
 	}
 
 	return pod, err
+}
+
+func (p *podClientAPIWrapper) Introspect() interface{} {
+	return IntrospectResponse{
+		PodList: p.dataStore.ListKeys(),
+	}
 }

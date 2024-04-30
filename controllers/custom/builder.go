@@ -130,23 +130,29 @@ func (b *Builder) Complete(reconciler Reconciler) (healthz.Checker, error) {
 				if err != nil {
 					return err
 				}
+				metaObj, ok := convertedObj.(metav1.Object)
+				if !ok {
+					return fmt.Errorf("failed to get object meta %v", obj)
+				}
+				b.log.Info("processing item", "objName", metaObj.GetName(), "namespace", metaObj.GetNamespace(), "deltaType", d.Type)
 				switch d.Type {
 				case cache.Sync, cache.Added, cache.Updated:
-					if _, exists, err := b.dataStore.Get(convertedObj); err == nil && exists {
-						if err := b.dataStore.Update(convertedObj); err != nil {
-							return err
+
+					if _, exists, err := b.dataStore.Get(convertedObj); err == nil {
+						if exists {
+							if err := b.dataStore.Update(convertedObj); err != nil {
+								b.log.Error(err, "failed to update object in datastore, returning error", "obj", metaObj.GetName())
+								return err
+							}
+						} else {
+							if err := b.dataStore.Add(convertedObj); err != nil {
+								b.log.Error(err, "failed to add object to datastore, returning error", "obj", metaObj.GetName())
+								return err
+							}
 						}
 					} else {
-						if err := b.dataStore.Add(convertedObj); err != nil {
-							return err
-						}
-					}
-					if err != nil {
+						b.log.Error(err, "failed to get object", "error", err.Error())
 						return err
-					}
-					metaObj, ok := convertedObj.(metav1.Object)
-					if !ok {
-						return fmt.Errorf("failed to get object meta %v", obj)
 					}
 
 					// Add the namespace/name to the queue so multiple
@@ -159,7 +165,9 @@ func (b *Builder) Complete(reconciler Reconciler) (healthz.Checker, error) {
 					})
 
 				case cache.Deleted:
+					b.log.Info("deleting item", "objName", metaObj.GetName(), "namespace", metaObj.GetNamespace())
 					if err := b.dataStore.Delete(convertedObj); err != nil {
+						b.log.Error(err, "failed to delete object from datastore, returning error", "obj", metaObj.GetName())
 						return err
 					}
 					// Add entire object instead of namespace/name as from this

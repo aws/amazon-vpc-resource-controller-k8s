@@ -17,8 +17,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
+	"strings"
 
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
+	podWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -28,15 +34,20 @@ const (
 	GetNodeResourcesPath    = "/node/"
 	GetAllResourcesPath     = "/resources/all"
 	GetResourcesSummaryPath = "/resources/summary"
+	// Use path "/datastore/all" to get all pods stored in the cache,
+	// "/datastore/node/<nodename>" to get list of all pods on a node (ie ListPods output), and list of all running pods on a node (ie GetRunningPodsOnNode output)
+	GetDatastoreResourcePrefix = "/datastore/"
+	InvalidDSRequestMessage    = "Invalid request, valid requests for datastore are /datastore/all, /datastore/node/<nodename>"
 )
 
 type IntrospectHandler struct {
 	Log             logr.Logger
 	BindAddress     string
 	ResourceManager ResourceManager
+	PodAPIWrapper   podWrapper.PodClientAPIWrapper
 }
 
-// StartENICleaner starts the ENI Cleaner routine that cleans up dangling ENIs created by the controller
+// Start the introspection API
 func (i *IntrospectHandler) Start(_ context.Context) error {
 	i.Log.Info("starting introspection API")
 
@@ -44,6 +55,7 @@ func (i *IntrospectHandler) Start(_ context.Context) error {
 	mux.HandleFunc(GetAllResourcesPath, i.ResourceHandler)
 	mux.HandleFunc(GetNodeResourcesPath, i.NodeResourceHandler)
 	mux.HandleFunc(GetResourcesSummaryPath, i.ResourceSummaryHandler)
+	mux.HandleFunc(GetDatastoreResourcePrefix, i.DatastoreResourceHandler)
 
 	// Should this be a fatal error?
 	err := http.ListenAndServe(i.BindAddress, mux) // #nosec G114
@@ -117,6 +129,62 @@ func (i *IntrospectHandler) ResourceSummaryHandler(w http.ResponseWriter, r *htt
 	w.Write(jsonData)
 }
 
+func (i *IntrospectHandler) DatastoreResourceHandler(w http.ResponseWriter, r *http.Request) {
+	response := make(map[string]interface{})
+
+	request := r.URL.Path[len(GetDatastoreResourcePrefix):]
+	request, nodeName, found := strings.Cut(request, "/")
+	if !found {
+		if request != "all" && !slices.Contains([]string{"node"}, request) {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(InvalidDSRequestMessage))
+			return
+		}
+	}
+	var err error
+	var isError bool
+	switch request {
+	case "node":
+		nodeResponse := make(map[string]interface{})
+		var podList *v1.PodList
+		if podList, err = i.PodAPIWrapper.ListPods(nodeName); err != nil {
+			isError = true
+			break
+		}
+		nodeResponse["Pods"] = getPodNameSpaceName(podList.Items)
+
+		var pods []v1.Pod
+		if pods, err = i.PodAPIWrapper.GetRunningPodsOnNode(nodeName); err != nil {
+			isError = true
+			break
+		}
+		nodeResponse["RunningPods"] = getPodNameSpaceName(pods)
+		response[nodeName] = nodeResponse
+	case "all":
+		response["PodDatastore"] = i.PodAPIWrapper.Introspect()
+	default:
+		// will not execute, adding it for future cases
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(InvalidDSRequestMessage))
+		return
+	}
+	if isError {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	jsonData, err := json.MarshalIndent(response, "", "\t")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(jsonData)
+}
+
 func (i *IntrospectHandler) SetupWithManager(mgr ctrl.Manager, healthzHanlder *rcHealthz.HealthzHandler) error {
 	// add health check on subpath for introspect controller
 	healthzHanlder.AddControllersHealthCheckers(
@@ -124,4 +192,14 @@ func (i *IntrospectHandler) SetupWithManager(mgr ctrl.Manager, healthzHanlder *r
 	)
 
 	return mgr.Add(i)
+}
+
+func getPodNameSpaceName(podList []v1.Pod) interface{} {
+	var podNameSpaceName []string
+	for _, pod := range podList {
+		podNameSpaceName = append(podNameSpaceName, types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}.String())
+	}
+	return podWrapper.IntrospectResponse{
+		PodList: podNameSpaceName,
+	}
 }
