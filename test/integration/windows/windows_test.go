@@ -219,7 +219,7 @@ var _ = Describe("Windows Integration Test", func() {
 
 			bufferForCoolDown = time.Second * 30
 
-			windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, ctx, "windows",
+			windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "windows",
 				config.ResourceNameIPAddress)
 			instanceID = manager.GetNodeInstanceID(&windowsNodeList.Items[0])
 			nodeName = windowsNodeList.Items[0].Name

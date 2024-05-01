@@ -56,6 +56,12 @@ spec:
                       type: string
                   type: object
                 type: array
+              tags:
+                additionalProperties:
+                  type: string
+                description: Additional tag key/value added to all network interfaces
+                  provisioned by the vpc-resource-controller and VPC-CNI
+                type: object
             type: object
           status:
             description: CNINodeStatus defines the managed VPC resources.
