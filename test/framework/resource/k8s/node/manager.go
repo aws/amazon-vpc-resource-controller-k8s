@@ -15,6 +15,7 @@ package node
 
 import (
 	"context"
+	"strings"
 
 	cninode "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
@@ -32,6 +33,9 @@ type Manager interface {
 	GetNodeList() (*v1.NodeList, error)
 	GetCNINode(node *v1.Node) (*cninode.CNINode, error)
 	GetCNINodeList() (*cninode.CNINodeList, error)
+	GetInstanceID(node *v1.Node) string
+	DeleteCNINode(cniNode *cninode.CNINode) error
+	UpdateCNINode(oldCNINode, newCNINode *cninode.CNINode) error
 }
 
 type defaultManager struct {
@@ -116,4 +120,22 @@ func (d *defaultManager) GetNodeList() (*v1.NodeList, error) {
 	list := &v1.NodeList{}
 	err := d.k8sClient.List(context.TODO(), list)
 	return list, err
+}
+
+func (d *defaultManager) GetInstanceID(node *v1.Node) string {
+	if node.Spec.ProviderID != "" {
+		id := strings.Split(node.Spec.ProviderID, "/")
+		return id[len(id)-1]
+	}
+	return ""
+}
+
+func (d *defaultManager) DeleteCNINode(cniNode *cninode.CNINode) error {
+	err := d.k8sClient.Delete(context.Background(), cniNode)
+	return err
+}
+
+func (d *defaultManager) UpdateCNINode(oldCNINode, newCNINode *cninode.CNINode) error {
+	err := d.k8sClient.Patch(context.Background(), newCNINode, client.MergeFromWithOptions(oldCNINode, client.MergeFromWithOptimisticLock{}))
+	return err
 }

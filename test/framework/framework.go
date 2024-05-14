@@ -17,6 +17,7 @@ import (
 	eniConfig "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	cninode "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	sgp "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/aws/autoscaling"
 	ec2Manager "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/configmap"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
@@ -42,21 +43,22 @@ import (
 )
 
 type Framework struct {
-	Options           Options
-	K8sClient         client.Client
-	ec2Client         *ec2.EC2
-	DeploymentManager deployment.Manager
-	PodManager        pod.Manager
-	EC2Manager        *ec2Manager.Manager
-	SAManager         serviceaccount.Manager
-	NSManager         namespace.Manager
-	SGPManager        *sgpManager.Manager
-	SVCManager        service.Manager
-	JobManager        jobs.Manager
-	NodeManager       node.Manager
-	ControllerManager controller.Manager
-	RBACManager       rbac.Manager
-	ConfigMapManager  configmap.Manager
+	Options            Options
+	K8sClient          client.Client
+	ec2Client          *ec2.EC2
+	DeploymentManager  deployment.Manager
+	PodManager         pod.Manager
+	EC2Manager         *ec2Manager.Manager
+	SAManager          serviceaccount.Manager
+	NSManager          namespace.Manager
+	SGPManager         *sgpManager.Manager
+	SVCManager         service.Manager
+	JobManager         jobs.Manager
+	NodeManager        node.Manager
+	ControllerManager  controller.Manager
+	RBACManager        rbac.Manager
+	ConfigMapManager   configmap.Manager
+	AutoScalingManager autoscaling.Manager
 }
 
 func New(options Options) *Framework {
@@ -91,20 +93,21 @@ func New(options Options) *Framework {
 	ec2 := ec2.New(sess, &aws.Config{Region: aws.String(options.AWSRegion)})
 
 	return &Framework{
-		K8sClient:         k8sClient,
-		ec2Client:         ec2,
-		PodManager:        pod.NewManager(k8sClient, k8sSchema, config),
-		DeploymentManager: deployment.NewManager(k8sClient),
-		EC2Manager:        ec2Manager.NewManager(ec2, options.AWSVPCID),
-		SAManager:         serviceaccount.NewManager(k8sClient, config),
-		NSManager:         namespace.NewManager(k8sClient),
-		SGPManager:        sgpManager.NewManager(k8sClient),
-		SVCManager:        service.NewManager(k8sClient),
-		JobManager:        jobs.NewManager(k8sClient),
-		NodeManager:       node.NewManager(k8sClient),
-		ControllerManager: controller.NewManager(k8sClient),
-		RBACManager:       rbac.NewManager(k8sClient),
-		ConfigMapManager:  configmap.NewManager(k8sClient),
-		Options:           options,
+		K8sClient:          k8sClient,
+		ec2Client:          ec2,
+		PodManager:         pod.NewManager(k8sClient, k8sSchema, config),
+		DeploymentManager:  deployment.NewManager(k8sClient),
+		EC2Manager:         ec2Manager.NewManager(ec2, options.AWSVPCID),
+		SAManager:          serviceaccount.NewManager(k8sClient, config),
+		NSManager:          namespace.NewManager(k8sClient),
+		SGPManager:         sgpManager.NewManager(k8sClient),
+		SVCManager:         service.NewManager(k8sClient),
+		JobManager:         jobs.NewManager(k8sClient),
+		NodeManager:        node.NewManager(k8sClient),
+		ControllerManager:  controller.NewManager(k8sClient),
+		RBACManager:        rbac.NewManager(k8sClient),
+		ConfigMapManager:   configmap.NewManager(k8sClient),
+		AutoScalingManager: autoscaling.NewManager(sess),
+		Options:            options,
 	}
 }

@@ -37,29 +37,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-var _ = Describe("CNINode Veification", func() {
-	Describe("verify CNINode mapping to nodes", func() {
-		Context("when nodes are ready", func() {
-			It("should have same number of CNINode no matter which mode", func() {
-				cniNodes, err := frameWork.NodeManager.GetCNINodeList()
-				Expect(err).NotTo(HaveOccurred())
-				nodes, err := frameWork.NodeManager.GetNodeList()
-				Expect(err).NotTo(HaveOccurred())
-				Expect(len(nodes.Items)).To(Equal(len(cniNodes.Items)))
-				nameMatched := true
-				for _, node := range nodes.Items {
-					if !lo.ContainsBy(cniNodes.Items, func(cniNode cninode.CNINode) bool {
-						return cniNode.Name == node.Name
-					}) {
-						nameMatched = false
-					}
-				}
-				Expect(nameMatched).To(BeTrue())
-			})
-		})
-	})
-})
-
 var _ = Describe("Branch ENI Pods", func() {
 	var (
 		securityGroupPolicy *v1beta1.SecurityGroupPolicy
