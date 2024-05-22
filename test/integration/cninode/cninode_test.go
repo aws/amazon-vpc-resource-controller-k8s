@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
-var _ = Describe("CNINode test", func() {
+var _ = Describe("[CANARY]CNINode test", func() {
 	Describe("CNINode count verification on adding or removing node", func() {
 		var oldMinSize int64
 		var oldMaxSize int64
