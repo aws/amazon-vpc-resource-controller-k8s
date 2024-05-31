@@ -44,6 +44,11 @@ var _ = Describe("[CANARY]CNINode test", func() {
 			Expect(err).ToNot(HaveOccurred())
 			oldMinSize = *asg[0].MinSize
 			oldMaxSize = *asg[0].MaxSize
+
+			// Keep atleast one instance running in the cluster when restoring the values in AfterEach
+			if oldMinSize == 0 {
+				oldMinSize = 1
+			}
 		})
 		AfterEach(func() {
 			By("restoring ASG minSize & maxSize after test")
