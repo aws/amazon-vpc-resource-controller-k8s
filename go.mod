@@ -26,7 +26,6 @@ require (
 )
 
 require (
-	github.com/aws/smithy-go v1.20.2 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
