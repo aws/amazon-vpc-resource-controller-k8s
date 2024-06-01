@@ -363,13 +363,13 @@ var (
 	ec2GetServiceQuotaAPICallCnt = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "ec2_describe_network_interfaces_pages_api_err_count",
-			Help: "The number of errors encountered while making call to get service quotas",
+			Help: "The number of calls made to get service quotas (paginated)",
 		},
 	)
 	ec2GetServiceQuotaAPIErrCnt = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "ec2_get_service_quota_api_err_count",
-			Help: "The number of errors encountered while making call to get service quotas",
+			Help: "The number of errors encountered while making call to get service quotas (paginated)",
 		},
 	)
 

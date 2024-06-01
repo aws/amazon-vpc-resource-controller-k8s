@@ -16,7 +16,6 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -195,15 +194,13 @@ func (i *PodMutationWebHook) HandleWindowsPod(req admission.Request, pod *corev1
 // matches any SGP
 func (i *PodMutationWebHook) HandleLinuxPod(req admission.Request, pod *corev1.Pod,
 	log logr.Logger) (response admission.Response) {
-
 	sgList, err := i.SGPAPI.GetMatchingSecurityGroupForPods(pod)
-	fmt.Println(err, "에러입니다")
-
 	if err != nil {
 		i.Log.Error(err, "failed to get matching SGP for Pods",
 			"namespace", pod.Namespace, "name", pod.Name)
 		return admission.Denied("Failed to get Matching SGP for Pods, rejecting event")
 	}
+
 	if len(sgList) == 0 {
 		return admission.Allowed("Pod didn't match any SGP")
 	}
