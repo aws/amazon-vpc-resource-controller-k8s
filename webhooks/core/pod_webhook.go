@@ -156,11 +156,11 @@ func (i *PodMutationWebHook) HandleFargatePod(req admission.Request, pod *corev1
 	default:
 		// If more than 5 SGs match for the Pod, deny the request
 		// Fargate only allows up to 5 security groups. If you are using Fargate, you can only use up to 5 security groups per pod
-		// if len(sgList) > 5 {
-		// 	log.Info("Denying request due to too many matching security groups",
-		// 		"Security Groups", sgList)
-		// 	return admission.Denied("Too many matching security groups, rejecting event")
-		// }
+		if len(sgList) > 5 {
+			log.Info("Denying request due to too many matching security groups",
+				"Security Groups", sgList)
+			return admission.Denied("Too many matching security groups, rejecting event")
+		}
 		// If more than 1 SG match for the Pod then add all matching SG to the Annotation
 		pod.Annotations[FargatePodSGAnnotationKey] = strings.Join(sgList, ",")
 		log.Info("annotating Fargate pod with matching security groups",
