@@ -175,7 +175,6 @@ func (i *PodMutationWebHook) HandleFargatePod(req admission.Request, pod *corev1
 // Limit to the Pod when the Windows IPAM feature is enabled via ConfigMap
 func (i *PodMutationWebHook) HandleWindowsPod(req admission.Request, pod *corev1.Pod,
 	log logr.Logger) (response admission.Response) {
-
 	if !i.Condition.IsWindowsIPAMEnabled() {
 		return admission.Allowed("")
 	}
