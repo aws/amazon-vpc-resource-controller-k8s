@@ -640,6 +640,7 @@ func (h *ec2APIHelper) GetSecurityGroupQuota(quotaCode, serviceCode *string) (in
 	}
 	serviceQuotaOutput, err := h.ec2Wrapper.GetServiceQuota(input)
 	if err != nil {
+		// Default value of security groups per network interface
 		return 5, fmt.Errorf("failed to retrieve security group quota: %v", err)
 	}
 	return int(serviceQuotaOutput), nil
