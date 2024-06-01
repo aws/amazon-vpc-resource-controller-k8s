@@ -642,7 +642,5 @@ func (h *ec2APIHelper) GetSecurityGroupQuota(quotaCode, serviceCode *string) (in
 	if err != nil {
 		return 5, fmt.Errorf("failed to retrieve security group quota: %v", err)
 	}
-	fmt.Println(serviceQuotaOutput)
-
 	return int(serviceQuotaOutput), nil
 }
