@@ -16,6 +16,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -25,8 +26,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 )
@@ -41,10 +44,11 @@ const (
 
 // PodResourceInjector injects resources into Pods
 type PodMutationWebHook struct {
-	decoder   *admission.Decoder
-	SGPAPI    utils.SecurityGroupForPodsAPI
-	Log       logr.Logger
-	Condition condition.Conditions
+	decoder      *admission.Decoder
+	SGPAPI       utils.SecurityGroupForPodsAPI
+	Log          logr.Logger
+	Condition    condition.Conditions
+	ec2ApiHelper api.EC2APIHelper
 }
 
 func NewPodMutationWebHook(
@@ -53,12 +57,14 @@ func NewPodMutationWebHook(
 	condition condition.Conditions,
 	d *admission.Decoder,
 	healthzHandler *rcHealthz.HealthzHandler,
+	ec2ApiHelper api.EC2APIHelper,
 ) *PodMutationWebHook {
 	podWebhook := &PodMutationWebHook{
-		SGPAPI:    sgpAPI,
-		Log:       log,
-		Condition: condition,
-		decoder:   d,
+		SGPAPI:       sgpAPI,
+		Log:          log,
+		Condition:    condition,
+		decoder:      d,
+		ec2ApiHelper: ec2ApiHelper,
 	}
 	// add health check on subpath for pod mutation webhook
 	healthzHandler.AddControllersHealthCheckers(
@@ -149,6 +155,13 @@ func (i *PodMutationWebHook) HandleFargatePod(req admission.Request, pod *corev1
 			response = admission.Allowed("Fargate pod not matching any SGP")
 		}
 	default:
+		// If more than 5 SGs match for the Pod, deny the request
+		// Fargate only allows up to 5 security groups. If you are using Fargate, you can only use up to 5 security groups per pod
+		// if len(sgList) > 5 {
+		// 	log.Info("Denying request due to too many matching security groups",
+		// 		"Security Groups", sgList)
+		// 	return admission.Denied("Too many matching security groups, rejecting event")
+		// }
 		// If more than 1 SG match for the Pod then add all matching SG to the Annotation
 		pod.Annotations[FargatePodSGAnnotationKey] = strings.Join(sgList, ",")
 		log.Info("annotating Fargate pod with matching security groups",
@@ -184,6 +197,8 @@ func (i *PodMutationWebHook) HandleLinuxPod(req admission.Request, pod *corev1.P
 	log logr.Logger) (response admission.Response) {
 
 	sgList, err := i.SGPAPI.GetMatchingSecurityGroupForPods(pod)
+	fmt.Println(err, "에러입니다")
+
 	if err != nil {
 		i.Log.Error(err, "failed to get matching SGP for Pods",
 			"namespace", pod.Namespace, "name", pod.Name)
@@ -191,6 +206,23 @@ func (i *PodMutationWebHook) HandleLinuxPod(req admission.Request, pod *corev1.P
 	}
 	if len(sgList) == 0 {
 		return admission.Allowed("Pod didn't match any SGP")
+	}
+
+	quotaCode := "L-2AFB9258" // Security groups per network interface QuotaCode
+	serviceCode := "vpc"
+
+	securityGroupQuota, err := i.ec2ApiHelper.GetSecurityGroupQuota(&quotaCode, &serviceCode)
+	if err != nil {
+		i.Log.Error(err, "failed to get security group quota",
+			"namespace", pod.Namespace, "name", pod.Name)
+		return admission.Denied("Failed to get security group quota, rejecting event")
+	}
+
+	// Verify that the number of securitygroups matches sevicequtoa
+	if len(sgList) > securityGroupQuota {
+		log.Info("Denied the security groups to match quota",
+			"Original Security Groups", sgList, "Quota", securityGroupQuota)
+		return admission.Denied("Exceed security group quota, rejecting event")
 	}
 
 	log.Info("injecting resource to the first container of the pod", "resource name",

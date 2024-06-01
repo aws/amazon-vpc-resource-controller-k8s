@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_utils "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -48,6 +49,7 @@ var (
 type Mock struct {
 	SGPMock       *mock_utils.MockSecurityGroupForPodsAPI
 	ConditionMock *mock_condition.MockConditions
+	EC2Mock       *mock_api.MockEC2APIHelper
 }
 
 func TestPodMutationWebHook_Handle(t *testing.T) {
@@ -159,6 +161,7 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 			},
 			mockInvocation: func(mock Mock) {
 				mock.SGPMock.EXPECT().GetMatchingSecurityGroupForPods(gomock.AssignableToTypeOf(sgpPod)).Return(sgList, nil)
+				mock.EC2Mock.EXPECT().GetSecurityGroupQuota(gomock.Any(), gomock.Any()).Return(5, nil)
 			},
 
 			want: admission.Response{
@@ -192,6 +195,7 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 			},
 			mockInvocation: func(mock Mock) {
 				mock.SGPMock.EXPECT().GetMatchingSecurityGroupForPods(gomock.AssignableToTypeOf(sgpPod)).Return(sgList, nil)
+				mock.EC2Mock.EXPECT().GetSecurityGroupQuota(gomock.Any(), gomock.Any()).Return(5, nil)
 			},
 
 			want: admission.Response{
@@ -225,6 +229,7 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 			},
 			mockInvocation: func(mock Mock) {
 				mock.SGPMock.EXPECT().GetMatchingSecurityGroupForPods(gomock.AssignableToTypeOf(sgpPod)).Return([]string{}, nil)
+				mock.EC2Mock.EXPECT().GetSecurityGroupQuota(gomock.Any(), gomock.Any()).Return(5, nil)
 			},
 
 			want: admission.Response{
@@ -245,6 +250,7 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 			},
 			mockInvocation: func(mock Mock) {
 				mock.SGPMock.EXPECT().GetMatchingSecurityGroupForPods(gomock.AssignableToTypeOf(sgpPod)).Return(nil, mockErr)
+				mock.EC2Mock.EXPECT().GetSecurityGroupQuota(gomock.Any(), gomock.Any()).Return(5, nil)
 			},
 
 			want: admission.Response{
@@ -517,13 +523,15 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 			ctx := context.TODO()
 			mock := Mock{
 				SGPMock:       mock_utils.NewMockSecurityGroupForPodsAPI(ctrl),
+				EC2Mock:       mock_api.NewMockEC2APIHelper(ctrl),
 				ConditionMock: mock_condition.NewMockConditions(ctrl),
 			}
 			h := &PodMutationWebHook{
-				decoder:   decoder,
-				Log:       zap.New(),
-				SGPAPI:    mock.SGPMock,
-				Condition: mock.ConditionMock,
+				decoder:      decoder,
+				Log:          zap.New(),
+				SGPAPI:       mock.SGPMock,
+				ec2ApiHelper: mock.EC2Mock,
+				Condition:    mock.ConditionMock,
 			}
 
 			if tt.mockInvocation != nil {
