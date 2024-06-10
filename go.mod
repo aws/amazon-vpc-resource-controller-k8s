@@ -1,6 +1,7 @@
 module github.com/aws/amazon-vpc-resource-controller-k8s
 
 go 1.21
+toolchain go1.22.3
 
 require (
 	github.com/aws/amazon-vpc-cni-k8s v1.18.1
@@ -20,7 +21,7 @@ require (
 	golang.org/x/time v0.5.0
 	gomodules.xyz/jsonpatch/v2 v2.4.0
 	k8s.io/api v0.29.3
-	k8s.io/apimachinery v0.29.3
+	k8s.io/apimachinery v0.30.1
 	k8s.io/client-go v0.29.3
 	sigs.k8s.io/controller-runtime v0.17.0
 )
@@ -77,8 +78,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apiextensions-apiserver v0.29.0 // indirect
 	k8s.io/component-base v0.29.0 // indirect
-	k8s.io/klog/v2 v2.110.1 // indirect
-	k8s.io/kube-openapi v0.0.0-20231010175941-2dd684a91f00 // indirect
+	k8s.io/klog/v2 v2.120.1 // indirect
+	k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340 // indirect
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
