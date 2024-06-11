@@ -420,20 +420,21 @@ func main() {
 	webhookServer := mgr.GetWebhookServer()
 
 	setupLog.Info("registering webhooks to the webhook server")
+	decoder := admission.NewDecoder(mgr.GetScheme())
 	podMutationWebhook := webhookcore.NewPodMutationWebHook(
-		sgpAPI, ctrl.Log.WithName("resource mutating webhook"), controllerConditions, admission.NewDecoder(mgr.GetScheme()), healthzHandler)
+		sgpAPI, ctrl.Log.WithName("resource mutating webhook"), controllerConditions, decoder, healthzHandler)
 	webhookServer.Register("/mutate-v1-pod", &webhook.Admission{
 		Handler: podMutationWebhook,
 	})
 
 	nodeValidateWebhook := webhookcore.NewNodeUpdateWebhook(
-		controllerConditions, ctrl.Log.WithName("node validating webhook"), admission.NewDecoder(mgr.GetScheme()), healthzHandler)
+		controllerConditions, ctrl.Log.WithName("node validating webhook"), decoder, healthzHandler)
 	webhookServer.Register("/validate-v1-node", &webhook.Admission{
 		Handler: nodeValidateWebhook})
 
 	// Validating webhook for pod.
 	annotationValidator := webhookcore.NewAnnotationValidator(
-		controllerConditions, ctrl.Log.WithName("annotation validating webhook"), admission.NewDecoder(mgr.GetScheme()), healthzHandler)
+		controllerConditions, ctrl.Log.WithName("annotation validating webhook"), decoder, healthzHandler)
 	webhookServer.Register("/validate-v1-pod", &webhook.Admission{
 		Handler: annotationValidator})
 

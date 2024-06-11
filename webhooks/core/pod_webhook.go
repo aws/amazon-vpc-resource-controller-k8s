@@ -41,7 +41,7 @@ const (
 
 // PodResourceInjector injects resources into Pods
 type PodMutationWebHook struct {
-	decoder   *admission.Decoder
+	decoder   admission.Decoder
 	SGPAPI    utils.SecurityGroupForPodsAPI
 	Log       logr.Logger
 	Condition condition.Conditions
@@ -51,7 +51,7 @@ func NewPodMutationWebHook(
 	sgpAPI utils.SecurityGroupForPodsAPI,
 	log logr.Logger,
 	condition condition.Conditions,
-	d *admission.Decoder,
+	d admission.Decoder,
 	healthzHandler *rcHealthz.HealthzHandler,
 ) *PodMutationWebHook {
 	podWebhook := &PodMutationWebHook{
