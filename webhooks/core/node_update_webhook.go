@@ -15,13 +15,13 @@ import (
 )
 
 type NodeUpdateWebhook struct {
-	decoder   *admission.Decoder
+	decoder   admission.Decoder
 	Condition condition.Conditions
 	Log       logr.Logger
 	Checker   healthz.Checker
 }
 
-func NewNodeUpdateWebhook(condition condition.Conditions, log logr.Logger, d *admission.Decoder, healthzHandler *rcHealthz.HealthzHandler) *NodeUpdateWebhook {
+func NewNodeUpdateWebhook(condition condition.Conditions, log logr.Logger, d admission.Decoder, healthzHandler *rcHealthz.HealthzHandler) *NodeUpdateWebhook {
 	nodeUpdateWebhook := &NodeUpdateWebhook{
 		Condition: condition,
 		Log:       log,
