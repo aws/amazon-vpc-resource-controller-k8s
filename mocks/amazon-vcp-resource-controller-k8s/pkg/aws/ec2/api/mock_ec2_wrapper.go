@@ -20,6 +20,7 @@ package mock_api
 import (
 	reflect "reflect"
 
+	servicequotas "github.com/aws/aws-sdk-go/service/servicequotas"
 	ec2 "github.com/aws/aws-sdk-go/service/ec2"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -284,4 +285,19 @@ func (m *MockEC2Wrapper) UnassignPrivateIPAddresses(arg0 *ec2.UnassignPrivateIpA
 func (mr *MockEC2WrapperMockRecorder) UnassignPrivateIPAddresses(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnassignPrivateIPAddresses", reflect.TypeOf((*MockEC2Wrapper)(nil).UnassignPrivateIPAddresses), arg0)
+}
+
+// GetServiceQuota mocks base method.
+func (m *MockEC2Wrapper) GetServiceQuota(input *servicequotas.GetServiceQuotaInput) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetServiceQuota", input)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetServiceQuota indicates an expected call of GetServiceQuota.
+func (mr *MockEC2WrapperMockRecorder) GetServiceQuota(input interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetServiceQuota", reflect.TypeOf((*MockEC2Wrapper)(nil).GetServiceQuota), input)
 }
