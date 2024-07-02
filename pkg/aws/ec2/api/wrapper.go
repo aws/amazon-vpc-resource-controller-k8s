@@ -821,13 +821,7 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkIn
 }
 
 func (e *ec2Wrapper) GetSecurityGroupsForVpc(input *ec2.GetSecurityGroupsForVpcInput) (*ec2.GetSecurityGroupsForVpcOutput, error) {
-	accountIdFilter := ec2.Filter{
-		Name:   aws.String("owner-id"),
-		Values: aws.StringSlice([]string{e.accountID}),
-	}
-
 	start := time.Now()
-	input.Filters = append(input.Filters, &accountIdFilter)
 	// e.userServiceClient.Get
 	output, err := e.userServiceClient.GetSecurityGroupsForVpc(input)
 	ec2APICallLatencies.WithLabelValues("get_security_groups_for_vpc").Observe(timeSinceMs(start))

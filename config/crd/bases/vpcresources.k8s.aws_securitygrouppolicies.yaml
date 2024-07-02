@@ -96,11 +96,12 @@ spec:
                     type: object
                 type: object
               securityGroups:
-                description: GroupIds contains the list of security groups that will
-                  be applied to the network interface of the pod matching the criteria.
+                description: SecurityGroups contains the list of security groups that
+                  will be applied to the network interface of the pod matching the
+                  criteria.
                 properties:
                   groupIds:
-                    description: Groups is the list of EC2 Security Groups Ids that
+                    description: GroupIds is the list of EC2 Security Groups Ids that
                       need to be applied to the ENI of a Pod.
                     items:
                       type: string

@@ -23,16 +23,16 @@ import (
 type SecurityGroupPolicySpec struct {
 	PodSelector            *metav1.LabelSelector `json:"podSelector,omitempty"`
 	ServiceAccountSelector *metav1.LabelSelector `json:"serviceAccountSelector,omitempty"`
-	SecurityGroups         GroupIds              `json:"securityGroups,omitempty"`
+	SecurityGroups         SecurityGroups        `json:"securityGroups,omitempty"`
 }
 
-// GroupIds contains the list of security groups that will be applied to the network interface of the pod matching the criteria.
-type GroupIds struct {
-	// Groups is the list of EC2 Security Groups Ids that need to be applied to the ENI of a Pod.
+// SecurityGroups contains the list of security groups that will be applied to the network interface of the pod matching the criteria.
+type SecurityGroups struct {
+	// GroupIds is the list of EC2 Security Groups Ids that need to be applied to the ENI of a Pod.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=5
 	// +kubebuilder:validation:UniqueItems=true
-	Groups []string `json:"groupIds,omitempty"`
+	GroupIds []string `json:"groupIds,omitempty"`
 	// GroupNames is the list of EC2 Security Group Names that need to be applied to the ENI of a Pod.
 	// +kubebuilder:validation:MinItems=0
 	// +kubebuilder:validation:MaxItems=5

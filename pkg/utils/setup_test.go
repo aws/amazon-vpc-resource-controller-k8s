@@ -42,7 +42,6 @@ var (
 	saName                        string
 )
 
-// TODO: Use the mocks and actually correctly mock this
 type FakeEc2Helper struct {
 	api.EC2APIHelper
 }
@@ -111,8 +110,8 @@ func NewSecurityGroupPolicyOne(name string, namespace string, securityGroups []s
 					},
 				},
 			},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds: securityGroups,
 			},
 		},
 	}
@@ -138,8 +137,8 @@ func NewSecurityGroupPolicyTwo(name string, namespace string, securityGroups []s
 					},
 				},
 			},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds: securityGroups,
 			},
 		},
 	}

@@ -278,7 +278,7 @@ func TestCanInjectENI_MismatchedSASelector(t *testing.T) {
 func TestEmptySecurityGroupInSGP(t *testing.T) {
 	securityGroupPolicyPod := NewSecurityGroupPolicyPodSelector(
 		"test", "test_namespace", testSecurityGroupsOne, nil)
-	securityGroupPolicyPod.Spec.SecurityGroups.Groups = []string{}
+	securityGroupPolicyPod.Spec.SecurityGroups.GroupIds = []string{}
 	sgpList := &vpcresourcesv1beta1.SecurityGroupPolicyList{
 		TypeMeta: metav1.TypeMeta{},
 		ListMeta: metav1.ListMeta{},
@@ -353,8 +353,8 @@ func NewSecurityGroupPolicyCombined(
 					Values:   []string{"qa", "production"},
 				}},
 			},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds: securityGroups,
 			},
 		},
 	}
@@ -379,8 +379,8 @@ func NewSecurityGroupPolicyPodSelector(
 					Values:   []string{"qa", "production"},
 				}},
 			},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups:     securityGroupIds,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds:   securityGroupIds,
 				GroupNames: securityGroupNames,
 			},
 		},
@@ -401,8 +401,8 @@ func NewSecurityGroupPolicyEmptyPodSelector(name string, namespace string, secur
 				MatchLabels:      map[string]string{},
 				MatchExpressions: []metav1.LabelSelectorRequirement{},
 			},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds: securityGroups,
 			},
 		},
 	}
@@ -426,8 +426,8 @@ func NewSecurityGroupPolicySaSelector(name string, namespace string, securityGro
 					Values:   []string{"qa", "production"},
 				}},
 			},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds: securityGroups,
 			},
 		},
 	}
@@ -446,8 +446,8 @@ func NewSecurityGroupPolicyEmptySaSelector(name string, namespace string, securi
 			ServiceAccountSelector: &metav1.LabelSelector{
 				MatchLabels:      map[string]string{},
 				MatchExpressions: []metav1.LabelSelectorRequirement{}},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds: securityGroups,
 			},
 		},
 	}
@@ -466,8 +466,8 @@ func NewSecurityGroupPolicyMatchLabelPodSelector(name string, namespace string, 
 			PodSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"role": "db"},
 			},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds: securityGroups,
 			},
 		},
 	}
@@ -492,8 +492,8 @@ func NewSecurityGroupPolicyMatchExpressionPodSelector(name string, namespace str
 					},
 				},
 			},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds: securityGroups,
 			},
 		},
 	}
@@ -512,8 +512,8 @@ func NewSecurityGroupPolicyMatchLabelSASelector(name string, namespace string, s
 			ServiceAccountSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"role": "db"},
 			},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds: securityGroups,
 			},
 		},
 	}
@@ -538,8 +538,8 @@ func NewSecurityGroupPolicyMatchExpressionSASelector(name string, namespace stri
 					},
 				},
 			},
-			SecurityGroups: vpcresourcesv1beta1.GroupIds{
-				Groups: securityGroups,
+			SecurityGroups: vpcresourcesv1beta1.SecurityGroups{
+				GroupIds: securityGroups,
 			},
 		},
 	}

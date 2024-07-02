@@ -104,7 +104,7 @@ func (s *SecurityGroupForPods) GetMatchingSecurityGroupForPods(pod *corev1.Pod) 
 
 	sgList, err := s.filterPodSecurityGroups(sgpList, pod, sa)
 	if err != nil {
-		helperLog.Error(err, "Failed in associating pod to security groups")
+		helperLog.Error(err, "Failed to get security groups to be associated with pod", "pod", pod.Name)
 		return nil, err
 	}
 
@@ -125,7 +125,7 @@ func (s *SecurityGroupForPods) filterPodSecurityGroups(
 	for _, sgp := range sgpList.Items {
 		hasPodSelector := sgp.Spec.PodSelector != nil
 		hasSASelector := sgp.Spec.ServiceAccountSelector != nil
-		hasSecurityGroup := (sgp.Spec.SecurityGroups.Groups != nil && len(sgp.Spec.SecurityGroups.Groups) > 0) ||
+		hasSecurityGroup := (sgp.Spec.SecurityGroups.GroupIds != nil && len(sgp.Spec.SecurityGroups.GroupIds) > 0) ||
 			(sgp.Spec.SecurityGroups.GroupNames != nil && len(sgp.Spec.SecurityGroups.GroupNames) > 0)
 
 		if (!hasPodSelector && !hasSASelector) || !hasSecurityGroup {
@@ -163,7 +163,7 @@ func (s *SecurityGroupForPods) filterPodSecurityGroups(
 		}
 
 		sgNameList = append(sgNameList, sgp.Spec.SecurityGroups.GroupNames...)
-		sgList = append(sgList, sgp.Spec.SecurityGroups.Groups...)
+		sgList = append(sgList, sgp.Spec.SecurityGroups.GroupIds...)
 	}
 
 	sgIdsForNames, err := s.Ec2Helper.GetSecurityGroupIdsForSecurityGroupNames(sgNameList)

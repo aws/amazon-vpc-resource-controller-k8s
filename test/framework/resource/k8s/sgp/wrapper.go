@@ -47,7 +47,7 @@ func UpdateSecurityGroupPolicy(k8sClient client.Client, ctx context.Context,
 	}, updatedSgp)
 	Expect(err).ToNot(HaveOccurred())
 
-	updatedSgp.Spec.SecurityGroups.Groups = securityGroups
+	updatedSgp.Spec.SecurityGroups.GroupIds = securityGroups
 	err = k8sClient.Update(ctx, updatedSgp)
 	Expect(err).NotTo(HaveOccurred())
 }
