@@ -29,7 +29,8 @@ import (
 )
 
 var (
-	clusterName = "cluster-name"
+	clusterName     = "cluster-name"
+	workerNodeVpcId = "vpc-abcdef"
 	// instance id of EC2 worker node
 	instanceId   = "i-00000000000000000"
 	instanceType = "m5.xlarge"
@@ -57,6 +58,11 @@ var (
 	securityGroup1 = "sg-00000000000000001"
 	securityGroup2 = "sg-00000000000000002"
 	securityGroups = []string{securityGroup1, securityGroup2}
+
+	securityGroupName1 = "db-sg"
+	securityGroupName2 = "redis-sg"
+	securityGroupName3 = "web-sg"
+	securityGroupNames = []string{securityGroupName1, securityGroupName2}
 
 	tags = []*ec2.Tag{
 		{
@@ -335,6 +341,28 @@ var (
 	}
 
 	maxRetryOnError = 3
+
+	getSecurityGroupForVpcInput = &ec2.GetSecurityGroupsForVpcInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("group-name"),
+				Values: aws.StringSlice(securityGroupNames),
+			},
+		},
+		VpcId: &workerNodeVpcId,
+	}
+	getSecurityGroupForVpcOutput = &ec2.GetSecurityGroupsForVpcOutput{
+		SecurityGroupForVpcs: []*ec2.SecurityGroupForVpc{
+			{
+				GroupId:   aws.String(securityGroup1),
+				GroupName: aws.String(securityGroupName1),
+			},
+			{
+				GroupId:   aws.String(securityGroup2),
+				GroupName: aws.String(securityGroupName2),
+			},
+		},
+	}
 )
 
 // getMockWrapper returns the Mock EC2Wrapper along with the EC2APIHelper with mock EC2Wrapper set up
@@ -363,7 +391,7 @@ func getMockWrapper(ctrl *gomock.Controller) (EC2APIHelper, *mock_api.MockEC2Wra
 	}
 
 	mockWrapper := mock_api.NewMockEC2Wrapper(ctrl)
-	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName)
+	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName, workerNodeVpcId)
 
 	return ec2ApiHelper, mockWrapper
 }
@@ -1202,4 +1230,113 @@ func TestEc2APIHelper_GetBranchNetworkInterface_PaginatedResults(t *testing.T) {
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []*ec2.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
+}
+
+func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_EmptyCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	mockWrapper.EXPECT().GetSecurityGroupsForVpc(getSecurityGroupForVpcInput).Return(getSecurityGroupForVpcOutput, nil)
+
+	securityGroupIds, err := ec2ApiHelper.GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames)
+
+	assert.Nil(t, err)
+	assert.Equal(t, securityGroupIds[0], securityGroup1)
+	assert.Equal(t, securityGroupIds[1], securityGroup2)
+	assert.Equal(t, len(securityGroupIds), 2)
+}
+
+func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_FullCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	mockWrapper.EXPECT().GetSecurityGroupsForVpc(getSecurityGroupForVpcInput).Return(getSecurityGroupForVpcOutput, nil).MaxTimes(1)
+	securityGroupIds, err := ec2ApiHelper.GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames)
+
+	assert.Nil(t, err)
+	assert.Equal(t, securityGroupIds[0], securityGroup1)
+	assert.Equal(t, securityGroupIds[1], securityGroup2)
+	assert.Equal(t, len(securityGroupIds), 2)
+}
+
+// TestGetSourceAcctAndArn tests that generating account ID and cluster ARN
+func TestGetSourceAcctAndArn(t *testing.T) {
+	accountID := "123456789876"
+	clusterName := "test-cluster"
+	region := "us-west-2"
+	clusterARN := "arn:aws:eks:us-west-2:123456789876:cluster/test-cluster"
+
+	roleARN := "arn:aws:iam::123456789876:role/test-cluster"
+
+	// test correct inputs
+	acct, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
+	assert.NoError(t, err, "no error should be returned with accurate role arn")
+	assert.Equal(t, accountID, acct, "correct account ID should be retrieved")
+	assert.Equal(t, clusterARN, arn, "correct cluster arn should be retrieved")
+
+	region = "us-gov-west-1"
+	roleARN = "arn:aws-us-gov:iam::123456789876:role/test-cluster"
+	clusterARN = "arn:aws-us-gov:eks:us-gov-west-1:123456789876:cluster/test-cluster"
+	acct, arn, err = GetSourceAcctAndArn(roleARN, region, clusterName)
+	assert.NoError(t, err, "no error should be returned with accurate aws-us-gov partition role arn")
+	assert.Equal(t, accountID, acct, "correct account ID should be retrieved")
+	assert.Equal(t, clusterARN, arn, "correct gov partition cluster arn should be retrieved")
+
+	// test error handling
+	roleARN = "arn:aws:iam::123456789876"
+	_, _, err = GetSourceAcctAndArn(roleARN, region, clusterName)
+	assert.Error(t, err, "error should be returned with inaccurate role arn is given")
+}
+
+// TestGetSourceAcctAndArn_NoRegion test empty region
+func TestGetSourceAcctAndArn_NoRegion(t *testing.T) {
+	clusterName := "test-cluster"
+	region := ""
+
+	roleARN := "arn:aws:iam::123456789876:role/test-cluster"
+
+	// test correct inputs
+	acct, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
+	assert.NoError(t, err, "no error should be returned with accurate role arn")
+	assert.Equal(t, "", acct, "correct account ID should be retrieved")
+	assert.Equal(t, "", arn, "correct cluster arn should be retrieved")
+}
+
+func TestEc2APIHelper_GetSecurityGroupIdsForSecurityGroupNames_MissingGroup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	securityGroupNames := []string{securityGroupName1, securityGroupName2, securityGroupName3}
+
+	getSecurityGroupsForVpcInput := &ec2.GetSecurityGroupsForVpcInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("group-name"),
+				Values: aws.StringSlice(securityGroupNames),
+			},
+		},
+		VpcId: &workerNodeVpcId,
+	}
+
+	getSecurityGroupsForVpcOutput := &ec2.GetSecurityGroupsForVpcOutput{
+		SecurityGroupForVpcs: []*ec2.SecurityGroupForVpc{
+			{
+				GroupId:   aws.String(securityGroup1),
+				GroupName: aws.String(securityGroupName1),
+			},
+		},
+	}
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	mockWrapper.EXPECT().GetSecurityGroupsForVpc(getSecurityGroupsForVpcInput).Return(getSecurityGroupsForVpcOutput, nil)
+
+	securityGroupIds, err := ec2ApiHelper.GetSecurityGroupIdsForSecurityGroupNames(securityGroupNames)
+
+	assert.Nil(t, securityGroupIds)
+	assert.NotNil(t, err)
+	assert.ErrorContains(t, err, fmt.Sprintf("security groups [%s %s] not found", securityGroupName2, securityGroupName3))
 }

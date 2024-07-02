@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/httpclient"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -58,6 +58,7 @@ type EC2Wrapper interface {
 	DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
+	GetSecurityGroupsForVpc(input *ec2.GetSecurityGroupsForVpcInput) (*ec2.GetSecurityGroupsForVpcOutput, error)
 }
 
 var (
@@ -307,6 +308,33 @@ var (
 		},
 	)
 
+	ec2GetSecurityGroupsForVpcCallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_get_security_groups_for_vpc_api_call_count",
+			Help: "The number of calls made to get security groups for vpc",
+		},
+	)
+
+	ec2GetSecurityGroupsForVpcErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_get_security_groups_for_vpc_api_err_count",
+			Help: "The number of errors encountered while making calls to get security groups for vpc",
+		},
+	)
+
+	ec2DescribeNetworkInterfacesPagesAPICallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_describe_network_interfaces_pages_api_call_count",
+			Help: "The number of calls made to describe network interfaces (paginated)",
+		},
+	)
+	ec2DescribeNetworkInterfacesPagesAPIErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_describe_network_interfaces_pages_api_err_count",
+			Help: "The number of errors encountered while making call to describe network interfaces (paginated)",
+		},
+	)
+
 	prometheusRegistered = false
 )
 
@@ -344,6 +372,8 @@ func prometheusRegister() {
 			ec2describeTrunkInterfaceAssociationAPIErrCnt,
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
+			ec2GetSecurityGroupsForVpcCallCnt,
+			ec2GetSecurityGroupsForVpcErrCnt,
 			ec2APICallLatencies,
 			vpccniAvailableENICnt,
 			vpcrcAvailableENICnt,
@@ -432,7 +462,7 @@ func (e *ec2Wrapper) getInstanceSession() (instanceSession *session.Session, err
 }
 
 func (e *ec2Wrapper) getInstanceServiceClient(qps int, burst int, instanceSession *session.Session) (*ec2.EC2, error) {
-	instanceClient, err := utils.NewRateLimitedClient(qps, burst)
+	instanceClient, err := httpclient.NewRateLimitedClient(qps, burst)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v",
 			qps, burst, err)
@@ -449,7 +479,7 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 	injectUserAgent(&userStsSession.Handlers)
 
 	// Create a rate limited http client for the
-	client, err := utils.NewRateLimitedClient(qps, burst)
+	client, err := httpclient.NewRateLimitedClient(qps, burst)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v", qps, burst, err)
 	}
@@ -465,7 +495,7 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 
 	roleARN = strings.Trim(roleARN, "\"")
 
-	sourceAcct, sourceArn, err := utils.GetSourceAcctAndArn(roleARN, region, clusterName)
+	sourceAcct, sourceArn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
 	if err != nil {
 		return nil, err
 	}
@@ -785,6 +815,24 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkIn
 	if err != nil {
 		ec2APIErrCnt.Inc()
 		ec2CreateNetworkInterfacePermissionErrCnt.Inc()
+	}
+
+	return output, err
+}
+
+func (e *ec2Wrapper) GetSecurityGroupsForVpc(input *ec2.GetSecurityGroupsForVpcInput) (*ec2.GetSecurityGroupsForVpcOutput, error) {
+	start := time.Now()
+	// e.userServiceClient.Get
+	output, err := e.userServiceClient.GetSecurityGroupsForVpc(input)
+	ec2APICallLatencies.WithLabelValues("get_security_groups_for_vpc").Observe(timeSinceMs(start))
+
+	// Metric Update
+	ec2APICallCnt.Inc()
+	ec2GetSecurityGroupsForVpcCallCnt.Inc()
+
+	if err != nil {
+		ec2APIErrCnt.Inc()
+		ec2GetSecurityGroupsForVpcErrCnt.Inc()
 	}
 
 	return output, err

@@ -23,15 +23,21 @@ import (
 type SecurityGroupPolicySpec struct {
 	PodSelector            *metav1.LabelSelector `json:"podSelector,omitempty"`
 	ServiceAccountSelector *metav1.LabelSelector `json:"serviceAccountSelector,omitempty"`
-	SecurityGroups         GroupIds              `json:"securityGroups,omitempty"`
+	SecurityGroups         SecurityGroups        `json:"securityGroups,omitempty"`
 }
 
-// GroupIds contains the list of security groups that will be applied to the network interface of the pod matching the criteria.
-type GroupIds struct {
-	// Groups is the list of EC2 Security Groups Ids that need to be applied to the ENI of a Pod.
+// SecurityGroups contains the list of security groups that will be applied to the network interface of the pod matching the criteria.
+type SecurityGroups struct {
+	// GroupIds is the list of EC2 Security Groups Ids that need to be applied to the ENI of a Pod.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=5
-	Groups []string `json:"groupIds,omitempty"`
+	// +kubebuilder:validation:UniqueItems=true
+	GroupIds []string `json:"groupIds,omitempty"`
+	// GroupNames is the list of EC2 Security Group Names that need to be applied to the ENI of a Pod.
+	// +kubebuilder:validation:MinItems=0
+	// +kubebuilder:validation:MaxItems=5
+	// +kubebuilder:validation:UniqueItems=true
+	GroupNames []string `json:"groupNames,omitempty"`
 }
 
 // ServiceAccountSelector contains the selection criteria for matching pod with service account that matches the label selector
@@ -45,6 +51,7 @@ type ServiceAccountSelector struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:printcolumn:name="Security-Group-Ids",type=string,JSONPath=`.spec.securityGroups.groupIds`,description="The security group IDs to apply to the elastic network interface of pods that match this policy"
+// +kubebuilder:printcolumn:name="Security-Group-Names",type=string,JSONPath=`.spec.securityGroups.groupNames`,description="The security group names to apply to the elastic network interface of pods that match this policy"
 // +kubebuilder:resource:shortName=sgp
 
 // Custom Resource Definition for applying security groups to pods

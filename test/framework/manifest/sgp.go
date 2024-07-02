@@ -108,7 +108,7 @@ func (s *SGPBuilder) Build() (*v1beta1.SecurityGroupPolicy, error) {
 		Spec: v1beta1.SecurityGroupPolicySpec{
 			PodSelector:            s.podSelector,
 			ServiceAccountSelector: s.saSelector,
-			SecurityGroups:         v1beta1.GroupIds{Groups: s.securityGroup},
+			SecurityGroups:         v1beta1.SecurityGroups{GroupIds: s.securityGroup},
 		},
 	}, nil
 }

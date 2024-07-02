@@ -23,6 +23,11 @@ spec:
       jsonPath: .spec.securityGroups.groupIds
       name: Security-Group-Ids
       type: string
+    - description: The security group names to apply to the elastic network interface
+        of pods that match this policy
+      jsonPath: .spec.securityGroups.groupNames
+      name: Security-Group-Names
+      type: string
     name: v1beta1
     schema:
       openAPIV3Schema:
@@ -91,17 +96,28 @@ spec:
                     type: object
                 type: object
               securityGroups:
-                description: GroupIds contains the list of security groups that will
-                  be applied to the network interface of the pod matching the criteria.
+                description: SecurityGroups contains the list of security groups that
+                  will be applied to the network interface of the pod matching the
+                  criteria.
                 properties:
                   groupIds:
-                    description: Groups is the list of EC2 Security Groups Ids that
+                    description: GroupIds is the list of EC2 Security Groups Ids that
                       need to be applied to the ENI of a Pod.
                     items:
                       type: string
                     maxItems: 5
                     minItems: 1
                     type: array
+                    uniqueItems: true
+                  groupNames:
+                    description: GroupNames is the list of EC2 Security Group Names
+                      that need to be applied to the ENI of a Pod.
+                    items:
+                      type: string
+                    maxItems: 5
+                    minItems: 0
+                    type: array
+                    uniqueItems: true
                 type: object
               serviceAccountSelector:
                 description: A label selector is a label query over a set of resources.
