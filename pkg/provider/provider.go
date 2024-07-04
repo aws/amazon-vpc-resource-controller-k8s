@@ -14,10 +14,14 @@
 package provider
 
 import (
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
+	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 )
 
 // ResourceProvider is the provider interface that each resource managed by the controller has to implement
@@ -45,4 +49,22 @@ type ResourceProvider interface {
 	// IntrospectSummary allows introspection of resources summary per node
 	IntrospectSummary() interface{}
 	ReconcileNode(nodeName string) bool
+}
+
+// GetWinWarmPoolConfig retrieves Windows warmpool configuration from ConfigMap, falls back to using default values on failure
+func GetWinWarmPoolConfig(log logr.Logger, w api.Wrapper, isPDEnabled bool) *config.WarmPoolConfig {
+	var resourceConfig map[string]config.ResourceConfig
+	vpcCniConfigMap, err := w.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
+	if err == nil {
+		resourceConfig = config.LoadResourceConfigFromConfigMap(log, vpcCniConfigMap)
+	} else {
+		log.Error(err, "failed to read from config map, will use default resource config")
+		resourceConfig = config.LoadResourceConfig()
+	}
+
+	if isPDEnabled {
+		return resourceConfig[config.ResourceNameIPAddressFromPrefix].WarmPoolConfig
+	} else {
+		return resourceConfig[config.ResourceNameIPAddress].WarmPoolConfig
+	}
 }

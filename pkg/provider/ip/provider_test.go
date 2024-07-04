@@ -16,7 +16,10 @@ package ip
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"testing"
+
+	v1 "k8s.io/api/core/v1"
 
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
@@ -47,9 +50,11 @@ var (
 	nodeCapacity = 14
 
 	ipV4WarmPoolConfig = config.WarmPoolConfig{
-		DesiredSize:  config.IPv4DefaultWPSize,
-		MaxDeviation: config.IPv4DefaultMaxDev,
-		ReservedSize: config.IPv4DefaultResSize,
+		WarmIPTarget: config.IPv4DefaultWinWarmIPTarget,
+		MinIPTarget:  config.IPv4DefaultWinMinIPTarget,
+		DesiredSize:  config.IPv4DefaultWinWarmIPTarget,
+		MaxDeviation: config.IPv4DefaultWinMaxDev,
+		ReservedSize: config.IPv4DefaultWinResSize,
 	}
 )
 
@@ -327,17 +332,28 @@ func TestIPv4Provider_UpdateResourceCapacity_FromFromPDToIP(t *testing.T) {
 	mockConditions := mock_condition.NewMockConditions(ctrl)
 	mockWorker := mock_worker.NewMockWorker(ctrl)
 	ipV4WarmPoolConfig := config.WarmPoolConfig{
-		DesiredSize:  config.IPv4DefaultWPSize,
-		MaxDeviation: config.IPv4DefaultMaxDev,
-		ReservedSize: config.IPv4DefaultResSize,
+		WarmIPTarget: config.IPv4DefaultWinWarmIPTarget,
+		MinIPTarget:  config.IPv4DefaultWinMinIPTarget,
+		DesiredSize:  config.IPv4DefaultWinWarmIPTarget,
+		MaxDeviation: config.IPv4DefaultWinMaxDev,
+		ReservedSize: config.IPv4DefaultWinResSize,
 	}
 	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, workerPool: mockWorker, config: &ipV4WarmPoolConfig,
 		instanceProviderAndPool: map[string]*ResourceProviderAndPool{}, log: zap.New(zap.UseDevMode(true)).WithName("ip provider"), conditions: mockConditions}
+	expectedVpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			config.EnableWindowsIPAMKey:             "true",
+			config.EnableWindowsPrefixDelegationKey: "false",
+			config.WarmIPTarget:                     strconv.Itoa(config.IPv4DefaultWinWarmIPTarget),
+			config.MinimumIPTarget:                  strconv.Itoa(config.IPv4DefaultWinMinIPTarget),
+		},
+	}
 
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
 	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, true)
 	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
+	mockK8sWrapper.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(expectedVpcCNIConfig, nil)
 
 	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
 	mockPool.EXPECT().SetToActive(&ipV4WarmPoolConfig).Return(job)
@@ -391,11 +407,21 @@ func TestIPv4Provider_UpdateResourceCapacity_FromFromIPToPD_NonNitro(t *testing.
 	mockWorker := mock_worker.NewMockWorker(ctrl)
 	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, workerPool: mockWorker, config: &ipV4WarmPoolConfig,
 		instanceProviderAndPool: map[string]*ResourceProviderAndPool{}, log: zap.New(zap.UseDevMode(true)).WithName("ip provider"), conditions: mockConditions}
+	expectedVpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			config.EnableWindowsIPAMKey:             "true",
+			config.EnableWindowsPrefixDelegationKey: "false",
+			config.WarmIPTarget:                     strconv.Itoa(config.IPv4DefaultWinWarmIPTarget),
+			config.MinimumIPTarget:                  strconv.Itoa(config.IPv4DefaultWinMinIPTarget),
+			config.WarmPrefixTarget:                 strconv.Itoa(0),
+		},
+	}
 
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
 	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
+	mockK8sWrapper.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(expectedVpcCNIConfig, nil)
 
 	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
 	mockPool.EXPECT().SetToActive(&ipV4WarmPoolConfig).Return(job)
@@ -442,11 +468,20 @@ func TestIPv4Provider_UpdateResourceCapacity_FromIPToIP(t *testing.T) {
 	mockWorker := mock_worker.NewMockWorker(ctrl)
 	ipv4Provider := ipv4Provider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper}, workerPool: mockWorker, config: &ipV4WarmPoolConfig,
 		instanceProviderAndPool: map[string]*ResourceProviderAndPool{}, log: zap.New(zap.UseDevMode(true)).WithName("ip provider"), conditions: mockConditions}
+	expectedVpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			config.EnableWindowsIPAMKey:             "true",
+			config.EnableWindowsPrefixDelegationKey: "false",
+			config.WarmIPTarget:                     strconv.Itoa(config.IPv4DefaultWinWarmIPTarget),
+			config.MinimumIPTarget:                  strconv.Itoa(config.IPv4DefaultWinMinIPTarget),
+		},
+	}
 
 	mockPool := mock_pool.NewMockPool(ctrl)
 	mockManager := mock_eni.NewMockENIManager(ctrl)
 	ipv4Provider.putInstanceProviderAndPool(nodeName, mockPool, mockManager, nodeCapacity, false)
 	mockConditions.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
+	mockK8sWrapper.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(expectedVpcCNIConfig, nil)
 
 	job := &worker.WarmPoolJob{Operations: worker.OperationCreate}
 	mockPool.EXPECT().SetToActive(&ipV4WarmPoolConfig).Return(job)

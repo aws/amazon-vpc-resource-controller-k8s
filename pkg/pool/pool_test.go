@@ -25,11 +25,25 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
+type deviationCalcTestCase struct {
+	warmPoolConfig     *config.WarmPoolConfig
+	warmResources      map[string][]Resource
+	usedResources      map[string]Resource
+	capacity           int
+	expectedWarmIPSize int
+	expectedMinIPSize  int
+	expectedDeviation  int
+	isPDPool           bool
+	pendingCreate      int
+}
+
 var (
 	poolConfig = &config.WarmPoolConfig{
-		DesiredSize:  2,
+		DesiredSize:  1,
 		ReservedSize: 1,
-		MaxDeviation: 1,
+		MaxDeviation: config.IPv4DefaultWinMaxDev,
+		WarmIPTarget: config.IPv4DefaultWinWarmIPTarget,
+		MinIPTarget:  config.IPv4DefaultWinMinIPTarget,
 	}
 
 	nodeName = "node-name"
@@ -345,57 +359,84 @@ func TestPool_ReconcilePool_MaxCapacity(t *testing.T) {
 	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}, job)
 }
 
-// TestPool_ReconcilePool_NotRequired tests if the deviation form warm pool is equal to or less than the max deviation
+// TestPool_ReconcilePool_NotRequired tests if the deviation from warm pool is equal to or less than the max deviation
 // then reconciliation is not triggered
 func TestPool_ReconcilePool_NotRequired(t *testing.T) {
-	warmPool := getMockPool(poolConfig, usedResources, map[string][]Resource{}, 7, false)
-	warmPool.pendingCreate = 1
+	usedResourcesEmpty := map[string]Resource{}
+	warmPoolResourcesEmpty := map[string][]Resource{}
+	poolConfig.WarmIPTarget = 2
+	poolConfig.MinIPTarget = 0
+	warmPool := getMockPool(poolConfig, usedResourcesEmpty, warmPoolResourcesEmpty, 7, false)
+	warmPool.pendingCreate = 2
 
 	job := warmPool.ReconcilePool()
 
-	// deviation = 2(desired WP) - 1(actual WP + pending create) = 1, (deviation)1 > (max deviation)1 => false,
+	// deviation = 2(warmIPTarget) - 2(actual warmpool size + pending create) = 0
+	// 0(deviation) > 0(max deviation) => false,
 	// so no need create right now
 	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}, job)
 }
 
 // TestPool_ReconcilePool tests job with operation type create is returned when the warm pool deviates form max deviation
 func TestPool_ReconcilePool_Create(t *testing.T) {
-	warmPool := getMockPool(poolConfig, usedResources, map[string][]Resource{}, 7, false)
+	usedResourcesEmpty := map[string]Resource{}
+	warmPoolResourcesEmpty := map[string][]Resource{}
+	poolConfig.WarmIPTarget = 2
+	poolConfig.MinIPTarget = 0
+	warmPool := getMockPool(poolConfig, usedResourcesEmpty, warmPoolResourcesEmpty, 7, false)
 
 	job := warmPool.ReconcilePool()
 
-	// deviation = 2(desired WP) - 0(actual WP + pending create) = 0, (deviation)0 > (max deviation)1 => true,
+	// deviation = 2(warmIPTarget) - 0(actual warm pool size + pending create) = 0
+	// 2 (deviation) >= 0 (max deviation) => true, so need to create 2 resources
 	// create (deviation)2 resources
 	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationCreate, ResourceCount: 2}, job)
-	assert.Equal(t, warmPool.pendingCreate, 2)
+	assert.Equal(t, 2, warmPool.pendingCreate)
 }
 
 // TestPool_ReconcilePool_Create_LimitByMaxCapacity tests when the warm pool deviates from max deviation and the deviation
 // is greater than the capacity of the pool, then only resources upto the max capacity are created
 func TestPool_ReconcilePool_Create_LimitByMaxCapacity(t *testing.T) {
-	warmPool := getMockPool(poolConfig, usedResources, map[string][]Resource{}, 7, false)
-	warmPool.pendingDelete = 4
+	usedResources6 := map[string]Resource{
+		res1: {GroupID: grp1, ResourceID: res1},
+		res2: {GroupID: grp2, ResourceID: res2},
+		res3: {GroupID: grp3, ResourceID: res3},
+		res4: {GroupID: grp4, ResourceID: res4},
+		res5: {GroupID: grp5, ResourceID: res5},
+		res6: {GroupID: grp6, ResourceID: res6},
+	}
+	warmPoolResourcesEmpty := map[string][]Resource{}
+	poolConfig.WarmIPTarget = 2
+	poolConfig.MinIPTarget = 0
+	warmPool := getMockPool(poolConfig, usedResources6, warmPoolResourcesEmpty, 7, false)
 
 	job := warmPool.ReconcilePool()
 
-	// deviation = 2(desired WP) - 0(actual WP + pending create) = 2, (deviation)2 >= (max deviation)1 => true, so
-	// need to create (deviation)2 resources. But since remaining capacity is just 1, so we create 1 resource instead
+	// deviation = 2(warmIPTarget) - 0(actual warmpool size + pending create) = 2
+	// 2 (deviation) >= 0 (max deviation) => true, so need to create 2 resources
+	// 6 resources are already pending creation when the ENI has a capacity of 7
+	// Since the remaining capacity is just 1, so we create 1 resource instead
 	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationCreate, ResourceCount: 1}, job)
-	assert.Equal(t, warmPool.pendingCreate, 1)
+	assert.Equal(t, 1, warmPool.pendingCreate)
 }
 
 // TestPool_ReconcilePool_Delete_NotRequired tests that if the warm pool is over the desired warm pool size but has not
 // exceeded the max deviation then we don't return a delete job
 func TestPool_ReconcilePool_Delete_NotRequired(t *testing.T) {
-	warmResources := make(map[string][]Resource)
-	warmResources[res3] = []Resource{{GroupID: res3, ResourceID: res3}}
-	warmResources[res4] = []Resource{{GroupID: res4, ResourceID: res4}}
-	warmResources[res5] = []Resource{{GroupID: res5, ResourceID: res5}}
-	warmPool := getMockPool(poolConfig, usedResources, warmResources, 7, false)
+	usedResourcesEmpty := map[string]Resource{}
+	poolConfig.WarmIPTarget = 2
+	poolConfig.MinIPTarget = 0
+	poolConfig.MaxDeviation = 1
+	warmResources3 := make(map[string][]Resource)
+	warmResources3[res3] = []Resource{{GroupID: res3, ResourceID: res3}}
+	warmResources3[res4] = []Resource{{GroupID: res4, ResourceID: res4}}
+	warmResources3[res5] = []Resource{{GroupID: res5, ResourceID: res5}}
+	warmPool := getMockPool(poolConfig, usedResourcesEmpty, warmResources3, 7, false)
 
 	job := warmPool.ReconcilePool()
 
-	// deviation = 2(desired WP) - 3(actual WP) = -1, (-deviation)1 > (max deviation)1 => false, so no need delete
+	// deviation = 2(warmIPTarget) - 3(actual warmpool size) = -1,
+	// -1 (deviation) > 1 (max deviation) => false, so no need delete
 	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationReconcileNotRequired}, job)
 	assert.Equal(t, warmPool.pendingDelete, 0)
 }
@@ -403,15 +444,20 @@ func TestPool_ReconcilePool_Delete_NotRequired(t *testing.T) {
 // TestPool_ReconcilePool_Delete tests that if the warm pool is over the desired warm pool size and has exceed the max
 // deviation then we issue a return a delete job
 func TestPool_ReconcilePool_Delete(t *testing.T) {
-	warmResources := make(map[string][]Resource)
-	warmResources[res3] = []Resource{{GroupID: res3, ResourceID: res3}}
-	warmResources[res4] = []Resource{{GroupID: res4, ResourceID: res4}}
-	warmResources[res5] = []Resource{{GroupID: res5, ResourceID: res5}}
-	warmResources[res6] = []Resource{{GroupID: res6, ResourceID: res6}}
-	warmPool := getMockPool(poolConfig, usedResources, warmResources, 7, false)
+	usedResourcesEmpty := make(map[string]Resource)
+	poolConfig.WarmIPTarget = 2
+	poolConfig.MinIPTarget = 0
+	warmResources4 := map[string][]Resource{
+		res1: {{GroupID: res3, ResourceID: res1}},
+		res2: {{GroupID: res3, ResourceID: res2}},
+		res3: {{GroupID: res3, ResourceID: res3}},
+		res4: {{GroupID: res3, ResourceID: res4}},
+	}
+	warmPool := getMockPool(poolConfig, usedResourcesEmpty, warmResources4, 7, false)
 
 	job := warmPool.ReconcilePool()
-	// deviation = 2(desired WP) - 4(actual WP) = -2, (-deviation)2 > (max deviation)1 => true, need to delete
+	// deviation = 2(warmIPTarget) - 4(actual warmpool) = -2,
+	//|-2| (deviation) > 0(max deviation) => true, need to delete
 	// since the warm resources is a map, there is no particular order to delete ip address from secondary ip pool,
 	// we can't assert which two ips would get deleted here
 	assert.Equal(t, 2, job.ResourceCount)
@@ -532,12 +578,23 @@ func TestPool_Introspect(t *testing.T) {
 }
 
 func TestPool_SetToDraining_SecondaryIP_Pool(t *testing.T) {
-	warmPool := getMockPool(poolConfig, usedResources, warmPoolResources, 7, false)
+	usedResourcesEmpty := map[string]Resource{}
+	warmPoolResources2 := map[string][]Resource{
+		res2: {{GroupID: res2, ResourceID: res2}},
+		res3: {{GroupID: res3, ResourceID: res3}},
+	}
+	poolConfig.WarmIPTarget = 1
+	poolConfig.MinIPTarget = 0
+	warmPool := getMockPool(poolConfig, usedResourcesEmpty, warmPoolResources2, 7, false)
 	job := warmPool.SetToDraining()
 
-	// only 1 warm resource, i.e. secondary IP address
-	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationDeleted, Resources: []string{"res-3"}, ResourceCount: 1}, job)
-	assert.Equal(t, 1, warmPool.pendingDelete)
+	// Both 2 warm secondary IP addresses need to be deleted, warm pool should drain to zero
+	assert.Equal(t, worker.OperationDeleted, job.Operations)
+	expectedDeletedCount := 2
+	assert.Equal(t, expectedDeletedCount, job.ResourceCount)
+	assert.Equal(t, expectedDeletedCount, len(job.Resources))
+	assert.Equal(t, expectedDeletedCount, warmPool.pendingDelete)
+	assert.Equal(t, 0, warmPool.pendingCreate)
 }
 
 func TestPool_SetToDraining_PD_Pool(t *testing.T) {
@@ -555,12 +612,22 @@ func TestPool_SetToDraining_PD_Pool(t *testing.T) {
 }
 
 func TestPool_SetToActive_SecondaryIP_Pool(t *testing.T) {
-	emptyConfig := &config.WarmPoolConfig{}
-	warmPool := getMockPool(emptyConfig, usedResources, nil, 7, false)
-	newConfig := &config.WarmPoolConfig{DesiredSize: config.IPv4DefaultWPSize, MaxDeviation: config.IPv4DefaultMaxDev}
+	usedResourcesEmpty := map[string]Resource{}
+	warmPoolResources1 := map[string][]Resource{
+		res3: {
+			{GroupID: res3, ResourceID: res3},
+		},
+	}
+	poolConfig.WarmIPTarget = 1
+	poolConfig.MinIPTarget = 0
+	warmPool := getMockPool(poolConfig, usedResourcesEmpty, warmPoolResources1, 7, false)
+	newConfig := &config.WarmPoolConfig{
+		DesiredSize:  4,
+		WarmIPTarget: 4,
+	}
 	job := warmPool.SetToActive(newConfig)
 
-	// default desired size is 3
+	// 3 secondary IP addresses need to be created
 	assert.Equal(t, &worker.WarmPoolJob{Operations: worker.OperationCreate, ResourceCount: 3}, job)
 	assert.Equal(t, 3, warmPool.pendingCreate)
 }
@@ -808,4 +875,260 @@ func TestNumResourcesFromMap(t *testing.T) {
 
 	count = numResourcesFromMap(map[string][]Resource{grp5: {}})
 	assert.Equal(t, 0, count)
+}
+
+// TestCalcSecondaryIPDeviation_PDDisabledAndInvalidZeroTargets tests the pool calculation when prefix delegation is disabled, and secondary IP mode is active
+// Zero values for minIPTarget and warmIPTarget are permitted because the user should have the flexibility to configure as little as zero minimum and warm IP targets
+// Note that at current time, implementation in 'loader.go' prevents these zero values from being propagated, and instead overrides warm-ip-target with a default value of 1 so warmpool always has an available IP
+func TestCalcSecondaryIPDeviation_PDDisabledAndInvalidZeroTargets(t *testing.T) {
+	poolConfig.MinIPTarget = 0
+	poolConfig.WarmIPTarget = 0
+	pdPool := getMockPool(poolConfig, nil, nil, 7, false)
+
+	deviation := pdPool.calculateSecondaryIPDeviation()
+	assert.Equal(t, 0, pdPool.warmPoolConfig.WarmIPTarget)
+	assert.Equal(t, 0, pdPool.warmPoolConfig.MinIPTarget)
+	assert.Equal(t, 0, deviation)
+}
+
+func TestCalcSecondaryIPDeviation_InvalidMinIPTargetSet_UsesDefaultConfig(t *testing.T) {
+	createTestCase := func(minIPTarget int) deviationCalcTestCase {
+		return deviationCalcTestCase{
+			warmPoolConfig: &config.WarmPoolConfig{
+				DesiredSize: 1,
+				MinIPTarget: minIPTarget,
+			},
+			isPDPool:           false,
+			warmResources:      map[string][]Resource{},
+			usedResources:      map[string]Resource{},
+			capacity:           14,
+			expectedMinIPSize:  config.IPv4DefaultWinMinIPTarget,
+			expectedWarmIPSize: config.IPv4DefaultWinWarmIPTarget,
+			expectedDeviation:  0,
+		}
+	}
+	testCases := map[string]deviationCalcTestCase{
+		"InvalidNegativeValue1": createTestCase(-1),
+		"InvalidNegativeValue2": createTestCase(-10),
+		"InvalidNegativeValue3": createTestCase(-100),
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			sIPPool := getMockPool(tc.warmPoolConfig, tc.usedResources, tc.warmResources, tc.capacity, tc.isPDPool)
+			sIPPool.calculateSecondaryIPDeviation()
+			assert.Equal(t, tc.expectedMinIPSize, sIPPool.warmPoolConfig.MinIPTarget)
+		})
+	}
+}
+
+func TestCalcSecondaryIPDeviation_InvalidWarmIPTargetSet_UsesDefaultConfig(t *testing.T) {
+	createTestCase := func(warmIPTarget int) deviationCalcTestCase {
+		return deviationCalcTestCase{
+			warmPoolConfig: &config.WarmPoolConfig{
+				DesiredSize:  1,
+				WarmIPTarget: warmIPTarget,
+			},
+			isPDPool:           false,
+			warmResources:      map[string][]Resource{},
+			usedResources:      map[string]Resource{},
+			capacity:           14,
+			expectedMinIPSize:  config.IPv4DefaultWinMinIPTarget,
+			expectedWarmIPSize: config.IPv4DefaultWinWarmIPTarget,
+			expectedDeviation:  config.IPv4DefaultWinMinIPTarget,
+		}
+	}
+	testCases := map[string]deviationCalcTestCase{
+		"InvalidNegativeValue1": createTestCase(-1),
+		"InvalidNegativeValue2": createTestCase(-10),
+		"InvalidNegativeValue3": createTestCase(-100),
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			sIPPool := getMockPool(tc.warmPoolConfig, tc.usedResources, tc.warmResources, tc.capacity, tc.isPDPool)
+			sIPPool.calculateSecondaryIPDeviation()
+			assert.Equal(t, tc.expectedWarmIPSize, sIPPool.warmPoolConfig.WarmIPTarget)
+		})
+	}
+}
+
+func TestCalcSecondaryIPDeviation_OnlyWarmIPTargetSetToNonZero_ExpectedDeviation(t *testing.T) {
+	createTestCase := func(warmIPTarget int, pendingCreate int, expectedDeviation int, warmResources map[string][]Resource, usedResources map[string]Resource) deviationCalcTestCase {
+		return deviationCalcTestCase{
+			warmPoolConfig: &config.WarmPoolConfig{
+				DesiredSize:  1,
+				WarmIPTarget: warmIPTarget,
+				MinIPTarget:  0,
+			},
+			isPDPool:           false,
+			pendingCreate:      pendingCreate,
+			warmResources:      warmResources,
+			usedResources:      usedResources,
+			expectedWarmIPSize: warmIPTarget,
+			expectedMinIPSize:  0,
+			expectedDeviation:  expectedDeviation,
+		}
+	}
+
+	usedResourcesEmpty := map[string]Resource{}
+	usedResources1 := map[string]Resource{
+		pod1: {GroupID: grp1, ResourceID: res1},
+	}
+	usedResources2 := map[string]Resource{
+		pod1: {GroupID: grp1, ResourceID: res1},
+		pod2: {GroupID: grp2, ResourceID: res2},
+	}
+	warmResourcesEmpty := make(map[string][]Resource)
+	warmResources1 := make(map[string][]Resource)
+	warmResources1[res1] = []Resource{{GroupID: res1, ResourceID: res1}}
+	warmResources2 := make(map[string][]Resource)
+	warmResources2[res1] = []Resource{{GroupID: res1, ResourceID: res1}, {GroupID: res2, ResourceID: res2}}
+
+	testCases := map[string]deviationCalcTestCase{
+		"ResourcesNeedToBeDeleted1":             createTestCase(1, 0, -1, warmResources2, usedResourcesEmpty),
+		"NoResourcesInUseNoWarmNoPendingCreate": createTestCase(3, 0, 3, warmResourcesEmpty, usedResourcesEmpty),
+		"SomePendingResourcesScenario1":         createTestCase(2, 2, 0, warmResourcesEmpty, usedResourcesEmpty),
+		"SomePendingResourcesScenario2":         createTestCase(2, 1, 1, warmResourcesEmpty, usedResourcesEmpty),
+		"SomeWarmResourcesScenario1":            createTestCase(2, 0, 1, warmResources1, usedResourcesEmpty),
+		"SomeWarmResourcesScenario2":            createTestCase(2, 0, 0, warmResources2, usedResourcesEmpty),
+		"SomeUsedResourcesScenario1":            createTestCase(2, 0, 2, warmResourcesEmpty, usedResources1),
+		"SomeUsedResourcesScenario2":            createTestCase(2, 0, 2, warmResourcesEmpty, usedResources2),
+		"ComplexScenario1":                      createTestCase(3, 1, 0, warmResources2, usedResources1),
+		"ComplexScenario2":                      createTestCase(3, 2, 0, warmResources1, usedResources2),
+		"ComplexScenario3":                      createTestCase(3, 1, 0, warmResources2, usedResources2),
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			sIPPool := getMockPool(tc.warmPoolConfig, tc.usedResources, tc.warmResources, tc.capacity, tc.isPDPool)
+			sIPPool.pendingCreate = tc.pendingCreate
+			deviation := sIPPool.calculateSecondaryIPDeviation()
+			assert.Equal(t, tc.expectedWarmIPSize, sIPPool.warmPoolConfig.WarmIPTarget)
+			assert.Equal(t, tc.expectedMinIPSize, sIPPool.warmPoolConfig.MinIPTarget)
+			assert.Equal(t, tc.expectedDeviation, deviation)
+		})
+	}
+}
+
+func TestCalcSecondaryIPDeviation_OnlyMinIPTargetSetToNonZero_ExpectedDeviation(t *testing.T) {
+	createTestCase := func(minIPTarget int, pendingCreate int, expectedDeviation int, warmResources map[string][]Resource, usedResources map[string]Resource) deviationCalcTestCase {
+		return deviationCalcTestCase{
+			warmPoolConfig: &config.WarmPoolConfig{
+				DesiredSize:  1,
+				WarmIPTarget: 1,
+				MinIPTarget:  minIPTarget,
+			},
+			isPDPool:           false,
+			pendingCreate:      pendingCreate,
+			warmResources:      warmResources,
+			usedResources:      usedResources,
+			expectedMinIPSize:  minIPTarget,
+			expectedWarmIPSize: 1,
+			expectedDeviation:  expectedDeviation,
+		}
+	}
+
+	usedResourcesEmpty := map[string]Resource{}
+	usedResources1 := map[string]Resource{
+		pod1: {GroupID: grp1, ResourceID: res1},
+	}
+	usedResources2 := map[string]Resource{
+		pod1: {GroupID: grp1, ResourceID: res1},
+		pod2: {GroupID: grp2, ResourceID: res2},
+	}
+	warmResourcesEmpty := make(map[string][]Resource)
+	warmResources1 := make(map[string][]Resource)
+	warmResources1[res1] = []Resource{{GroupID: res1, ResourceID: res1}}
+	warmResources2 := make(map[string][]Resource)
+	warmResources2[res1] = []Resource{{GroupID: res1, ResourceID: res1}, {GroupID: res2, ResourceID: res2}}
+
+	testCases := map[string]deviationCalcTestCase{
+		"ResourcesNeedToBeDeleted":              createTestCase(0, 0, -1, warmResources2, usedResourcesEmpty),
+		"NoResourcesInUseNoWarmNoPendingCreate": createTestCase(3, 0, 3, warmResourcesEmpty, usedResourcesEmpty),
+		"SomePendingResourcesScenario1":         createTestCase(2, 2, 0, warmResourcesEmpty, usedResourcesEmpty),
+		"SomePendingResourcesScenario2":         createTestCase(2, 1, 1, warmResourcesEmpty, usedResourcesEmpty),
+		"SomeWarmResourcesScenario1":            createTestCase(2, 0, 1, warmResources1, usedResourcesEmpty),
+		"SomeWarmResourcesScenario2":            createTestCase(2, 0, 0, warmResources2, usedResourcesEmpty),
+		"SomeUsedResourcesScenario1":            createTestCase(2, 0, 1, warmResourcesEmpty, usedResources1),
+		"SomeUsedResourcesScenario2":            createTestCase(2, 0, 1, warmResourcesEmpty, usedResources2),
+		"ComplexScenario1":                      createTestCase(5, 1, 2, warmResources1, usedResources1),
+		"ComplexScenario2":                      createTestCase(5, 3, -2, warmResources2, usedResources2),
+		"ComplexScenario3":                      createTestCase(5, 2, 0, warmResources2, usedResources1),
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			sIPPool := getMockPool(tc.warmPoolConfig, tc.usedResources, tc.warmResources, tc.capacity, tc.isPDPool)
+			sIPPool.pendingCreate = tc.pendingCreate
+			deviation := sIPPool.calculateSecondaryIPDeviation()
+			assert.Equal(t, tc.expectedWarmIPSize, sIPPool.warmPoolConfig.WarmIPTarget)
+			assert.Equal(t, tc.expectedMinIPSize, sIPPool.warmPoolConfig.MinIPTarget)
+			assert.Equal(t, tc.expectedDeviation, deviation)
+		})
+	}
+}
+
+func TestCalcSecondaryIPDeviation_MinIPTargetAndWarmIPTargetSet_ExpectedDeviation(t *testing.T) {
+	createTestCase := func(minIPTarget int, warmIPTarget int, pendingCreate int, expectedDeviation int, warmResources map[string][]Resource, usedResources map[string]Resource) deviationCalcTestCase {
+		return deviationCalcTestCase{
+			warmPoolConfig: &config.WarmPoolConfig{
+				DesiredSize:  1,
+				WarmIPTarget: warmIPTarget,
+				MinIPTarget:  minIPTarget,
+			},
+			isPDPool:           false,
+			pendingCreate:      pendingCreate,
+			warmResources:      warmResources,
+			usedResources:      usedResources,
+			expectedMinIPSize:  minIPTarget,
+			expectedWarmIPSize: warmIPTarget,
+			expectedDeviation:  expectedDeviation,
+		}
+	}
+
+	usedResourcesEmpty := map[string]Resource{}
+	usedResources1 := map[string]Resource{
+		pod1: {GroupID: grp1, ResourceID: res1},
+	}
+	usedResources2 := map[string]Resource{
+		pod1: {GroupID: grp1, ResourceID: res1},
+		pod2: {GroupID: grp2, ResourceID: res2},
+	}
+	warmResourcesEmpty := make(map[string][]Resource)
+	warmResources1 := make(map[string][]Resource)
+	warmResources1[res1] = []Resource{{GroupID: res1, ResourceID: res1}}
+	warmResources2 := make(map[string][]Resource)
+	warmResources2[res1] = []Resource{{GroupID: res1, ResourceID: res1}, {GroupID: res2, ResourceID: res2}}
+	warmResources5 := make(map[string][]Resource)
+	warmResources5[res1] = []Resource{
+		{GroupID: res1, ResourceID: res1},
+		{GroupID: res2, ResourceID: res2},
+		{GroupID: res3, ResourceID: res3},
+		{GroupID: res4, ResourceID: res4},
+		{GroupID: res5, ResourceID: res5},
+	}
+
+	testCases := map[string]deviationCalcTestCase{
+		"Scenario1": createTestCase(1, 1, 0, 1, warmResourcesEmpty, usedResourcesEmpty),
+		"Scenario2": createTestCase(5, 2, 0, 3, warmResources2, usedResourcesEmpty),
+		"Scenario3": createTestCase(5, 2, 0, 0, warmResources5, usedResourcesEmpty),
+		"Scenario4": createTestCase(0, 1, 0, -4, warmResources5, usedResourcesEmpty),
+		"Scenario5": createTestCase(4, 5, 2, 1, warmResources2, usedResources1),
+		"Scenario6": createTestCase(10, 5, 1, 7, warmResources1, usedResources1),
+		"Scenario7": createTestCase(12, 12, 5, 5, warmResources2, usedResources2),
+		"Scenario8": createTestCase(0, 1, 0, 0, warmResources1, usedResources1),
+		"Scenario9": createTestCase(2, 1, 0, -1, warmResources2, usedResources1),
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			sIPPool := getMockPool(tc.warmPoolConfig, tc.usedResources, tc.warmResources, tc.capacity, tc.isPDPool)
+			sIPPool.pendingCreate = tc.pendingCreate
+			deviation := sIPPool.calculateSecondaryIPDeviation()
+			assert.Equal(t, tc.expectedWarmIPSize, sIPPool.warmPoolConfig.WarmIPTarget)
+			assert.Equal(t, tc.expectedMinIPSize, sIPPool.warmPoolConfig.MinIPTarget)
+			assert.Equal(t, tc.expectedDeviation, deviation)
+		})
+	}
 }
