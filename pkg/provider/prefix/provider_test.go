@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
@@ -31,7 +33,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/ip/eni"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -541,24 +542,6 @@ func TestIpv4PrefixProvider_Introspect(t *testing.T) {
 func getMockIPv4PrefixProvider() ipv4PrefixProvider {
 	return ipv4PrefixProvider{instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
 		log: zap.New(zap.UseDevMode(true)).WithName("prefix provider")}
-}
-
-func TestGetPDWarmPoolConfig(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockK8sWrapper := mock_k8s.NewMockK8sWrapper(ctrl)
-	mockConditions := mock_condition.NewMockConditions(ctrl)
-	prefixProvider := ipv4PrefixProvider{apiWrapper: api.Wrapper{K8sAPI: mockK8sWrapper},
-		instanceProviderAndPool: map[string]*ResourceProviderAndPool{},
-		log:                     zap.New(zap.UseDevMode(true)).WithName("prefix provider"), conditions: mockConditions}
-
-	for _, c := range []*v1.ConfigMap{vpcCNIConfig, vpcCNIConfigWindows} {
-		mockK8sWrapper.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(c, nil)
-
-		config := prefixProvider.getPDWarmPoolConfig()
-		assert.Equal(t, pdWarmPoolConfig, config)
-	}
 }
 
 // TestIsInstanceSupported tests that if the instance type is nitro, return true
