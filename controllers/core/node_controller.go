@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
@@ -43,6 +44,7 @@ import (
 // when the controller has to be restarted for various reasons.
 const (
 	MaxNodeConcurrentReconciles = 10
+	NodeTerminationFinalizer    = "networking.k8s.aws/resource-cleanup"
 )
 
 // NodeReconciler reconciles a Node object
@@ -73,13 +75,26 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	node := &corev1.Node{}
-	var err error
 
 	logger := r.Log.WithValues("node", req.NamespacedName)
 
 	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
 		if errors.IsNotFound(err) {
-			r.Log.V(1).Info("the requested node couldn't be found by k8s client", "Node", req.NamespacedName)
+			// clean up CNINode finalizer
+			cniNode := &v1alpha1.CNINode{}
+			if err = r.Client.Get(ctx, req.NamespacedName, cniNode); err == nil {
+				if yes := controllerutil.ContainsFinalizer(cniNode, NodeTerminationFinalizer); yes {
+					updated := cniNode.DeepCopy()
+					if yes = controllerutil.RemoveFinalizer(updated, NodeTerminationFinalizer); yes {
+						if err := r.Client.Patch(ctx, updated, client.MergeFrom(cniNode)); err != nil {
+							return ctrl.Result{}, err
+						}
+						r.Log.Info("removed leaked CNINode resource's finalizer", "cninode", cniNode.Name)
+					}
+				}
+			}
+
+			// clean up local cached nodes
 			_, found := r.Manager.GetNode(req.Name)
 			if found {
 				err := r.Manager.DeleteNode(req.Name)
@@ -93,6 +108,8 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	var err error
 
 	_, found := r.Manager.GetNode(req.Name)
 	if found {
