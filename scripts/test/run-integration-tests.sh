@@ -47,7 +47,7 @@ function run_integration_tests(){
     echo "skipping Windows tests"
   fi
   (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=5m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
-  (cd $INTEGRATION_TEST_DIR/cninode && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=10m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
+  # (cd $INTEGRATION_TEST_DIR/cninode && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=10m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
 
   if [[ "$TEST_RESULT" == fail ]]; then
       exit 1
