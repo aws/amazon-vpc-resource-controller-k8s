@@ -645,6 +645,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			name: "TrunkExists_WithBranches, verifies no error when trunk exists with branches",
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
 				f.mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, awsEc2.AttachmentStatusAttached).Return(nil)
 				f.mockInstance.EXPECT().SubnetID().Return(SubnetId)
@@ -674,6 +675,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			name: "TrunkExists_DanglingENIs, verifies ENIs are pushed to delete queue if no pod exists",
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
 				f.mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, awsEc2.AttachmentStatusAttached).Return(nil)
 				f.mockInstance.EXPECT().SubnetID().Return(SubnetId)
