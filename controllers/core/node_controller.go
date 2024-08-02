@@ -25,6 +25,8 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +38,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+)
+
+var (
+	leakedCNINodeResourceCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "orphaned_cninode_objects",
+			Help: "The number of leaked cninode resources",
+		},
+	)
+
+	prometheusRegistered = false
 )
 
 // MaxNodeConcurrentReconciles is the number of go routines that can invoke
@@ -92,6 +105,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 						}
 						r.Log.Info("removed leaked CNINode resource's finalizer", "cninode", cniNode.Name)
 					}
+					leakedCNINodeResourceCount.Inc()
 				}
 			} else if !errors.IsNotFound(cninodeErr) {
 				return ctrl.Result{}, fmt.Errorf("failed getting CNINode %s from cached client, %w", cniNode.Name, cninodeErr)
@@ -135,6 +149,8 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHe
 		map[string]healthz.Checker{"health-node-controller": r.Check()},
 	)
 
+	prometheusRegister()
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: MaxNodeConcurrentReconciles}).
@@ -170,5 +186,13 @@ func (r *NodeReconciler) Check() healthz.Checker {
 		}, r.Log)
 
 		return err
+	}
+}
+
+func prometheusRegister() {
+	if !prometheusRegistered {
+		metrics.Registry.MustRegister(leakedCNINodeResourceCount)
+
+		prometheusRegistered = true
 	}
 }

@@ -64,6 +64,13 @@ var (
 		},
 		[]string{"operation"},
 	)
+	unreconciledTrunkENICount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "unreconciled_trunk_network_interfaces",
+			Help: "The number of unreconciled trunk network interfaces",
+		},
+		[]string{"attribute"},
+	)
 	branchENIOperationsSuccessCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "branch_eni_opeartions_success_count",
@@ -175,6 +182,7 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 func PrometheusRegister() {
 	if !prometheusRegistered {
 		metrics.Registry.MustRegister(trunkENIOperationsErrCount)
+		metrics.Registry.MustRegister(unreconciledTrunkENICount)
 		metrics.Registry.MustRegister(branchENIOperationsSuccessCount)
 		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
 
@@ -260,6 +268,14 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 			"missingSGs", missingSGsInTrunk,
 			"extraSGs", extraSGsInTrunk,
 		)
+
+		if mismatchedSGs {
+			unreconciledTrunkENICount.WithLabelValues("security_groups").Inc()
+		}
+
+		if mismatchedSubnets {
+			unreconciledTrunkENICount.WithLabelValues("subnet").Inc()
+		}
 	}
 
 	// Get the list of branch ENIs
