@@ -16,6 +16,7 @@ package trunk
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
+	"github.com/samber/lo"
 
 	"github.com/aws/aws-sdk-go/aws"
 	awsEC2 "github.com/aws/aws-sdk-go/service/ec2"
@@ -192,6 +194,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		return err
 	}
 
+	var trunk awsEC2.InstanceNetworkInterface
 	// Get trunk network interface
 	for _, nwInterface := range nwInterfaces {
 		// It's possible to get an empty network interface response if the instance is being deleted.
@@ -206,6 +209,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 			} else {
 				return fmt.Errorf("failed to verify network interface status attached for %v", *nwInterface.NetworkInterfaceId)
 			}
+			trunk = *nwInterface
 		}
 	}
 
@@ -229,6 +233,33 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		log.Info("created a new trunk interface", "trunk id", t.trunkENIId)
 
 		return nil
+	}
+
+	// the node already have trunk, let's check if its SGs and Subnets match with expected
+	expectedSubnetID, expectedSecurityGroups := t.instance.GetCustomNetworkingSpec()
+	if len(expectedSecurityGroups) > 0 || expectedSubnetID != "" {
+		slices.Sort(expectedSecurityGroups)
+		trunkSGs := lo.Map(trunk.Groups, func(g *awsEC2.GroupIdentifier, _ int) string {
+			return lo.FromPtr(g.GroupId)
+		})
+		slices.Sort(trunkSGs)
+
+		mismatchedSubnets := expectedSubnetID != lo.FromPtr(trunk.SubnetId)
+		mismatchedSGs := !slices.Equal(expectedSecurityGroups, trunkSGs)
+
+		extraSGsInTrunk, missingSGsInTrunk := lo.Difference(trunkSGs, expectedSecurityGroups)
+		t.log.Info("Observed trunk ENI config",
+			"instanceID", t.instance.InstanceID(),
+			"trunkENIID", lo.FromPtr(trunk.NetworkInterfaceId),
+			"configuredTrunkSGs", trunkSGs,
+			"configuredTrunkSubnet", lo.FromPtr(trunk.SubnetId),
+			"desiredTrunkSGs", expectedSecurityGroups,
+			"desiredTrunkSubnet", expectedSubnetID,
+			"mismatchedSGs", mismatchedSGs,
+			"mismatchedSubnets", mismatchedSubnets,
+			"missingSGs", missingSGsInTrunk,
+			"extraSGs", extraSGsInTrunk,
+		)
 	}
 
 	// Get the list of branch ENIs
