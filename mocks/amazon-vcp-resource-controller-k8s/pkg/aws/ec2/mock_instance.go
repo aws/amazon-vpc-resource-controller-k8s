@@ -73,6 +73,21 @@ func (mr *MockEC2InstanceMockRecorder) FreeDeviceIndex(arg0 interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FreeDeviceIndex", reflect.TypeOf((*MockEC2Instance)(nil).FreeDeviceIndex), arg0)
 }
 
+// GetCustomNetworkingSpec mocks base method.
+func (m *MockEC2Instance) GetCustomNetworkingSpec() (string, []string) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCustomNetworkingSpec")
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].([]string)
+	return ret0, ret1
+}
+
+// GetCustomNetworkingSpec indicates an expected call of GetCustomNetworkingSpec.
+func (mr *MockEC2InstanceMockRecorder) GetCustomNetworkingSpec() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCustomNetworkingSpec", reflect.TypeOf((*MockEC2Instance)(nil).GetCustomNetworkingSpec))
+}
+
 // GetHighestUnusedDeviceIndex mocks base method.
 func (m *MockEC2Instance) GetHighestUnusedDeviceIndex() (int64, error) {
 	m.ctrl.T.Helper()

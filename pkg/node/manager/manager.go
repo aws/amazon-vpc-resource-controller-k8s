@@ -228,7 +228,7 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 		}
 		return err
 	} else {
-		m.Log.V(1).Info("The CNINode is already existing", "CNINode", cniNode)
+		m.Log.Info("The CNINode is already existing", "cninode", cniNode.Name, "features", cniNode.Spec.Features)
 		return nil
 	}
 }

@@ -15,6 +15,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -93,7 +94,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 					}
 				}
 			} else if !errors.IsNotFound(cninodeErr) {
-				return ctrl.Result{}, cninodeErr
+				return ctrl.Result{}, fmt.Errorf("failed getting CNINode %s from cached client, %w", cniNode.Name, cninodeErr)
 			}
 
 			// clean up local cached nodes
