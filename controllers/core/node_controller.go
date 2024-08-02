@@ -78,11 +78,11 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	logger := r.Log.WithValues("node", req.NamespacedName)
 
-	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
-		if errors.IsNotFound(err) {
+	if nodeErr := r.Client.Get(ctx, req.NamespacedName, node); nodeErr != nil {
+		if errors.IsNotFound(nodeErr) {
 			// clean up CNINode finalizer
 			cniNode := &v1alpha1.CNINode{}
-			if err = r.Client.Get(ctx, req.NamespacedName, cniNode); err == nil {
+			if cninodeErr := r.Client.Get(ctx, req.NamespacedName, cniNode); cninodeErr == nil {
 				if yes := controllerutil.ContainsFinalizer(cniNode, NodeTerminationFinalizer); yes {
 					updated := cniNode.DeepCopy()
 					if yes = controllerutil.RemoveFinalizer(updated, NodeTerminationFinalizer); yes {
@@ -92,21 +92,23 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 						r.Log.Info("removed leaked CNINode resource's finalizer", "cninode", cniNode.Name)
 					}
 				}
+			} else if !errors.IsNotFound(cninodeErr) {
+				return ctrl.Result{}, cninodeErr
 			}
 
 			// clean up local cached nodes
 			_, found := r.Manager.GetNode(req.Name)
 			if found {
-				err := r.Manager.DeleteNode(req.Name)
-				if err != nil {
+				cacheErr := r.Manager.DeleteNode(req.Name)
+				if cacheErr != nil {
 					// The request is not retryable so not returning the error
-					logger.Error(err, "failed to delete node from manager")
+					logger.Error(cacheErr, "failed to delete node from manager")
 					return ctrl.Result{}, nil
 				}
 				logger.V(1).Info("deleted the node from manager")
 			}
 		}
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		return ctrl.Result{}, client.IgnoreNotFound(nodeErr)
 	}
 
 	var err error
