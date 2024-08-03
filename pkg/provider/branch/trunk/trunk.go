@@ -42,7 +42,9 @@ const (
 	// MaxAllocatableVlanIds is the maximum number of Vlan Ids that can be allocated per trunk.
 	MaxAllocatableVlanIds = 121
 	// MaxDeleteRetries is the maximum number of times the ENI will be retried before being removed from the delete queue
-	MaxDeleteRetries = 3
+	MaxDeleteRetries    = 3
+	SubnetLabel         = "subnet"
+	SecurityGroupsLabel = "security_groups"
 )
 
 var (
@@ -270,11 +272,11 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		)
 
 		if mismatchedSGs {
-			unreconciledTrunkENICount.WithLabelValues("security_groups").Inc()
+			unreconciledTrunkENICount.WithLabelValues(SecurityGroupsLabel).Inc()
 		}
 
 		if mismatchedSubnets {
-			unreconciledTrunkENICount.WithLabelValues("subnet").Inc()
+			unreconciledTrunkENICount.WithLabelValues(SubnetLabel).Inc()
 		}
 	}
 
