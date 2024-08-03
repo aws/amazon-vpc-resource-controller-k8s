@@ -44,7 +44,7 @@ var (
 	leakedCNINodeResourceCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "orphaned_cninode_objects",
-			Help: "The number of leaked cninode resources",
+			Help: "The number of CNINode objects that do not have a parent Node object (likely indicating a leak from a deleted node)",
 		},
 	)
 
