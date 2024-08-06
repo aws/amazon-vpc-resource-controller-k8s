@@ -178,23 +178,21 @@ func (c *CustomController) WaitForCacheSync(controller cache.Controller) {
 
 // newOptimizedListWatcher returns a list watcher with a custom list function that converts the
 // response for each page using the converter function and returns a general watcher
-func newOptimizedListWatcher(ctx context.Context, restClient cache.Getter, resource string, namespace string, limit int,
+func newOptimizedListWatcher(ctx context.Context, restClient cache.Getter, resource string, namespace string,
 	converter Converter) *cache.ListWatch {
 
 	listFunc := func(options metav1.ListOptions) (runtime.Object, error) {
 		list, err := restClient.Get().
 			Namespace(namespace).
 			Resource(resource).
-			// This needs to be done because just setting the limit using option's
-			// Limit is being overridden and the response is returned without pagination.
 			VersionedParams(&metav1.ListOptions{
-				Limit:    int64(limit),
+				Limit:    options.Limit,
 				Continue: options.Continue,
 			}, metav1.ParameterCodec).
 			Do(ctx).
 			Get()
 		if err != nil {
-			return list, err
+			return nil, err
 		}
 		// Strip down the the list before passing the paginated response back to
 		// the pager function
