@@ -202,6 +202,7 @@ func main() {
 	// Set the API Server QPS and Burst
 	kubeConfig.QPS = config.DefaultAPIServerQPS
 	kubeConfig.Burst = config.DefaultAPIServerBurst
+	kubeConfig.UserAgent = fmt.Sprintf("%s/%s", ec2API.AppName, version.GitVersion)
 
 	setupLog.Info("starting the controller with leadership setting",
 		"leader mode enabled", enableLeaderElection,
