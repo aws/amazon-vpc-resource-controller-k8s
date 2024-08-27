@@ -223,7 +223,7 @@ func newOptimizedListWatcher(ctx context.Context, restClient cache.Getter, resou
 			}
 			return nil, err
 		}
-		return watch,err
+		return watch, err
 	}
 	return &cache.ListWatch{ListFunc: listFunc, WatchFunc: watchFunc}
 }
