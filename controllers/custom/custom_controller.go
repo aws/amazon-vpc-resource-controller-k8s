@@ -21,6 +21,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/go-logr/logr"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -179,7 +180,7 @@ func (c *CustomController) WaitForCacheSync(controller cache.Controller) {
 // newOptimizedListWatcher returns a list watcher with a custom list function that converts the
 // response for each page using the converter function and returns a general watcher
 func newOptimizedListWatcher(ctx context.Context, restClient cache.Getter, resource string, namespace string,
-	converter Converter) *cache.ListWatch {
+	converter Converter, log logr.Logger) *cache.ListWatch {
 
 	listFunc := func(options metav1.ListOptions) (runtime.Object, error) {
 		list, err := restClient.Get().
@@ -192,6 +193,11 @@ func newOptimizedListWatcher(ctx context.Context, restClient cache.Getter, resou
 			Do(ctx).
 			Get()
 		if err != nil {
+			if statusErr, ok := err.(*apierrors.StatusError); ok {
+				log.Error(err, "List operation error", "code", statusErr.Status().Code)
+			} else {
+				log.Error(err, "List operation error")
+			}
 			return nil, err
 		}
 		// Strip down the the list before passing the paginated response back to
@@ -204,11 +210,20 @@ func newOptimizedListWatcher(ctx context.Context, restClient cache.Getter, resou
 	// before storing the object in the data store.
 	watchFunc := func(options metav1.ListOptions) (watch.Interface, error) {
 		options.Watch = true
-		return restClient.Get().
+		watch, err := restClient.Get().
 			Namespace(namespace).
 			Resource(resource).
 			VersionedParams(&options, metav1.ParameterCodec).
 			Watch(ctx)
+		if err != nil {
+			if statusErr, ok := err.(*apierrors.StatusError); ok {
+				log.Error(err, "Watch operation error", "code", statusErr.Status().Code)
+			} else {
+				log.Error(err, "Watch operation error")
+			}
+			return nil, err
+		}
+		return watch,err
 	}
 	return &cache.ListWatch{ListFunc: listFunc, WatchFunc: watchFunc}
 }

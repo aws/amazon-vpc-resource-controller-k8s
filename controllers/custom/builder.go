@@ -113,7 +113,7 @@ func (b *Builder) Complete(reconciler Reconciler) (healthz.Checker, error) {
 		workqueue.DefaultControllerRateLimiter(), b.options.Name)
 
 	optimizedListWatch := newOptimizedListWatcher(b.ctx, b.clientSet.CoreV1().RESTClient(),
-		b.converter.Resource(), b.options.Namespace, b.converter)
+		b.converter.Resource(), b.options.Namespace, b.converter, b.log.WithName("listWatcher"))
 
 	// Create the config for low level controller with the custom converter
 	// list and watch
