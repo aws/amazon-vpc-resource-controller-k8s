@@ -82,7 +82,42 @@ The Integration test suite provides the following focuses.
 
 This is intended for the purposes of local development, testing and CI Setup. For more details refer the steps are provided in `scripts/test/README.md`
 
-### Future Work
-- Once we have more test suites, we can provide a script instead of invoking each suite manually.
-- Add Windows tests to the list once the support is enabled.
-- Move the script based tests in `integration-test` to Ginkgo Based integration/e2e test.
+### Running Scale Tests
+
+#### Test Pod startup latency
+For each release, verify that pod startup latency is comparable to the previous release. This helps to detect regression issues which impact controller performance in the new release.
+
+To run the test manually: 
+
+##### 1. Create EKS cluster and install Karpenter.
+
+Karpenter provides node lifecycle management for Kubernetes clusters. It automates provisioning and deprovisioning of nodes based on the scheduling needs of pods, allowing efficient scaling and cost optimization. 
+
+The script will provision all required resources for the test: 
+1. Deploy CFN stack to set up EKS cluster infrasstructure
+2. Create EKS cluster using eksctl 
+3. Install Karpenter on the cluster via helm
+4. Deploy default NodePool and EC2NodeClass. NodePool sets constraints on the nodes that can be created by Karpenter and the pods that can run on those nodes. EC2NodeClass is used to configure AWS-specific settings such as AMI type, AMI ID, EC2 security groups. 
+Refer to the Karpenter documentation for further details.
+```
+./scripts/test/create-cluster-karpenter.sh
+```
+The scripts are located in the `scripts/test` directory.
+
+##### 2. Run the scale tests.
+
+The scale tests are located in `test/integration/scale` directory. The test will create a deployment with 1000 pods and measures the pod startup latency. It asserts that all 1000 pods be ready within 5 minutes. The test is run three times on repeat and must pass each time. 
+```
+KUBE_CONFIG_PATH=<path-to-kube-config> # Update the kube-config path
+ginkgo -v --timeout 30m -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$AWS_REGION --aws-vpc-id=$VPC_ID
+```
+
+##### 3. Delete EKS cluster and other resources.
+
+The below script uninstalls Karpenter on the clusters, deletes the CFN stack, and finally deletes the EKS cluster.
+```
+./scripts/test/delete-cluster-karpenter.sh
+```
+
+References:
+1. Karpenter Getting Started Guide: https://karpenter.sh/docs/getting-started/getting-started-with-karpenter/
