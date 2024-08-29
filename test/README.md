@@ -94,7 +94,7 @@ To run the test manually:
 Karpenter provides node lifecycle management for Kubernetes clusters. It automates provisioning and deprovisioning of nodes based on the scheduling needs of pods, allowing efficient scaling and cost optimization. 
 
 The script will provision all required resources for the test: 
-1. Deploy CFN stack to set up EKS cluster infrasstructure
+1. Deploy CFN stack to set up EKS cluster infrastructure
 2. Create EKS cluster using eksctl 
 3. Install Karpenter on the cluster via helm
 4. Deploy default NodePool and EC2NodeClass. NodePool sets constraints on the nodes that can be created by Karpenter and the pods that can run on those nodes. EC2NodeClass is used to configure AWS-specific settings such as AMI type, AMI ID, EC2 security groups. 
