@@ -8,16 +8,7 @@
 
 Controller running on EKS Control Plane for managing Branch & Trunk Network Interface for [Kubernetes Pod](https://kubernetes.io/docs/concepts/workloads/pods/) using the [Security Group for Pod](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) feature and IPv4 Address Management(IPAM) of [Windows Nodes](https://docs.aws.amazon.com/eks/latest/userguide/windows-support.html).
 
-The controller broadcasts its version to nodes. Describing any node will provide the version information in node `Events`. The mapping between the controller's version and the cluster's platform version is also available in release notes. Please be aware that kubernetes events last for one hour in general and you may have to check the version information events in newly created nodes.
-
-Version events example:
-```
-Events:
-  Type     Reason                   Age                    From                     Message
-  ----     ------                   ----                   ----                     -------
-  Normal   ControllerVersionNotice  2m58s                  vpc-resource-controller  The node is managed by VPC resource controller version v1.4.9
-  Normal   NodeTrunkInitiated       2m55s                  vpc-resource-controller  The node has trunk interface initialized successfully
-```
+The controller broadcasts its version to nodes. Describing any node will provide the version information in node `Events`. The mapping between the controller's version and the cluster's platform version is also available in release notes.
 
 ## Security Group for Pods
 

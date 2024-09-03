@@ -16,6 +16,7 @@ package trunk
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
+	"github.com/samber/lo"
 
 	"github.com/aws/aws-sdk-go/aws"
 	awsEC2 "github.com/aws/aws-sdk-go/service/ec2"
@@ -40,7 +42,9 @@ const (
 	// MaxAllocatableVlanIds is the maximum number of Vlan Ids that can be allocated per trunk.
 	MaxAllocatableVlanIds = 121
 	// MaxDeleteRetries is the maximum number of times the ENI will be retried before being removed from the delete queue
-	MaxDeleteRetries = 3
+	MaxDeleteRetries    = 3
+	SubnetLabel         = "subnet"
+	SecurityGroupsLabel = "security_groups"
 )
 
 var (
@@ -61,6 +65,13 @@ var (
 			Help: "The number of errors encountered for operations on Trunk ENI",
 		},
 		[]string{"operation"},
+	)
+	unreconciledTrunkENICount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "unreconciled_trunk_network_interfaces",
+			Help: "The number of unreconciled trunk network interfaces",
+		},
+		[]string{"attribute"},
 	)
 	branchENIOperationsSuccessCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -173,6 +184,7 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 func PrometheusRegister() {
 	if !prometheusRegistered {
 		metrics.Registry.MustRegister(trunkENIOperationsErrCount)
+		metrics.Registry.MustRegister(unreconciledTrunkENICount)
 		metrics.Registry.MustRegister(branchENIOperationsSuccessCount)
 		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
 
@@ -192,6 +204,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		return err
 	}
 
+	var trunk awsEC2.InstanceNetworkInterface
 	// Get trunk network interface
 	for _, nwInterface := range nwInterfaces {
 		// It's possible to get an empty network interface response if the instance is being deleted.
@@ -206,6 +219,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 			} else {
 				return fmt.Errorf("failed to verify network interface status attached for %v", *nwInterface.NetworkInterfaceId)
 			}
+			trunk = *nwInterface
 		}
 	}
 
@@ -229,6 +243,41 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		log.Info("created a new trunk interface", "trunk id", t.trunkENIId)
 
 		return nil
+	}
+
+	// the node already have trunk, let's check if its SGs and Subnets match with expected
+	expectedSubnetID, expectedSecurityGroups := t.instance.GetCustomNetworkingSpec()
+	if len(expectedSecurityGroups) > 0 || expectedSubnetID != "" {
+		slices.Sort(expectedSecurityGroups)
+		trunkSGs := lo.Map(trunk.Groups, func(g *awsEC2.GroupIdentifier, _ int) string {
+			return lo.FromPtr(g.GroupId)
+		})
+		slices.Sort(trunkSGs)
+
+		mismatchedSubnets := expectedSubnetID != lo.FromPtr(trunk.SubnetId)
+		mismatchedSGs := !slices.Equal(expectedSecurityGroups, trunkSGs)
+
+		extraSGsInTrunk, missingSGsInTrunk := lo.Difference(trunkSGs, expectedSecurityGroups)
+		t.log.Info("Observed trunk ENI config",
+			"instanceID", t.instance.InstanceID(),
+			"trunkENIID", lo.FromPtr(trunk.NetworkInterfaceId),
+			"configuredTrunkSGs", trunkSGs,
+			"configuredTrunkSubnet", lo.FromPtr(trunk.SubnetId),
+			"desiredTrunkSGs", expectedSecurityGroups,
+			"desiredTrunkSubnet", expectedSubnetID,
+			"mismatchedSGs", mismatchedSGs,
+			"mismatchedSubnets", mismatchedSubnets,
+			"missingSGs", missingSGsInTrunk,
+			"extraSGs", extraSGsInTrunk,
+		)
+
+		if mismatchedSGs {
+			unreconciledTrunkENICount.WithLabelValues(SecurityGroupsLabel).Inc()
+		}
+
+		if mismatchedSubnets {
+			unreconciledTrunkENICount.WithLabelValues(SubnetLabel).Inc()
+		}
 	}
 
 	// Get the list of branch ENIs

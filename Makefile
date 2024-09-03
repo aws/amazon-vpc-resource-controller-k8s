@@ -13,9 +13,12 @@ VERSION ?= $(GIT_VERSION)
 IMAGE ?= $(REPO):$(VERSION)
 BASE_IMAGE ?= public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-nonroot:latest.2
 GOLANG_VERSION ?= $(shell cat .go-version)
-BUILD_IMAGE ?= public.ecr.aws/docker/library/golang:$(GOLANG_VERSION)
+BUILD_IMAGE ?= public.ecr.aws/bitnami/golang:$(GOLANG_VERSION)
 GOARCH ?= amd64
 PLATFORM ?= linux/amd64
+
+export GOSUMDB = sum.golang.org
+export GOTOOLCHAIN = go$(GOLANG_VERSION)
 
 help: ## Display help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
@@ -75,11 +78,6 @@ docker-buildx: check-env test
 # Build the docker image
 docker-build: check-env test
 	docker build --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg ARCH=$(GOARCH) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) . -t ${IMAGE}
-
-
-# Build the docker image with buildx and no tests
-docker-buildx-no-test:
-	docker buildx build --platform=$(PLATFORM) -t $(IMAGE)_$(GOARCH) --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) --build-arg $(GOARCH) --load .
 
 # Push the docker image
 docker-push: check-env
