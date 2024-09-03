@@ -50,10 +50,8 @@ var _ = BeforeSuite(func() {
 	securityGroupID1 = reCreateSGIfAlreadyExists(utils.ResourceNamePrefix + "sg-1")
 	securityGroupID2 = reCreateSGIfAlreadyExists(utils.ResourceNamePrefix + "sg-2")
 
-	nodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "linux",
+	nodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, ctx, "linux",
 		config.ResourceNamePodENI)
-	err = node.VerifyCNINodeCount(frameWork.NodeManager)
-	Expect(err).ToNot(HaveOccurred())
 })
 
 var _ = AfterSuite(func() {

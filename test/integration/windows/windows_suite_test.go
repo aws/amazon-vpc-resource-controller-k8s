@@ -67,7 +67,7 @@ var _ = BeforeSuite(func() {
 	}
 
 	By("getting the list of Windows node")
-	windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "windows",
+	windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, ctx, "windows",
 		config.ResourceNameIPAddress)
 
 	By("getting the instance ID for the first node")

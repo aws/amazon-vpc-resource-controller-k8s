@@ -61,8 +61,6 @@ rules:
   - create
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - vpcresources.k8s.aws

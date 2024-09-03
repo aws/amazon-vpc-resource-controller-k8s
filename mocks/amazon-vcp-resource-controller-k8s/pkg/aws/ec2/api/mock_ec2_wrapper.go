@@ -182,21 +182,6 @@ func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfaces(arg0 interface{}
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNetworkInterfaces", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeNetworkInterfaces), arg0)
 }
 
-// DescribeNetworkInterfacesPages mocks base method.
-func (m *MockEC2Wrapper) DescribeNetworkInterfacesPages(arg0 *ec2.DescribeNetworkInterfacesInput) ([]*ec2.NetworkInterface, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeNetworkInterfacesPages", arg0)
-	ret0, _ := ret[0].([]*ec2.NetworkInterface)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DescribeNetworkInterfacesPages indicates an expected call of DescribeNetworkInterfacesPages.
-func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfacesPages(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNetworkInterfacesPages", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeNetworkInterfacesPages), arg0)
-}
-
 // DescribeSubnets mocks base method.
 func (m *MockEC2Wrapper) DescribeSubnets(arg0 *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
 	m.ctrl.T.Helper()
@@ -240,20 +225,6 @@ func (m *MockEC2Wrapper) DetachNetworkInterface(arg0 *ec2.DetachNetworkInterface
 func (mr *MockEC2WrapperMockRecorder) DetachNetworkInterface(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetachNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).DetachNetworkInterface), arg0)
-}
-
-// DisassociateTrunkInterface mocks base method.
-func (m *MockEC2Wrapper) DisassociateTrunkInterface(arg0 *ec2.DisassociateTrunkInterfaceInput) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DisassociateTrunkInterface", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// DisassociateTrunkInterface indicates an expected call of DisassociateTrunkInterface.
-func (mr *MockEC2WrapperMockRecorder) DisassociateTrunkInterface(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DisassociateTrunkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).DisassociateTrunkInterface), arg0)
 }
 
 // ModifyNetworkInterfaceAttribute mocks base method.

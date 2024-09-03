@@ -64,6 +64,18 @@ func (mr *MockTrunkENIMockRecorder) CreateAndAssociateBranchENIs(arg0, arg1, arg
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAndAssociateBranchENIs", reflect.TypeOf((*MockTrunkENI)(nil).CreateAndAssociateBranchENIs), arg0, arg1, arg2)
 }
 
+// DeleteAllBranchENIs mocks base method.
+func (m *MockTrunkENI) DeleteAllBranchENIs() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "DeleteAllBranchENIs")
+}
+
+// DeleteAllBranchENIs indicates an expected call of DeleteAllBranchENIs.
+func (mr *MockTrunkENIMockRecorder) DeleteAllBranchENIs() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAllBranchENIs", reflect.TypeOf((*MockTrunkENI)(nil).DeleteAllBranchENIs))
+}
+
 // DeleteCooledDownENIs mocks base method.
 func (m *MockTrunkENI) DeleteCooledDownENIs() {
 	m.ctrl.T.Helper()

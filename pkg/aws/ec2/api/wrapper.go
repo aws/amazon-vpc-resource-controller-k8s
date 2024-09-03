@@ -21,7 +21,6 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
-	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -53,14 +52,12 @@ type EC2Wrapper interface {
 	AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
 	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error)
-	DescribeNetworkInterfacesPages(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2.NetworkInterface, error)
 	CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
 	DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error)
 	AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error)
 	DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
-	DisassociateTrunkInterface(input *ec2.DisassociateTrunkInterfaceInput) error
 }
 
 var (
@@ -256,7 +253,7 @@ var (
 	ec2AssociateTrunkInterfaceAPIErrCnt = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "ec2_associate_trunk_interface_api_err_count",
-			Help: "The number of errors encountered while associating Trunk with Branch ENI",
+			Help: "The number of errors encountered while disassociating Trunk with Branch ENI",
 		},
 	)
 
@@ -310,54 +307,6 @@ var (
 		},
 	)
 
-	ec2DisassociateTrunkInterfaceCallCnt = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "ec2_disassociate_trunk_interface_api_req_count",
-			Help: "The number of calls made to EC2 to remove association between a branch and trunk network interface",
-		},
-	)
-
-	ec2DisassociateTrunkInterfaceErrCnt = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "ec2_disassociate_trunk_interface_api_err_count",
-			Help: "The number of errors encountered while removing association between a branch and trunk network interface",
-		},
-	)
-
-	VpcCniAvailableClusterENICnt = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "vpc_cni_created_available_eni_count",
-			Help: "The number of available ENIs created by VPC-CNI that will tried to be deleted by the controller",
-		},
-	)
-
-	VpcRcAvailableClusterENICnt = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "vpc_rc_created_available_eni_count",
-			Help: "The number of available ENIs created by VPC-RC that will tried to be deleted by the controller",
-		},
-	)
-
-	LeakedENIClusterCleanupCnt = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "leaked_eni_count",
-			Help: "The number of available ENIs that failed to be deleted by the controller",
-		},
-	)
-
-	ec2DescribeNetworkInterfacesPagesAPICallCnt = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "ec2_describe_network_interfaces_pages_api_call_count",
-			Help: "The number of calls made to describe network interfaces (paginated)",
-		},
-	)
-	ec2DescribeNetworkInterfacesPagesAPIErrCnt = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "ec2_describe_network_interfaces_pages_api_err_count",
-			Help: "The number of errors encountered while making call to describe network interfaces (paginated)",
-		},
-	)
-
 	prometheusRegistered = false
 )
 
@@ -396,13 +345,9 @@ func prometheusRegister() {
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
 			ec2APICallLatencies,
-			ec2DisassociateTrunkInterfaceCallCnt,
-			ec2DisassociateTrunkInterfaceErrCnt,
-			VpcRcAvailableClusterENICnt,
-			VpcCniAvailableClusterENICnt,
-			LeakedENIClusterCleanupCnt,
-			ec2DescribeNetworkInterfacesPagesAPICallCnt,
-			ec2DescribeNetworkInterfacesPagesAPIErrCnt,
+			vpccniAvailableENICnt,
+			vpcrcAvailableENICnt,
+			leakedENICnt,
 		)
 
 		prometheusRegistered = true
@@ -431,7 +376,7 @@ func NewEC2Wrapper(roleARN, clusterName, region string, log logr.Logger) (EC2Wra
 
 	// Role ARN is passed, assume the role ARN to make EC2 API Calls
 	if roleARN != "" {
-		// Create the instance service client with low QPS, it will be only used for associate branch to trunk calls
+		// Create the instance service client with low QPS, it will be only used fro associate branch to trunk calls
 		log.Info("Creating INSTANCE service client with configured QPS", "QPS", config.InstanceServiceClientQPS, "Burst", config.InstanceServiceClientBurst)
 		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(config.InstanceServiceClientQPS,
 			config.InstanceServiceClientBurst, instanceSession)
@@ -695,38 +640,6 @@ func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfa
 	return describeNetworkInterfacesOutput, err
 }
 
-// DescribeNetworkInterfacesPages returns network interfaces that match the filters specified in the input with MaxResult set to 1000(max value)
-// This API is used during periodic ENI cleanup routine and trunk initialization to list all network interfaces that match the given filters (vpc-id or subnet-id, and tag)
-// Only required fields, network interface ID and tag set, is populated to avoid consuming extra memory
-func (e *ec2Wrapper) DescribeNetworkInterfacesPages(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2.NetworkInterface, error) {
-	var networkInterfaces []*ec2.NetworkInterface
-	input.MaxResults = aws.Int64(config.DescribeNetworkInterfacesMaxResults)
-
-	start := time.Now()
-	if err := e.userServiceClient.DescribeNetworkInterfacesPages(input, func(output *ec2.DescribeNetworkInterfacesOutput, _ bool) bool {
-		ec2APICallCnt.Inc()
-		ec2DescribeNetworkInterfacesPagesAPICallCnt.Inc()
-		//Currently only network interface ID and the tag set is require, only add required details to avoid consuming extra memory
-		for _, nwInterface := range output.NetworkInterfaces {
-			networkInterfaces = append(networkInterfaces, &ec2.NetworkInterface{
-				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
-				TagSet:             nwInterface.TagSet,
-			})
-		}
-		// Add jitter to avoid EC2 API throttling in the account
-		time.Sleep(wait.Jitter(500*time.Millisecond, 0.5))
-		return true
-
-	}); err != nil {
-		ec2APIErrCnt.Inc()
-		ec2DescribeNetworkInterfacesPagesAPIErrCnt.Inc()
-		return nil, err
-	}
-	ec2APICallLatencies.WithLabelValues("describe_network_interfaces_pages").Observe(timeSinceMs(start))
-
-	return networkInterfaces, nil
-}
-
 func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
 	start := time.Now()
 	assignPrivateIPAddressesOutput, err := e.userServiceClient.AssignPrivateIpAddresses(input)
@@ -875,20 +788,4 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkIn
 	}
 
 	return output, err
-}
-
-func (e *ec2Wrapper) DisassociateTrunkInterface(input *ec2.DisassociateTrunkInterfaceInput) error {
-	start := time.Now()
-	// Using the instance role
-	_, err := e.instanceServiceClient.DisassociateTrunkInterface(input)
-	ec2APICallLatencies.WithLabelValues("disassociate_branch_from_trunk").Observe(timeSinceMs(start))
-
-	ec2APICallCnt.Inc()
-	ec2DisassociateTrunkInterfaceCallCnt.Inc()
-
-	if err != nil {
-		ec2APIErrCnt.Inc()
-		ec2DisassociateTrunkInterfaceErrCnt.Inc()
-	}
-	return err
 }

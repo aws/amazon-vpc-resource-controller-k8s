@@ -15,8 +15,6 @@ package framework
 
 import (
 	"flag"
-	"os"
-	"strings"
 
 	"github.com/pkg/errors"
 	"k8s.io/client-go/tools/clientcmd"
@@ -34,7 +32,6 @@ type Options struct {
 	AWSRegion            string
 	AWSVPCID             string
 	ReleasedImageVersion string
-	ClusterRoleArn       string
 }
 
 func (options *Options) BindFlags() {
@@ -43,7 +40,6 @@ func (options *Options) BindFlags() {
 	flag.StringVar(&options.AWSRegion, "aws-region", "", `AWS Region for the kubernetes cluster`)
 	flag.StringVar(&options.AWSVPCID, "aws-vpc-id", "", `AWS VPC ID for the kubernetes cluster`)
 	flag.StringVar(&options.ReleasedImageVersion, "latest-released-rc-image-tag", "v1.1.3", `VPC RC latest released image`)
-	flag.StringVar(&options.ClusterRoleArn, "cluster-role-arn", "", "EKS Cluster role ARN")
 }
 
 func (options *Options) Validate() error {
@@ -62,10 +58,5 @@ func (options *Options) Validate() error {
 	if len(options.ReleasedImageVersion) == 0 {
 		return errors.Errorf("%s must be set!", "latest-released-rc-image-tag")
 	}
-	dir, err := os.Executable()
-	if err == nil && len(options.ClusterRoleArn) == 0 && strings.Contains(dir, "ec2api") {
-		return errors.Errorf("%s must be set when running ec2api tests", "cluster-role-arn")
-	}
-
 	return nil
 }

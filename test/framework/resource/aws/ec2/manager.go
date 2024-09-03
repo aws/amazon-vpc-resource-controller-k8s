@@ -19,7 +19,6 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -240,43 +239,4 @@ func (d *Manager) GetPrivateIPv4AddressAndPrefix(instanceID string) ([]string, [
 	}
 
 	return secondaryIPAddresses, ipV4Prefixes, err
-}
-
-func (d *Manager) CreateAndAttachNetworkInterface(subnetID, instanceID, instanceType string) (string, error) {
-	createENIOp, err := d.ec2Client.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
-		SubnetId:    aws.String(subnetID),
-		Description: aws.String("VPC-Resource-Controller integration test ENI"),
-	})
-	if err != nil {
-		return "", err
-	}
-	nwInterfaceID := *createENIOp.NetworkInterface.NetworkInterfaceId
-	// for test just use the max index - 2 (as trunk maybe attached to max index)
-	indexID := vpc.Limits[instanceType].NetworkCards[0].MaximumNetworkInterfaces - 2
-	_, err = d.ec2Client.AttachNetworkInterface(&ec2.AttachNetworkInterfaceInput{
-		InstanceId:         aws.String(instanceID),
-		NetworkInterfaceId: aws.String(nwInterfaceID),
-		DeviceIndex:        aws.Int64(indexID),
-	})
-	return nwInterfaceID, err
-}
-
-func (d *Manager) TerminateInstances(instanceID string) error {
-	_, err := d.ec2Client.TerminateInstances(&ec2.TerminateInstancesInput{
-		InstanceIds: []*string{&instanceID},
-	})
-	return err
-}
-
-func (d *Manager) DescribeNetworkInterface(nwInterfaceID string) error {
-	_, err := d.ec2Client.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
-		NetworkInterfaceIds: []*string{&nwInterfaceID},
-	})
-	return err
-}
-func (d *Manager) DeleteNetworkInterface(nwInterfaceID string) error {
-	_, err := d.ec2Client.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
-		NetworkInterfaceId: aws.String(nwInterfaceID),
-	})
-	return err
 }

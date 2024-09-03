@@ -186,3 +186,4 @@ func VerifyCNINodeFields(cniNode *v1alpha1.CNINode) {
 	Expect(cniNode.ObjectMeta.Labels).To(ContainElement(config.OSLinux))
 	Expect(config.NodeLabelOS).To(BeKeyOf(cniNode.ObjectMeta.Labels))
 }
+
