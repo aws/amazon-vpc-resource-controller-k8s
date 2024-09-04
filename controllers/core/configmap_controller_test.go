@@ -16,14 +16,9 @@ package controllers
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
-	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
-	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
-	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
-	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	cooldown "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
@@ -35,18 +30,36 @@ import (
 	fakeClient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
+	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	cooldown "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 )
 
 var (
 	mockConfigMap = &corev1.ConfigMap{
 		TypeMeta:   metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: config.KubeSystemNamespace},
-		Data:       map[string]string{config.EnableWindowsIPAMKey: "true", config.EnableWindowsPrefixDelegationKey: "true"},
+		Data: map[string]string{
+			config.EnableWindowsIPAMKey:             "true",
+			config.EnableWindowsPrefixDelegationKey: "false",
+			config.WinMinimumIPTarget:               strconv.Itoa(config.IPv4DefaultWinMinIPTarget),
+			config.WinWarmIPTarget:                  strconv.Itoa(config.IPv4DefaultWinWarmIPTarget),
+		},
 	}
 	mockConfigMapPD = &corev1.ConfigMap{
 		TypeMeta:   metav1.TypeMeta{},
 		ObjectMeta: metav1.ObjectMeta{Name: config.VpcCniConfigMapName, Namespace: config.KubeSystemNamespace},
-		Data:       map[string]string{config.EnableWindowsIPAMKey: "false", config.EnableWindowsPrefixDelegationKey: "true"},
+		Data: map[string]string{
+			config.EnableWindowsIPAMKey:             "true",
+			config.EnableWindowsPrefixDelegationKey: "true",
+			config.WinMinimumIPTarget:               strconv.Itoa(config.IPv4PDDefaultMinIPTargetSize),
+			config.WinWarmIPTarget:                  strconv.Itoa(config.IPv4PDDefaultWarmIPTargetSize),
+			config.WinWarmPrefixTarget:              strconv.Itoa(config.IPv4PDDefaultWarmPrefixTargetSize),
+		},
 	}
 	mockConfigMapReq = reconcile.Request{
 		NamespacedName: types.NamespacedName{
@@ -89,11 +102,13 @@ func NewConfigMapMock(ctrl *gomock.Controller, mockObjects ...client.Object) Con
 	return ConfigMapMock{
 		MockNodeManager: mockNodeManager,
 		ConfigMapReconciler: &ConfigMapReconciler{
-			Client:      client,
-			Log:         zap.New(),
-			NodeManager: mockNodeManager,
-			K8sAPI:      mockK8sWrapper,
-			Condition:   mockCondition,
+			Client:             client,
+			Log:                zap.New(),
+			NodeManager:        mockNodeManager,
+			K8sAPI:             mockK8sWrapper,
+			Condition:          mockCondition,
+			curWinMinIPTarget:  config.IPv4DefaultWinMinIPTarget,
+			curWinWarmIPTarget: config.IPv4DefaultWinWarmIPTarget,
 		},
 		MockNode:                   mockNode,
 		MockK8sAPI:                 mockK8sWrapper,
@@ -103,11 +118,30 @@ func NewConfigMapMock(ctrl *gomock.Controller, mockObjects ...client.Object) Con
 	}
 }
 
-func Test_Reconcile_ConfigMap_Updated(t *testing.T) {
+func Test_Reconcile_ConfigMap_Updated_Secondary_IP(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	mock := NewConfigMapMock(ctrl, mockConfigMap)
+	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
+	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
+	mock.MockK8sAPI.EXPECT().ListNodes().Return(nodeList, nil)
+	mock.MockNodeManager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
+	mock.MockNodeManager.EXPECT().UpdateNode(mockNodeName).Return(nil)
+
+	mock.MockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil).AnyTimes()
+
+	cooldown.InitCoolDownPeriod(mock.MockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
+	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
+	assert.NoError(t, err)
+	assert.Equal(t, res, reconcile.Result{})
+}
+
+func Test_Reconcile_ConfigMap_Updated_PD(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewConfigMapMock(ctrl, mockConfigMapPD)
 	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(true)
 	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(true)
 	mock.MockK8sAPI.EXPECT().ListNodes().Return(nodeList, nil)
@@ -120,14 +154,13 @@ func Test_Reconcile_ConfigMap_Updated(t *testing.T) {
 	res, err := mock.ConfigMapReconciler.Reconcile(context.TODO(), mockConfigMapReq)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
-
 }
 
 func Test_Reconcile_ConfigMap_PD_Disabled_If_IPAM_Disabled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mock := NewConfigMapMock(ctrl, mockConfigMapPD)
+	mock := NewConfigMapMock(ctrl, mockConfigMap)
 	mock.MockCondition.EXPECT().IsWindowsIPAMEnabled().Return(false)
 	mock.MockCondition.EXPECT().IsWindowsPrefixDelegationEnabled().Return(false)
 	mock.MockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil).AnyTimes()

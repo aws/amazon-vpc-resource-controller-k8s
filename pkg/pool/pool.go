@@ -18,10 +18,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
-	"github.com/go-logr/logr"
 )
 
 var (
@@ -442,9 +443,14 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 	}
 
 	// Consider pending create as well so we don't create multiple subsequent create request
-	deviation := p.warmPoolConfig.DesiredSize - (numWarmResources + p.pendingCreate)
+	// deviation represents the difference between the desired number of resources and the current state
+	// A negative deviation means IP resources need to be deleted to reach the desired state
+	// A positive deviation means IP resources need to be created to reach the desired state
+	var deviation int
 	if p.isPDPool {
 		deviation = p.getPDDeviation()
+	} else {
+		deviation = p.calculateSecondaryIPDeviation()
 	}
 
 	// Need to create more resources for warm pool
@@ -713,6 +719,51 @@ func (p *pool) getPDDeviation() int {
 	}
 
 	return deviationPrefix * NumIPv4AddrPerPrefix
+}
+
+// calculateSecondaryIPDeviation calculates the deviation required to meet the desired state for secondary IP mode
+// Returns a number of IPv4 addresses by taking into account the MinIPTarget and WarmIPTarget
+func (p *pool) calculateSecondaryIPDeviation() int {
+	numWarmResources := numResourcesFromMap(p.warmResources)
+	numUsedResources := len(p.usedResources)
+	numAssignedResources := numUsedResources + numWarmResources + p.pendingCreate + len(p.coolDownQueue)
+
+	// warm pool is in draining state, set targets to zero
+	if p.warmPoolConfig.DesiredSize == 0 {
+		p.warmPoolConfig.WarmIPTarget = 0
+		p.warmPoolConfig.MinIPTarget = 0
+		p.warmPoolConfig.WarmPrefixTarget = 0
+	}
+
+	isMinIPTargetInvalid := p.warmPoolConfig.MinIPTarget < 0
+	isWarmIPTargetInvalid := p.warmPoolConfig.WarmIPTarget < 0
+	// Handle scenario where MinIPTarget is configured to negative integer which is invalid
+	if isMinIPTargetInvalid {
+		p.warmPoolConfig.MinIPTarget = config.IPv4DefaultWinMinIPTarget
+	}
+	// Handle scenario where WarmIPTarget is configured to negative integer which is invalid
+	if isWarmIPTargetInvalid {
+		p.warmPoolConfig.WarmIPTarget = config.IPv4DefaultWinWarmIPTarget
+	}
+
+	availableResources := numWarmResources + p.pendingCreate
+
+	// Calculate how many IPs we're short of the warm target
+	resourcesShort := max(p.warmPoolConfig.WarmIPTarget-availableResources, 0)
+
+	// Adjust short based on the minimum IP target
+	resourcesShort = max(resourcesShort, p.warmPoolConfig.MinIPTarget-numAssignedResources)
+
+	// Calculate how many IPs we're over the warm target
+	resourcesOver := max(availableResources-p.warmPoolConfig.WarmIPTarget, 0)
+
+	// Adjust over to not go below the minimum IP target
+	resourcesOver = max(min(resourcesOver, numAssignedResources-p.warmPoolConfig.MinIPTarget), 0)
+
+	// The final deviation is the difference between short and over
+	deviation := resourcesShort - resourcesOver
+
+	return deviation
 }
 
 // numResourcesFromMap returns total number of resources from a map of list of resources indexed by group id
