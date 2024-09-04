@@ -155,11 +155,11 @@ func (p *ipv4PrefixProvider) InitResource(instance ec2.EC2Instance) error {
 	// Expected node capacity based on instance type in PD mode
 	nodeCapacity := getCapacity(instance.Type(), instance.Os()) * pool.NumIPv4AddrPerPrefix
 
-	p.config = p.getPDWarmPoolConfig()
+	isPDEnabled := p.conditions.IsWindowsPrefixDelegationEnabled()
+	p.config = pool.GetWinWarmPoolConfig(p.log, p.apiWrapper, isPDEnabled)
 
 	// Set warm pool config to empty if PD is not enabled
 	prefixIPWPConfig := p.config
-	isPDEnabled := p.conditions.IsWindowsPrefixDelegationEnabled()
 	if !isPDEnabled {
 		prefixIPWPConfig = &config.WarmPoolConfig{}
 	} else {
@@ -234,7 +234,7 @@ func (p *ipv4PrefixProvider) UpdateResourceCapacity(instance ec2.EC2Instance) er
 
 	resourceProviderAndPool.isPrevPDEnabled = true
 
-	warmPoolConfig := p.getPDWarmPoolConfig()
+	warmPoolConfig := pool.GetWinWarmPoolConfig(p.log, p.apiWrapper, isCurrPDEnabled)
 
 	// Set the secondary IP provider pool state to active
 	job := resourceProviderAndPool.resourcePool.SetToActive(warmPoolConfig)
@@ -506,19 +506,6 @@ func getCapacity(instanceType string, instanceOs string) int {
 	}
 
 	return capacity
-}
-
-// Retrieve dynamic configuration for prefix delegation from config map, else use default warm pool config
-func (p *ipv4PrefixProvider) getPDWarmPoolConfig() *config.WarmPoolConfig {
-	var resourceConfig map[string]config.ResourceConfig
-	vpcCniConfigMap, err := p.apiWrapper.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
-	if err == nil {
-		resourceConfig = config.LoadResourceConfigFromConfigMap(p.log, vpcCniConfigMap)
-	} else {
-		p.log.Error(err, "failed to read from config map, will use default resource config")
-		resourceConfig = config.LoadResourceConfig()
-	}
-	return resourceConfig[config.ResourceNameIPAddressFromPrefix].WarmPoolConfig
 }
 
 func (p *ipv4PrefixProvider) check() healthz.Checker {
