@@ -240,3 +240,59 @@ func (d *Manager) GetPrivateIPv4AddressAndPrefix(instanceID string) ([]string, [
 
 	return secondaryIPAddresses, ipV4Prefixes, err
 }
+
+func (d *Manager) CreateAndAttachNetworkInterface(subnetID, instanceID, instanceType string) (string, error) {
+	createENIOp, err := d.ec2Client.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+		SubnetId:    aws.String(subnetID),
+		Description: aws.String("VPC-Resource-Controller integration test ENI"),
+	})
+	if err != nil {
+		return "", err
+	}
+	nwInterfaceID := *createENIOp.NetworkInterface.NetworkInterfaceId
+	// for test just use the max index - 2 (as trunk maybe attached to max index)
+	indexID := vpc.Limits[instanceType].NetworkCards[0].MaximumNetworkInterfaces - 2
+	_, err = d.ec2Client.AttachNetworkInterface(&ec2.AttachNetworkInterfaceInput{
+		InstanceId:         aws.String(instanceID),
+		NetworkInterfaceId: aws.String(nwInterfaceID),
+		DeviceIndex:        aws.Int64(indexID),
+	})
+	return nwInterfaceID, err
+}
+
+func (d *Manager) TerminateInstances(instanceID string) error {
+	_, err := d.ec2Client.TerminateInstances(&ec2.TerminateInstancesInput{
+		InstanceIds: []*string{&instanceID},
+	})
+	return err
+}
+
+func (d *Manager) DescribeNetworkInterface(nwInterfaceID string) error {
+	_, err := d.ec2Client.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: []*string{&nwInterfaceID},
+	})
+	return err
+}
+func (d *Manager) DeleteNetworkInterface(nwInterfaceID string) error {
+	_, err := d.ec2Client.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+		NetworkInterfaceId: aws.String(nwInterfaceID),
+	})
+	return err
+}
+func (d *Manager) ReCreateSG(securityGroupName string, ctx context.Context) (string, error) {
+	groupID, err := d.GetSecurityGroupID(securityGroupName)
+	// If the security group already exists, no error will be returned
+	// We need to delete the security Group in this case so ingres/egress
+	// rules from last run don't interfere with the current test
+	if err == nil {
+		if err = d.DeleteSecurityGroup(ctx, groupID); err != nil {
+			return "", err
+		}
+	}
+	// If error is not nil, then the Security Group doesn't exists, we need
+	// to create new rule
+	if groupID, err = d.CreateSecurityGroup(securityGroupName); err != nil {
+		return "", err
+	}
+	return groupID, nil
+}

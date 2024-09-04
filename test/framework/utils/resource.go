@@ -15,4 +15,5 @@ package utils
 
 const (
 	ResourceNamePrefix = "vpc-resource-controller-integration-"
+	TestNameSpace      = "test-ns"
 )
