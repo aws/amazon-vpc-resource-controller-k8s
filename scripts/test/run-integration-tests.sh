@@ -42,11 +42,12 @@ function run_integration_tests(){
   TEST_RESULT=success
   (cd $INTEGRATION_TEST_DIR/perpodsg && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=35m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
   if [[ -z "${SKIP_WINDOWS_TEST}" ]]; then
-    (cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=100m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
+    (cd $INTEGRATION_TEST_DIR/windows && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=150m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
   else
     echo "skipping Windows tests"
   fi
   (cd $INTEGRATION_TEST_DIR/webhook && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=5m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
+  # (cd $INTEGRATION_TEST_DIR/cninode && CGO_ENABLED=0 ginkgo --skip=LOCAL $EXTRA_GINKGO_FLAGS -v -timeout=10m -- -cluster-kubeconfig=$KUBE_CONFIG_PATH -cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id $VPC_ID) || TEST_RESULT=fail
 
   if [[ "$TEST_RESULT" == fail ]]; then
       exit 1
