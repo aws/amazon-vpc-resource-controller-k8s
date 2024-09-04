@@ -424,21 +424,6 @@ func (p *pool) ReconcilePool() *worker.WarmPoolJob {
 		len(p.usedResources), "pending create", p.pendingCreate, "pending delete", p.pendingDelete,
 		"cool down queue", len(p.coolDownQueue), "total resources", totalCreatedResources, "capacity", p.capacity)
 
-	p.log.V(1).Info(
-		"Reconciling pool",
-		"isPDPool", p.isPDPool,
-		"reSyncRequired", p.reSyncRequired,
-		"minIPTarget", p.warmPoolConfig.MinIPTarget,
-		"warmIPTarget", p.warmPoolConfig.WarmIPTarget,
-		"numWarmResources", numWarmResources,
-		"used resouces", len(p.usedResources),
-		"cool down queue", len(p.coolDownQueue),
-		"total resources", totalCreatedResources,
-		"pendingCreate", p.pendingCreate,
-		"pendingDelete", p.pendingDelete,
-		"capacity", p.capacity,
-	)
-
 	if p.reSyncRequired {
 		// If Pending operations are present then we can't re-sync as the upstream
 		// and pool could change during re-sync
@@ -745,7 +730,6 @@ func (p *pool) calculateSecondaryIPDeviation() int {
 
 	// warm pool is in draining state, set targets to zero
 	if p.warmPoolConfig.DesiredSize == 0 {
-		p.log.V(1).Info("DesiredSize is zero, warmPool is in draining state")
 		p.warmPoolConfig.WarmIPTarget = 0
 		p.warmPoolConfig.MinIPTarget = 0
 		p.warmPoolConfig.WarmPrefixTarget = 0
@@ -755,22 +739,14 @@ func (p *pool) calculateSecondaryIPDeviation() int {
 	isWarmIPTargetInvalid := p.warmPoolConfig.WarmIPTarget < 0
 	// Handle scenario where MinIPTarget is configured to negative integer which is invalid
 	if isMinIPTargetInvalid {
-		p.log.V(1).Info(
-			"MinIPTarget value is invalid negative integer, setting MinIPTarget to default",
-			"IPv4DefaultWinMinIPTarget", config.IPv4DefaultWinMinIPTarget,
-		)
 		p.warmPoolConfig.MinIPTarget = config.IPv4DefaultWinMinIPTarget
 	}
 	// Handle scenario where WarmIPTarget is configured to negative integer which is invalid
 	if isWarmIPTargetInvalid {
-		p.log.V(1).Info(
-			"WarmIPTarget value is invalid negative integer, setting warmIPTarget to default",
-			"IPv4DefaultWinWarmIPTarget", config.IPv4DefaultWinWarmIPTarget,
-		)
 		p.warmPoolConfig.WarmIPTarget = config.IPv4DefaultWinWarmIPTarget
 	}
 
-	availableResources := numWarmResources + p.pendingCreate - p.pendingDelete
+	availableResources := numWarmResources + p.pendingCreate
 
 	// Calculate how many IPs we're short of the warm target
 	resourcesShort := max(p.warmPoolConfig.WarmIPTarget-availableResources, 0)
@@ -786,19 +762,6 @@ func (p *pool) calculateSecondaryIPDeviation() int {
 
 	// The final deviation is the difference between short and over
 	deviation := resourcesShort - resourcesOver
-
-	p.log.V(1).Info(
-		"Finished calculating IP deviation for secondary IP pool",
-		"minIPTarget", p.warmPoolConfig.MinIPTarget,
-		"warmIPTarget", p.warmPoolConfig.WarmIPTarget,
-		"numWarmResources", numWarmResources,
-		"numUsedResources", numUsedResources,
-		"numAssigned", numAssignedResources,
-		"availableResources", availableResources,
-		"resourcesShort", resourcesShort,
-		"resourcesOver", resourcesOver,
-		"deviationResult", deviation,
-	)
 
 	return deviation
 }

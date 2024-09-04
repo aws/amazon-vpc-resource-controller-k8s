@@ -97,7 +97,7 @@ func ParseWinIPTargetConfigs(log logr.Logger, vpcCniConfigMap *v1.ConfigMap) (wa
 	if vpcCniConfigMap.Data == nil {
 		warmIPTarget = IPv4DefaultWinWarmIPTarget
 		minIPTarget = IPv4DefaultWinMinIPTarget
-		log.V(1).Info(
+		log.Info(
 			"No ConfigMap data found, falling back to using default values",
 			"minIPTarget", minIPTarget,
 			"warmIPTarget", warmIPTarget,
@@ -126,46 +126,36 @@ func ParseWinIPTargetConfigs(log logr.Logger, vpcCniConfigMap *v1.ConfigMap) (wa
 
 	// If warm IP target config value is not found, or there is an error parsing it, the value will be set to zero
 	if foundWarmIP {
-		warmIPTargetInt, err := strconv.Atoi(warmIPTargetStr)
+		warmIPTarget, err = strconv.Atoi(warmIPTargetStr)
 		if err != nil {
 			log.Info("Could not parse warm ip target, defaulting to zero", "warm ip target", warmIPTargetStr)
-			warmIPTarget = 0
-		} else {
-			warmIPTarget = warmIPTargetInt
-
+		} else if !isPDEnabled && warmIPTarget == 0 {
 			// Handle secondary IP mode scenario where WarmIPTarget is explicitly configured to zero
 			// In such a case there must always be 1 warm IP to ensure that the warmpool is never empty
-			if !isPDEnabled && warmIPTarget == 0 {
-				log.V(1).Info("Explicitly setting WarmIPTarget zero value not supported in secondary IP mode, will override with 1")
-				warmIPTarget = 1
-			}
+			log.Info("Explicitly setting WarmIPTarget zero value not supported in secondary IP mode, will override with 1")
+			warmIPTarget = 1
 		}
 	} else {
-		log.V(1).Info("could not find warm ip target in ConfigMap, defaulting to zero")
+		log.Info("could not find warm ip target in ConfigMap, defaulting to zero")
 		warmIPTarget = 0
 	}
 
 	// If min IP target config value is not found, or there is an error parsing it, the value will be set to zero
 	if foundMinIP {
-		minIPTargetInt, err := strconv.Atoi(minIPTargetStr)
+		minIPTarget, err = strconv.Atoi(minIPTargetStr)
 		if err != nil {
 			log.Info("Could not parse minimum ip target, defaulting to zero", "minimum ip target", minIPTargetStr)
-			minIPTarget = 0
-		} else {
-			minIPTarget = minIPTargetInt
 		}
 	} else {
-		log.V(1).Info("could not find minimum ip target in ConfigMap, defaulting to zero")
+		log.Info("could not find minimum ip target in ConfigMap, defaulting to zero")
 		minIPTarget = 0
 	}
 
 	warmPrefixTarget = 0
 	if isPDEnabled && foundWarmPrefix {
-		warmPrefixTargetInt, err := strconv.Atoi(warmPrefixTargetStr)
+		warmPrefixTarget, err = strconv.Atoi(warmPrefixTargetStr)
 		if err != nil {
 			log.Info("Could not parse warm prefix target, defaulting to zero", "warm prefix target", warmPrefixTargetStr)
-		} else {
-			warmPrefixTarget = warmPrefixTargetInt
 		}
 	}
 
@@ -178,7 +168,7 @@ func ParseWinIPTargetConfigs(log logr.Logger, vpcCniConfigMap *v1.ConfigMap) (wa
 			minIPTarget = IPv4DefaultWinMinIPTarget
 			warmIPTarget = IPv4DefaultWinWarmIPTarget
 		}
-		log.V(1).Info(
+		log.Info(
 			"Encountered zero values for warm-ip-target, min-ip-target and warm-prefix-target in ConfigMap data, falling back to using default values since on demand IP allocation is not supported",
 			"minIPTarget", minIPTarget,
 			"warmIPTarget", warmIPTarget,

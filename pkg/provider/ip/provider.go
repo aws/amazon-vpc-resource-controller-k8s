@@ -154,7 +154,7 @@ func (p *ipv4Provider) InitResource(instance ec2.EC2Instance) error {
 	nodeCapacity := getCapacity(instance.Type(), instance.Os())
 
 	isPDEnabled := p.conditions.IsWindowsPrefixDelegationEnabled()
-	p.config = provider.GetWinWarmPoolConfig(p.log, p.apiWrapper, isPDEnabled)
+	p.config = pool.GetWinWarmPoolConfig(p.log, p.apiWrapper, isPDEnabled)
 
 	// Set warm pool config to empty config if PD is enabled
 	secondaryIPWPConfig := p.config
@@ -241,7 +241,7 @@ func (p *ipv4Provider) UpdateResourceCapacity(instance ec2.EC2Instance) error {
 
 	resourceProviderAndPool.isPrevPDEnabled = false
 
-	p.config = provider.GetWinWarmPoolConfig(p.log, p.apiWrapper, isCurrPDEnabled && isNitroInstance)
+	p.config = pool.GetWinWarmPoolConfig(p.log, p.apiWrapper, isCurrPDEnabled && isNitroInstance)
 
 	// Set the secondary IP provider pool state to active
 	job := resourceProviderAndPool.resourcePool.SetToActive(p.config)
