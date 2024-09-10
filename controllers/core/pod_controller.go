@@ -114,7 +114,7 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 			return PodRequeueRequest, nil
 		} else if !node.IsManaged() {
 			if utils.PodHasENIRequest(pod) {
-				logger.V(1).Info("pod's node is not managed, but has eni request, will retry", "Requested", request.NamespacedName.String(), "Cached pod name", pod.ObjectMeta.Name, "Cached pod namespace", pod.ObjectMeta.Namespace)
+				r.Log.Info("pod's node is not managed, but has eni request, will retry", "Requested", request.NamespacedName.String(), "Cached pod name", pod.ObjectMeta.Name, "Cached pod namespace", pod.ObjectMeta.Namespace)
 				return PodRequeueRequest, nil
 			}
 			logger.V(1).Info("pod's node is not managed, skipping pod event", "Requested", request.NamespacedName.String(), "Cached pod name", pod.ObjectMeta.Name, "Cached pod namespace", pod.ObjectMeta.Namespace)
