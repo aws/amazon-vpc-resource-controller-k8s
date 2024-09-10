@@ -19,6 +19,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/servicequotas"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 
@@ -94,6 +95,7 @@ type EC2APIHelper interface {
 	AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error)
 	UnassignIPv4Resources(eniID string, resourceType config.ResourceType, resources []string) error
 	DisassociateTrunkInterface(associationID *string) error
+	GetSecurityGroupQuota(quotaCode, serviceCode *string) (int, error)
 }
 
 // CreateNetworkInterface creates a new network interface
@@ -629,4 +631,17 @@ func (h *ec2APIHelper) DisassociateTrunkInterface(associationID *string) error {
 		AssociationId: associationID,
 	}
 	return h.ec2Wrapper.DisassociateTrunkInterface(input)
+}
+
+func (h *ec2APIHelper) GetSecurityGroupQuota(quotaCode, serviceCode *string) (int, error) {
+	input := &servicequotas.GetServiceQuotaInput{
+		QuotaCode:   quotaCode,
+		ServiceCode: serviceCode,
+	}
+	serviceQuotaOutput, err := h.ec2Wrapper.GetServiceQuota(input)
+	if err != nil {
+		// Default value of security groups per network interface
+		return 5, fmt.Errorf("failed to retrieve security group quota: %v", err)
+	}
+	return int(serviceQuotaOutput), nil
 }

@@ -103,7 +103,7 @@ spec:
                       need to be applied to the ENI of a Pod.
                     items:
                       type: string
-                    maxItems: 5
+                    maxItems: 16
                     minItems: 1
                     type: array
                 type: object

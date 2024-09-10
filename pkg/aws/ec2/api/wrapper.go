@@ -31,6 +31,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/servicequotas"
 	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -61,6 +62,7 @@ type EC2Wrapper interface {
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
 	DisassociateTrunkInterface(input *ec2.DisassociateTrunkInterfaceInput) error
+	GetServiceQuota(input *servicequotas.GetServiceQuotaInput) (int, error)
 }
 
 var (
@@ -358,6 +360,19 @@ var (
 		},
 	)
 
+	ec2GetServiceQuotaAPICallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_describe_network_interfaces_pages_api_err_count",
+			Help: "The number of calls made to get service quotas (paginated)",
+		},
+	)
+	ec2GetServiceQuotaAPIErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_get_service_quota_api_err_count",
+			Help: "The number of errors encountered while making call to get service quotas (paginated)",
+		},
+	)
+
 	prometheusRegistered = false
 )
 
@@ -403,6 +418,8 @@ func prometheusRegister() {
 			LeakedENIClusterCleanupCnt,
 			ec2DescribeNetworkInterfacesPagesAPICallCnt,
 			ec2DescribeNetworkInterfacesPagesAPIErrCnt,
+			ec2GetServiceQuotaAPICallCnt,
+			ec2GetServiceQuotaAPIErrCnt,
 		)
 
 		prometheusRegistered = true
@@ -413,6 +430,7 @@ type ec2Wrapper struct {
 	log                   logr.Logger
 	instanceServiceClient *ec2.EC2
 	userServiceClient     *ec2.EC2
+	serviceQuotasClient   *servicequotas.ServiceQuotas
 	accountID             string
 }
 
@@ -428,6 +446,10 @@ func NewEC2Wrapper(roleARN, clusterName, region string, log logr.Logger) (EC2Wra
 	if err != nil {
 		return nil, err
 	}
+
+	// Initialize the service quotas client
+	serviceQuotasClient := servicequotas.New(instanceSession)
+	ec2Wrapper.serviceQuotasClient = serviceQuotasClient
 
 	// Role ARN is passed, assume the role ARN to make EC2 API Calls
 	if roleARN != "" {
@@ -891,4 +913,21 @@ func (e *ec2Wrapper) DisassociateTrunkInterface(input *ec2.DisassociateTrunkInte
 		ec2DisassociateTrunkInterfaceErrCnt.Inc()
 	}
 	return err
+}
+
+func (e *ec2Wrapper) GetServiceQuota(input *servicequotas.GetServiceQuotaInput) (int, error) {
+	start := time.Now()
+	// Using the service quotas client
+	output, err := e.serviceQuotasClient.GetServiceQuota(input)
+	ec2APICallLatencies.WithLabelValues("get_service_quota").Observe(time.Since(start).Seconds() * 1e3) // milliseconds
+
+	// Metric Update
+	ec2APICallCnt.Inc()
+	ec2GetServiceQuotaAPICallCnt.Inc()
+
+	if err != nil {
+		ec2APIErrCnt.Inc()
+		ec2GetServiceQuotaAPIErrCnt.Inc()
+	}
+	return int(*output.Quota.Value), nil
 }

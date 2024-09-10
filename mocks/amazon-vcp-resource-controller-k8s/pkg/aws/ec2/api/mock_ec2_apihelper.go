@@ -310,3 +310,18 @@ func (mr *MockEC2APIHelperMockRecorder) WaitForNetworkInterfaceStatusChange(arg0
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitForNetworkInterfaceStatusChange", reflect.TypeOf((*MockEC2APIHelper)(nil).WaitForNetworkInterfaceStatusChange), arg0, arg1)
 }
+
+// GetSecurityGroupQuota mocks base method.
+func (m *MockEC2APIHelper) GetSecurityGroupQuota(quotaCode, serviceCode *string) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSecurityGroupQuota", quotaCode, serviceCode)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetSecurityGroupQuota indicates an expected call of GetSecurityGroupQuota.
+func (mr *MockEC2APIHelperMockRecorder) GetSecurityGroupQuota(quotaCode, serviceCode interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSecurityGroupQuota", reflect.TypeOf((*MockEC2APIHelper)(nil).GetSecurityGroupQuota), quotaCode, serviceCode)
+}

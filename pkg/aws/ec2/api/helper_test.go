@@ -23,6 +23,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/servicequotas"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -1184,4 +1185,47 @@ func TestEc2APIHelper_GetBranchNetworkInterface(t *testing.T) {
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []*ec2.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
+}
+
+// TestEc2APIHelper_GetSecurityGroupQuota tests the GetSecurityGroupQuota function
+func TestEc2APIHelper_GetSecurityGroupQuota(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	quotaCode := "L-1234ABCD"
+	serviceCode := "ec2"
+
+	getServiceQuotaInput := &servicequotas.GetServiceQuotaInput{
+		QuotaCode:   &quotaCode,
+		ServiceCode: &serviceCode,
+	}
+
+	mockWrapper.EXPECT().GetServiceQuota(getServiceQuotaInput).Return(5, nil)
+
+	quota, err := ec2ApiHelper.GetSecurityGroupQuota(&quotaCode, &serviceCode)
+	assert.NoError(t, err)
+	assert.Equal(t, 5, quota)
+}
+
+// TestEc2APIHelper_GetSecurityGroupQuota_Error tests that error is returned if GetServiceQuota call fails
+func TestEc2APIHelper_GetSecurityGroupQuota_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	quotaCode := "L-1234ABCD"
+	serviceCode := "ec2"
+
+	getServiceQuotaInput := &servicequotas.GetServiceQuotaInput{
+		QuotaCode:   &quotaCode,
+		ServiceCode: &serviceCode,
+	}
+
+	mockWrapper.EXPECT().GetServiceQuota(getServiceQuotaInput).Return(5, mockError)
+
+	_, err := ec2ApiHelper.GetSecurityGroupQuota(&quotaCode, &serviceCode)
+	assert.Error(t, err)
 }
