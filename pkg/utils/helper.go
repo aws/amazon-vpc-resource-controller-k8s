@@ -238,9 +238,10 @@ func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, e
 // PodHasENIRequest will return true if first container of pod spec has request for eni indicating
 // it needs trunk interface from vpc-rc
 func PodHasENIRequest(pod *v1.Pod) bool {
-	if len(pod.Spec.Containers) > 0 {
-		_, hasEniRequest := pod.Spec.Containers[0].Resources.Requests[config.ResourceNamePodENI]
-		return hasEniRequest
+	for _, container := range pod.Spec.Containers {
+		if _, hasEniRequest := container.Resources.Requests[config.ResourceNamePodENI]; hasEniRequest {
+			return true
+		}
 	}
 	return false
 }
