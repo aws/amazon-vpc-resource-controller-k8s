@@ -537,22 +537,23 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 	// TODO: we should revisit the global sts endpoint and check if we should remove global endpoint
 	// we are not using it since the concern on availability and performance
 	// https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_enable-regions.html
+
 	globalSTSEndpoint, err := endpoints.DefaultResolver().
 		EndpointFor("sts", aws.StringValue(userStsSession.Config.Region))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get the global sts endoint for region %s: %v",
-			*userStsSession.Config.Region, err)
+		e.log.Info("failed to get the global STS Endpoint, ignoring", "roleARN", roleARN)
+	} else {
+		// If the regional STS endpoint is different than the global STS endpoint then add the global sts endpoint
+		if regionalSTSEndpoint.URL != globalSTSEndpoint.URL {
+			globalProvider := &stscreds.AssumeRoleProvider{
+				Client:   e.createSTSClient(userStsSession, client, regionalSTSEndpoint, sourceAcct, sourceArn),
+				RoleARN:  roleARN,
+				Duration: time.Minute * 60,
+			}
+			providers = append(providers, globalProvider)
+		}
 	}
 
-	// If the regional STS endpoint is different than the global STS endpoint then add the global sts endpoint
-	if regionalSTSEndpoint.URL != globalSTSEndpoint.URL {
-		globalProvider := &stscreds.AssumeRoleProvider{
-			Client:   e.createSTSClient(userStsSession, client, regionalSTSEndpoint, sourceAcct, sourceArn),
-			RoleARN:  roleARN,
-			Duration: time.Minute * 60,
-		}
-		providers = append(providers, globalProvider)
-	}
 	e.log.Info("initialized the regional/global providers", "roleARN", roleARN)
 
 	userStsSession.Config.Credentials = credentials.NewChainCredentials(providers)
