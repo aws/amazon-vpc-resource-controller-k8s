@@ -16,6 +16,7 @@ package controllers
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/custom"
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
@@ -188,7 +189,7 @@ func TestPodReconciler_Reconcile_NonManaged(t *testing.T) {
 
 	result, err := mock.PodReconciler.Reconcile(mockReq)
 	assert.NoError(t, err)
-	assert.Equal(t, result, controllerruntime.Result{})
+	assert.Equal(t, controllerruntime.Result{Requeue: true, RequeueAfter: time.Second}, result)
 }
 
 // TestPodReconciler_Reconcile_NoNodeAssigned tests that the request for a Pod with no Node assigned
