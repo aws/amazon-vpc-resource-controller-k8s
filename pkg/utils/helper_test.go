@@ -18,9 +18,12 @@ import (
 
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 )
 
 // TestRemoveDuplicatedSg tests if RemoveDuplicatedSg func works as expected.
@@ -573,4 +576,101 @@ func TestGetSourceAcctAndArn_NoRegion(t *testing.T) {
 	assert.NoError(t, err, "no error should be returned with accurate role arn")
 	assert.Equal(t, "", acct, "correct account ID should be retrieved")
 	assert.Equal(t, "", arn, "correct cluster arn should be retrieved")
+}
+
+func TestPodHasENIRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		pod      *v1.Pod
+		expected bool
+	}{
+		{
+			name: "Pod with ENI request in first container",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									config.ResourceNamePodENI: resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "Pod with multiple containers, no ENI request",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									v1.ResourceCPU: resource.MustParse("100m"),
+								},
+							},
+						},
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									v1.ResourceMemory: resource.MustParse("128Mi"),
+								},
+							},
+						},
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									v1.ResourceStorage: resource.MustParse("1Gi"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "Pod without ENI request",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									v1.ResourceCPU: resource.MustParse("100m"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "Pod with empty containers",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{},
+				},
+			},
+			expected: false,
+		},
+		{
+			name:     "Nil pod",
+			pod:      nil,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := PodHasENIRequest(tt.pod)
+			if result != tt.expected {
+				t.Errorf("PodHasENIRequest() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
 }
