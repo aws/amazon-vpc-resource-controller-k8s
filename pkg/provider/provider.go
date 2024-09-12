@@ -14,10 +14,11 @@
 package provider
 
 import (
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 )
 
 // ResourceProvider is the provider interface that each resource managed by the controller has to implement

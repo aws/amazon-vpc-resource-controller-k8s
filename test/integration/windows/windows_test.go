@@ -59,6 +59,12 @@ var _ = Describe("Windows Integration Test", func() {
 		testConfigMap v1.ConfigMap
 	)
 
+	var sleepInfinityContainerCommands = []string{
+		GetCommandToTestHostConnectivity(
+			"www.amazon.com", 80, 2, true,
+		),
+	}
+
 	BeforeEach(func() {
 		namespace = "windows-test"
 		jobParallelism = 1
@@ -203,10 +209,240 @@ var _ = Describe("Windows Integration Test", func() {
 		})
 	})
 
+	Describe("configMap secondary IP mode tests", Label("windows-prefix-delegation-disabled"), func() {
+		// Test workflow when windows prefix delegation is disabled and secondary IP mode is active
+		// In secondary IP mode, pods must have secondary IPs assigned
+		var testPod, testPod2, testPod3 *v1.Pod
+		var instanceID string
+		var nodeName string
+		var bufferForCoolDown = config.CoolDownPeriod + (time.Second * 5)
+		var poolReconciliationWaitTime = time.Second * 5
+		container := manifest.NewWindowsContainerBuilder().Args(sleepInfinityContainerCommands).Build()
+
+		data = map[string]string{
+			config.EnableWindowsIPAMKey:             "true",
+			config.EnableWindowsPrefixDelegationKey: "false",
+		}
+		testerContainerCommands = []string{
+			GetCommandToTestHostConnectivity("www.amazon.com", 80, 2, false),
+		}
+
+		JustBeforeEach(func() {
+			windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "windows",
+				config.ResourceNameIPAddress)
+			instanceID = manager.GetNodeInstanceID(&windowsNodeList.Items[0])
+			nodeName = windowsNodeList.Items[0].Name
+
+			testPod = generateTestPodSpec(1, container, nodeName)
+			testPod2 = generateTestPodSpec(2, container, nodeName)
+			testPod3 = generateTestPodSpec(3, container, nodeName)
+
+			data[config.EnableWindowsIPAMKey] = "true"
+			data[config.EnableWindowsPrefixDelegationKey] = "false"
+			updateConfigMap(data, poolReconciliationWaitTime)
+
+			GinkgoWriter.Printf("Waiting %d seconds for cooldown period...\n", int(bufferForCoolDown.Seconds()))
+			time.Sleep(bufferForCoolDown)
+		})
+
+		AfterEach(func() {
+			data = map[string]string{
+				config.EnableWindowsIPAMKey:             "true",
+				config.EnableWindowsPrefixDelegationKey: "false",
+			}
+			updateConfigMap(data, poolReconciliationWaitTime)
+		})
+
+		Context("when prefix delegation is disabled and secondary IP mode is active", func() {
+			Context("When windows-warm-prefix-target is set to non zero value", Label("windows-warm-prefix-target"), func() {
+				BeforeEach(func() {
+					data[config.WinWarmPrefixTarget] = "2"
+				})
+				It("if windows-warm-prefix-target is 2 the value should be ignored and no prefixes should be assigned", func() {
+					By(fmt.Sprintf("creating 1 Windows pod and waiting until in ready status with timeout of %d seconds", int(utils.WindowsPodsCreationTimeout.Seconds())))
+					createdPod1, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+					verify.WindowsPodHaveIPv4Address(createdPod1)
+
+					GinkgoWriter.Printf("Waiting %d seconds for warmpool to reconciliate after creating new pod(s)...\n", int(poolReconciliationWaitTime.Seconds()))
+					time.Sleep(poolReconciliationWaitTime)
+
+					ipv4AddressCount, prefixCount, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(ipv4AddressCount)).To(BeNumerically(">=", 1))
+					Expect(len(prefixCount)).To(Equal(0))
+
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			Context("When windows-warm-ip-target is set to non zero value", Label("windows-warm-ip-target"), func() {
+				BeforeEach(func() {
+					data[config.WinWarmIPTarget] = "1"
+					data[config.WinMinimumIPTarget] = "0"
+				})
+				It("if windows-warm-ip-target is 1 should have 1 warm IPs available when 0 pods were running", func() {
+					ipv4AddressCount, prefixCount, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+
+					Expect(len(ipv4AddressCount)).To(Equal(1))
+					Expect(len(prefixCount)).To(Equal(0))
+				})
+			})
+
+			Context("When windows-warm-ip-target is 5", Label("windows-warm-ip-target"), func() {
+				BeforeEach(func() {
+					data[config.WinWarmIPTarget] = "5"
+				})
+				It("should have 7 warm IPs available when 2 pods were running", func() {
+					By(fmt.Sprintf("creating 2 Windows pods and waiting until in ready status with timeout of %d seconds", int(utils.WindowsPodsCreationTimeout.Seconds())))
+					createdPod1, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+					createdPod2, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod2, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+
+					verify.WindowsPodHaveIPv4Address(createdPod1)
+					verify.WindowsPodHaveIPv4Address(createdPod2)
+
+					GinkgoWriter.Printf("Waiting %d seconds for warmpool to reconciliate after creating new pod(s)...\n", int(poolReconciliationWaitTime.Seconds()))
+					time.Sleep(poolReconciliationWaitTime)
+
+					ipv4AddressCount, prefixCount, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(ipv4AddressCount)).To(BeNumerically("==", 7))
+					Expect(len(prefixCount)).To(Equal(0))
+
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+					Expect(err).ToNot(HaveOccurred())
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod2)
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			Context("When windows-minimum-ip-target is set to non zero value", Label("windows-minimum-ip-target"), func() {
+				BeforeEach(func() {
+					data[config.WinMinimumIPTarget] = "6"
+				})
+				It("if windows-minimum-ip-target is 6 should have 6 warm IPs available when 0 pods were running", func() {
+					ipv4AddressCount, prefixCount, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(ipv4AddressCount)).To(Equal(6))
+					Expect(len(prefixCount)).To(Equal(0))
+				})
+			})
+
+			Context("When windows-minimum-ip-target is set to 6 with 3 pods running", Label("windows-minimum-ip-target"), func() {
+				BeforeEach(func() {
+					data[config.WinMinimumIPTarget] = "6"
+				})
+				It("if windows-minimum-ip-target is 6 should have 6 IPs assigned to the node when 3 pods were running", func() {
+					By(fmt.Sprintf("creating 3 Windows pods and waiting until in ready status with timeout of %d seconds", int(utils.WindowsPodsCreationTimeout.Seconds())))
+					createdPod1, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+					createdPod2, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod2, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+					createdPod3, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod3, utils.WindowsPodsCreationTimeout)
+					Expect(err).ToNot(HaveOccurred())
+
+					verify.WindowsPodHaveIPv4Address(createdPod1)
+					verify.WindowsPodHaveIPv4Address(createdPod2)
+					verify.WindowsPodHaveIPv4Address(createdPod3)
+
+					GinkgoWriter.Printf("Waiting %d seconds for warmpool to reconciliate after creating new pod(s)...\n", int(poolReconciliationWaitTime.Seconds()))
+					time.Sleep(poolReconciliationWaitTime)
+
+					ipv4AddressCount, prefixCount, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(ipv4AddressCount)).To(Equal(6))
+					Expect(len(prefixCount)).To(Equal(0))
+
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+					Expect(err).ToNot(HaveOccurred())
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod2)
+					Expect(err).ToNot(HaveOccurred())
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod3)
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			Context("When windows-warm-ip-target and windows-minimum-ip-target set to non zero values", Label("windows-minimum-ip-target"), func() {
+				Context("windows-minimum-ip-target=3 and windows-warm-ip-target=6", func() {
+					BeforeEach(func() {
+						data[config.WinMinimumIPTarget] = "3"
+						data[config.WinWarmIPTarget] = "6"
+					})
+					It("if  should have 6 IPs assigned and 6 warm IPs available when 0 pods were running", func() {
+						ipv4AddressCount, prefixCount, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(len(ipv4AddressCount)).To(Equal(6))
+						Expect(len(prefixCount)).To(Equal(0))
+					})
+				})
+
+				Context("windows-minimum-ip-target=8 and windows-warm-ip-target=4", func() {
+					BeforeEach(func() {
+						data[config.WinMinimumIPTarget] = "8"
+						data[config.WinWarmIPTarget] = "4"
+					})
+					It("should have 8 IPs assigned and 8 warm IPs available when 0 pods were running", func() {
+						ipv4AddressCount, prefixCount, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(len(ipv4AddressCount)).To(Equal(8))
+						Expect(len(prefixCount)).To(Equal(0))
+					})
+				})
+				Context("windows-minimum-ip-target=2 and windows-warm-ip-target=4", func() {
+					BeforeEach(func() {
+						data[config.WinMinimumIPTarget] = "2"
+						data[config.WarmIPTarget] = "4"
+					})
+					It("should have 6 IPs assigned and 4 warm IPs available when 2 pods were running", func() {
+						By(fmt.Sprintf("creating 2 Windows pods and waiting until in ready status with timeout of %d seconds", int(utils.WindowsPodsCreationTimeout.Seconds())))
+						createdPod1, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
+						Expect(err).ToNot(HaveOccurred())
+						createdPod2, err := frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod2, utils.WindowsPodsCreationTimeout)
+						Expect(err).ToNot(HaveOccurred())
+
+						verify.WindowsPodHaveIPv4Address(createdPod1)
+						verify.WindowsPodHaveIPv4Address(createdPod2)
+
+						GinkgoWriter.Printf("Waiting %d seconds for warmpool to reconciliate after creating new pod(s)...\n", int(poolReconciliationWaitTime.Seconds()))
+						time.Sleep(poolReconciliationWaitTime)
+
+						ipv4AddressCount, prefixCount, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(len(ipv4AddressCount)).To(Equal(6))
+						Expect(len(prefixCount)).To(Equal(0))
+
+						err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+						Expect(err).ToNot(HaveOccurred())
+						err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod2)
+						Expect(err).ToNot(HaveOccurred())
+					})
+				})
+			})
+
+			Context("When windows-warm-ip-target and windows-min-ip-target set to 0", Label("windows-warm-ip-target"), func() {
+				BeforeEach(func() {
+					data[config.WinMinimumIPTarget] = "0"
+					data[config.WinWarmIPTarget] = "0"
+				})
+
+				It("should result in warm-ip-target=1 and min-ip-target=0", func() {
+					ipv4AddressCount, prefixCount, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(len(ipv4AddressCount)).To(Equal(1))
+					Expect(len(prefixCount)).To(Equal(0))
+				})
+			})
+		})
+	})
+
 	Describe("configMap enable-windows-prefix-delegation tests", Label("windows-prefix-delegation"), func() {
 		// Test windows prefix delegation feature enable/disable. When feature enabled, pod must have
 		// prefix ips assigned. Otherwise, pod must have secondary ip assigned.
-		var testPod, testPod2 *v1.Pod
+		var testPod, testPod2, testPodLongLiving *v1.Pod
 		var createdPod *v1.Pod
 		var instanceID string
 		var nodeName string
@@ -225,12 +461,13 @@ var _ = Describe("Windows Integration Test", func() {
 			nodeName = windowsNodeList.Items[0].Name
 
 			testerContainerCommands = []string{
-				GetCommandToTestHostConnectivity("www.amazon.com", 80, 2),
+				GetCommandToTestHostConnectivity("www.amazon.com", 80, 2, false),
 			}
 
 			testerContainer = manifest.NewWindowsContainerBuilder().
 				Args(testerContainerCommands).
 				Build()
+			testContainerLongLiving := manifest.NewWindowsContainerBuilder().Args(sleepInfinityContainerCommands).Build()
 
 			testPod, err = manifest.NewWindowsPodBuilder().
 				Namespace("windows-test").
@@ -247,6 +484,17 @@ var _ = Describe("Windows Integration Test", func() {
 				Namespace("windows-test").
 				Name("windows-pd-pod2").
 				Container(testerContainer).
+				OS("windows").
+				TerminationGracePeriod(0).
+				RestartPolicy(v1.RestartPolicyNever).
+				NodeName(nodeName).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			testPodLongLiving, err = manifest.NewWindowsPodBuilder().
+				Namespace("windows-test").
+				Name("windows-pod-long-living").
+				Container(testContainerLongLiving).
 				OS("windows").
 				TerminationGracePeriod(0).
 				RestartPolicy(v1.RestartPolicyNever).
@@ -271,8 +519,9 @@ var _ = Describe("Windows Integration Test", func() {
 			Context("[CANARY] When enable-windows-prefix-delegation is true", func() {
 				It("pod should be running and assigned ips are from prefix", func() {
 					By("creating pod and waiting for ready")
-					_, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					numIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
 					Expect(err).ToNot(HaveOccurred())
+					Expect(len(numIPsBefore)).To(Equal(0))
 					Expect(len(prefixesBefore)).To(Equal(1))
 
 					// verify if ip assigned is coming from a prefix
@@ -297,8 +546,9 @@ var _ = Describe("Windows Integration Test", func() {
 				It("two prefixes should be assigned", func() {
 					// allow some time for previous test pod to cool down
 					time.Sleep(bufferForCoolDown)
-					_, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					numIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
 					Expect(err).ToNot(HaveOccurred())
+					Expect(len(numIPsBefore)).To(Equal(0))
 					Expect(len(prefixesBefore)).To(Equal(2))
 
 					By("creating pod and waiting for ready should have 1 new prefix assigned")
@@ -308,8 +558,9 @@ var _ = Describe("Windows Integration Test", func() {
 					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesBefore)
 
 					// number of prefixes should increase by 1 since need 1 more prefix to fulfill warm-prefix-target of 2
-					_, prefixesAfter, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					numIPsAfter, prefixesAfter, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
 					Expect(err).ToNot(HaveOccurred())
+					Expect(len(numIPsAfter)).To(Equal(0))
 					Expect(len(prefixesAfter) - len(prefixesBefore)).To(Equal(1))
 
 					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
@@ -335,7 +586,7 @@ var _ = Describe("Windows Integration Test", func() {
 
 					By("creating 1 pod and waiting for ready should not create new prefix")
 					// verify if ip assigned is coming from a prefix
-					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
+					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPodLongLiving, utils.WindowsPodsCreationTimeout)
 					Expect(err).ToNot(HaveOccurred())
 
 					_, prefixesAfterPod1, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
@@ -357,7 +608,7 @@ var _ = Describe("Windows Integration Test", func() {
 					Expect(len(privateIPsBefore)).To(Equal(len(privateIPsAfter)))
 					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesAfterPod2)
 
-					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPodLongLiving)
 					Expect(err).ToNot(HaveOccurred())
 					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod2)
 					Expect(err).ToNot(HaveOccurred())
@@ -430,8 +681,9 @@ var _ = Describe("Windows Integration Test", func() {
 				It("two prefixes should be assigned", func() {
 					// allow some time for previous test pod to cool down
 					time.Sleep(bufferForCoolDown)
-					_, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					numIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
 					Expect(err).ToNot(HaveOccurred())
+					Expect(len(numIPsBefore)).To(Equal(0))
 					Expect(len(prefixesBefore)).To(Equal(2))
 
 					By("creating pod and waiting for ready should have 1 new prefix assigned")
@@ -441,8 +693,9 @@ var _ = Describe("Windows Integration Test", func() {
 					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesBefore)
 
 					// number of prefixes should increase by 1 since need 1 more prefix to fulfill warm-prefix-target of 2
-					_, prefixesAfter, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+					numIPsAfter, prefixesAfter, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
 					Expect(err).ToNot(HaveOccurred())
+					Expect(len(numIPsAfter)).To(Equal(0))
 					Expect(len(prefixesAfter) - len(prefixesBefore)).To(Equal(1))
 
 					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
@@ -467,7 +720,7 @@ var _ = Describe("Windows Integration Test", func() {
 
 					By("creating 1 pod and waiting for ready should not create new prefix")
 					// verify if ip assigned is coming from a prefix
-					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
+					createdPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, testPodLongLiving, utils.WindowsPodsCreationTimeout)
 					Expect(err).ToNot(HaveOccurred())
 
 					_, prefixesAfterPod1, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
@@ -489,7 +742,7 @@ var _ = Describe("Windows Integration Test", func() {
 					Expect(len(privateIPsBefore)).To(Equal(len(privateIPsAfter)))
 					verify.WindowsPodHaveIPv4AddressFromPrefixes(createdPod, prefixesAfterPod2)
 
-					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod)
+					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPodLongLiving)
 					Expect(err).ToNot(HaveOccurred())
 					err = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, testPod2)
 					Expect(err).ToNot(HaveOccurred())
@@ -631,7 +884,7 @@ var _ = Describe("Windows Integration Test", func() {
 						CreateAndWaitUntilDeploymentReady(ctx, oldControllerDeployment)
 					Expect(err).ToNot(HaveOccurred())
 
-					By("creating windows pod and waiting for it to timout")
+					By("creating windows pod and waiting for it to timeout")
 					createdPod, err := frameWork.PodManager.
 						CreateAndWaitTillPodIsRunning(ctx, testPod, utils.WindowsPodsCreationTimeout)
 					Expect(err).To(HaveOccurred())
@@ -685,7 +938,7 @@ var _ = Describe("Windows Integration Test", func() {
 			BeforeEach(func() {
 				jobParallelism = 30
 				testerContainerCommands = []string{
-					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, service.Spec.Ports[0].Port, 10),
+					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, service.Spec.Ports[0].Port, 10, false),
 				}
 			})
 
@@ -702,7 +955,7 @@ var _ = Describe("Windows Integration Test", func() {
 			BeforeEach(func() {
 				jobParallelism = 1
 				testerContainerCommands = []string{
-					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, 1, 1),
+					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, 1, 1, false),
 				}
 			})
 
@@ -714,7 +967,7 @@ var _ = Describe("Windows Integration Test", func() {
 		Context("when connecting to internet", func() {
 			BeforeEach(func() {
 				testerContainerCommands = []string{
-					GetCommandToTestHostConnectivity("www.amazon.com", 80, 2),
+					GetCommandToTestHostConnectivity("www.amazon.com", 80, 2, false),
 				}
 			})
 
@@ -727,7 +980,7 @@ var _ = Describe("Windows Integration Test", func() {
 		Context("when connecting to invalid url", func() {
 			BeforeEach(func() {
 				testerContainerCommands = []string{
-					GetCommandToTestHostConnectivity("www.amazon.zzz", 80, 1),
+					GetCommandToTestHostConnectivity("www.amazon.zzz", 80, 1, false),
 				}
 			})
 
@@ -778,7 +1031,7 @@ var _ = Describe("Windows Integration Test", func() {
 
 			testerContainer = manifest.NewWindowsContainerBuilder().
 				Args([]string{
-					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, service.Spec.Ports[0].Port, 10)}).
+					GetCommandToTestHostConnectivity(service.Spec.ClusterIP, service.Spec.Ports[0].Port, 10, false)}).
 				Build()
 
 			testerJob = manifest.NewWindowsJob().
@@ -835,7 +1088,7 @@ var _ = Describe("Windows Integration Test", func() {
 	Describe("when creating pod with same namespace and name", func() {
 		BeforeEach(func() {
 			testerContainerCommands = []string{
-				GetCommandToTestHostConnectivity("www.amazon.com", 80, 2),
+				GetCommandToTestHostConnectivity("www.amazon.com", 80, 2, false),
 			}
 		})
 
@@ -883,19 +1136,45 @@ var _ = Describe("Windows Integration Test", func() {
 	})
 })
 
-// GetCommandToTestHostConnectivity tests the DNS Resolution and the tcp connection to the
-// host
-func GetCommandToTestHostConnectivity(host string, port int32, retries int) string {
+func generateTestPodSpec(index int, testerContainer v1.Container, nodeName string) *v1.Pod {
+	testPod, err := manifest.NewWindowsPodBuilder().
+		Namespace("windows-test").
+		Name(fmt.Sprintf("windows-secondary-ip-pod-%d", index)).
+		Container(testerContainer).
+		OS("windows").
+		TerminationGracePeriod(0).
+		RestartPolicy(v1.RestartPolicyNever).
+		NodeName(nodeName).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+	return testPod
+}
+
+func updateConfigMap(data map[string]string, waitTime time.Duration) {
+	By("updating the configmap")
+	builtConfigMap := *manifest.NewConfigMapBuilder().Data(data).Build()
+	configMapWrapper.UpdateConfigMap(frameWork.ConfigMapManager, ctx, &builtConfigMap)
+	GinkgoWriter.Printf("Updated amazon-vpc-cni config map data: %v\n", data)
+	GinkgoWriter.Printf("Waiting %d seconds for pool reconciliation...\n", int(waitTime.Seconds()))
+	time.Sleep(waitTime)
+}
+
+func GetCommandToTestHostConnectivity(host string, port int32, retries int, sleepForever bool) string {
 	return fmt.Sprintf(`
      $Server = "%s"
      $Port = %d
      $Retries = %d
      $RetryInterval = 1
+     $SleepForever = $%t # If true, sleep forever after the test is complete
 
      While (-Not (Test-NetConnection -ComputerName $Server -Port $Port).TcpTestSucceeded) {
        if ($Retries -le 0) {
          Write-Warning "maximum number of connection attempts reached, exiting"
-         exit 1
+         if (!$SleepForever) {
+           exit 1
+         } else {
+           break
+         }
        }
        Write-Warning "failed to connect to server $Server, will retry"
        Start-Sleep -s $RetryInterval
@@ -903,7 +1182,14 @@ func GetCommandToTestHostConnectivity(host string, port int32, retries int) stri
        # Limit RetryInterval to 20 seconds after it exceeds certain value
        $RetryInterval = if ($RetryInterval -lt 20) {$RetryInterval*2} else {20}
      }
-     Write-Output "connection from $env:COMPUTERNAME to $Server succeeded"`, host, port, retries)
+     Write-Output "connection from $env:COMPUTERNAME to $Server succeeded"
+     if ($SleepForever) {
+       while ($true) { 
+	      $SleepSeconds = 3600
+	      Write-Output "Sleeping forver, will sleep for $SleepSeconds seconds at a time..."
+	      Start-Sleep -Seconds $SleepSeconds; 
+       }
+     }`, host, port, retries, sleepForever)
 }
 
 // Install and start the dot net web server, it's light weight so starts pretty quick
@@ -921,5 +1207,5 @@ func GetCommandToContinuouslyTestHostConnectivity(host string, tries int, interv
       Start-Sleep -s %d # Sleep for specified interval before testing connection
       %s # The test connection command
       $val++
-    }`, tries, interval, GetCommandToTestHostConnectivity(host, 80, 10))
+    }`, tries, interval, GetCommandToTestHostConnectivity(host, 80, 10, false))
 }

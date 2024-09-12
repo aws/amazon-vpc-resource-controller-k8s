@@ -21,11 +21,13 @@ import (
 
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
 	"github.com/aws/aws-sdk-go/aws/arn"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -213,22 +215,36 @@ func IsNitroInstance(instanceType string) (bool, error) {
 }
 
 // GetSourceAcctAndArn constructs source acct and arn and return them for use
-func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, error) {
+func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, string, error) {
 	// ARN format (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html)
 	// arn:partition:service:region:account-id:resource-type/resource-id
 	// IAM format, region is always blank
 	// arn:aws:iam::account:role/role-name-with-path
 	if !arn.IsARN(roleARN) {
-		return "", "", fmt.Errorf("incorrect ARN format for role %s", roleARN)
+		return "", "", "", fmt.Errorf("incorrect ARN format for role %s", roleARN)
 	} else if region == "" {
-		return "", "", nil
+		return "", "", "", nil
 	}
 
 	parsedArn, err := arn.Parse(roleARN)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	sourceArn := fmt.Sprintf("arn:%s:eks:%s:%s:cluster/%s", parsedArn.Partition, region, parsedArn.AccountID, clusterName)
-	return parsedArn.AccountID, sourceArn, nil
+	return parsedArn.AccountID, parsedArn.Partition, sourceArn, nil
+}
+
+// PodHasENIRequest will return true if first container of pod spec has request for eni indicating
+// it needs trunk interface from vpc-rc
+func PodHasENIRequest(pod *v1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	for _, container := range pod.Spec.Containers {
+		if _, hasEniRequest := container.Resources.Requests[config.ResourceNamePodENI]; hasEniRequest {
+			return true
+		}
+	}
+	return false
 }

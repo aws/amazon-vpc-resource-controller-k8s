@@ -16,6 +16,8 @@ GOLANG_VERSION ?= $(shell cat .go-version)
 BUILD_IMAGE ?= public.ecr.aws/docker/library/golang:$(GOLANG_VERSION)
 GOARCH ?= amd64
 PLATFORM ?= linux/amd64
+USER_ROLE_ARN ?= arn:aws:iam::$(AWS_ACCOUNT):role/VPCResourceControllerRole
+BETA_CLUSTER ?= false
 
 help: ## Display help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
@@ -51,6 +53,11 @@ toolchain: ## Install developer toolchain
 	./hack/toolchain.sh
 
 apply: image check-deployment-env check-env ## Deploy controller to ~/.kube/config
+ifeq ($(BETA_CLUSTER), true)
+	VPC_ID=$(shell aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} --endpoint https://api.beta.us-west-2.wesley.amazonaws.com --query "cluster.resourcesVpcConfig" --output json | jq '.vpcId')
+else
+	VPC_ID=$(shell aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} --query "cluster.resourcesVpcConfig" --output json | jq '.vpcId')
+endif
 	eksctl create iamserviceaccount vpc-resource-controller --namespace kube-system --cluster ${CLUSTER_NAME} --region ${AWS_REGION} \
 		--role-name VPCResourceControllerRole \
 		--attach-policy-arn=arn:aws:iam::aws:policy/AdministratorAccess \
@@ -58,7 +65,7 @@ apply: image check-deployment-env check-env ## Deploy controller to ~/.kube/conf
 		--approve
 	kustomize build config/crd | kubectl apply -f -
 	cd config/controller && kustomize edit set image controller=${IMAGE}
-	kustomize build config/default | sed "s|CLUSTER_NAME|${CLUSTER_NAME}|g;s|USER_ROLE_ARN|${USER_ROLE_ARN}|g" | kubectl apply -f -
+	kustomize build config/default | sed "s|CLUSTER_NAME|${CLUSTER_NAME}|g;s|USER_ROLE_ARN|${USER_ROLE_ARN}|g;s|VPC_ID|${VPC_ID}|g" | kubectl apply -f -
 	kubectl patch rolebinding eks-vpc-resource-controller-rolebinding -n kube-system --patch '{"subjects":[{"kind":"ServiceAccount","name":"vpc-resource-controller","namespace":"kube-system"}]}'
 	kubectl patch clusterrolebinding vpc-resource-controller-rolebinding --patch '{"subjects":[{"kind":"ServiceAccount","name":"vpc-resource-controller","namespace":"kube-system"}]}'
 
