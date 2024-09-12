@@ -455,19 +455,19 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 	}
 	e.log.Info("created rate limited http client", "qps", qps, "burst", burst)
 
-	// Get the regional sts end point
-	regionalSTSEndpoint, err := endpoints.DefaultResolver().
-		EndpointFor("sts", aws.StringValue(userStsSession.Config.Region), endpoints.STSRegionalEndpointOption)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get the regional sts endoint for region %s: %v",
-			*userStsSession.Config.Region, err)
-	}
-
+	// GetPartition ID, SourceAccount and SourceARN
 	roleARN = strings.Trim(roleARN, "\"")
 
-	sourceAcct, sourceArn, err := utils.GetSourceAcctAndArn(roleARN, region, clusterName)
+	sourceAcct, partitionID, sourceArn, err := utils.GetSourceAcctAndArn(roleARN, region, clusterName)
 	if err != nil {
 		return nil, err
+	}
+
+	// Get the regional sts end point
+	regionalSTSEndpoint, err := e.getRegionalStsEndpoint(partitionID, region)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get the regional sts endpoint for region %s: %v %v",
+			*userStsSession.Config.Region, err, partitionID)
 	}
 
 	regionalProvider := &stscreds.AssumeRoleProvider{
@@ -788,4 +788,36 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkIn
 	}
 
 	return output, err
+}
+
+func (e *ec2Wrapper) getRegionalStsEndpoint(partitionID, region string) (endpoints.ResolvedEndpoint, error) {
+	var partition *endpoints.Partition
+	var stsServiceID = "sts"
+	for _, p := range endpoints.DefaultPartitions() {
+		if partitionID == p.ID() {
+			partition = &p
+			break
+		}
+	}
+	if partition == nil {
+		return endpoints.ResolvedEndpoint{}, fmt.Errorf("partition %s not valid", partitionID)
+	}
+
+	stsSvc, ok := partition.Services()[stsServiceID]
+	if !ok {
+		e.log.Info("STS service not found in partition, generating default endpoint.", "Partition:", partitionID)
+		// Add the host of the current instances region if the service doesn't already exists in the partition
+		// so we don't fail if the service is not present in the go sdk but matches the instances region.
+		res, err := partition.EndpointFor(stsServiceID, region, endpoints.STSRegionalEndpointOption, endpoints.ResolveUnknownServiceOption)
+		if err != nil {
+			return endpoints.ResolvedEndpoint{}, fmt.Errorf("error resolving endpoint for %s in partition %s. err: %v", region, partition.ID(), err)
+		}
+		return res, nil
+	}
+
+	res, err := stsSvc.ResolveEndpoint(region, endpoints.STSRegionalEndpointOption)
+	if err != nil {
+		return endpoints.ResolvedEndpoint{}, fmt.Errorf("error resolving endpoint for %s in partition %s. err: %v", region, partition.ID(), err)
+	}
+	return res, nil
 }
