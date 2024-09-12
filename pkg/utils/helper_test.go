@@ -538,26 +538,29 @@ func TestGetSourceAcctAndArn(t *testing.T) {
 	clusterName := "test-cluster"
 	region := "us-west-2"
 	clusterARN := "arn:aws:eks:us-west-2:123456789876:cluster/test-cluster"
-
+	partition := "aws"
 	roleARN := "arn:aws:iam::123456789876:role/test-cluster"
 
 	// test correct inputs
-	acct, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
+	acct, part, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
 	assert.NoError(t, err, "no error should be returned with accurate role arn")
+	assert.Equal(t, partition, part, "correct partition should be retrieved")
 	assert.Equal(t, accountID, acct, "correct account ID should be retrieved")
 	assert.Equal(t, clusterARN, arn, "correct cluster arn should be retrieved")
 
 	region = "us-gov-west-1"
 	roleARN = "arn:aws-us-gov:iam::123456789876:role/test-cluster"
 	clusterARN = "arn:aws-us-gov:eks:us-gov-west-1:123456789876:cluster/test-cluster"
-	acct, arn, err = GetSourceAcctAndArn(roleARN, region, clusterName)
+	partition = "aws-us-gov"
+	acct, part, arn, err = GetSourceAcctAndArn(roleARN, region, clusterName)
 	assert.NoError(t, err, "no error should be returned with accurate aws-us-gov partition role arn")
 	assert.Equal(t, accountID, acct, "correct account ID should be retrieved")
+	assert.Equal(t, partition, part, "correct patition should be retrieved")
 	assert.Equal(t, clusterARN, arn, "correct gov partition cluster arn should be retrieved")
 
 	// test error handling
 	roleARN = "arn:aws:iam::123456789876"
-	_, _, err = GetSourceAcctAndArn(roleARN, region, clusterName)
+	_, _, _, err = GetSourceAcctAndArn(roleARN, region, clusterName)
 	assert.Error(t, err, "error should be returned with inaccurate role arn is given")
 }
 
@@ -569,8 +572,10 @@ func TestGetSourceAcctAndArn_NoRegion(t *testing.T) {
 	roleARN := "arn:aws:iam::123456789876:role/test-cluster"
 
 	// test correct inputs
-	acct, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
+	acct, part, arn, err := GetSourceAcctAndArn(roleARN, region, clusterName)
 	assert.NoError(t, err, "no error should be returned with accurate role arn")
 	assert.Equal(t, "", acct, "correct account ID should be retrieved")
 	assert.Equal(t, "", arn, "correct cluster arn should be retrieved")
+	assert.Equal(t, "", part, "correct partiton should be retrieved")
+
 }

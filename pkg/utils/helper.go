@@ -213,22 +213,22 @@ func IsNitroInstance(instanceType string) (bool, error) {
 }
 
 // GetSourceAcctAndArn constructs source acct and arn and return them for use
-func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, error) {
+func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, string, error) {
 	// ARN format (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html)
 	// arn:partition:service:region:account-id:resource-type/resource-id
 	// IAM format, region is always blank
 	// arn:aws:iam::account:role/role-name-with-path
 	if !arn.IsARN(roleARN) {
-		return "", "", fmt.Errorf("incorrect ARN format for role %s", roleARN)
+		return "", "", "", fmt.Errorf("incorrect ARN format for role %s", roleARN)
 	} else if region == "" {
-		return "", "", nil
+		return "", "", "", nil
 	}
 
 	parsedArn, err := arn.Parse(roleARN)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	sourceArn := fmt.Sprintf("arn:%s:eks:%s:%s:cluster/%s", parsedArn.Partition, region, parsedArn.AccountID, clusterName)
-	return parsedArn.AccountID, sourceArn, nil
+	return parsedArn.AccountID, parsedArn.Partition, sourceArn, nil
 }
