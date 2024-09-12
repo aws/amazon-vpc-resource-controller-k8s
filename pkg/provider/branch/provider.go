@@ -72,7 +72,7 @@ var (
 	branchProviderOperationLatency = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Name:       "branch_provider_operation_latency",
-			Help:       "Branch Provider operations latency in ms",
+			Help:       "Branch Provider operations latency in seconds",
 			Objectives: map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0},
 		},
 		[]string{operationLabel, resourceCountLabel},
@@ -134,9 +134,9 @@ func prometheusRegister() {
 	}
 }
 
-// timeSinceMs returns the time since MS from the start time
-func timeSinceMs(start time.Time) float64 {
-	return float64(time.Since(start).Milliseconds())
+// timeSinceSeconds returns the time elapsed in seconds from the start time
+func timeSinceSeconds(start time.Time) float64 {
+	return float64(time.Since(start).Seconds())
 }
 
 // InitResources initialized the resource for the given node name. The initialized trunk ENI is stored in
@@ -177,7 +177,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		branchProviderOperationsErrCount.WithLabelValues("init").Inc()
 		return fmt.Errorf("initializing trunk, %w", err)
 	}
-	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceMs(start))
+	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceSeconds(start))
 
 	// Add the Trunk ENI to cache
 	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil {
@@ -370,7 +370,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	}
 
 	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENI, strconv.Itoa(resourceCount)).
-		Observe(timeSinceMs(start))
+		Observe(timeSinceSeconds(start))
 
 	jsonBytes, err := json.Marshal(branchENIs)
 	if err != nil {
@@ -398,7 +398,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		fmt.Sprintf("Allocated %s to the pod", string(jsonBytes)), v1.EventTypeNormal)
 
 	branchProviderOperationLatency.WithLabelValues(operationAnnotateBranchENI, strconv.Itoa(resourceCount)).
-		Observe(timeSinceMs(start))
+		Observe(timeSinceSeconds(start))
 
 	log.Info("created and annotated branch interface/s successfully", "branches", branchENIs)
 
