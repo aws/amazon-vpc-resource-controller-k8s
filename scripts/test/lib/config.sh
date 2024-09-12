@@ -14,7 +14,7 @@ function add_suffix() {
 
 # IAM Role Name for Linux Node Role where VPC Resource Controller Runs. It should
 # have the Trunk Association Policy
-TRUNK_ASSOC_POLICY_NAME=$(add_suffix "AssociateTrunkInterfcePolicy")
+TRUNK_ASSOC_POLICY_NAME=$(add_suffix "AssociateTrunkInterfacePolicy")
 INSTANCE_ROLE_NAME=$(add_suffix "LinuxNodeRole")
 
 # IAM Role and it's Policy Names which have the permission to manage Trunk/Branch

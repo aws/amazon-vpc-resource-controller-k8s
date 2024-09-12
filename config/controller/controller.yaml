@@ -33,6 +33,8 @@ spec:
           - --role-arn=USER_ROLE_ARN
           - --leader-elect
           - --metrics-bind-address=:8443
+          - --introspect-bind-addr=:22775
+          - --vpc-id=VPC_ID
         image: controller:latest
         name: controller
         resources:
