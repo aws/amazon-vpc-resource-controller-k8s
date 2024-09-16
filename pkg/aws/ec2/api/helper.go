@@ -93,7 +93,6 @@ type EC2APIHelper interface {
 	GetInstanceDetails(instanceId *string) (*ec2.Instance, error)
 	AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error)
 	UnassignIPv4Resources(eniID string, resourceType config.ResourceType, resources []string) error
-	DisassociateTrunkInterface(associationID *string) error
 }
 
 // CreateNetworkInterface creates a new network interface
@@ -604,6 +603,7 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*
 
 		describeNetworkInterfacesInput.NextToken = describeNetworkInterfaceOutput.NextToken
 	}
+
 	return nwInterfaces, nil
 }
 
@@ -622,11 +622,4 @@ func (h *ec2APIHelper) DetachAndDeleteNetworkInterface(attachmentID *string, nwI
 		return err
 	}
 	return nil
-}
-
-func (h *ec2APIHelper) DisassociateTrunkInterface(associationID *string) error {
-	input := &ec2.DisassociateTrunkInterfaceInput{
-		AssociationId: associationID,
-	}
-	return h.ec2Wrapper.DisassociateTrunkInterface(input)
 }

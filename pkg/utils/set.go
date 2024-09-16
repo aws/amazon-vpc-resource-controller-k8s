@@ -13,10 +13,6 @@
 
 package utils
 
-import (
-	"github.com/aws/aws-sdk-go/service/ec2"
-)
-
 // Difference returns a-b, elements present in a and not in b
 func Difference[T comparable](a, b []T) (diff []T) {
 	m := make(map[T]struct{})
@@ -38,12 +34,4 @@ func GetKeyValSlice(m map[string]string) (key []string, val []string) {
 		val = append(val, v)
 	}
 	return
-}
-
-func GetTagKeyValueMap(tagSet []*ec2.Tag) map[string]string {
-	m := make(map[string]string)
-	for _, tag := range tagSet {
-		m[*tag.Key] = *tag.Value
-	}
-	return m
 }
