@@ -3,7 +3,7 @@ module github.com/aws/amazon-vpc-resource-controller-k8s
 go 1.22.5
 
 require (
-	github.com/aws/amazon-vpc-cni-k8s v1.18.1
+	github.com/aws/amazon-vpc-cni-k8s v1.18.3
 	github.com/aws/aws-sdk-go v1.55.5
 	github.com/go-logr/logr v1.4.2
 	github.com/go-logr/zapr v1.3.0
@@ -12,7 +12,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.22.0
 	github.com/onsi/gomega v1.34.2
 	github.com/pkg/errors v0.9.1
-	github.com/prometheus/client_golang v1.19.0
+	github.com/prometheus/client_golang v1.19.1
 	github.com/prometheus/client_model v0.6.1
 	github.com/prometheus/common v0.55.0
 	github.com/stretchr/testify v1.9.0
