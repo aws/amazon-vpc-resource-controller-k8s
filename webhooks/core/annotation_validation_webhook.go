@@ -34,13 +34,13 @@ import (
 // AnnotationValidator validates the resource allocated to the Pod via annotations. The WebHook
 // prevents unauthorized user from modifying/removing these Annotations.
 type AnnotationValidator struct {
-	decoder   *admission.Decoder
+	decoder   admission.Decoder
 	Condition condition.Conditions
 	Log       logr.Logger
 	Checker   healthz.Checker
 }
 
-func NewAnnotationValidator(condition condition.Conditions, log logr.Logger, d *admission.Decoder, healthzHandler *rcHealthz.HealthzHandler) *AnnotationValidator {
+func NewAnnotationValidator(condition condition.Conditions, log logr.Logger, d admission.Decoder, healthzHandler *rcHealthz.HealthzHandler) *AnnotationValidator {
 	annotationValidator := &AnnotationValidator{
 		Condition: condition,
 		Log:       log,
