@@ -35,8 +35,6 @@ type Feature struct {
 // CNINodeSpec defines the desired state of CNINode
 type CNINodeSpec struct {
 	Features []Feature `json:"features,omitempty"`
-	// Additional tag key/value added to all network interfaces provisioned by the vpc-resource-controller and VPC-CNI
-	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // CNINodeStatus defines the managed VPC resources.

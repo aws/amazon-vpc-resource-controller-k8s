@@ -20,7 +20,6 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
@@ -35,6 +34,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+)
+
+// MaxNodeConcurrentReconciles is the number of go routines that can invoke
+// Reconcile in parallel. Since Node Reconciler, performs local operation
+// on cache only a single go routine should be sufficient. Using more than
+// one routines to help high rate churn and larger nodes groups restarting
+// when the controller has to be restarted for various reasons.
+const (
+	MaxNodeConcurrentReconciles = 10
 )
 
 // NodeReconciler reconciles a Node object
@@ -109,7 +117,7 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHe
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
-		WithOptions(controller.Options{MaxConcurrentReconciles: config.MaxNodeConcurrentReconciles}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: MaxNodeConcurrentReconciles}).
 		Owns(&v1alpha1.CNINode{}).
 		Complete(r)
 }

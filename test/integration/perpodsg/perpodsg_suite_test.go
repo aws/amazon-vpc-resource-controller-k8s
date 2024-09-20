@@ -52,10 +52,8 @@ var _ = BeforeSuite(func() {
 	securityGroupID2, err = frameWork.EC2Manager.ReCreateSG(utils.ResourceNamePrefix+"sg-2", ctx)
 	Expect(err).ToNot(HaveOccurred())
 
-	nodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "linux",
+	nodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, ctx, "linux",
 		config.ResourceNamePodENI)
-	err = node.VerifyCNINodeCount(frameWork.NodeManager)
-	Expect(err).ToNot(HaveOccurred())
 })
 
 var _ = AfterSuite(func() {
