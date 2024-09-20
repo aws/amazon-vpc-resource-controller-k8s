@@ -79,6 +79,7 @@ type EC2Instance interface {
 	PrimaryNetworkInterfaceID() string
 	CurrentInstanceSecurityGroups() []string
 	SetNewCustomNetworkingSpec(subnetID string, securityGroup []string)
+	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 }
 
@@ -310,4 +311,11 @@ func (i *ec2Instance) updateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHel
 	}
 
 	return nil
+}
+
+func (i *ec2Instance) GetCustomNetworkingSpec() (subnetID string, securityGroup []string) {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.newCustomNetworkingSubnetID, i.newCustomNetworkingSecurityGroups
 }
