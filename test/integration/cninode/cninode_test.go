@@ -42,7 +42,7 @@ var _ = Describe("[CANARY]CNINode test", func() {
 			oldMaxSize = *asg[0].MaxSize
 		})
 		AfterEach(func() {
-			By("restoring ASG minSize & maxSize after test")
+			By("restoring ASG desiredCapacity, minSize, maxSize after test")
 			err := frameWork.AutoScalingManager.UpdateAutoScalingGroup(asgName, oldDesiredSize, oldMinSize, oldMaxSize)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(WaitTillNodeSizeUpdated(int(oldDesiredSize))).Should(Succeed())
@@ -90,6 +90,7 @@ func ListNodesAndGetAutoScalingGroupName() string {
 
 // Verifies (linux) node size is updated after ASG is updated
 func WaitTillNodeSizeUpdated(desiredSize int) error {
+	By("waiting till node list is updated")
 	err := wait.PollUntilContextTimeout(context.Background(), testUtils.PollIntervalShort, testUtils.ResourceCreationTimeout, true,
 		func(ctx context.Context) (bool, error) {
 			nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux) // since we are only updating the linux ASG in the test
