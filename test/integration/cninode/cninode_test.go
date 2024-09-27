@@ -14,7 +14,7 @@
 package cninode_test
 
 import (
-	"time"
+	"context"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
@@ -22,6 +22,7 @@ import (
 	testUtils "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 var _ = Describe("[CANARY]CNINode test", func() {
@@ -44,8 +45,7 @@ var _ = Describe("[CANARY]CNINode test", func() {
 			By("restoring ASG minSize & maxSize after test")
 			err := frameWork.AutoScalingManager.UpdateAutoScalingGroup(asgName, oldDesiredSize, oldMinSize, oldMaxSize)
 			Expect(err).ToNot(HaveOccurred())
-			// sleep to allow ASG to be updated
-			time.Sleep(testUtils.ResourceCreationTimeout)
+			Expect(WaitTillNodeSizeUpdated(int(oldDesiredSize))).Should(Succeed())
 		})
 
 		Context("when new node is added", func() {
@@ -55,11 +55,8 @@ var _ = Describe("[CANARY]CNINode test", func() {
 				By("adding new node")
 				err := frameWork.AutoScalingManager.UpdateAutoScalingGroup(asgName, newSize, oldMinSize, newSize)
 				Expect(err).ToNot(HaveOccurred())
-				// sleep to allow ASG to be updated
-				time.Sleep(testUtils.ResourceCreationTimeout)
-
-				err = node.VerifyCNINodeCount(frameWork.NodeManager)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(WaitTillNodeSizeUpdated(int(newSize))).Should(Succeed())
+				Expect(node.VerifyCNINode(frameWork.NodeManager)).Should(Succeed())
 			})
 		})
 		Context("when existing node is removed", func() {
@@ -69,11 +66,8 @@ var _ = Describe("[CANARY]CNINode test", func() {
 				By("removing existing node")
 				err := frameWork.AutoScalingManager.UpdateAutoScalingGroup(asgName, newSize, newSize, oldMaxSize)
 				Expect(err).ToNot(HaveOccurred())
-				// sleep to allow ASG to be updated
-				time.Sleep(testUtils.ResourceCreationTimeout)
-				err = node.VerifyCNINodeCount(frameWork.NodeManager)
-				Expect(err).ToNot(HaveOccurred())
-
+				Expect(WaitTillNodeSizeUpdated(int(newSize))).Should(Succeed())
+				Expect(node.VerifyCNINode(frameWork.NodeManager)).Should(Succeed())
 			})
 		})
 	})
@@ -92,4 +86,20 @@ func ListNodesAndGetAutoScalingGroupName() string {
 	val, ok := tags["aws:autoscaling:groupName"]
 	Expect(ok).To(BeTrue())
 	return val
+}
+
+// Verifies (linux) node size is updated after ASG is updated
+func WaitTillNodeSizeUpdated(desiredSize int) error {
+	err := wait.PollUntilContextTimeout(context.Background(), testUtils.PollIntervalShort, testUtils.ResourceCreationTimeout, true,
+		func(ctx context.Context) (bool, error) {
+			nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux) // since we are only updating the linux ASG in the test
+			if err != nil {
+				return false, nil
+			}
+			if len(nodes.Items) != desiredSize {
+				return false, nil
+			}
+			return true, nil
+		})
+	return err
 }

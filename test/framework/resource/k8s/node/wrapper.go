@@ -46,9 +46,9 @@ func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResou
 	return observedNodeList
 }
 
-// VerifyCNINodeCount checks if the number of CNINodes is equal to number of nodes in the cluster, and verifies 1:1 mapping between CNINode and Node objects
+// VerifyCNINode checks if the number of CNINodes is equal to number of nodes in the cluster, and verifies 1:1 mapping between CNINode and Node objects
 // Returns nil if count and 1:1 mapping exists, else returns error
-func VerifyCNINodeCount(manager Manager) error {
+func VerifyCNINode(manager Manager) error {
 	cniNodes, err := manager.GetCNINodeList()
 	Expect(err).NotTo(HaveOccurred())
 	nodes, err := manager.GetNodeList()

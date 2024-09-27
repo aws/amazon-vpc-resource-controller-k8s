@@ -38,13 +38,13 @@ var _ = BeforeSuite(func() {
 	Expect(len(nodeList.Items)).To(BeNumerically(">", 1))
 
 	By("verify CNINode count")
-	err = node.VerifyCNINodeCount(frameWork.NodeManager)
+	err = node.VerifyCNINode(frameWork.NodeManager)
 	Expect(err).ToNot(HaveOccurred())
 })
 
 // Verify CNINode count before and after test remains same
 var _ = AfterSuite(func() {
 	By("verify CNINode count")
-	err := node.VerifyCNINodeCount(frameWork.NodeManager)
+	err := node.VerifyCNINode(frameWork.NodeManager)
 	Expect(err).ToNot(HaveOccurred())
 })
