@@ -49,20 +49,30 @@ func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResou
 // VerifyCNINode checks if the number of CNINodes is equal to number of nodes in the cluster, and verifies 1:1 mapping between CNINode and Node objects
 // Returns nil if count and 1:1 mapping exists, else returns error
 func VerifyCNINode(manager Manager) error {
-	cniNodes, err := manager.GetCNINodeList()
-	Expect(err).NotTo(HaveOccurred())
-	nodes, err := manager.GetNodeList()
-	Expect(err).NotTo(HaveOccurred())
+	var cniNodeList *cninode.CNINodeList
+	var nodeList *v1.NodeList
+	var err error
 	By("checking number of CNINodes match number of nodes in the cluster")
-	isEqual := len(nodes.Items) == len(cniNodes.Items)
-	if !isEqual {
+	err = wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.PollTimeout, true,
+		func(ctx context.Context) (bool, error) {
+			if cniNodeList, err = manager.GetCNINodeList(); err != nil {
+				return false, nil
+			}
+			if nodeList, err = manager.GetNodeList(); err != nil {
+				return false, nil
+			}
+			if len(nodeList.Items) != len(cniNodeList.Items) {
+				return false, nil
+			}
+			return true, nil
+		})
+	if err != nil {
 		return fmt.Errorf("number of CNINodes does not match number of nodes in the cluster")
 	}
-
 	By("checking CNINode list matches node list")
 	nameMatched := true
-	for _, node := range nodes.Items {
-		if !lo.ContainsBy(cniNodes.Items, func(cniNode cninode.CNINode) bool {
+	for _, node := range nodeList.Items {
+		if !lo.ContainsBy(cniNodeList.Items, func(cniNode cninode.CNINode) bool {
 			return cniNode.Name == node.Name
 		}) {
 			nameMatched = false
