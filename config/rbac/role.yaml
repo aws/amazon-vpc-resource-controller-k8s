@@ -2,7 +2,6 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  creationTimestamp: null
   name: controller-role
 rules:
 - apiGroups:
@@ -16,16 +15,8 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - patch
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - nodes
+  - serviceaccounts
   verbs:
   - get
   - list
@@ -40,10 +31,11 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - serviceaccounts
+  - pods
   verbs:
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - crd.k8s.amazonaws.com
@@ -74,26 +66,25 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  creationTimestamp: null
   name: controller-role
   namespace: kube-system
 rules:
-- apiGroups:
-  - apps
-  resourceNames:
-  - vpc-resource-controller
-  resources:
-  - deployments
-  verbs:
-  - get
-  - list
-  - watch
 - apiGroups:
   - ""
   resourceNames:
   - amazon-vpc-cni
   resources:
   - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resourceNames:
+  - vpc-resource-controller
+  resources:
+  - deployments
   verbs:
   - get
   - list
