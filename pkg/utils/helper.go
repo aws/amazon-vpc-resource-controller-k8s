@@ -27,7 +27,6 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -237,7 +236,7 @@ func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, s
 
 // PodHasENIRequest will return true if first container of pod spec has request for eni indicating
 // it needs trunk interface from vpc-rc
-func PodHasENIRequest(pod *v1.Pod) bool {
+func PodHasENIRequest(pod *corev1.Pod) bool {
 	if pod == nil {
 		return false
 	}
