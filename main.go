@@ -51,6 +51,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+	"k8s.io/client-go/rest"
 	clientgocache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -256,7 +257,12 @@ func main() {
 	// add root health ping on manager in general
 	healthzHandler.AddControllerHealthChecker("health-root-manager-ping", rcHealthz.SimplePing("root manager", setupLog))
 
-	clientSet, err := kubernetes.NewForConfig(kubeConfig)
+	var clientKubeConfig *rest.Config
+	clientKubeConfig = kubeConfig
+	clientKubeConfig.AcceptContentTypes = "application/vnd.kubernetes.protobuf,application/json"
+	clientKubeConfig.ContentType = "application/vnd.kubernetes.protobuf"
+
+	clientSet, err := kubernetes.NewForConfig(clientKubeConfig)
 	if err != nil {
 		setupLog.Error(err, "failed to create client set")
 		os.Exit(1)
