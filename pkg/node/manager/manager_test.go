@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	rcV1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -680,6 +681,31 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().BroadcastEvent(v1Node, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", mock.Manager.controllerVersion), v1.EventTypeNormal).Times(1)
 
 	_, err := mock.Manager.performAsyncOperation(job)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName) // It should be cleared from cache
+	assert.NoError(t, err)
+}
+
+func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+
+	job := AsyncOperationJob{
+		node:     mock.MockNode,
+		nodeName: nodeName,
+		op:       Init,
+	}
+
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{
+		Err: errors.New("RequestLimitExceeded: Request limit exceeded.\n\tstatus code: 503, request id: 123-123-123-123-123"),
+	})
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
+	mock.MockK8sAPI.EXPECT().BroadcastEvent(v1Node, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", mock.Manager.controllerVersion), v1.EventTypeNormal).Times(1)
+
+	_, err := mock.Manager.performAsyncOperation(job)
+	time.Sleep(time.Second * 1)
+	assert.True(t, mock.Manager.SkipHealthCheck())
 	assert.NotContains(t, mock.Manager.dataStore, nodeName) // It should be cleared from cache
 	assert.NoError(t, err)
 }
