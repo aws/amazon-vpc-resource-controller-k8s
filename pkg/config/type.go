@@ -140,6 +140,7 @@ type ResourceConfig struct {
 
 // WarmPoolConfig is the configuration of Warm Pool of a resource
 type WarmPoolConfig struct {
+	// TODO: Deprecate DesiredSize in favour of using WarmIPTarget since historically they served the same purpose
 	// Number of resources to keep in warm pool per node; for prefix IP pool, this is used to check if pool is active
 	DesiredSize int
 	// Number of resources not to use in the warm pool

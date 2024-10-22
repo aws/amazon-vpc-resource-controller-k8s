@@ -36,14 +36,15 @@ func TestLoadResourceConfig(t *testing.T) {
 	// Verify default resource configuration for resource IPv4 Address
 	ipV4Config := defaultResourceConfig[ResourceNameIPAddress]
 	assert.Equal(t, ResourceNameIPAddress, ipV4Config.Name)
-	assert.Equal(t, IPv4DefaultWorker, ipV4Config.WorkerCount)
+	assert.Equal(t, IPv4DefaultWinWorkerCount, ipV4Config.WorkerCount)
 	assert.Equal(t, map[string]bool{OSLinux: false, OSWindows: true}, ipV4Config.SupportedOS)
 
 	// Verify default Warm pool configuration for IPv4 Address
 	ipV4WPConfig := ipV4Config.WarmPoolConfig
-	assert.Equal(t, IPv4DefaultWPSize, ipV4WPConfig.DesiredSize)
-	assert.Equal(t, IPv4DefaultMaxDev, ipV4WPConfig.MaxDeviation)
-	assert.Equal(t, IPv4DefaultResSize, ipV4WPConfig.ReservedSize)
+	assert.Equal(t, IPv4DefaultWinWarmIPTarget, ipV4WPConfig.DesiredSize)
+	assert.Equal(t, IPv4DefaultWinMinIPTarget, ipV4WPConfig.MinIPTarget)
+	assert.Equal(t, IPv4DefaultWinMaxDev, ipV4WPConfig.MaxDeviation)
+	assert.Equal(t, IPv4DefaultWinResSize, ipV4WPConfig.ReservedSize)
 
 	// Verify default resource configuration for prefix-deconstructed IPv4 Address
 	prefixIPv4Config := defaultResourceConfig[ResourceNameIPAddressFromPrefix]
@@ -61,8 +62,8 @@ func TestLoadResourceConfig(t *testing.T) {
 	assert.Equal(t, IPv4PDDefaultWarmPrefixTargetSize, prefixIPv4WPConfig.WarmPrefixTarget)
 }
 
-// TestParseWinPDTargets parses prefix delegation configurations from a vpc cni config map
-func TestParseWinPDTargets(t *testing.T) {
+// TestParseWinIPTargetConfigs_PDEnabledWithDefaultTargets parses prefix delegation configurations from a vpc cni config map
+func TestParseWinIPTargetConfigs_PDEnabledWithDefaultTargets(t *testing.T) {
 	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
 
 	vpcCNIConfig := &v1.ConfigMap{
@@ -74,14 +75,109 @@ func TestParseWinPDTargets(t *testing.T) {
 			WarmPrefixTarget:                 strconv.Itoa(IPv4PDDefaultWarmPrefixTargetSize),
 		},
 	}
-	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(log, vpcCNIConfig)
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
 	assert.Equal(t, IPv4PDDefaultWarmIPTargetSize, warmIPTarget)
 	assert.Equal(t, IPv4PDDefaultMinIPTargetSize, minIPTarget)
 	assert.Equal(t, IPv4PDDefaultWarmPrefixTargetSize, warmPrefixTarget)
+	assert.Equal(t, true, isPDEnabled)
+}
+
+func TestParseWinIPTargetConfigs_PDDisabledWithAllZeroTargets(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			EnableWindowsIPAMKey:             "true",
+			EnableWindowsPrefixDelegationKey: "false",
+			WarmIPTarget:                     strconv.Itoa(0),
+			MinimumIPTarget:                  strconv.Itoa(0),
+		},
+	}
+	warmIPTarget, minIPTarget, _, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.Equal(t, 1, warmIPTarget)
+	assert.Equal(t, 0, minIPTarget)
+	assert.Equal(t, false, isPDEnabled)
+}
+
+func TestParseWinIPTargetConfigs_PDEnabledWithAllZeroTargets(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			EnableWindowsIPAMKey:             "true",
+			EnableWindowsPrefixDelegationKey: "true",
+			WarmIPTarget:                     strconv.Itoa(0),
+			MinimumIPTarget:                  strconv.Itoa(0),
+			WarmPrefixTarget:                 strconv.Itoa(0),
+		},
+	}
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.Equal(t, IPv4PDDefaultWarmIPTargetSize, warmIPTarget)
+	assert.Equal(t, IPv4PDDefaultMinIPTargetSize, minIPTarget)
+	assert.Equal(t, IPv4PDDefaultWarmPrefixTargetSize, warmPrefixTarget)
+	assert.Equal(t, true, isPDEnabled)
+}
+
+func TestParseWinIPTargetConfigs_PDDisabledWithDefaultTargets(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	expectedWarmIPTarget := IPv4DefaultWinWarmIPTarget
+	expectedMinIPTarget := IPv4DefaultWinMinIPTarget
+	expectedWarmPrefixTarget := 0
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			EnableWindowsIPAMKey:             "true",
+			EnableWindowsPrefixDelegationKey: "false",
+			WarmIPTarget:                     strconv.Itoa(expectedWarmIPTarget),
+			MinimumIPTarget:                  strconv.Itoa(expectedMinIPTarget),
+		},
+	}
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.Equal(t, expectedWarmIPTarget, warmIPTarget)
+	assert.Equal(t, expectedMinIPTarget, minIPTarget)
+	assert.Equal(t, expectedWarmPrefixTarget, warmPrefixTarget)
+	assert.Equal(t, false, isPDEnabled)
+}
+
+func TestParseWinIPTargetConfigs_PDDisabledAndInvalidConfig_ReturnsDefault(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			EnableWindowsIPAMKey:             "true",
+			EnableWindowsPrefixDelegationKey: "false",
+			WarmIPTarget:                     "Invalid string",
+			MinimumIPTarget:                  "Invalid string",
+		},
+	}
+
+	warmIPTarget, minIPTarget, _, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.False(t, isPDEnabled)
+	assert.Equal(t, IPv4DefaultWinWarmIPTarget, warmIPTarget)
+	assert.Equal(t, IPv4DefaultWinMinIPTarget, minIPTarget)
+}
+
+// negative values are still read in but processed accordingly when it's used in the warm pool
+func TestParseWinIPTargetConfigs_PDDisabledAndNegativeConfig_ReturnsOriginal(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			EnableWindowsIPAMKey:             "true",
+			EnableWindowsPrefixDelegationKey: "false",
+			WarmIPTarget:                     strconv.Itoa(-5),
+			MinimumIPTarget:                  strconv.Itoa(-5),
+		},
+	}
+
+	warmIPTarget, minIPTarget, _, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.False(t, isPDEnabled)
+	assert.Equal(t, -5, warmIPTarget)
+	assert.Equal(t, -5, minIPTarget)
 }
 
 // TestParseWinPDTargets parses prefix delegation configurations with negative values and returns the same
-func TestParseWinPDTargets_Negative(t *testing.T) {
+func TestParseWinIPTargetConfigs_PDEnabled_Negative(t *testing.T) {
 	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
 
 	vpcCNIConfig := &v1.ConfigMap{
@@ -93,15 +189,60 @@ func TestParseWinPDTargets_Negative(t *testing.T) {
 			WarmPrefixTarget:                 strconv.Itoa(0),
 		},
 	}
-	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(log, vpcCNIConfig)
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
 	// negative values are still read in but processed when it's used in the warm pool
 	assert.Equal(t, -10, warmIPTarget)
 	assert.Equal(t, -100, minIPTarget)
 	assert.Equal(t, 0, warmPrefixTarget)
+	assert.Equal(t, true, isPDEnabled)
 }
 
-// TestParseWinPDTargets_Invalid parses prefix delegation configurations with invalid values and returns 0s as targets
-func TestParseWinPDTargets_Invalid(t *testing.T) {
+func TestParseWinIPTargetConfigs_OnlyWindowsIPAM_EffectsDefaults(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			EnableWindowsIPAMKey: "true",
+		},
+	}
+
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.Equal(t, IPv4DefaultWinWarmIPTarget, warmIPTarget)
+	assert.Equal(t, IPv4DefaultWinMinIPTarget, minIPTarget)
+	assert.Equal(t, 0, warmPrefixTarget)
+	assert.Equal(t, false, isPDEnabled)
+}
+
+func TestParseWinIPTargetConfigs_PartiallyEmptyTargets_EffectsSpecified(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			WinWarmIPTarget: "1",
+		},
+	}
+
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.Equal(t, 1, warmIPTarget)
+	assert.Equal(t, 0, minIPTarget)
+	assert.Equal(t, 0, warmPrefixTarget)
+	assert.Equal(t, false, isPDEnabled)
+}
+
+// TestParseWinIPTargetConfigs_EmptyConfigMap_ReturnsDefaultsWithSecondaryIP parses configurations with empty configmap
+func TestParseWinIPTargetConfigs_EmptyConfigMap_ReturnsDefaultsWithSecondaryIP(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{}
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.Equal(t, IPv4DefaultWinWarmIPTarget, warmIPTarget)
+	assert.Equal(t, IPv4DefaultWinMinIPTarget, minIPTarget)
+	assert.Equal(t, 0, warmPrefixTarget)
+	assert.Equal(t, false, isPDEnabled)
+}
+
+// TestParseWinIPTargetConfigs_PDEnabled_Invalid parses prefix delegation configurations with invalid values and returns 0s as targets
+func TestParseWinIPTargetConfigs_PDEnabled_Invalid(t *testing.T) {
 	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
 
 	vpcCNIConfig := &v1.ConfigMap{
@@ -113,10 +254,88 @@ func TestParseWinPDTargets_Invalid(t *testing.T) {
 			WarmPrefixTarget:                 "can't parse",
 		},
 	}
-	warmIPTarget, minIPTarget, warmPrefixTarget := ParseWinPDTargets(log, vpcCNIConfig)
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.Equal(t, IPv4PDDefaultWarmIPTargetSize, warmIPTarget)
+	assert.Equal(t, IPv4PDDefaultMinIPTargetSize, minIPTarget)
+	assert.Equal(t, 0, warmPrefixTarget)
+	assert.Equal(t, true, isPDEnabled)
+}
+
+// TestParseWinIPTargetConfigs_PDEnabledAndWarmPrefixInvalid parses prefix delegation configurations with warm prefix being invalid
+func TestParseWinIPTargetConfigs_PDEnabledAndWarmPrefixInvalid(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			EnableWindowsIPAMKey:             "true",
+			EnableWindowsPrefixDelegationKey: "true",
+			WarmIPTarget:                     "2",
+			MinimumIPTarget:                  "2",
+			WarmPrefixTarget:                 "invalid value",
+		},
+	}
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.Equal(t, 2, warmIPTarget)
+	assert.Equal(t, 2, minIPTarget)
+	assert.Equal(t, 0, warmPrefixTarget)
+	assert.Equal(t, true, isPDEnabled)
+}
+
+// TestParseWinIPTargetConfigs_PDEnabledAndWarmAndMinimumIPInvalid parses prefix delegation configurations with only warm prefix being valid
+func TestParseWinIPTargetConfigs_PDEnabledAndWarmAndMinimumIPInvalid(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			EnableWindowsIPAMKey:             "true",
+			EnableWindowsPrefixDelegationKey: "true",
+			WarmIPTarget:                     "invalid value",
+			MinimumIPTarget:                  "invalid value",
+			WarmPrefixTarget:                 "1",
+		},
+	}
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
 	assert.Equal(t, 0, warmIPTarget)
 	assert.Equal(t, 0, minIPTarget)
+	assert.Equal(t, 1, warmPrefixTarget)
+	assert.Equal(t, true, isPDEnabled)
+}
+
+// TestParseWinIPTargetConfigs_PDEnabledAndWarmAndOnlyWarmPrefixSet parses prefix delegation configurations with only warm prefix set
+func TestParseWinIPTargetConfigs_PDEnabledAndWarmAndOnlyWarmPrefixSet(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			EnableWindowsIPAMKey:             "true",
+			EnableWindowsPrefixDelegationKey: "true",
+			WarmPrefixTarget:                 "1",
+		},
+	}
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.Equal(t, 0, warmIPTarget)
+	assert.Equal(t, 0, minIPTarget)
+	assert.Equal(t, 1, warmPrefixTarget)
+	assert.Equal(t, true, isPDEnabled)
+}
+
+// TestParseWinIPTargetConfigs_PDEnabledAndWarmAndOnlyWarmPrefixNotSet parses prefix delegation configurations with only warm prefix not set
+func TestParseWinIPTargetConfigs_PDEnabledAndWarmAndOnlyWarmPrefixNotSet(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true)).WithName("loader test")
+
+	vpcCNIConfig := &v1.ConfigMap{
+		Data: map[string]string{
+			EnableWindowsIPAMKey:             "true",
+			EnableWindowsPrefixDelegationKey: "true",
+			WarmIPTarget:                     "2",
+			MinimumIPTarget:                  "2",
+		},
+	}
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := ParseWinIPTargetConfigs(log, vpcCNIConfig)
+	assert.Equal(t, 2, warmIPTarget)
+	assert.Equal(t, 2, minIPTarget)
 	assert.Equal(t, 0, warmPrefixTarget)
+	assert.Equal(t, true, isPDEnabled)
 }
 
 // TestLoadResourceConfigFromConfigMap tests the custom configuration for PD is loaded correctly from config map
@@ -148,14 +367,14 @@ func TestLoadResourceConfigFromConfigMap(t *testing.T) {
 	// Verify default resource configuration for resource IPv4 Address
 	ipV4Config := resourceConfig[ResourceNameIPAddress]
 	assert.Equal(t, ResourceNameIPAddress, ipV4Config.Name)
-	assert.Equal(t, IPv4DefaultWorker, ipV4Config.WorkerCount)
+	assert.Equal(t, IPv4DefaultWinWorkerCount, ipV4Config.WorkerCount)
 	assert.Equal(t, map[string]bool{OSLinux: false, OSWindows: true}, ipV4Config.SupportedOS)
 
 	// Verify default Warm pool configuration for IPv4 Address
 	ipV4WPConfig := ipV4Config.WarmPoolConfig
-	assert.Equal(t, IPv4DefaultWPSize, ipV4WPConfig.DesiredSize)
-	assert.Equal(t, IPv4DefaultMaxDev, ipV4WPConfig.MaxDeviation)
-	assert.Equal(t, IPv4DefaultResSize, ipV4WPConfig.ReservedSize)
+	assert.Equal(t, IPv4DefaultWinWarmIPTarget, ipV4WPConfig.DesiredSize)
+	assert.Equal(t, IPv4DefaultWinMaxDev, ipV4WPConfig.MaxDeviation)
+	assert.Equal(t, IPv4DefaultWinResSize, ipV4WPConfig.ReservedSize)
 
 	// Verify default resource configuration for prefix-deconstructed IPv4 Address
 	prefixIPv4Config := resourceConfig[ResourceNameIPAddressFromPrefix]

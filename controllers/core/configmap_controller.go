@@ -46,8 +46,8 @@ type ConfigMapReconciler struct {
 	Condition                         condition.Conditions
 	curWinIPAMEnabledCond             bool
 	curWinPrefixDelegationEnabledCond bool
-	curWinPDWarmIPTarget              int
-	curWinPDMinIPTarget               int
+	curWinWarmIPTarget                int
+	curWinMinIPTarget                 int
 	curWinPDWarmPrefixTarget          int
 	Context                           context.Context
 }
@@ -116,21 +116,33 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		isPrefixFlagUpdated = true
 	}
 
-	// Check if configurations for Windows prefix delegation have changed
-	var isPDConfigUpdated bool
-	warmIPTarget, minIPTarget, warmPrefixTarget := config.ParseWinPDTargets(r.Log, configmap)
-	if r.curWinPDWarmIPTarget != warmIPTarget || r.curWinPDMinIPTarget != minIPTarget || r.curWinPDWarmPrefixTarget != warmPrefixTarget {
-		r.curWinPDWarmIPTarget = warmIPTarget
-		r.curWinPDMinIPTarget = minIPTarget
-		r.curWinPDWarmPrefixTarget = warmPrefixTarget
-		logger.Info("updated PD configs from configmap", config.WarmIPTarget, r.curWinPDWarmIPTarget,
-			config.MinimumIPTarget, r.curWinPDMinIPTarget, config.WarmPrefixTarget, r.curWinPDWarmPrefixTarget)
+	// Check if Windows IP target configurations in ConfigMap have changed
+	var isWinIPConfigsUpdated bool
 
-		isPDConfigUpdated = true
+	warmIPTarget, minIPTarget, warmPrefixTarget, isPDEnabled := config.ParseWinIPTargetConfigs(r.Log, configmap)
+	var winMinIPTargetUpdated = r.curWinMinIPTarget != minIPTarget
+	var winWarmIPTargetUpdated = r.curWinWarmIPTarget != warmIPTarget
+	var winPDWarmPrefixTargetUpdated = r.curWinPDWarmPrefixTarget != warmPrefixTarget
+	if winWarmIPTargetUpdated || winMinIPTargetUpdated {
+		r.curWinWarmIPTarget = warmIPTarget
+		r.curWinMinIPTarget = minIPTarget
+		isWinIPConfigsUpdated = true
+	}
+	if isPDEnabled && winPDWarmPrefixTargetUpdated {
+		r.curWinPDWarmPrefixTarget = warmPrefixTarget
+		isWinIPConfigsUpdated = true
+	}
+	if isWinIPConfigsUpdated {
+		logger.Info(
+			"Detected update in Windows IP configuration parameter values in ConfigMap",
+			config.WinWarmIPTarget, r.curWinWarmIPTarget,
+			config.WinMinimumIPTarget, r.curWinMinIPTarget,
+			config.WinWarmPrefixTarget, r.curWinPDWarmPrefixTarget,
+			config.EnableWindowsPrefixDelegationKey, isPDEnabled,
+		)
 	}
 
-	// Flag is updated, update all nodes
-	if isIPAMFlagUpdated || isPrefixFlagUpdated || isPDConfigUpdated {
+	if isIPAMFlagUpdated || isPrefixFlagUpdated || isWinIPConfigsUpdated {
 		err := UpdateNodesOnConfigMapChanges(r.K8sAPI, r.NodeManager)
 		if err != nil {
 			// Error in updating nodes

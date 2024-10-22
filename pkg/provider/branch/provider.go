@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
@@ -33,7 +35,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
-	"github.com/google/uuid"
 
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/go-logr/logr"
@@ -139,7 +140,7 @@ func timeSinceMs(start time.Time) float64 {
 // cache for use in future Create/Delete Requests
 func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
-	log := b.log.WithValues("node name", nodeName)
+	log := b.log.WithValues("nodeName", nodeName)
 	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API)
 
 	// Initialize the Trunk ENI
