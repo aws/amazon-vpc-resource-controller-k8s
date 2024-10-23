@@ -22,7 +22,7 @@ const (
 	PollTimeout        = 30 * time.Second
 	// ResourceCreationTimeout is the number of seconds till the controller waits
 	// for the resource creation to complete
-	ResourceCreationTimeout = 120 * time.Second
+	ResourceCreationTimeout = 180 * time.Second
 	// Windows Container Images are much larger in size and pulling them the first
 	// time takes much longer, so have higher timeout for Windows Pod to be Ready
 	WindowsPodsCreationTimeout = 240 * time.Second
