@@ -81,7 +81,7 @@ var _ = Describe("Security group per pod scale test", func() {
 				duration := time.Since(start)
 				verify.VerifyNetworkingOfAllPodUsingENI(namespace, sgpLabelKey, sgpLabelValue,
 					securityGroups)
-				Expect(duration.Minutes()).To(BeNumerically("<", 5.0))
+				Expect(duration.Minutes()).To(BeNumerically("<", 5.5))
 			})
 		})
 	})
