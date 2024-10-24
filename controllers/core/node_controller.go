@@ -168,6 +168,12 @@ func (r *NodeReconciler) Check() healthz.Checker {
 			return nil
 		}
 
+		if r.Manager.SkipHealthCheck() {
+			// node manager observes EC2 error on processing node, pausing reconciler check to avoid stressing the system
+			r.Log.Info("due to EC2 error, node controller skips node reconciler health check for now")
+			return nil
+		}
+
 		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
 			// when the reconciler is ready, testing the reconciler with a fake node request
 			pingRequest := &ctrl.Request{
