@@ -45,26 +45,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
-var (
-	branchProviderOperationsErrCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "branch_provider_operations_err_count",
-			Help: "The number of errors encountered for branch provider operations",
-		},
-		[]string{"operation"},
-	)
-
-	branchProviderOperationLatency = prometheus.NewSummaryVec(
-		prometheus.SummaryOpts{
-			Name: "branch_provider_operation_latency",
-			Help: "Branch Provider operations latency in ms",
-		},
-		[]string{"operation", "resource_count"},
-	)
-
-	operationCreateBranchENI            = "create_branch_eni"
-	operationCreateBranchENIAndAnnotate = "create_and_annotate_branch_eni"
-	operationInitTrunk                  = "init_trunk"
+const (
+	operationCreateBranchENI   = "create_branch_eni"
+	operationAnnotateBranchENI = "annotate_branch_eni"
+	operationInitTrunk         = "init_trunk"
+	resourceCountLabel         = "resource_count"
+	operationLabel             = "branch_provider_operation"
 
 	ReasonSecurityGroupRequested    = "SecurityGroupRequested"
 	ReasonResourceAllocated         = "ResourceAllocated"
@@ -72,6 +58,25 @@ var (
 	ReasonBranchENIAnnotationFailed = "BranchENIAnnotationFailed"
 
 	ReasonTrunkENICreationFailed = "TrunkENICreationFailed"
+)
+
+var (
+	branchProviderOperationsErrCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_provider_operations_err_count",
+			Help: "The number of errors encountered for branch provider operations",
+		},
+		[]string{operationLabel},
+	)
+
+	branchProviderOperationLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "branch_provider_operation_latency",
+			Help:       "Branch Provider operations latency in seconds",
+			Objectives: map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0},
+		},
+		[]string{operationLabel, resourceCountLabel},
+	)
 
 	deleteQueueRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
 
@@ -80,9 +85,7 @@ var (
 	NodeDeleteRequeueRequestDelay = time.Minute * 5
 
 	prometheusRegistered = false
-)
 
-var (
 	ErrTrunkExistInCache = fmt.Errorf("trunk eni already exist in cache")
 	ErrTrunkNotInCache   = fmt.Errorf("trunk eni not present in cache")
 )
@@ -131,9 +134,9 @@ func prometheusRegister() {
 	}
 }
 
-// timeSinceMs returns the time since MS from the start time
-func timeSinceMs(start time.Time) float64 {
-	return float64(time.Since(start).Milliseconds())
+// timeSinceSeconds returns the time elapsed in seconds from the start time
+func timeSinceSeconds(start time.Time) float64 {
+	return float64(time.Since(start).Seconds())
 }
 
 // InitResources initialized the resource for the given node name. The initialized trunk ENI is stored in
@@ -172,9 +175,9 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 
 		utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkFailedInitializationReason, "The node failed initializing trunk interface", v1.EventTypeNormal, b.log)
 		branchProviderOperationsErrCount.WithLabelValues("init").Inc()
-		return fmt.Errorf("initalizing trunk, %w", err)
+		return fmt.Errorf("initializing trunk, %w", err)
 	}
-	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceMs(start))
+	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceSeconds(start))
 
 	// Add the Trunk ENI to cache
 	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil {
@@ -367,7 +370,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	}
 
 	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENI, strconv.Itoa(resourceCount)).
-		Observe(timeSinceMs(start))
+		Observe(timeSinceSeconds(start))
 
 	jsonBytes, err := json.Marshal(branchENIs)
 	if err != nil {
@@ -377,6 +380,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, err
 	}
 
+	start = time.Now()
 	// Annotate the pod with the created resources
 	err = b.apiWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, pod.UID,
 		config.ResourceNamePodENI, string(jsonBytes))
@@ -393,8 +397,8 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocated,
 		fmt.Sprintf("Allocated %s to the pod", string(jsonBytes)), v1.EventTypeNormal)
 
-	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENIAndAnnotate, strconv.Itoa(resourceCount)).
-		Observe(timeSinceMs(start))
+	branchProviderOperationLatency.WithLabelValues(operationAnnotateBranchENI, strconv.Itoa(resourceCount)).
+		Observe(timeSinceSeconds(start))
 
 	log.Info("created and annotated branch interface/s successfully", "branches", branchENIs)
 
