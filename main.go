@@ -108,6 +108,15 @@ func main() {
 	var enableWindowsPrefixDelegation bool
 	var region string
 	var vpcID string
+	var nodeWorkerCount int
+	var userClientQPS int
+	var userClientBurst int
+	var instanceClientQPS int
+	var instanceClientBurst int
+	var apiServerQPS int
+	var apiServerBurst int
+	var maxPodConcurrentReconciles int
+	var maxNodeConcurrentReconciles int
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to.")
@@ -143,6 +152,17 @@ func main() {
 		"Enable the feature flag for Windows prefix delegation")
 	flag.StringVar(&region, "aws-region", "", "The aws region of the k8s cluster")
 	flag.StringVar(&vpcID, "vpc-id", "", "The VPC ID where EKS cluster is deployed")
+	flag.IntVar(&nodeWorkerCount, "node-mgr-workers", 10, "The number of node workers")
+	flag.IntVar(&userClientQPS, "user-client-qps", 12, "The user client QPS rate")
+	flag.IntVar(&userClientBurst, "user-client-burst", 18, "The user client burst limit")
+	flag.IntVar(&instanceClientQPS, "instance-qps", 12, "The instance client QPS rate")
+	flag.IntVar(&instanceClientBurst, "instance-burst", 18, "The instance client burst limit")
+	// API Server QPS & burst
+	// Use the same values as default client (https://github.com/kubernetes-sigs/controller-runtime/blob/main/pkg/client/config/config.go#L85)
+	flag.IntVar(&apiServerQPS, "apiserver-qps", 20, "The API server client QPS rate")
+	flag.IntVar(&apiServerBurst, "apiserver-burst", 30, "The API server client burst limit")
+	flag.IntVar(&maxPodConcurrentReconciles, "max-pod-reconcile", 20, "The maximum number of concurrent reconciles for pod controller")
+	flag.IntVar(&maxNodeConcurrentReconciles, "max-node-reconcile", 10, "The maximum number of concurrent reconciles for node controller")
 
 	flag.Parse()
 
@@ -200,8 +220,8 @@ func main() {
 
 	kubeConfig := ctrl.GetConfigOrDie()
 	// Set the API Server QPS and Burst
-	kubeConfig.QPS = config.DefaultAPIServerQPS
-	kubeConfig.Burst = config.DefaultAPIServerBurst
+	kubeConfig.QPS = float32(apiServerQPS)
+	kubeConfig.Burst = apiServerBurst
 	kubeConfig.UserAgent = fmt.Sprintf("%s/%s", ec2API.AppName, version.GitVersion)
 
 	setupLog.Info("starting the controller with leadership setting",
@@ -270,7 +290,8 @@ func main() {
 		region = ""
 	}
 
-	ec2Wrapper, err := ec2API.NewEC2Wrapper(roleARN, clusterName, region, setupLog)
+	ec2Wrapper, err := ec2API.NewEC2Wrapper(roleARN, clusterName, region, instanceClientQPS,
+		instanceClientBurst, userClientQPS, userClientBurst, setupLog)
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
 	}
@@ -316,7 +337,7 @@ func main() {
 	}
 
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
-		10, 1, ctrl.Log.WithName("node async workers"), ctx)
+		nodeWorkerCount, 1, ctrl.Log.WithName("node async workers"), ctx)
 	nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager,
 		apiWrapper, nodeManagerWorkers, controllerConditions, version.GitVersion, healthzHandler)
 
@@ -334,7 +355,7 @@ func main() {
 		K8sAPI:          k8sApi,
 		DataStore:       dataStore,
 		Condition:       controllerConditions,
-	}).SetupWithManager(ctx, mgr, clientSet, listPageLimit, syncPeriod, healthzHandler); err != nil {
+	}).SetupWithManager(ctx, mgr, clientSet, listPageLimit, syncPeriod, maxPodConcurrentReconciles, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "pod")
 		os.Exit(1)
 	}
@@ -357,7 +378,7 @@ func main() {
 		Manager:    nodeManager,
 		Conditions: controllerConditions,
 		Context:    ctx,
-	}).SetupWithManager(mgr, healthzHandler); err != nil {
+	}).SetupWithManager(mgr, maxNodeConcurrentReconciles, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
 		os.Exit(1)
 	}
