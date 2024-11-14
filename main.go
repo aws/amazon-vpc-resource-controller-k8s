@@ -155,8 +155,8 @@ func main() {
 	flag.IntVar(&nodeWorkerCount, "node-mgr-workers", 10, "The number of node workers")
 	flag.IntVar(&userClientQPS, "user-client-qps", 12, "The user client QPS rate")
 	flag.IntVar(&userClientBurst, "user-client-burst", 18, "The user client burst limit")
-	flag.IntVar(&instanceClientQPS, "instance-qps", 12, "The instance client QPS rate")
-	flag.IntVar(&instanceClientBurst, "instance-burst", 18, "The instance client burst limit")
+	flag.IntVar(&instanceClientQPS, "instance-client-qps", 12, "The instance client QPS rate")
+	flag.IntVar(&instanceClientBurst, "instance-client-burst", 18, "The instance client burst limit")
 	// API Server QPS & burst
 	// Use the same values as default client (https://github.com/kubernetes-sigs/controller-runtime/blob/main/pkg/client/config/config.go#L85)
 	flag.IntVar(&apiServerQPS, "apiserver-qps", 20, "The API server client QPS rate")
