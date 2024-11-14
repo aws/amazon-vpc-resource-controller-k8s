@@ -15,16 +15,18 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -34,7 +36,29 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+)
+
+var (
+	leakedCNINodeResourceCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "orphaned_cninode_objects",
+			Help: "The number of leaked cninode resources",
+		},
+	)
+
+	prometheusRegistered = false
+)
+
+// MaxNodeConcurrentReconciles is the number of go routines that can invoke
+// Reconcile in parallel. Since Node Reconciler, performs local operation
+// on cache only a single go routine should be sufficient. Using more than
+// one routines to help high rate churn and larger nodes groups restarting
+// when the controller has to be restarted for various reasons.
+const (
+	MaxNodeConcurrentReconciles = 10
+	NodeTerminationFinalizer    = "networking.k8s.aws/resource-cleanup"
 )
 
 // NodeReconciler reconciles a Node object
@@ -65,26 +89,44 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	node := &corev1.Node{}
-	var err error
 
 	logger := r.Log.WithValues("node", req.NamespacedName)
 
-	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
-		if errors.IsNotFound(err) {
-			r.Log.V(1).Info("the requested node couldn't be found by k8s client", "Node", req.NamespacedName)
+	if nodeErr := r.Client.Get(ctx, req.NamespacedName, node); nodeErr != nil {
+		if errors.IsNotFound(nodeErr) {
+			// clean up CNINode finalizer
+			cniNode := &v1alpha1.CNINode{}
+			if cninodeErr := r.Client.Get(ctx, req.NamespacedName, cniNode); cninodeErr == nil {
+				if yes := controllerutil.ContainsFinalizer(cniNode, NodeTerminationFinalizer); yes {
+					updated := cniNode.DeepCopy()
+					if yes = controllerutil.RemoveFinalizer(updated, NodeTerminationFinalizer); yes {
+						if err := r.Client.Patch(ctx, updated, client.MergeFrom(cniNode)); err != nil {
+							return ctrl.Result{}, err
+						}
+						r.Log.Info("removed leaked CNINode resource's finalizer", "cninode", cniNode.Name)
+					}
+					leakedCNINodeResourceCount.Inc()
+				}
+			} else if !errors.IsNotFound(cninodeErr) {
+				return ctrl.Result{}, fmt.Errorf("failed getting CNINode %s from cached client, %w", cniNode.Name, cninodeErr)
+			}
+
+			// clean up local cached nodes
 			_, found := r.Manager.GetNode(req.Name)
 			if found {
-				err := r.Manager.DeleteNode(req.Name)
-				if err != nil {
+				cacheErr := r.Manager.DeleteNode(req.Name)
+				if cacheErr != nil {
 					// The request is not retryable so not returning the error
-					logger.Error(err, "failed to delete node from manager")
+					logger.Error(cacheErr, "failed to delete node from manager")
 					return ctrl.Result{}, nil
 				}
 				logger.V(1).Info("deleted the node from manager")
 			}
 		}
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		return ctrl.Result{}, client.IgnoreNotFound(nodeErr)
 	}
+
+	var err error
 
 	_, found := r.Manager.GetNode(req.Name)
 	if found {
@@ -107,9 +149,11 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHe
 		map[string]healthz.Checker{"health-node-controller": r.Check()},
 	)
 
+	prometheusRegister()
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
-		WithOptions(controller.Options{MaxConcurrentReconciles: config.MaxNodeConcurrentReconciles}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: MaxNodeConcurrentReconciles}).
 		Owns(&v1alpha1.CNINode{}).
 		Complete(r)
 }
@@ -121,6 +165,12 @@ func (r *NodeReconciler) Check() healthz.Checker {
 		// this can test the referenced cached pod datastore
 		if !r.Conditions.GetPodDataStoreSyncStatus() {
 			r.Log.V(1).Info("***** node controller healthz enpoint tested Simple Ping *****")
+			return nil
+		}
+
+		if r.Manager.SkipHealthCheck() {
+			// node manager observes EC2 error on processing node, pausing reconciler check to avoid stressing the system
+			r.Log.Info("due to EC2 error, node controller skips node reconciler health check for now")
 			return nil
 		}
 
@@ -142,5 +192,13 @@ func (r *NodeReconciler) Check() healthz.Checker {
 		}, r.Log)
 
 		return err
+	}
+}
+
+func prometheusRegister() {
+	if !prometheusRegistered {
+		metrics.Registry.MustRegister(leakedCNINodeResourceCount)
+
+		prometheusRegistered = true
 	}
 }

@@ -34,8 +34,6 @@ type Manager interface {
 	GetCNINode(node *v1.Node) (*cninode.CNINode, error)
 	GetCNINodeList() (*cninode.CNINodeList, error)
 	GetInstanceID(node *v1.Node) string
-	DeleteCNINode(cniNode *cninode.CNINode) error
-	UpdateCNINode(oldCNINode, newCNINode *cninode.CNINode) error
 }
 
 type defaultManager struct {
@@ -128,14 +126,4 @@ func (d *defaultManager) GetInstanceID(node *v1.Node) string {
 		return id[len(id)-1]
 	}
 	return ""
-}
-
-func (d *defaultManager) DeleteCNINode(cniNode *cninode.CNINode) error {
-	err := d.k8sClient.Delete(context.Background(), cniNode)
-	return err
-}
-
-func (d *defaultManager) UpdateCNINode(oldCNINode, newCNINode *cninode.CNINode) error {
-	err := d.k8sClient.Patch(context.Background(), newCNINode, client.MergeFromWithOptions(oldCNINode, client.MergeFromWithOptimisticLock{}))
-	return err
 }

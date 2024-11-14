@@ -24,7 +24,7 @@ import (
 
 type Manager interface {
 	DescribeAutoScalingGroup(autoScalingGroupName string) ([]*autoscaling.Group, error)
-	UpdateAutoScalingGroup(asgName string, minSize, maxSize int64) error
+	UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int64) error
 }
 
 type defaultManager struct {
@@ -52,10 +52,10 @@ func (d defaultManager) DescribeAutoScalingGroup(autoScalingGroupName string) ([
 	return asg.AutoScalingGroups, nil
 }
 
-func (d defaultManager) UpdateAutoScalingGroup(asgName string, minSize, maxSize int64) error {
+func (d defaultManager) UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int64) error {
 	updateASGInput := &autoscaling.UpdateAutoScalingGroupInput{
 		AutoScalingGroupName: aws.String(asgName),
-		DesiredCapacity:      aws.Int64(minSize), // Set DesiredCapacity to minSize
+		DesiredCapacity:      aws.Int64(desiredSize),
 		MaxSize:              aws.Int64(maxSize),
 		MinSize:              aws.Int64(minSize),
 	}

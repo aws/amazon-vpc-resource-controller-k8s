@@ -26,10 +26,8 @@ import (
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/apps"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
-	crdcontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/crds"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
-	eniCleaner "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
@@ -205,8 +203,6 @@ func main() {
 	kubeConfig.QPS = config.DefaultAPIServerQPS
 	kubeConfig.Burst = config.DefaultAPIServerBurst
 	kubeConfig.UserAgent = fmt.Sprintf("%s/%s", ec2API.AppName, version.GitVersion)
-	kubeConfig.AcceptContentTypes = "application/vnd.kubernetes.protobuf,application/json"
-	kubeConfig.ContentType = "application/vnd.kubernetes.protobuf"
 
 	setupLog.Info("starting the controller with leadership setting",
 		"leader mode enabled", enableLeaderElection,
@@ -322,7 +318,7 @@ func main() {
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
 		10, 1, ctrl.Log.WithName("node async workers"), ctx)
 	nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager,
-		apiWrapper, nodeManagerWorkers, controllerConditions, clusterName, version.GitVersion, healthzHandler)
+		apiWrapper, nodeManagerWorkers, controllerConditions, version.GitVersion, healthzHandler)
 
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init node manager")
@@ -343,17 +339,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	cleaner := &eniCleaner.ClusterENICleaner{
+	if err := (&ec2API.ENICleaner{
+		EC2Wrapper:  ec2Wrapper,
 		ClusterName: clusterName,
-	}
-	cleaner.ENICleaner = &eniCleaner.ENICleaner{
-		EC2Wrapper: ec2Wrapper,
-		Manager:    cleaner,
-		VPCID:      vpcID,
-		Log:        ctrl.Log.WithName("eniCleaner").WithName("cluster"),
-	}
-
-	if err := cleaner.SetupWithManager(ctx, mgr, healthzHandler); err != nil {
+		Log:         ctrl.Log.WithName("eni cleaner"),
+		VPCID:       vpcID,
+	}).SetupWithManager(ctx, mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to start eni cleaner")
 		os.Exit(1)
 	}
@@ -403,21 +394,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	finalizerManager := k8s.NewDefaultFinalizerManager(mgr.GetClient(), ctrl.Log.WithName("finalizer manager"))
-	if err = (&crdcontroller.CNINodeReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		Context:          ctx,
-		Log:              ctrl.Log.WithName("controllers").WithName("CNINode"),
-		EC2Wrapper:       ec2Wrapper,
-		K8sAPI:           k8sApi,
-		ClusterName:      clusterName,
-		VPCID:            vpcID,
-		FinalizerManager: finalizerManager,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CNINode")
-		os.Exit(1)
-	}
 	// +kubebuilder:scaffold:builder
 	setupLog.Info("setting up webhook server")
 	webhookServer := mgr.GetWebhookServer()

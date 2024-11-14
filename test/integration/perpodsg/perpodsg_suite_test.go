@@ -54,7 +54,7 @@ var _ = BeforeSuite(func() {
 
 	nodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "linux",
 		config.ResourceNamePodENI)
-	err = node.VerifyCNINodeCount(frameWork.NodeManager)
+	err = node.VerifyCNINode(frameWork.NodeManager)
 	Expect(err).ToNot(HaveOccurred())
 })
 

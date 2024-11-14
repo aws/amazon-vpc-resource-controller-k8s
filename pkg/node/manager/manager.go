@@ -57,7 +57,7 @@ type manager struct {
 	worker            asyncWorker.Worker
 	conditions        condition.Conditions
 	controllerVersion string
-	clusterName       string
+	stopHealthCheckAt time.Time
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -67,6 +67,7 @@ type Manager interface {
 	UpdateNode(nodeName string) error
 	DeleteNode(nodeName string) error
 	CheckNodeForLeakedENIs(nodeName string)
+	SkipHealthCheck() bool
 }
 
 // AsyncOperation is operation on a node after the lock has been released.
@@ -97,9 +98,11 @@ type AsyncOperationJob struct {
 	nodeName string
 }
 
+const pausingHealthCheckDuration = 10 * time.Minute
+
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
-	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
 
 	manager := &manager{
 		resourceManager:   resourceManager,
@@ -109,7 +112,6 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 		worker:            worker,
 		conditions:        conditions,
 		controllerVersion: controllerVersion,
-		clusterName:       clusterName,
 	}
 
 	// add health check on subpath for node manager
@@ -226,11 +228,11 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 	); err != nil {
 		if apierrors.IsNotFound(err) {
 			m.Log.Info("Will create a new CNINode", "CNINodeName", node.Name)
-			return m.wrapper.K8sAPI.CreateCNINode(node, m.clusterName)
+			return m.wrapper.K8sAPI.CreateCNINode(node)
 		}
 		return err
 	} else {
-		m.Log.V(1).Info("The CNINode is already existing", "CNINode", cniNode)
+		m.Log.Info("The CNINode is already existing", "cninode", cniNode.Name, "features", cniNode.Spec.Features)
 		return nil
 	}
 }
@@ -427,6 +429,10 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		utils.SendNodeEventWithNodeName(m.wrapper.K8sAPI, asyncJob.nodeName, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", m.controllerVersion), v1.EventTypeNormal, m.Log)
 		err = asyncJob.node.InitResources(m.resourceManager)
 		if err != nil {
+			if pauseHealthCheckOnError(err) && !m.SkipHealthCheck() {
+				m.setStopHealthCheck()
+				log.Info("node manager sets a pause on health check due to observing a EC2 error", "error", err.Error())
+			}
 			log.Error(err, "removing the node from cache as it failed to initialize")
 			m.removeNodeSafe(asyncJob.nodeName)
 			// if initializing node failed, we want to make this visible although the manager will retry
@@ -453,7 +459,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		log.V(1).Info("successfully performed node operation")
 		return ctrl.Result{}, nil
 	}
-	log.Error(err, "failed to perform node operation")
+	log.Error(err, "failed to performed node operation")
 
 	return ctrl.Result{}, nil
 }
@@ -567,12 +573,36 @@ func (m *manager) check() healthz.Checker {
 			randomName := uuid.New().String()
 			_, found := m.GetNode(randomName)
 			m.Log.V(1).Info("health check tested ping GetNode to check on datastore cache in node manager successfully", "TesedNodeName", randomName, "NodeFound", found)
-			var ping interface{}
-			m.worker.SubmitJob(ping)
-			m.Log.V(1).Info("health check tested ping SubmitJob with a nil job to check on worker queue in node manager successfully")
+			if m.SkipHealthCheck() {
+				m.Log.Info("due to EC2 error, node manager skips node worker queue health check for now")
+			} else {
+				var ping interface{}
+				m.worker.SubmitJob(ping)
+				m.Log.V(1).Info("health check tested ping SubmitJob with a nil job to check on worker queue in node manager successfully")
+			}
 			c <- nil
 		}, m.Log)
 
 		return err
 	}
+}
+
+func (m *manager) SkipHealthCheck() bool {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+
+	return time.Since(m.stopHealthCheckAt) < pausingHealthCheckDuration
+}
+
+func (m *manager) setStopHealthCheck() {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	m.stopHealthCheckAt = time.Now()
+}
+
+func pauseHealthCheckOnError(err error) bool {
+	return lo.ContainsBy(utils.PauseHealthCheckErrors, func(e string) bool {
+		return strings.Contains(err.Error(), e)
+	})
 }

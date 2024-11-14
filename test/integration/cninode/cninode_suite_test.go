@@ -32,14 +32,19 @@ var _ = BeforeSuite(func() {
 	By("creating a framework")
 	frameWork = framework.New(framework.GlobalOptions)
 
+	By("verify at least 2 nodes are available")
+	nodeList, err := frameWork.NodeManager.GetNodeList()
+	Expect(err).ToNot(HaveOccurred())
+	Expect(len(nodeList.Items)).To(BeNumerically(">", 1))
+
 	By("verify CNINode count")
-	err := node.VerifyCNINodeCount(frameWork.NodeManager)
+	err = node.VerifyCNINode(frameWork.NodeManager)
 	Expect(err).ToNot(HaveOccurred())
 })
 
 // Verify CNINode count before and after test remains same
 var _ = AfterSuite(func() {
 	By("verify CNINode count")
-	err := node.VerifyCNINodeCount(frameWork.NodeManager)
+	err := node.VerifyCNINode(frameWork.NodeManager)
 	Expect(err).ToNot(HaveOccurred())
 })
