@@ -17,7 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof"
+	_ "net/http/pprof" // #nosec G108
 	"os"
 	"time"
 
@@ -194,8 +194,7 @@ func main() {
 	if enableProfiling {
 		// To use the profiler - https://golang.org/pkg/net/http/pprof/
 		go func() {
-			setupLog.Info("starting profiler",
-				"error", http.ListenAndServe("localhost:6060", nil))
+			setupLog.Info("starting profiler", "error", http.ListenAndServe("localhost:6060", nil)) // #nosec G114
 		}()
 	}
 
@@ -203,6 +202,7 @@ func main() {
 	// Set the API Server QPS and Burst
 	kubeConfig.QPS = config.DefaultAPIServerQPS
 	kubeConfig.Burst = config.DefaultAPIServerBurst
+	kubeConfig.UserAgent = fmt.Sprintf("%s/%s", ec2API.AppName, version.GitVersion)
 
 	setupLog.Info("starting the controller with leadership setting",
 		"leader mode enabled", enableLeaderElection,

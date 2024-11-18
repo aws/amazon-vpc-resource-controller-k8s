@@ -27,6 +27,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/google/uuid"
 
 	"github.com/go-logr/logr"
@@ -56,7 +57,7 @@ type PodReconciler struct {
 
 var (
 	PodRequeueRequest          = ctrl.Result{Requeue: true, RequeueAfter: time.Second}
-	MaxPodConcurrentReconciles = 10
+	MaxPodConcurrentReconciles = 20
 )
 
 // Reconcile handles create/update/delete event by delegating the request to the  handler
@@ -112,6 +113,10 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 			logger.V(1).Info("pod's node is not yet initialized by the manager, will retry", "Requested", request.NamespacedName.String(), "Cached pod name", pod.ObjectMeta.Name, "Cached pod namespace", pod.ObjectMeta.Namespace)
 			return PodRequeueRequest, nil
 		} else if !node.IsManaged() {
+			if utils.PodHasENIRequest(pod) {
+				r.Log.Info("pod's node is not managed, but has eni request, will retry", "Requested", request.NamespacedName.String(), "Cached pod name", pod.ObjectMeta.Name, "Cached pod namespace", pod.ObjectMeta.Namespace)
+				return PodRequeueRequest, nil
+			}
 			logger.V(1).Info("pod's node is not managed, skipping pod event", "Requested", request.NamespacedName.String(), "Cached pod name", pod.ObjectMeta.Name, "Cached pod namespace", pod.ObjectMeta.Namespace)
 			return ctrl.Result{}, nil
 		} else if !node.IsReady() {

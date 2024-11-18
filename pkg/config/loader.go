@@ -50,15 +50,16 @@ const (
 	// Tested: 12 + 8 limits (not seeing significant degradation from 15+8)
 	// Larger number seems not make latency better than 12+8
 	UserServiceClientQPS      = 12
-	UserServiceClientQPSBurst = 8
+	UserServiceClientQPSBurst = 18
 
 	// EC2 API QPS for instance service client
-	InstanceServiceClientQPS   = 5
-	InstanceServiceClientBurst = 7
+	InstanceServiceClientQPS   = 12
+	InstanceServiceClientBurst = 18
 
 	// API Server QPS
-	DefaultAPIServerQPS   = 10
-	DefaultAPIServerBurst = 15
+	// Use the same values as default client (https://github.com/kubernetes-sigs/controller-runtime/blob/main/pkg/client/config/config.go#L85)
+	DefaultAPIServerQPS   = 20
+	DefaultAPIServerBurst = 30
 )
 
 // LoadResourceConfig returns the Resource Configuration for all resources managed by the VPC Resource Controller. Currently

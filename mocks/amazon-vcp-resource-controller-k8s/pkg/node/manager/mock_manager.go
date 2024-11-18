@@ -102,6 +102,20 @@ func (mr *MockManagerMockRecorder) GetNode(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNode", reflect.TypeOf((*MockManager)(nil).GetNode), arg0)
 }
 
+// SkipHealthCheck mocks base method.
+func (m *MockManager) SkipHealthCheck() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SkipHealthCheck")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// SkipHealthCheck indicates an expected call of SkipHealthCheck.
+func (mr *MockManagerMockRecorder) SkipHealthCheck() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SkipHealthCheck", reflect.TypeOf((*MockManager)(nil).SkipHealthCheck))
+}
+
 // UpdateNode mocks base method.
 func (m *MockManager) UpdateNode(arg0 string) error {
 	m.ctrl.T.Helper()

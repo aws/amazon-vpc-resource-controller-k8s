@@ -23,6 +23,7 @@ var (
 	ErrInsufficientCidrBlocks     = errors.New("InsufficientCidrBlocks: The specified subnet does not have enough free cidr blocks to satisfy the request")
 	ErrMsgProviderAndPoolNotFound = "cannot find the instance provider and pool from the cache"
 	NotRetryErrors                = []string{InsufficientCidrBlocksReason}
+	PauseHealthCheckErrors        = []string{"RequestLimitExceeded"}
 )
 
 // ShouldRetryOnError returns true if the error is retryable, else returns false
