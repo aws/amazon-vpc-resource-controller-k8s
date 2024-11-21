@@ -57,8 +57,7 @@ var (
 // one routines to help high rate churn and larger nodes groups restarting
 // when the controller has to be restarted for various reasons.
 const (
-	MaxNodeConcurrentReconciles = 10
-	NodeTerminationFinalizer    = "networking.k8s.aws/resource-cleanup"
+	NodeTerminationFinalizer = "networking.k8s.aws/resource-cleanup"
 )
 
 // NodeReconciler reconciles a Node object
@@ -143,7 +142,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, err
 }
 
-func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHealthz.HealthzHandler) error {
+func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrentReconciles int, healthzHandler *rcHealthz.HealthzHandler) error {
 	// add health check on subpath for node controller
 	healthzHandler.AddControllersHealthCheckers(
 		map[string]healthz.Checker{"health-node-controller": r.Check()},
@@ -153,7 +152,7 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHe
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
-		WithOptions(controller.Options{MaxConcurrentReconciles: MaxNodeConcurrentReconciles}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles}).
 		Owns(&v1alpha1.CNINode{}).
 		Complete(r)
 }
