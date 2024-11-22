@@ -368,9 +368,7 @@ func (t *trunkENI) Reconcile(pods []v1.Pod) bool {
 				t.deleteQueue = append(t.deleteQueue, eni)
 			}
 			delete(t.uidToBranchENIMap, uid)
-
-			t.log.Info("trunk controller found leaked branch ENI. the controller pushed leaked ENI to delete queue and deleted pod that doesn't exist anymore", "pod uid", uid,
-				"eni", branchENIs)
+			t.log.Info("leaked eni pushed to delete queue, deleted non-existing pod", "pod uid", uid, "eni", branchENIs)
 		}
 	}
 
@@ -505,7 +503,7 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 	branchENIs, isPresent := t.uidToBranchENIMap[UID]
 	if !isPresent {
 		t.log.Info("couldn't find Branch ENI in cache, it could have been released if pod"+
-			"succeeded/failed before being deleted", "UID", UID, "BranchENIs", branchENIs)
+			"succeeded/failed before being deleted", "UID", UID)
 		trunkENIOperationsErrCount.WithLabelValues("get_branch_from_cache").Inc()
 		return
 	}
