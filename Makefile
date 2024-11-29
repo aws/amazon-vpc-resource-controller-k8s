@@ -12,7 +12,8 @@ MAKEFILE_PATH = $(dir $(realpath -s $(firstword $(MAKEFILE_LIST))))
 VERSION ?= $(GIT_VERSION)
 IMAGE ?= $(REPO):$(VERSION)
 BASE_IMAGE ?= public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-nonroot:latest.2
-BUILD_IMAGE ?= public.ecr.aws/bitnami/golang:1.21.5
+GOLANG_VERSION ?= $(shell cat .go-version)
+BUILD_IMAGE ?= public.ecr.aws/docker/library/golang:$(GOLANG_VERSION)
 GOARCH ?= amd64
 PLATFORM ?= linux/amd64
 
@@ -74,6 +75,11 @@ docker-buildx: check-env test
 # Build the docker image
 docker-build: check-env test
 	docker build --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg ARCH=$(GOARCH) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) . -t ${IMAGE}
+
+
+# Build the docker image with buildx and no tests
+docker-buildx-no-test:
+	docker buildx build --platform=$(PLATFORM) -t $(IMAGE)_$(GOARCH) --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) --build-arg $(GOARCH) --load .
 
 # Push the docker image
 docker-push: check-env

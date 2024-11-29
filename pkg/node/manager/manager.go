@@ -16,7 +16,6 @@ package manager
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +29,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	asyncWorker "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
-	"github.com/google/uuid"
 	"github.com/samber/lo"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -559,18 +557,6 @@ func (m *manager) removeNodeSafe(nodeName string) {
 }
 
 func (m *manager) check() healthz.Checker {
-	// instead of using SimplePing, testing the node cache from manager makes the test more accurate
-	return func(req *http.Request) error {
-		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
-			randomName := uuid.New().String()
-			_, found := m.GetNode(randomName)
-			m.Log.V(1).Info("health check tested ping GetNode to check on datastore cache in node manager successfully", "TesedNodeName", randomName, "NodeFound", found)
-			var ping interface{}
-			m.worker.SubmitJob(ping)
-			m.Log.V(1).Info("health check tested ping SubmitJob with a nil job to check on worker queue in node manager successfully")
-			c <- nil
-		}, m.Log)
-
-		return err
-	}
+	// Use SimplePing in v1.4.6-internal patch
+	return rcHealthz.SimplePing("node manager", m.Log)
 }
