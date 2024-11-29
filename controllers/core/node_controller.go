@@ -15,7 +15,6 @@ package controllers
 
 import (
 	"context"
-	"net/http"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -23,13 +22,11 @@ import (
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
-	"github.com/google/uuid"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -124,31 +121,5 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, healthzHandler *rcHe
 
 func (r *NodeReconciler) Check() healthz.Checker {
 	r.Log.Info("Node controller's healthz subpath was added")
-	return func(req *http.Request) error {
-		// if the reconciler is not ready, using the simple ping to test
-		// this can test the referenced cached pod datastore
-		if !r.Conditions.GetPodDataStoreSyncStatus() {
-			r.Log.V(1).Info("***** node controller healthz enpoint tested Simple Ping *****")
-			return nil
-		}
-
-		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
-			// when the reconciler is ready, testing the reconciler with a fake node request
-			pingRequest := &ctrl.Request{
-				NamespacedName: types.NamespacedName{
-					Namespace: corev1.NamespaceDefault,
-					Name:      uuid.New().String(),
-				},
-			}
-
-			// expecting to 'return ctrl.Result{}, client.IgnoreNotFound(err)'
-			// IgnoreNotFound returns nil on NotFound errors.
-			// this can test the pod cached datastore and node cached datastore
-			_, rErr := r.Reconcile(r.Context, *pingRequest)
-			r.Log.V(1).Info("***** node controller healthz endpoint tested Reconcile *****")
-			c <- rErr
-		}, r.Log)
-
-		return err
-	}
+	return rcHealthz.SimplePing("node reconciler", r.Log)
 }

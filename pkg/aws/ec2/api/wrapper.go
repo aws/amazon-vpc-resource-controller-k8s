@@ -676,7 +676,7 @@ func (e *ec2Wrapper) DescribeNetworkInterfacesPages(input *ec2.DescribeNetworkIn
 			})
 		}
 		// Add jitter to avoid EC2 API throttling in the account
-		time.Sleep(wait.Jitter(500*time.Millisecond, 0.5))
+		time.Sleep(wait.Jitter(300*time.Millisecond, 0.5))
 		return true
 
 	}); err != nil {
