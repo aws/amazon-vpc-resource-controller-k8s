@@ -2,6 +2,7 @@ module github.com/aws/amazon-vpc-resource-controller-k8s
 
 go 1.22.5
 
+
 require (
 	github.com/aws/amazon-vpc-cni-k8s v1.18.3
 	github.com/aws/aws-sdk-go v1.55.5
@@ -19,8 +20,8 @@ require (
 	go.uber.org/zap v1.27.0
 	golang.org/x/time v0.5.0
 	gomodules.xyz/jsonpatch/v2 v2.4.0
-	k8s.io/api v0.30.2
-	k8s.io/apimachinery v0.30.2
+	k8s.io/api v0.30.3
+	k8s.io/apimachinery v0.30.3
 	k8s.io/client-go v0.30.2
 	sigs.k8s.io/controller-runtime v0.18.4
 )
