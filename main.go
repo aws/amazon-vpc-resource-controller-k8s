@@ -276,6 +276,8 @@ func main() {
 	// add root health ping on manager in general
 	healthzHandler.AddControllerHealthChecker("health-root-manager-ping", rcHealthz.SimplePing("root manager", setupLog))
 
+	kubeConfig.AcceptContentTypes = "application/vnd.kubernetes.protobuf,application/json"
+	kubeConfig.ContentType = "application/vnd.kubernetes.protobuf"
 	clientSet, err := kubernetes.NewForConfig(kubeConfig)
 	if err != nil {
 		setupLog.Error(err, "failed to create client set")
