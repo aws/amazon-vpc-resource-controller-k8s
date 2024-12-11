@@ -276,20 +276,17 @@ func (b *branchENIProvider) ReconcileNode(nodeName string) bool {
 	log := b.log.WithValues("node", nodeName)
 	if !isPresent {
 		// return true to set the node next clean up asap since we don't know why trunk is missing
-		log.Info("no trunk ENI is pointing to the given node", "nodeName", nodeName)
+		log.V(1).Info("trunk ENI not found, requeue node", "nodeName", nodeName)
 		return true
 	}
 	podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
 	if err != nil {
 		// return true to set the node next cleanup asap since the LIST call may fail for other reasons
 		// we should assume that there are leaked resources need to be cleaned up
-		log.Error(err, "failed fo list pod")
+		log.Error(err, "failed to list pods, requeue node", "nodeName", nodeName)
 		return true
 	}
 	foundLeakedENI := trunkENI.Reconcile(podList.Items)
-
-	log.Info("completed reconcile node cleanup on branch ENIs", "nodeName", nodeName)
-
 	return foundLeakedENI
 }
 

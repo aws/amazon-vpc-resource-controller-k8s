@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -363,7 +362,8 @@ type ec2Wrapper struct {
 
 // NewEC2Wrapper takes the roleARN that will be assumed to make all the EC2 API Calls, if no roleARN
 // is passed then the ec2 client will be initialized with the instance's service role account.
-func NewEC2Wrapper(roleARN, clusterName, region string, log logr.Logger) (EC2Wrapper, error) {
+func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, instanceClientBurst,
+	userClientQPS, userClientBurst int, log logr.Logger) (EC2Wrapper, error) {
 	// Register the metrics
 	prometheusRegister()
 
@@ -377,28 +377,28 @@ func NewEC2Wrapper(roleARN, clusterName, region string, log logr.Logger) (EC2Wra
 	// Role ARN is passed, assume the role ARN to make EC2 API Calls
 	if roleARN != "" {
 		// Create the instance service client with low QPS, it will be only used fro associate branch to trunk calls
-		log.Info("Creating INSTANCE service client with configured QPS", "QPS", config.InstanceServiceClientQPS, "Burst", config.InstanceServiceClientBurst)
-		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(config.InstanceServiceClientQPS,
-			config.InstanceServiceClientBurst, instanceSession)
+		log.Info("Creating INSTANCE service client with configured QPS", "QPS", instanceClientQPS, "Burst", instanceClientBurst)
+		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(instanceClientQPS, instanceClientBurst,
+			instanceSession)
 		if err != nil {
 			return nil, err
 		}
 		ec2Wrapper.instanceServiceClient = instanceServiceClient
 
 		// Create the user service client with higher QPS, this will be used to make rest of the EC2 API Calls
-		log.Info("Creating USER service client with configured QPS", "QPS", config.UserServiceClientQPS, "Burst", config.UserServiceClientQPSBurst)
+		log.Info("Creating USER service client with configured QPS", "QPS", userClientQPS, "Burst", userClientBurst)
 		userServiceClient, err := ec2Wrapper.getClientUsingAssumedRole(*instanceSession.Config.Region, roleARN, clusterName, region,
-			config.UserServiceClientQPS, config.UserServiceClientQPSBurst)
+			userClientQPS, userClientBurst)
 		if err != nil {
 			return nil, err
 		}
 		ec2Wrapper.userServiceClient = userServiceClient
 	} else {
-		// Role ARN is not provided, assuming that instance service client is whitelisted for ENI branching and use
+		// Role ARN is not provided, assuming that instance service client is allowlisted for ENI branching and use
 		// the instance service client as the user service client with higher QPS.
-		log.Info("Creating INSTANCE service client with configured USER Service QPS", "QPS", config.InstanceServiceClientQPS, "Burst", config.InstanceServiceClientBurst)
-		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(config.UserServiceClientQPS,
-			config.UserServiceClientQPSBurst, instanceSession)
+		log.Info("Creating INSTANCE service client with configured USER Service QPS", "QPS", userClientQPS, "Burst", userClientBurst)
+		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(userClientQPS,
+			userClientBurst, instanceSession)
 		if err != nil {
 			return nil, err
 		}
