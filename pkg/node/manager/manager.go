@@ -123,28 +123,28 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 }
 
 func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
-	managedNode, found := m.GetNode(nodeName)
-	if !found {
-		m.Log.Info("Node manager couldn't find the node for reconciliation cleanup", "NodeName", nodeName)
+	cachedNode, found := m.GetNode(nodeName)
+	if !found || !cachedNode.IsManaged() {
+		m.Log.V(1).Info("node not found or not managed by controller, skip reconciliation", "nodeName", nodeName)
 		return
 	}
 
 	// Only start a goroutine when need to
-	if time.Now().After(managedNode.GetNextReconciliationTime()) {
+	if time.Now().After(cachedNode.GetNextReconciliationTime()) {
 		go func() {
 			if resourceProvider, found := m.resourceManager.GetResourceProvider(config.ResourceNamePodENI); found {
 				foundLeakedENI := resourceProvider.ReconcileNode(nodeName)
 				if foundLeakedENI {
-					managedNode.SetReconciliationInterval(node.NodeInitialCleanupInterval)
+					cachedNode.SetReconciliationInterval(node.NodeInitialCleanupInterval)
 				} else {
-					interval := wait.Jitter(managedNode.GetReconciliationInterval(), 5)
+					interval := wait.Jitter(cachedNode.GetReconciliationInterval(), 5)
 					if interval > node.MaxNodeReconciliationInterval {
 						interval = node.MaxNodeReconciliationInterval
 					}
-					managedNode.SetReconciliationInterval(interval)
+					cachedNode.SetReconciliationInterval(interval)
 				}
-				managedNode.SetNextReconciliationTime(time.Now().Add(managedNode.GetReconciliationInterval()))
-				m.Log.Info("reconciled cleanup node for leaking branch interfaces", "NodeName", nodeName, "NextInterval", managedNode.GetReconciliationInterval(), "NextReconciliationTime", managedNode.GetNextReconciliationTime())
+				cachedNode.SetNextReconciliationTime(time.Now().Add(cachedNode.GetReconciliationInterval()))
+				m.Log.Info("reconciled node to cleanup leaked branch ENIs", "NodeName", nodeName, "NextInterval", cachedNode.GetReconciliationInterval(), "NextReconciliationTime", cachedNode.GetNextReconciliationTime())
 			} else {
 				// no SGP provider enabled
 				return

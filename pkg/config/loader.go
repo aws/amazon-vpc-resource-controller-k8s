@@ -43,23 +43,6 @@ const (
 	IPv4PDDefaultWarmIPTargetSize     = 1
 	IPv4PDDefaultMinIPTargetSize      = 3
 	IPv4PDDefaultWarmPrefixTargetSize = 0
-
-	// EC2 API QPS for user service client
-	// Tested: 15 + 20 limits
-	// Tested: 15 + 8 limits (not seeing significant degradation from 15+20)
-	// Tested: 12 + 8 limits (not seeing significant degradation from 15+8)
-	// Larger number seems not make latency better than 12+8
-	UserServiceClientQPS      = 12
-	UserServiceClientQPSBurst = 18
-
-	// EC2 API QPS for instance service client
-	InstanceServiceClientQPS   = 12
-	InstanceServiceClientBurst = 18
-
-	// API Server QPS
-	// Use the same values as default client (https://github.com/kubernetes-sigs/controller-runtime/blob/main/pkg/client/config/config.go#L85)
-	DefaultAPIServerQPS   = 20
-	DefaultAPIServerBurst = 30
 )
 
 // LoadResourceConfig returns the Resource Configuration for all resources managed by the VPC Resource Controller. Currently
