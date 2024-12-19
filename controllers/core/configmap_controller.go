@@ -27,7 +27,6 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -86,7 +85,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				r.K8sAPI,
 				utils.BranchENICoolDownUpdateReason,
 				fmt.Sprintf("Branch ENI cool down period has been updated to %s", cooldown.GetCoolDown().GetCoolDownPeriod()),
-				v1.EventTypeNormal,
+				corev1.EventTypeNormal,
 				r.Log,
 			)
 		}
