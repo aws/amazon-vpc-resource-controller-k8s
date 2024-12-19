@@ -22,7 +22,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -225,8 +224,8 @@ func Test_Reconcile_UpdateNode_Error(t *testing.T) {
 
 }
 
-func createCoolDownMockCM(cooldownTime string) *v1.ConfigMap {
-	return &v1.ConfigMap{
+func createCoolDownMockCM(cooldownTime string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      config.VpcCniConfigMapName,
 			Namespace: config.KubeSystemNamespace,
