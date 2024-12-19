@@ -51,6 +51,8 @@ const (
 	OSWindows = "windows"
 	// OSLinux is the the linux Operating System
 	OSLinux = "linux"
+	// Node termination finalizer on CNINode CRD
+	NodeTerminationFinalizer = "networking.k8s.aws/resource-cleanup"
 )
 
 // EC2 Tags
@@ -65,6 +67,7 @@ const (
 	NetworkInterfaceOwnerTagKey         = "eks:eni:owner"
 	NetworkInterfaceOwnerTagValue       = "eks-vpc-resource-controller"
 	NetworkInterfaceOwnerVPCCNITagValue = "amazon-vpc-cni"
+	CNINodeClusterNameKey               = "cluster.k8s.amazonaws.com/name"
 )
 
 const (

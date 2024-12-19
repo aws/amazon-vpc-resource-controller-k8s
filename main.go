@@ -341,7 +341,7 @@ func main() {
 	nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
 		nodeWorkerCount, 1, ctrl.Log.WithName("node async workers"), ctx)
 	nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager,
-		apiWrapper, nodeManagerWorkers, controllerConditions, version.GitVersion, healthzHandler)
+		apiWrapper, nodeManagerWorkers, controllerConditions, clusterName, version.GitVersion, healthzHandler)
 
 	if err != nil {
 		ctrl.Log.Error(err, "failed to init node manager")
