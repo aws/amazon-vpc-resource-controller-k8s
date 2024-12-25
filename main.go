@@ -28,6 +28,7 @@ import (
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	eniCleaner "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
@@ -362,12 +363,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&ec2API.ENICleaner{
-		EC2Wrapper:  ec2Wrapper,
+	cleaner := &eniCleaner.ClusterENICleaner{
 		ClusterName: clusterName,
-		Log:         ctrl.Log.WithName("eni cleaner"),
-		VPCID:       vpcID,
-	}).SetupWithManager(ctx, mgr, healthzHandler); err != nil {
+	}
+	cleaner.ENICleaner = &eniCleaner.ENICleaner{
+		EC2Wrapper: ec2Wrapper,
+		Manager:    cleaner,
+		VpcId:      vpcID,
+		Log:        ctrl.Log.WithName("eniCleaner").WithName("cluster"),
+	}
+
+	if err := cleaner.SetupWithManager(ctx, mgr, healthzHandler); err != nil {
 		setupLog.Error(err, "unable to start eni cleaner")
 		os.Exit(1)
 	}

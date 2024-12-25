@@ -179,8 +179,8 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	}
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceSeconds(start))
 
-	// Add the Trunk ENI to cache
-	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil {
+	// Add the Trunk ENI to cache if it does not already exist
+	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil && err != ErrTrunkExistInCache {
 		branchProviderOperationsErrCount.WithLabelValues("add_trunk_to_cache").Inc()
 		return err
 	}
@@ -238,12 +238,14 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 
 // DeleteNode deletes all the cached branch ENIs associated with the trunk and removes the trunk from the cache.
 func (b *branchENIProvider) DeleteNode(nodeName string) (ctrl.Result, error) {
-	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
+	_, isPresent := b.getTrunkFromCache(nodeName)
 	if !isPresent {
 		return ctrl.Result{}, fmt.Errorf("failed to find node %s", nodeName)
 	}
 
-	trunkENI.DeleteAllBranchENIs()
+	// At this point, the finalizer routine should have deleted all available branch ENIs
+	// Any leaked ENIs will be deleted by the periodic cleanup routine if cluster is active
+	// remove trunk from cache and de-initializer the resource provider
 	b.removeTrunkFromCache(nodeName)
 
 	b.log.Info("de-initialized resource provider successfully", "nodeName", nodeName)
