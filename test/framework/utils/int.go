@@ -11,20 +11,19 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package api
+package utils
 
-import (
-	"fmt"
+import "errors"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
+func Int64ToInt32(value int64) (int32, error) {
+	const (
+		minInt32 = -2147483648
+		maxInt32 = 2147483647
+	)
 
-	"github.com/aws/aws-sdk-go/aws/request"
-)
+	if value < minInt32 || value > maxInt32 {
+		return 0, errors.New("value out of int32 range")
+	}
 
-// injectUserAgent will inject app specific user-agent into awsSDK
-func injectUserAgent(handlers *request.Handlers) {
-	handlers.Build.PushFrontNamed(request.NamedHandler{
-		Name: fmt.Sprintf("%s/user-agent", AppName),
-		Fn:   request.MakeAddToUserAgentHandler(AppName, version.GitVersion),
-	})
+	return int32(value), nil
 }

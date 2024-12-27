@@ -27,7 +27,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
 	testUtils "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

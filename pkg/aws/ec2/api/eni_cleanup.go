@@ -19,14 +19,16 @@ import (
 	"strings"
 	"time"
 
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/exp/slices"
 
 	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -115,23 +117,23 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 	leakedENICount := 0
 
 	describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{
+		Filters: []ec2types.Filter{
 			{
 				Name:   aws.String("status"),
-				Values: []*string{aws.String(ec2.NetworkInterfaceStatusAvailable)},
+				Values: []string{string(ec2types.NetworkInterfaceStatusAvailable)},
 			},
 			{
 				Name:   aws.String("tag:" + e.clusterNameTagKey),
-				Values: []*string{aws.String(config.ClusterNameTagValue)},
+				Values: []string{string(config.ClusterNameTagValue)},
 			},
 			{
 				Name: aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
-				Values: aws.StringSlice([]string{config.NetworkInterfaceOwnerTagValue,
-					config.NetworkInterfaceOwnerVPCCNITagValue}),
+				Values: []string{config.NetworkInterfaceOwnerTagValue,
+					config.NetworkInterfaceOwnerVPCCNITagValue},
 			},
 			{
 				Name:   aws.String("vpc-id"),
-				Values: []*string{aws.String(e.VPCID)},
+				Values: []string{e.VPCID},
 			},
 		},
 	}
@@ -148,7 +150,7 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 		for _, networkInterface := range describeNetworkInterfaceOp.NetworkInterfaces {
 			if _, exists := e.availableENIs[*networkInterface.NetworkInterfaceId]; exists {
 				// Increment promethues metrics for number of leaked ENIs cleaned up
-				if tagIdx := slices.IndexFunc(networkInterface.TagSet, func(tag *ec2.Tag) bool {
+				if tagIdx := slices.IndexFunc(networkInterface.TagSet, func(tag ec2types.Tag) bool {
 					return *tag.Key == config.NetworkInterfaceOwnerTagKey
 				}); tagIdx != -1 {
 					switch *networkInterface.TagSet[tagIdx].Value {

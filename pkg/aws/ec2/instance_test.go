@@ -17,11 +17,12 @@ import (
 	"fmt"
 	"testing"
 
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
@@ -43,19 +44,19 @@ var (
 
 	primaryInterfaceID = "192.168.0.2"
 
-	deviceIndex0 = int64(0)
-	deviceIndex2 = int64(2)
+	deviceIndex0 = int32(0)
+	deviceIndex2 = int32(2)
 
-	nwInterfaces = &ec2.Instance{
+	nwInterfaces = &ec2types.Instance{
 		InstanceId:       &instanceID,
-		InstanceType:     &instanceType,
+		InstanceType:     ec2types.InstanceType(instanceType),
 		SubnetId:         &subnetID,
 		PrivateIpAddress: &privateIPAddr,
-		NetworkInterfaces: []*ec2.InstanceNetworkInterface{
+		NetworkInterfaces: []ec2types.InstanceNetworkInterface{
 			{
 				NetworkInterfaceId: &primaryInterfaceID,
 				PrivateIpAddress:   &privateIPAddr,
-				Groups: []*ec2.GroupIdentifier{
+				Groups: []ec2types.GroupIdentifier{
 					{
 						GroupId: &securityGroup1,
 					},
@@ -63,21 +64,21 @@ var (
 						GroupId: &securityGroup2,
 					},
 				},
-				Attachment: &ec2.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex0},
+				Attachment: &ec2types.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex0},
 			},
 			{
 				PrivateIpAddress: aws.String("192.168.1.2"),
-				Groups: []*ec2.GroupIdentifier{
+				Groups: []ec2types.GroupIdentifier{
 					{
 						GroupId: &securityGroup3,
 					},
 				},
-				Attachment: &ec2.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex2},
+				Attachment: &ec2types.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex2},
 			},
 		},
 	}
 
-	subnet = &ec2.Subnet{
+	subnet = &ec2types.Subnet{
 		CidrBlock: &subnetCidrBlock,
 	}
 
@@ -145,7 +146,7 @@ func TestEc2Instance_LoadDetails_InstanceDetails_SubnetID_IsNull(t *testing.T) {
 
 	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
 
-	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(&ec2.Instance{}, nil)
+	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(&ec2types.Instance{}, nil)
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NotNil(t, err)
@@ -175,7 +176,7 @@ func TestEc2Instance_LoadDetails_InstanceSubnet_CidrBlock_IsNull(t *testing.T) {
 	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
 
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
-	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&ec2.Subnet{}, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&ec2types.Subnet{}, nil)
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NotNil(t, err)
@@ -200,7 +201,7 @@ func TestEc2Instance_LoadDetails_SubnetPreLoaded(t *testing.T) {
 	ec2Instance.newCustomNetworkingSubnetID = customNWSubnetID
 	ec2Instance.newCustomNetworkingSecurityGroups = customNWSecurityGroups
 
-	customSubnet := &ec2.Subnet{CidrBlock: &customNWSubnetCidr}
+	customSubnet := &ec2types.Subnet{CidrBlock: &customNWSubnetCidr}
 
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
 	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(subnet, nil)
@@ -252,7 +253,7 @@ func TestEc2Instance_LoadDetails_InstanceENILimitNotFound(t *testing.T) {
 
 	unsupportedInstance := "c5.xlarge-2"
 
-	nwInterfaces.InstanceType = &unsupportedInstance
+	nwInterfaces.InstanceType = ec2types.InstanceType(unsupportedInstance)
 
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
 	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(subnet, nil)
@@ -263,7 +264,7 @@ func TestEc2Instance_LoadDetails_InstanceENILimitNotFound(t *testing.T) {
 	assert.ErrorIs(t, err, utils.ErrNotFound)
 
 	// Clean up
-	nwInterfaces.InstanceType = &instanceType
+	nwInterfaces.InstanceType = ec2types.InstanceType(instanceType)
 }
 
 // TestEc2Instance_GetHighestUnusedDeviceIndex tests that if a free index exists, it is returned
@@ -276,7 +277,7 @@ func TestEc2Instance_GetHighestUnusedDeviceIndex(t *testing.T) {
 
 	index, err := ec2Instance.GetHighestUnusedDeviceIndex()
 	assert.NoError(t, err)
-	assert.Equal(t, int64(1), index)
+	assert.Equal(t, int32(1), index)
 }
 
 // TestEc2Instance_GetHighestUnusedDeviceIndex_NoFreeIndex tests that error is returned if no free index exists
@@ -299,7 +300,7 @@ func TestEc2Instance_FreeDeviceIndex(t *testing.T) {
 	ec2Instance, _ := getMockInstance(ctrl)
 	ec2Instance.deviceIndexes = []bool{true, true, true}
 
-	indexToFree := int64(2)
+	indexToFree := int32(2)
 	ec2Instance.FreeDeviceIndex(indexToFree)
 
 	assert.False(t, ec2Instance.deviceIndexes[2])
@@ -324,7 +325,7 @@ func TestEc2Instance_E2E(t *testing.T) {
 	assert.False(t, ec2Instance.deviceIndexes[1])
 	index, err := ec2Instance.GetHighestUnusedDeviceIndex()
 	assert.NoError(t, err)
-	assert.Equal(t, int64(1), index)
+	assert.Equal(t, int32(1), index)
 	assert.True(t, ec2Instance.deviceIndexes[1])
 
 	// Check index is used and then free that index
@@ -350,7 +351,7 @@ func TestEc2Instance_LoadDetails_InvalidCustomNetworkingConfiguration(t *testing
 	ec2Instance.newCustomNetworkingSecurityGroups = []string{}
 
 	customNWSubnetCidr := "192.2.0.0/24"
-	customSubnet := &ec2.Subnet{CidrBlock: &customNWSubnetCidr}
+	customSubnet := &ec2types.Subnet{CidrBlock: &customNWSubnetCidr}
 
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
 	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(subnet, nil)

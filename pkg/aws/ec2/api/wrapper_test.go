@@ -57,7 +57,7 @@ func Test_getRegionalStsEndpoint(t *testing.T) {
 				t.Errorf("getRegionalStsEndpoint() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if got.URL != tt.want {
+			if got != tt.want {
 				t.Errorf("getRegionalStsEndpoint() = %v, want %v", got, tt.want)
 			}
 		})

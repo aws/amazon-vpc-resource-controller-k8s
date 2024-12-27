@@ -65,8 +65,8 @@ type ec2Instance struct {
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
 type EC2Instance interface {
 	LoadDetails(ec2APIHelper api.EC2APIHelper) error
-	GetHighestUnusedDeviceIndex() (int64, error)
-	FreeDeviceIndex(index int64)
+	GetHighestUnusedDeviceIndex() (int32, error)
+	FreeDeviceIndex(index int32)
 	Name() string
 	Os() string
 	Type() string
@@ -126,7 +126,7 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		}
 	}
 
-	i.instanceType = *instance.InstanceType
+	i.instanceType = string(instance.InstanceType)
 	limits, ok := vpc.Limits[i.instanceType]
 	if !ok {
 		return fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s, error: %w", i.instanceType, utils.ErrNotFound)
@@ -224,21 +224,21 @@ func (i *ec2Instance) CurrentInstanceSecurityGroups() []string {
 
 // GetHighestUnusedDeviceIndex assigns a free device index from the end of the list since IPAMD assigns indexes from
 // the beginning of the list
-func (i *ec2Instance) GetHighestUnusedDeviceIndex() (int64, error) {
+func (i *ec2Instance) GetHighestUnusedDeviceIndex() (int32, error) {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
 	for index := len(i.deviceIndexes) - 1; index >= 0; index-- {
-		if i.deviceIndexes[index] == false {
+		if !i.deviceIndexes[index] {
 			i.deviceIndexes[index] = true
-			return int64(index), nil
+			return int32(index), nil
 		}
 	}
 	return 0, fmt.Errorf("no free device index found")
 }
 
 // FreeDeviceIndex frees a device index from the list of managed index
-func (i *ec2Instance) FreeDeviceIndex(index int64) {
+func (i *ec2Instance) FreeDeviceIndex(index int32) {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
@@ -282,7 +282,7 @@ func (i *ec2Instance) updateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHel
 	// Custom networking is being used on node, point the current subnet ID, CIDR block and
 	// instance security group to the one's present in the Custom networking spec
 	if i.newCustomNetworkingSubnetID != "" {
-		if i.newCustomNetworkingSecurityGroups != nil && len(i.newCustomNetworkingSecurityGroups) > 0 {
+		if len(i.newCustomNetworkingSecurityGroups) > 0 {
 			i.currentInstanceSecurityGroups = i.newCustomNetworkingSecurityGroups
 		} else {
 			// when security groups are not specified in ENIConfig, use the primary network interface SG as per custom networking documentation

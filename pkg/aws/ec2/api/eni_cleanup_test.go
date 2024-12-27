@@ -19,11 +19,13 @@ import (
 	"reflect"
 	"testing"
 
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -40,34 +42,34 @@ var (
 	mockVPCID = "vpc-0000000000000000"
 
 	mockDescribeNetworkInterfaceIp = &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{
+		Filters: []ec2types.Filter{
 			{
 				Name:   aws.String("status"),
-				Values: []*string{aws.String(ec2.NetworkInterfaceStatusAvailable)},
+				Values: []string{string(ec2types.NetworkInterfaceStatusAvailable)},
 			},
 			{
 				Name:   aws.String("tag:" + mockClusterNameTagKey),
-				Values: []*string{aws.String(config.ClusterNameTagValue)},
+				Values: []string{string(config.ClusterNameTagValue)},
 			},
 			{
 				Name: aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
-				Values: aws.StringSlice([]string{config.NetworkInterfaceOwnerTagValue,
-					config.NetworkInterfaceOwnerVPCCNITagValue}),
+				Values: []string{config.NetworkInterfaceOwnerTagValue,
+					config.NetworkInterfaceOwnerVPCCNITagValue},
 			},
 			{
 				Name:   aws.String("vpc-id"),
-				Values: []*string{aws.String(mockVPCID)},
+				Values: []string{mockVPCID},
 			},
 		},
 	}
 	mockDescribeInterfaceOpWith1And2 = &ec2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*ec2.NetworkInterface{
+		NetworkInterfaces: []ec2types.NetworkInterface{
 			{NetworkInterfaceId: &mockNetworkInterfaceId1},
 			{NetworkInterfaceId: &mockNetworkInterfaceId2},
 		},
 	}
 	mockDescribeInterfaceOpWith1And3 = &ec2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*ec2.NetworkInterface{
+		NetworkInterfaces: []ec2types.NetworkInterface{
 			{NetworkInterfaceId: &mockNetworkInterfaceId1},
 			{NetworkInterfaceId: &mockNetworkInterfaceId3},
 		},

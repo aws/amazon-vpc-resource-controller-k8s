@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
@@ -36,7 +37,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
@@ -158,14 +158,14 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	if err := trunkENI.InitTrunk(instance, podList); err != nil {
 		// If it's an AWS Error, get the exit code without the error message to avoid
 		// broadcasting multiple different messaged events
-		if awsErr, ok := err.(awserr.Error); ok {
+		if awsErr, ok := err.(smithy.APIError); ok {
 			node, errGetNode := b.apiWrapper.K8sAPI.GetNode(instance.Name())
 			if errGetNode != nil {
 				return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, err)
 			}
 			var eventMessage = fmt.Sprintf("Failed to create trunk interface: "+
-				"Error Code: %s", awsErr.Code())
-			if awsErr.Code() == "UnauthorizedOperation" {
+				"Error Code: %s", awsErr.ErrorCode())
+			if awsErr.ErrorCode() == "UnauthorizedOperation" {
 				// Append resolution to the event message for users for common error
 				eventMessage = fmt.Sprintf("%s: %s", eventMessage,
 					"Please verify the cluster IAM role has AmazonEKSVPCResourceController policy")

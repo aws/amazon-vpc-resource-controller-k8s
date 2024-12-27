@@ -24,7 +24,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/go-logr/logr"
 )
 
@@ -94,7 +94,7 @@ func (e *eniManager) InitResources(ec2APIHelper api.EC2APIHelper) (*IPv4Resource
 			}
 			// loop through assigned IPv4 addresses and store into map
 			for _, ip := range nwInterface.PrivateIpAddresses {
-				if *ip.Primary != true {
+				if !*ip.Primary {
 					availIPs = append(availIPs, *ip.PrivateIpAddress)
 					e.resourceToENIMap[*ip.PrivateIpAddress] = eni
 				}
@@ -257,7 +257,7 @@ func (e *eniManager) DeleteIPV4Resource(resourceList []string, resourceType conf
 
 	log = log.WithValues("node name", e.instance.Name())
 
-	if resourceList == nil || len(resourceList) == 0 {
+	if len(resourceList) == 0 {
 		return resourceList, fmt.Errorf("failed to unassign since resourceList is empty")
 	}
 
@@ -307,7 +307,7 @@ func (e *eniManager) DeleteIPV4Resource(resourceList []string, resourceType conf
 	}
 	e.attachedENIs = e.attachedENIs[:i]
 
-	if errors != nil && len(errors) > 0 {
+	if len(errors) > 0 {
 		return failedToUnAssign, fmt.Errorf("failed to unassign one or more %s: %v", resourceType, errors)
 	}
 
