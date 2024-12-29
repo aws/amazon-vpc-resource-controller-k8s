@@ -27,3 +27,16 @@ func Int64ToInt32(value int64) (int32, error) {
 
 	return int32(value), nil
 }
+
+func IntToInt32(value int) (int32, error) {
+	const (
+		minInt32 = -2147483648
+		maxInt32 = 2147483647
+	)
+
+	if value < minInt32 || value > maxInt32 {
+		return 0, errors.New("value out of int32 range")
+	}
+
+	return int32(value), nil
+}

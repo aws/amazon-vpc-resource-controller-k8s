@@ -22,6 +22,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
+	pkgutils "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -255,7 +256,7 @@ func (d *Manager) CreateAndAttachNetworkInterface(subnetID, instanceID, instance
 	nwInterfaceID := *createENIOp.NetworkInterface.NetworkInterfaceId
 	// for test just use the max index - 2 (as trunk maybe attached to max index)
 	indexID := vpc.Limits[instanceType].NetworkCards[0].MaximumNetworkInterfaces - 2
-	indexIDInt32, err := utils.Int64ToInt32(indexID)
+	indexIDInt32, err := pkgutils.Int64ToInt32(indexID)
 	if err != nil {
 		return "", err
 	}

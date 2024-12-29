@@ -229,9 +229,13 @@ func (i *ec2Instance) GetHighestUnusedDeviceIndex() (int32, error) {
 	defer i.lock.Unlock()
 
 	for index := len(i.deviceIndexes) - 1; index >= 0; index-- {
+		indexInt32, err := utils.IntToInt32(index)
+		if err != nil {
+			continue
+		}
 		if !i.deviceIndexes[index] {
 			i.deviceIndexes[index] = true
-			return int32(index), nil
+			return indexInt32, nil
 		}
 	}
 	return 0, fmt.Errorf("no free device index found")

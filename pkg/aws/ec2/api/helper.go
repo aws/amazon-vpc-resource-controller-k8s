@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 )
 
 const (
@@ -277,13 +278,18 @@ func (h *ec2APIHelper) DescribeTrunkInterfaceAssociation(trunkInterfaceId *strin
 func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string,
 	vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error) {
 
+	vlanIdInt32, err := utils.IntToInt32(vlanId)
+	if err != nil {
+		return nil, err
+	}
+
 	// Get attach permission from User's Service Linked Role. Account ID will be added by the EC2 API Wrapper
 	input := &ec2.CreateNetworkInterfacePermissionInput{
 		NetworkInterfaceId: branchInterfaceId,
 		Permission:         ec2types.InterfacePermissionType(ec2types.InterfacePermissionTypeInstanceAttach),
 	}
 
-	_, err := h.ec2Wrapper.CreateNetworkInterfacePermission(input)
+	_, err = h.ec2Wrapper.CreateNetworkInterfacePermission(input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get attach network interface permissions for branch %v", err)
 	}
@@ -291,7 +297,7 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 	associateTrunkInterfaceIP := &ec2.AssociateTrunkInterfaceInput{
 		BranchInterfaceId: branchInterfaceId,
 		TrunkInterfaceId:  trunkInterfaceId,
-		VlanId:            aws.Int32(int32(vlanId)),
+		VlanId:            aws.Int32(vlanIdInt32),
 	}
 
 	associateTrunkInterfaceOutput, err := h.ec2Wrapper.AssociateTrunkInterface(associateTrunkInterfaceIP)
@@ -447,17 +453,21 @@ func (h *ec2APIHelper) GetInstanceDetails(instanceId *string) (*ec2types.Instanc
 func (h *ec2APIHelper) AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error) {
 	var assignedResources []string
 	input := &ec2.AssignPrivateIpAddressesInput{}
+	countInt32, err := utils.IntToInt32(count)
+	if err != nil {
+		return assignedResources, err
+	}
 
 	switch resourceType {
 	case config.ResourceTypeIPv4Address:
 		input = &ec2.AssignPrivateIpAddressesInput{
 			NetworkInterfaceId:             &eniID,
-			SecondaryPrivateIpAddressCount: aws.Int32(int32(count)),
+			SecondaryPrivateIpAddressCount: aws.Int32(countInt32),
 		}
 	case config.ResourceTypeIPv4Prefix:
 		input = &ec2.AssignPrivateIpAddressesInput{
 			NetworkInterfaceId: &eniID,
-			Ipv4PrefixCount:    aws.Int32(int32(count)),
+			Ipv4PrefixCount:    aws.Int32(countInt32),
 		}
 	}
 
