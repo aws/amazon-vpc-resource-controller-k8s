@@ -23,7 +23,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
-	"github.com/aws/aws-sdk-go/aws/arn"
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -120,7 +120,7 @@ func (s *SecurityGroupForPods) filterPodSecurityGroups(
 	for _, sgp := range sgpList.Items {
 		hasPodSelector := sgp.Spec.PodSelector != nil
 		hasSASelector := sgp.Spec.ServiceAccountSelector != nil
-		hasSecurityGroup := sgp.Spec.SecurityGroups.Groups != nil && len(sgp.Spec.SecurityGroups.Groups) > 0
+		hasSecurityGroup := len(sgp.Spec.SecurityGroups.Groups) > 0
 
 		if (!hasPodSelector && !hasSASelector) || !hasSecurityGroup {
 			sgpLogger.Info(
