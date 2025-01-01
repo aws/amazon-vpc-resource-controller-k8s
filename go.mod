@@ -17,7 +17,7 @@ require (
 	github.com/prometheus/common v0.55.0
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/zap v1.27.0
-	golang.org/x/time v0.5.0
+	golang.org/x/time v0.8.0
 	gomodules.xyz/jsonpatch/v2 v2.4.0
 	k8s.io/api v0.31.1
 	k8s.io/apimachinery v0.31.1
