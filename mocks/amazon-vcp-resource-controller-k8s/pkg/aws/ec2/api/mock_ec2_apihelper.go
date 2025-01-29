@@ -242,10 +242,10 @@ func (mr *MockEC2APIHelperMockRecorder) GetInstanceNetworkInterface(arg0 interfa
 }
 
 // GetSubnet mocks base method.
-func (m *MockEC2APIHelper) GetSubnet(arg0 *string) (*ec2.Subnet, error) {
+func (m *MockEC2APIHelper) GetSubnet(arg0 *string) (*types.Subnet, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetSubnet", arg0)
-	ret0, _ := ret[0].(*ec2.Subnet)
+	ret0, _ := ret[0].(*types.Subnet)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

@@ -184,10 +184,10 @@ func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfaces(arg0 interface{}
 }
 
 // DescribeSubnets mocks base method.
-func (m *MockEC2Wrapper) DescribeSubnets(arg0 *ec20.DescribeSubnetsInput) (*ec20.DescribeSubnetsOutput, error) {
+func (m *MockEC2Wrapper) DescribeSubnets(arg0 *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DescribeSubnets", arg0)
-	ret0, _ := ret[0].(*ec20.DescribeSubnetsOutput)
+	ret0, _ := ret[0].(*ec2.DescribeSubnetsOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

@@ -80,7 +80,7 @@ type EC2APIHelper interface {
 	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
 		ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
-	GetSubnet(subnetId *string) (*ec2.Subnet, error)
+	GetSubnet(subnetId *string) (*types.Subnet, error)
 	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]types.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
@@ -183,20 +183,25 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 }
 
 // GetSubnet returns the subnet details of the given subnet
-func (h *ec2APIHelper) GetSubnet(subnetId *string) (*ec2.Subnet, error) {
-	describeSubnetInput := &ec2.DescribeSubnetsInput{
-		SubnetIds: []*string{subnetId},
+func (h *ec2APIHelper) GetSubnet(subnetId *string) (*types.Subnet, error) {
+	if subnetId == nil {
+		return nil, fmt.Errorf("subnet id is nil")
 	}
 
-	describeSubnetOutput, err := h.ec2Wrapper.DescribeSubnets(describeSubnetInput)
+	input := &ec2v2.DescribeSubnetsInput{
+		SubnetIds: []string{*subnetId},
+	}
+
+	output, err := h.ec2Wrapper.DescribeSubnets(input)
 	if err != nil {
 		return nil, err
 	}
-	if describeSubnetOutput != nil && len(describeSubnetOutput.Subnets) == 0 {
-		return nil, fmt.Errorf("subnet not found %s", *subnetId)
+
+	if len(output.Subnets) == 0 {
+		return nil, fmt.Errorf("no subnet found with id %s", *subnetId)
 	}
 
-	return describeSubnetOutput.Subnets[0], nil
+	return &output.Subnets[0], nil
 }
 
 // DeleteNetworkInterface deletes a network interface with retries with exponential back offs
