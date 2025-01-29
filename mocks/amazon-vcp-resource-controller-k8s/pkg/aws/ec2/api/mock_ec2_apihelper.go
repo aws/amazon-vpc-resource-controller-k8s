@@ -21,6 +21,7 @@ import (
 	reflect "reflect"
 
 	config "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	ec2 "github.com/aws/aws-sdk-go/service/ec2"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -211,10 +212,10 @@ func (mr *MockEC2APIHelperMockRecorder) GetBranchNetworkInterface(arg0, arg1 int
 }
 
 // GetInstanceDetails mocks base method.
-func (m *MockEC2APIHelper) GetInstanceDetails(arg0 *string) (*ec2.Instance, error) {
+func (m *MockEC2APIHelper) GetInstanceDetails(arg0 *string) (*types.Instance, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetInstanceDetails", arg0)
-	ret0, _ := ret[0].(*ec2.Instance)
+	ret0, _ := ret[0].(*types.Instance)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -226,10 +227,10 @@ func (mr *MockEC2APIHelperMockRecorder) GetInstanceDetails(arg0 interface{}) *go
 }
 
 // GetInstanceNetworkInterface mocks base method.
-func (m *MockEC2APIHelper) GetInstanceNetworkInterface(arg0 *string) ([]*ec2.InstanceNetworkInterface, error) {
+func (m *MockEC2APIHelper) GetInstanceNetworkInterface(arg0 *string) ([]types.InstanceNetworkInterface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetInstanceNetworkInterface", arg0)
-	ret0, _ := ret[0].([]*ec2.InstanceNetworkInterface)
+	ret0, _ := ret[0].([]types.InstanceNetworkInterface)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

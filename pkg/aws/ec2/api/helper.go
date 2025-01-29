@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"time"
 
+	ec2v2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -80,7 +82,7 @@ type EC2APIHelper interface {
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2.Subnet, error)
 	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2.NetworkInterface, error)
-	GetInstanceNetworkInterface(instanceId *string) ([]*ec2.InstanceNetworkInterface, error)
+	GetInstanceNetworkInterface(instanceId *string) ([]types.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error)
 	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []*ec2.Tag, deviceIndex *int64,
@@ -90,7 +92,7 @@ type EC2APIHelper interface {
 	DetachNetworkInterfaceFromInstance(attachmentId *string) error
 	DetachAndDeleteNetworkInterface(attachmentId *string, nwInterfaceId *string) error
 	WaitForNetworkInterfaceStatusChange(networkInterfaceId *string, desiredStatus string) error
-	GetInstanceDetails(instanceId *string) (*ec2.Instance, error)
+	GetInstanceDetails(instanceId *string) (*types.Instance, error)
 	AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error)
 	UnassignIPv4Resources(eniID string, resourceType config.ResourceType, resources []string) error
 }
@@ -212,18 +214,17 @@ func (h *ec2APIHelper) DeleteNetworkInterface(interfaceId *string) error {
 }
 
 // GetInstanceNetworkInterface returns all the network interface associated with an instance id
-func (h *ec2APIHelper) GetInstanceNetworkInterface(instanceId *string) ([]*ec2.InstanceNetworkInterface, error) {
+func (h *ec2APIHelper) GetInstanceNetworkInterface(instanceId *string) ([]types.InstanceNetworkInterface, error) {
 	instanceDetails, err := h.GetInstanceDetails(instanceId)
 	if err != nil {
 		return nil, err
 	}
 
-	if instanceDetails != nil && instanceDetails.NetworkInterfaces != nil {
-		return instanceDetails.NetworkInterfaces, nil
+	if len(instanceDetails.NetworkInterfaces) == 0 {
+		return nil, fmt.Errorf("failed to find network interfaces for instance %s", *instanceId)
 	}
 
-	return nil, fmt.Errorf("failed to find network interfaces for instance %s",
-		*instanceDetails)
+	return instanceDetails.NetworkInterfaces, nil
 }
 
 // DescribeNetworkInterfaces returns the network interface details of the given network interface ids
@@ -426,9 +427,9 @@ func (h *ec2APIHelper) WaitForNetworkInterfaceStatusChange(networkInterfaceId *s
 }
 
 // GetInstanceDetails returns the details of the instance
-func (h *ec2APIHelper) GetInstanceDetails(instanceId *string) (*ec2.Instance, error) {
-	describeInstanceInput := &ec2.DescribeInstancesInput{
-		InstanceIds: []*string{instanceId},
+func (h *ec2APIHelper) GetInstanceDetails(instanceId *string) (*types.Instance, error) {
+	describeInstanceInput := &ec2v2.DescribeInstancesInput{
+		InstanceIds: []string{*instanceId},
 	}
 
 	describeInstanceOutput, err := h.ec2Wrapper.DescribeInstances(describeInstanceInput)
@@ -436,13 +437,12 @@ func (h *ec2APIHelper) GetInstanceDetails(instanceId *string) (*ec2.Instance, er
 		return nil, err
 	}
 
-	if describeInstanceOutput != nil && describeInstanceOutput.Reservations != nil &&
-		len(describeInstanceOutput.Reservations) != 0 && describeInstanceOutput.Reservations[0] != nil &&
-		describeInstanceOutput.Reservations[0].Instances != nil && len(describeInstanceOutput.Reservations[0].Instances) != 0 {
-		return describeInstanceOutput.Reservations[0].Instances[0], nil
+	if len(describeInstanceOutput.Reservations) == 0 || len(describeInstanceOutput.Reservations[0].Instances) == 0 {
+		return nil, fmt.Errorf("failed to find instance details for instance %s", *instanceId)
 	}
 
-	return nil, fmt.Errorf("failed to find instance details for input %v", *describeInstanceInput)
+	instance := describeInstanceOutput.Reservations[0].Instances[0]
+	return &instance, nil
 }
 
 func (h *ec2APIHelper) AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error) {

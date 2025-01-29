@@ -20,7 +20,8 @@ package mock_api
 import (
 	reflect "reflect"
 
-	ec2 "github.com/aws/aws-sdk-go/service/ec2"
+	ec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec20 "github.com/aws/aws-sdk-go/service/ec2"
 	gomock "github.com/golang/mock/gomock"
 )
 
@@ -48,10 +49,10 @@ func (m *MockEC2Wrapper) EXPECT() *MockEC2WrapperMockRecorder {
 }
 
 // AssignPrivateIPAddresses mocks base method.
-func (m *MockEC2Wrapper) AssignPrivateIPAddresses(arg0 *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
+func (m *MockEC2Wrapper) AssignPrivateIPAddresses(arg0 *ec20.AssignPrivateIpAddressesInput) (*ec20.AssignPrivateIpAddressesOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AssignPrivateIPAddresses", arg0)
-	ret0, _ := ret[0].(*ec2.AssignPrivateIpAddressesOutput)
+	ret0, _ := ret[0].(*ec20.AssignPrivateIpAddressesOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -63,10 +64,10 @@ func (mr *MockEC2WrapperMockRecorder) AssignPrivateIPAddresses(arg0 interface{})
 }
 
 // AssociateTrunkInterface mocks base method.
-func (m *MockEC2Wrapper) AssociateTrunkInterface(arg0 *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) AssociateTrunkInterface(arg0 *ec20.AssociateTrunkInterfaceInput) (*ec20.AssociateTrunkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AssociateTrunkInterface", arg0)
-	ret0, _ := ret[0].(*ec2.AssociateTrunkInterfaceOutput)
+	ret0, _ := ret[0].(*ec20.AssociateTrunkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -78,10 +79,10 @@ func (mr *MockEC2WrapperMockRecorder) AssociateTrunkInterface(arg0 interface{}) 
 }
 
 // AttachNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) AttachNetworkInterface(arg0 *ec2.AttachNetworkInterfaceInput) (*ec2.AttachNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) AttachNetworkInterface(arg0 *ec20.AttachNetworkInterfaceInput) (*ec20.AttachNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AttachNetworkInterface", arg0)
-	ret0, _ := ret[0].(*ec2.AttachNetworkInterfaceOutput)
+	ret0, _ := ret[0].(*ec20.AttachNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -93,10 +94,10 @@ func (mr *MockEC2WrapperMockRecorder) AttachNetworkInterface(arg0 interface{}) *
 }
 
 // CreateNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) CreateNetworkInterface(arg0 *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) CreateNetworkInterface(arg0 *ec20.CreateNetworkInterfaceInput) (*ec20.CreateNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateNetworkInterface", arg0)
-	ret0, _ := ret[0].(*ec2.CreateNetworkInterfaceOutput)
+	ret0, _ := ret[0].(*ec20.CreateNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -108,10 +109,10 @@ func (mr *MockEC2WrapperMockRecorder) CreateNetworkInterface(arg0 interface{}) *
 }
 
 // CreateNetworkInterfacePermission mocks base method.
-func (m *MockEC2Wrapper) CreateNetworkInterfacePermission(arg0 *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error) {
+func (m *MockEC2Wrapper) CreateNetworkInterfacePermission(arg0 *ec20.CreateNetworkInterfacePermissionInput) (*ec20.CreateNetworkInterfacePermissionOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateNetworkInterfacePermission", arg0)
-	ret0, _ := ret[0].(*ec2.CreateNetworkInterfacePermissionOutput)
+	ret0, _ := ret[0].(*ec20.CreateNetworkInterfacePermissionOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -123,10 +124,10 @@ func (mr *MockEC2WrapperMockRecorder) CreateNetworkInterfacePermission(arg0 inte
 }
 
 // CreateTags mocks base method.
-func (m *MockEC2Wrapper) CreateTags(arg0 *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
+func (m *MockEC2Wrapper) CreateTags(arg0 *ec20.CreateTagsInput) (*ec20.CreateTagsOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateTags", arg0)
-	ret0, _ := ret[0].(*ec2.CreateTagsOutput)
+	ret0, _ := ret[0].(*ec20.CreateTagsOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -138,10 +139,10 @@ func (mr *MockEC2WrapperMockRecorder) CreateTags(arg0 interface{}) *gomock.Call 
 }
 
 // DeleteNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) DeleteNetworkInterface(arg0 *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) DeleteNetworkInterface(arg0 *ec20.DeleteNetworkInterfaceInput) (*ec20.DeleteNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DeleteNetworkInterface", arg0)
-	ret0, _ := ret[0].(*ec2.DeleteNetworkInterfaceOutput)
+	ret0, _ := ret[0].(*ec20.DeleteNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -168,10 +169,10 @@ func (mr *MockEC2WrapperMockRecorder) DescribeInstances(arg0 interface{}) *gomoc
 }
 
 // DescribeNetworkInterfaces mocks base method.
-func (m *MockEC2Wrapper) DescribeNetworkInterfaces(arg0 *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
+func (m *MockEC2Wrapper) DescribeNetworkInterfaces(arg0 *ec20.DescribeNetworkInterfacesInput) (*ec20.DescribeNetworkInterfacesOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DescribeNetworkInterfaces", arg0)
-	ret0, _ := ret[0].(*ec2.DescribeNetworkInterfacesOutput)
+	ret0, _ := ret[0].(*ec20.DescribeNetworkInterfacesOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -183,10 +184,10 @@ func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfaces(arg0 interface{}
 }
 
 // DescribeSubnets mocks base method.
-func (m *MockEC2Wrapper) DescribeSubnets(arg0 *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
+func (m *MockEC2Wrapper) DescribeSubnets(arg0 *ec20.DescribeSubnetsInput) (*ec20.DescribeSubnetsOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DescribeSubnets", arg0)
-	ret0, _ := ret[0].(*ec2.DescribeSubnetsOutput)
+	ret0, _ := ret[0].(*ec20.DescribeSubnetsOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -198,10 +199,10 @@ func (mr *MockEC2WrapperMockRecorder) DescribeSubnets(arg0 interface{}) *gomock.
 }
 
 // DescribeTrunkInterfaceAssociations mocks base method.
-func (m *MockEC2Wrapper) DescribeTrunkInterfaceAssociations(arg0 *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error) {
+func (m *MockEC2Wrapper) DescribeTrunkInterfaceAssociations(arg0 *ec20.DescribeTrunkInterfaceAssociationsInput) (*ec20.DescribeTrunkInterfaceAssociationsOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DescribeTrunkInterfaceAssociations", arg0)
-	ret0, _ := ret[0].(*ec2.DescribeTrunkInterfaceAssociationsOutput)
+	ret0, _ := ret[0].(*ec20.DescribeTrunkInterfaceAssociationsOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -213,10 +214,10 @@ func (mr *MockEC2WrapperMockRecorder) DescribeTrunkInterfaceAssociations(arg0 in
 }
 
 // DetachNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) DetachNetworkInterface(arg0 *ec2.DetachNetworkInterfaceInput) (*ec2.DetachNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) DetachNetworkInterface(arg0 *ec20.DetachNetworkInterfaceInput) (*ec20.DetachNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DetachNetworkInterface", arg0)
-	ret0, _ := ret[0].(*ec2.DetachNetworkInterfaceOutput)
+	ret0, _ := ret[0].(*ec20.DetachNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -228,10 +229,10 @@ func (mr *MockEC2WrapperMockRecorder) DetachNetworkInterface(arg0 interface{}) *
 }
 
 // ModifyNetworkInterfaceAttribute mocks base method.
-func (m *MockEC2Wrapper) ModifyNetworkInterfaceAttribute(arg0 *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error) {
+func (m *MockEC2Wrapper) ModifyNetworkInterfaceAttribute(arg0 *ec20.ModifyNetworkInterfaceAttributeInput) (*ec20.ModifyNetworkInterfaceAttributeOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ModifyNetworkInterfaceAttribute", arg0)
-	ret0, _ := ret[0].(*ec2.ModifyNetworkInterfaceAttributeOutput)
+	ret0, _ := ret[0].(*ec20.ModifyNetworkInterfaceAttributeOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -243,10 +244,10 @@ func (mr *MockEC2WrapperMockRecorder) ModifyNetworkInterfaceAttribute(arg0 inter
 }
 
 // UnassignPrivateIPAddresses mocks base method.
-func (m *MockEC2Wrapper) UnassignPrivateIPAddresses(arg0 *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error) {
+func (m *MockEC2Wrapper) UnassignPrivateIPAddresses(arg0 *ec20.UnassignPrivateIpAddressesInput) (*ec20.UnassignPrivateIpAddressesOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UnassignPrivateIPAddresses", arg0)
-	ret0, _ := ret[0].(*ec2.UnassignPrivateIpAddressesOutput)
+	ret0, _ := ret[0].(*ec20.UnassignPrivateIpAddressesOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

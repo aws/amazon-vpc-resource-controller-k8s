@@ -14,6 +14,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -30,6 +31,11 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/sts"
+
+	// Add v2 SDK imports
+
+	configv2 "github.com/aws/aws-sdk-go-v2/config"
+	ec2v2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -43,7 +49,7 @@ const (
 )
 
 type EC2Wrapper interface {
-	DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error)
+	DescribeInstances(input *ec2v2.DescribeInstancesInput) (*ec2v2.DescribeInstancesOutput, error)
 	CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error)
 	AttachNetworkInterface(input *ec2.AttachNetworkInterfaceInput) (*ec2.AttachNetworkInterfaceOutput, error)
 	DetachNetworkInterface(input *ec2.DetachNetworkInterfaceInput) (*ec2.DetachNetworkInterfaceOutput, error)
@@ -357,6 +363,7 @@ type ec2Wrapper struct {
 	log                   logr.Logger
 	instanceServiceClient *ec2.EC2
 	userServiceClient     *ec2.EC2
+	userServiceClientV2   *ec2v2.Client // Add v2 client
 	accountID             string
 }
 
@@ -374,9 +381,17 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 		return nil, err
 	}
 
+	// Initialize v2 SDK config
+	cfg, err := configv2.LoadDefaultConfig(context.Background(),
+		configv2.WithRegion(*instanceSession.Config.Region),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("unable to load SDK config, %v", err)
+	}
+
 	// Role ARN is passed, assume the role ARN to make EC2 API Calls
 	if roleARN != "" {
-		// Create the instance service client with low QPS, it will be only used fro associate branch to trunk calls
+		// Create the instance service client with low QPS, it will be only used for associate branch to trunk calls
 		log.Info("Creating INSTANCE service client with configured QPS", "QPS", instanceClientQPS, "Burst", instanceClientBurst)
 		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(instanceClientQPS, instanceClientBurst,
 			instanceSession)
@@ -393,6 +408,10 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 			return nil, err
 		}
 		ec2Wrapper.userServiceClient = userServiceClient
+
+		// Initialize v2 client with assumed role
+		// TODO: Add proper credentials provider with assumed role for v2 client
+		ec2Wrapper.userServiceClientV2 = ec2v2.NewFromConfig(cfg)
 	} else {
 		// Role ARN is not provided, assuming that instance service client is allowlisted for ENI branching and use
 		// the instance service client as the user service client with higher QPS.
@@ -404,6 +423,9 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 		}
 		ec2Wrapper.instanceServiceClient = instanceServiceClient
 		ec2Wrapper.userServiceClient = instanceServiceClient
+
+		// Initialize v2 client with default config
+		ec2Wrapper.userServiceClientV2 = ec2v2.NewFromConfig(cfg)
 	}
 
 	return ec2Wrapper, nil
@@ -538,9 +560,9 @@ func timeSinceMs(start time.Time) float64 {
 	return float64(time.Since(start).Milliseconds())
 }
 
-func (e *ec2Wrapper) DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
+func (e *ec2Wrapper) DescribeInstances(input *ec2v2.DescribeInstancesInput) (*ec2v2.DescribeInstancesOutput, error) {
 	start := time.Now()
-	describeInstancesOutput, err := e.userServiceClient.DescribeInstances(input)
+	describeInstancesOutput, err := e.userServiceClientV2.DescribeInstances(context.Background(), input)
 	ec2APICallLatencies.WithLabelValues("describe_instances").Observe(timeSinceMs(start))
 
 	// Metric updates

@@ -126,7 +126,7 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		}
 	}
 
-	i.instanceType = *instance.InstanceType
+	i.instanceType = string(instance.InstanceType)
 	limits, ok := vpc.Limits[i.instanceType]
 	if !ok {
 		return fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s, error: %w", i.instanceType, utils.ErrNotFound)
