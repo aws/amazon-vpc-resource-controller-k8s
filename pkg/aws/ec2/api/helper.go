@@ -84,7 +84,7 @@ type EC2APIHelper interface {
 	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]types.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
-	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error)
+	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]types.TrunkInterfaceAssociation, error)
 	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []*ec2.Tag, deviceIndex *int64,
 		description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*ec2.NetworkInterface, error)
 	AttachNetworkInterfaceToInstance(instanceId *string, nwInterfaceId *string, deviceIndex *int64) (*string, error)
@@ -252,12 +252,12 @@ func (h *ec2APIHelper) DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*e
 
 // TODO: Not used currently as the API is not publicly available with assumed role
 // DescribeTrunkInterfaceAssociation describes all the association of the given trunk interface id
-func (h *ec2APIHelper) DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]*ec2.TrunkInterfaceAssociation, error) {
-	describeTrunkInterfaceAssociationInput := &ec2.DescribeTrunkInterfaceAssociationsInput{
-		Filters: []*ec2.Filter{
+func (h *ec2APIHelper) DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]types.TrunkInterfaceAssociation, error) {
+	describeTrunkInterfaceAssociationInput := &ec2v2.DescribeTrunkInterfaceAssociationsInput{
+		Filters: []types.Filter{
 			{
 				Name:   aws.String("trunk-interface-association.trunk-interface-id"),
-				Values: []*string{trunkInterfaceId},
+				Values: []string{*trunkInterfaceId},
 			},
 		},
 	}

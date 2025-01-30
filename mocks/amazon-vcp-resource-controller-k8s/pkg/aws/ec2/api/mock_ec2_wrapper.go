@@ -199,10 +199,10 @@ func (mr *MockEC2WrapperMockRecorder) DescribeSubnets(arg0 interface{}) *gomock.
 }
 
 // DescribeTrunkInterfaceAssociations mocks base method.
-func (m *MockEC2Wrapper) DescribeTrunkInterfaceAssociations(arg0 *ec20.DescribeTrunkInterfaceAssociationsInput) (*ec20.DescribeTrunkInterfaceAssociationsOutput, error) {
+func (m *MockEC2Wrapper) DescribeTrunkInterfaceAssociations(arg0 *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DescribeTrunkInterfaceAssociations", arg0)
-	ret0, _ := ret[0].(*ec20.DescribeTrunkInterfaceAssociationsOutput)
+	ret0, _ := ret[0].(*ec2.DescribeTrunkInterfaceAssociationsOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

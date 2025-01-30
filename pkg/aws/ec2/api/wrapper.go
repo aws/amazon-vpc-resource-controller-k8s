@@ -60,7 +60,7 @@ type EC2Wrapper interface {
 	CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
 	DescribeSubnets(input *ec2v2.DescribeSubnetsInput) (*ec2v2.DescribeSubnetsOutput, error)
 	AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error)
-	DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error)
+	DescribeTrunkInterfaceAssociations(input *ec2v2.DescribeTrunkInterfaceAssociationsInput) (*ec2v2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
 }
@@ -744,13 +744,12 @@ func (e *ec2Wrapper) DescribeSubnets(input *ec2v2.DescribeSubnetsInput) (*ec2v2.
 	return output, err
 }
 
-// DescribeTrunkInterfaceAssociations cannot be used as it's not public yet.
-func (e *ec2Wrapper) DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error) {
+func (e *ec2Wrapper) DescribeTrunkInterfaceAssociations(input *ec2v2.DescribeTrunkInterfaceAssociationsInput) (*ec2v2.DescribeTrunkInterfaceAssociationsOutput, error) {
 	start := time.Now()
-	describeTrunkInterfaceAssociationInput, err := e.instanceServiceClient.DescribeTrunkInterfaceAssociations(input)
+	output, err := e.userServiceClientV2.DescribeTrunkInterfaceAssociations(context.Background(), input)
 	ec2APICallLatencies.WithLabelValues("describe_trunk_association").Observe(timeSinceMs(start))
 
-	// Metric Update
+	// Metric updates
 	ec2APICallCnt.Inc()
 	ec2describeTrunkInterfaceAssociationAPICallCnt.Inc()
 
@@ -759,7 +758,7 @@ func (e *ec2Wrapper) DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunk
 		ec2describeTrunkInterfaceAssociationAPIErrCnt.Inc()
 	}
 
-	return describeTrunkInterfaceAssociationInput, err
+	return output, err
 }
 
 func (e *ec2Wrapper) AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error) {

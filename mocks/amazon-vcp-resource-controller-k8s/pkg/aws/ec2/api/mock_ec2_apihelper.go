@@ -154,10 +154,10 @@ func (mr *MockEC2APIHelperMockRecorder) DescribeNetworkInterfaces(arg0 interface
 }
 
 // DescribeTrunkInterfaceAssociation mocks base method.
-func (m *MockEC2APIHelper) DescribeTrunkInterfaceAssociation(arg0 *string) ([]*ec2.TrunkInterfaceAssociation, error) {
+func (m *MockEC2APIHelper) DescribeTrunkInterfaceAssociation(arg0 *string) ([]types.TrunkInterfaceAssociation, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DescribeTrunkInterfaceAssociation", arg0)
-	ret0, _ := ret[0].([]*ec2.TrunkInterfaceAssociation)
+	ret0, _ := ret[0].([]types.TrunkInterfaceAssociation)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
