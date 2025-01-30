@@ -681,7 +681,7 @@ func TestEc2APIHelper_DescribeNetworkInterfaces(t *testing.T) {
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingInterfaceId).
 		Return(describeNetworkInterfaceOutputUsingInterfaceId, nil)
 
-	nwInterfaces, err := ec2ApiHelper.DescribeNetworkInterfaces([]*string{&branchInterfaceId, &branchInterfaceId2})
+	nwInterfaces, err := ec2ApiHelper.DescribeNetworkInterfaces([]string{branchInterfaceId, branchInterfaceId2})
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(nwInterfaces))
 }
@@ -697,7 +697,7 @@ func TestEc2APIHelper_DescribeNetworkInterfaces_Error(t *testing.T) {
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingInterfaceId).
 		Return(nil, mockError)
 
-	_, err := ec2ApiHelper.DescribeNetworkInterfaces([]*string{&branchInterfaceId, &branchInterfaceId2})
+	_, err := ec2ApiHelper.DescribeNetworkInterfaces([]string{branchInterfaceId, branchInterfaceId2})
 	assert.Error(t, mockError, err)
 }
 

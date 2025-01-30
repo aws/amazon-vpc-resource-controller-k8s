@@ -56,7 +56,7 @@ type EC2Wrapper interface {
 	DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error)
 	AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
 	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
-	DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error)
+	DescribeNetworkInterfaces(input *ec2v2.DescribeNetworkInterfacesInput) (*ec2v2.DescribeNetworkInterfacesOutput, error)
 	CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
 	DescribeSubnets(input *ec2v2.DescribeSubnetsInput) (*ec2v2.DescribeSubnetsOutput, error)
 	AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error)
@@ -646,10 +646,10 @@ func (e *ec2Wrapper) DetachNetworkInterface(input *ec2.DetachNetworkInterfaceInp
 	return detachNetworkInterfaceOutput, err
 }
 
-func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
+func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2v2.DescribeNetworkInterfacesInput) (*ec2v2.DescribeNetworkInterfacesOutput, error) {
 	start := time.Now()
-	describeNetworkInterfacesOutput, err := e.userServiceClient.DescribeNetworkInterfaces(input)
-	ec2APICallLatencies.WithLabelValues("describe_network_interface").Observe(timeSinceMs(start))
+	output, err := e.userServiceClientV2.DescribeNetworkInterfaces(context.Background(), input)
+	ec2APICallLatencies.WithLabelValues("describe_network_interfaces").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
@@ -660,7 +660,7 @@ func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfa
 		ec2DescribeNetworkInterfaceAPIErrCnt.Inc()
 	}
 
-	return describeNetworkInterfacesOutput, err
+	return output, err
 }
 
 func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {

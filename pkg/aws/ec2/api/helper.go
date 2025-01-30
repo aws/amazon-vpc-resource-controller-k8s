@@ -81,9 +81,9 @@ type EC2APIHelper interface {
 		ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*types.Subnet, error)
-	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2.NetworkInterface, error)
+	GetBranchNetworkInterface(trunkID, subnetID *string) ([]types.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]types.InstanceNetworkInterface, error)
-	DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error)
+	DescribeNetworkInterfaces(nwInterfaceIds []string) ([]types.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]types.TrunkInterfaceAssociation, error)
 	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []*ec2.Tag, deviceIndex *int64,
 		description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*ec2.NetworkInterface, error)
@@ -233,8 +233,8 @@ func (h *ec2APIHelper) GetInstanceNetworkInterface(instanceId *string) ([]types.
 }
 
 // DescribeNetworkInterfaces returns the network interface details of the given network interface ids
-func (h *ec2APIHelper) DescribeNetworkInterfaces(nwInterfaceIds []*string) ([]*ec2.NetworkInterface, error) {
-	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{
+func (h *ec2APIHelper) DescribeNetworkInterfaces(nwInterfaceIds []string) ([]types.NetworkInterface, error) {
+	describeNetworkInterfacesInput := &ec2v2.DescribeNetworkInterfacesInput{
 		NetworkInterfaceIds: nwInterfaceIds,
 	}
 	describeNetworkInterfaceOutput, err := h.ec2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
@@ -416,10 +416,10 @@ func (h *ec2APIHelper) WaitForNetworkInterfaceStatusChange(networkInterfaceId *s
 			}
 			return false
 		}, func() error {
-			interfaces, err := h.DescribeNetworkInterfaces([]*string{networkInterfaceId})
+			interfaces, err := h.DescribeNetworkInterfaces([]string{*networkInterfaceId})
 			if err == nil && len(interfaces) == 1 {
 				attachment := interfaces[0].Attachment
-				if attachment != nil && attachment.Status != nil && *attachment.Status == desiredStatus {
+				if attachment != nil && string(attachment.Status) == desiredStatus {
 					return nil
 				} else {
 					return ErrRetryAttachmentStatusCheck
@@ -490,7 +490,7 @@ func (h *ec2APIHelper) AssignIPv4ResourcesAndWaitTillReady(eniID string, resourc
 			return false
 		}, func() error {
 			// Describe the network interface on which the new IP or prefixes are assigned
-			interfaces, err := h.DescribeNetworkInterfaces([]*string{&eniID})
+			interfaces, err := h.DescribeNetworkInterfaces([]string{eniID})
 			// Re-initialize the slice so that we don't add IP resources multiple times
 			assignedResources = []string{}
 
@@ -567,20 +567,20 @@ func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.R
 	return err
 }
 
-func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2.NetworkInterface, error) {
-	filters := []*ec2.Filter{
+func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]types.NetworkInterface, error) {
+	filters := []types.Filter{
 		{
 			Name:   aws.String("tag:" + config.TrunkENIIDTag),
-			Values: []*string{trunkID},
+			Values: []string{*trunkID},
 		},
 		{
 			Name:   aws.String("subnet-id"),
-			Values: []*string{subnetID},
+			Values: []string{*subnetID},
 		},
 	}
 
-	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}
-	var nwInterfaces []*ec2.NetworkInterface
+	describeNetworkInterfacesInput := &ec2v2.DescribeNetworkInterfacesInput{Filters: filters}
+	var nwInterfaces []types.NetworkInterface
 	for {
 		describeNetworkInterfaceOutput, err := h.ec2Wrapper.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
 		if err != nil {
@@ -596,7 +596,7 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*
 		// One or more interface associated with the trunk, return the result
 		for _, nwInterface := range describeNetworkInterfaceOutput.NetworkInterfaces {
 			// Only attach the required details to avoid consuming extra memory
-			nwInterfaces = append(nwInterfaces, &ec2.NetworkInterface{
+			nwInterfaces = append(nwInterfaces, types.NetworkInterface{
 				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
 				TagSet:             nwInterface.TagSet,
 			})

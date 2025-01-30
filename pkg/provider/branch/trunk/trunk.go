@@ -28,6 +28,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	awsEC2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/samber/lo"
 
@@ -286,7 +287,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	}
 
 	// Convert the list of interfaces to a set
-	associatedBranchInterfaces := make(map[string]*awsEC2.NetworkInterface)
+	associatedBranchInterfaces := make(map[string]awsEC2Types.NetworkInterface)
 	for _, branchInterface := range branchInterfaces {
 		associatedBranchInterfaces[*branchInterface.NetworkInterfaceId] = branchInterface
 	}
@@ -687,7 +688,7 @@ func (t *trunkENI) freeVlanId(vlanId int) {
 	t.usedVlanIds[vlanId] = false
 }
 
-func (t *trunkENI) getVlanIdFromTag(tags []*awsEC2.Tag) (int, error) {
+func (t *trunkENI) getVlanIdFromTag(tags []types.Tag) (int, error) {
 
 	for _, tag := range tags {
 		if *tag.Key == config.VLandIDTag {
