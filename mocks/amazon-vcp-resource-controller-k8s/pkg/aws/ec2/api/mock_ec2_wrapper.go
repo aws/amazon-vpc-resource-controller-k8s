@@ -64,10 +64,10 @@ func (mr *MockEC2WrapperMockRecorder) AssignPrivateIPAddresses(arg0 interface{})
 }
 
 // AssociateTrunkInterface mocks base method.
-func (m *MockEC2Wrapper) AssociateTrunkInterface(arg0 *ec20.AssociateTrunkInterfaceInput) (*ec20.AssociateTrunkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) AssociateTrunkInterface(arg0 *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AssociateTrunkInterface", arg0)
-	ret0, _ := ret[0].(*ec20.AssociateTrunkInterfaceOutput)
+	ret0, _ := ret[0].(*ec2.AssociateTrunkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

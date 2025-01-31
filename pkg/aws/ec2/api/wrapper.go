@@ -59,7 +59,7 @@ type EC2Wrapper interface {
 	DescribeNetworkInterfaces(input *ec2v2.DescribeNetworkInterfacesInput) (*ec2v2.DescribeNetworkInterfacesOutput, error)
 	CreateTags(input *ec2v2.CreateTagsInput) (*ec2v2.CreateTagsOutput, error)
 	DescribeSubnets(input *ec2v2.DescribeSubnetsInput) (*ec2v2.DescribeSubnetsOutput, error)
-	AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error)
+	AssociateTrunkInterface(input *ec2v2.AssociateTrunkInterfaceInput) (*ec2v2.AssociateTrunkInterfaceOutput, error)
 	DescribeTrunkInterfaceAssociations(input *ec2v2.DescribeTrunkInterfaceAssociationsInput) (*ec2v2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
@@ -764,12 +764,12 @@ func (e *ec2Wrapper) DescribeTrunkInterfaceAssociations(input *ec2v2.DescribeTru
 	return output, err
 }
 
-func (e *ec2Wrapper) AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error) {
+func (e *ec2Wrapper) AssociateTrunkInterface(input *ec2v2.AssociateTrunkInterfaceInput) (*ec2v2.AssociateTrunkInterfaceOutput, error) {
 	start := time.Now()
-	associateTrunkInterfaceOutput, err := e.instanceServiceClient.AssociateTrunkInterface(input)
+	output, err := e.userServiceClientV2.AssociateTrunkInterface(context.Background(), input)
 	ec2APICallLatencies.WithLabelValues("associate_trunk_to_branch").Observe(timeSinceMs(start))
 
-	// Metric Update
+	// Metric updates
 	ec2APICallCnt.Inc()
 	ec2AssociateTrunkInterfaceAPICallCnt.Inc()
 
@@ -778,7 +778,7 @@ func (e *ec2Wrapper) AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceI
 		ec2AssociateTrunkInterfaceAPIErrCnt.Inc()
 	}
 
-	return associateTrunkInterfaceOutput, err
+	return output, err
 }
 
 func (e *ec2Wrapper) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error) {

@@ -76,7 +76,7 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
 }
 
 type EC2APIHelper interface {
-	AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string, vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error)
+	AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string, vlanId int) (*ec2v2.AssociateTrunkInterfaceOutput, error)
 	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []types.Tag,
 		ipResourceCount *config.IPResourceCount, interfaceType *string) (*types.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
@@ -279,7 +279,7 @@ func (h *ec2APIHelper) DescribeTrunkInterfaceAssociation(trunkInterfaceId *strin
 
 // AssociateBranchToTrunk associates a branch network interface to a trunk network interface
 func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string,
-	vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error) {
+	vlanId int) (*ec2v2.AssociateTrunkInterfaceOutput, error) {
 
 	// Get attach permission from User's Service Linked Role. Account ID will be added by the EC2 API Wrapper
 	input := &ec2.CreateNetworkInterfacePermissionInput{
@@ -292,10 +292,10 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 		return nil, fmt.Errorf("failed to get attach network interface permissions for branch %v", err)
 	}
 
-	associateTrunkInterfaceIP := &ec2.AssociateTrunkInterfaceInput{
+	associateTrunkInterfaceIP := &ec2v2.AssociateTrunkInterfaceInput{
 		BranchInterfaceId: branchInterfaceId,
 		TrunkInterfaceId:  trunkInterfaceId,
-		VlanId:            aws.Int64(int64(vlanId)),
+		VlanId:            aws.Int32(int32(vlanId)),
 	}
 
 	associateTrunkInterfaceOutput, err := h.ec2Wrapper.AssociateTrunkInterface(associateTrunkInterfaceIP)
