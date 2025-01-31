@@ -79,10 +79,10 @@ func (mr *MockEC2WrapperMockRecorder) AssociateTrunkInterface(arg0 interface{}) 
 }
 
 // AttachNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) AttachNetworkInterface(arg0 *ec20.AttachNetworkInterfaceInput) (*ec20.AttachNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) AttachNetworkInterface(arg0 *ec2.AttachNetworkInterfaceInput) (*ec2.AttachNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AttachNetworkInterface", arg0)
-	ret0, _ := ret[0].(*ec20.AttachNetworkInterfaceOutput)
+	ret0, _ := ret[0].(*ec2.AttachNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

@@ -375,8 +375,8 @@ func (h *ec2APIHelper) SetDeleteOnTermination(attachmentId *string, eniId *strin
 
 // AttachNetworkInterfaceToInstance attaches the network interface to the instance
 func (h *ec2APIHelper) AttachNetworkInterfaceToInstance(instanceId *string, nwInterfaceId *string, deviceIndex *int64) (*string, error) {
-	attachNetworkInterfaceInput := &ec2.AttachNetworkInterfaceInput{
-		DeviceIndex:        deviceIndex,
+	attachNetworkInterfaceInput := &ec2v2.AttachNetworkInterfaceInput{
+		DeviceIndex:        aws.Int32(int32(*deviceIndex)),
 		InstanceId:         instanceId,
 		NetworkInterfaceId: nwInterfaceId,
 	}
