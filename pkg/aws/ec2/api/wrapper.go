@@ -55,7 +55,7 @@ type EC2Wrapper interface {
 	DetachNetworkInterface(input *ec2v2.DetachNetworkInterfaceInput) (*ec2v2.DetachNetworkInterfaceOutput, error)
 	DeleteNetworkInterface(input *ec2v2.DeleteNetworkInterfaceInput) (*ec2v2.DeleteNetworkInterfaceOutput, error)
 	AssignPrivateIPAddresses(input *ec2v2.AssignPrivateIpAddressesInput) (*ec2v2.AssignPrivateIpAddressesOutput, error)
-	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
+	UnassignPrivateIPAddresses(input *ec2v2.UnassignPrivateIpAddressesInput) (*ec2v2.UnassignPrivateIpAddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2v2.DescribeNetworkInterfacesInput) (*ec2v2.DescribeNetworkInterfacesOutput, error)
 	CreateTags(input *ec2v2.CreateTagsInput) (*ec2v2.CreateTagsOutput, error)
 	DescribeSubnets(input *ec2v2.DescribeSubnetsInput) (*ec2v2.DescribeSubnetsOutput, error)
@@ -691,9 +691,9 @@ func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2v2.AssignPrivateIpAddres
 	return output, err
 }
 
-func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error) {
+func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2v2.UnassignPrivateIpAddressesInput) (*ec2v2.UnassignPrivateIpAddressesOutput, error) {
 	start := time.Now()
-	unAssignPrivateIPAddressesOutput, err := e.userServiceClient.UnassignPrivateIpAddresses(input)
+	output, err := e.userServiceClientV2.UnassignPrivateIpAddresses(context.Background(), input)
 	ec2APICallLatencies.WithLabelValues("unassign_private_ip").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -710,7 +710,7 @@ func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddr
 		ec2UnassignPrivateIPAddressAPIErrCnt.Inc()
 	}
 
-	return unAssignPrivateIPAddressesOutput, err
+	return output, err
 }
 
 func (e *ec2Wrapper) CreateTags(input *ec2v2.CreateTagsInput) (*ec2v2.CreateTagsOutput, error) {

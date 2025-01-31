@@ -244,10 +244,10 @@ func (mr *MockEC2WrapperMockRecorder) ModifyNetworkInterfaceAttribute(arg0 inter
 }
 
 // UnassignPrivateIPAddresses mocks base method.
-func (m *MockEC2Wrapper) UnassignPrivateIPAddresses(arg0 *ec20.UnassignPrivateIpAddressesInput) (*ec20.UnassignPrivateIpAddressesOutput, error) {
+func (m *MockEC2Wrapper) UnassignPrivateIPAddresses(arg0 *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UnassignPrivateIPAddresses", arg0)
-	ret0, _ := ret[0].(*ec20.UnassignPrivateIpAddressesOutput)
+	ret0, _ := ret[0].(*ec2.UnassignPrivateIpAddressesOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

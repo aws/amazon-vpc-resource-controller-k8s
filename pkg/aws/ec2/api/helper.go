@@ -547,19 +547,19 @@ func (h *ec2APIHelper) AssignIPv4ResourcesAndWaitTillReady(eniID string, resourc
 
 // UnassignIPv4Resources un-assigns IPv4 address or prefix from the interface and waits till it succeeds
 func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.ResourceType, resources []string) error {
-	unassignPrivateIpAddressesInput := &ec2.UnassignPrivateIpAddressesInput{}
+	unassignPrivateIpAddressesInput := &ec2v2.UnassignPrivateIpAddressesInput{}
 
 	// Use respective input param depending on which resource type is being unassigned
 	switch resourceType {
 	case config.ResourceTypeIPv4Address:
-		unassignPrivateIpAddressesInput = &ec2.UnassignPrivateIpAddressesInput{
+		unassignPrivateIpAddressesInput = &ec2v2.UnassignPrivateIpAddressesInput{
 			NetworkInterfaceId: &eniID,
-			PrivateIpAddresses: aws.StringSlice(resources),
+			PrivateIpAddresses: resources,
 		}
 	case config.ResourceTypeIPv4Prefix:
-		unassignPrivateIpAddressesInput = &ec2.UnassignPrivateIpAddressesInput{
+		unassignPrivateIpAddressesInput = &ec2v2.UnassignPrivateIpAddressesInput{
 			NetworkInterfaceId: &eniID,
-			Ipv4Prefixes:       aws.StringSlice(resources),
+			Ipv4Prefixes:       resources,
 		}
 	}
 
