@@ -214,10 +214,10 @@ func (mr *MockEC2WrapperMockRecorder) DescribeTrunkInterfaceAssociations(arg0 in
 }
 
 // DetachNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) DetachNetworkInterface(arg0 *ec20.DetachNetworkInterfaceInput) (*ec20.DetachNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) DetachNetworkInterface(arg0 *ec2.DetachNetworkInterfaceInput) (*ec2.DetachNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DetachNetworkInterface", arg0)
-	ret0, _ := ret[0].(*ec20.DetachNetworkInterfaceOutput)
+	ret0, _ := ret[0].(*ec2.DetachNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

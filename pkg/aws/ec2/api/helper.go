@@ -394,7 +394,7 @@ func (h *ec2APIHelper) AttachNetworkInterfaceToInstance(instanceId *string, nwIn
 
 // DetachNetworkInterfaceFromInstance detaches a network interface using the attachment id
 func (h *ec2APIHelper) DetachNetworkInterfaceFromInstance(attachmentId *string) error {
-	input := &ec2.DetachNetworkInterfaceInput{
+	input := &ec2v2.DetachNetworkInterfaceInput{
 		AttachmentId: attachmentId,
 	}
 
