@@ -124,10 +124,10 @@ func (mr *MockEC2WrapperMockRecorder) CreateNetworkInterfacePermission(arg0 inte
 }
 
 // CreateTags mocks base method.
-func (m *MockEC2Wrapper) CreateTags(arg0 *ec20.CreateTagsInput) (*ec20.CreateTagsOutput, error) {
+func (m *MockEC2Wrapper) CreateTags(arg0 *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateTags", arg0)
-	ret0, _ := ret[0].(*ec20.CreateTagsOutput)
+	ret0, _ := ret[0].(*ec2.CreateTagsOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

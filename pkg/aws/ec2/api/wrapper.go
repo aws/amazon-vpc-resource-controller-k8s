@@ -57,7 +57,7 @@ type EC2Wrapper interface {
 	AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
 	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2v2.DescribeNetworkInterfacesInput) (*ec2v2.DescribeNetworkInterfacesOutput, error)
-	CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
+	CreateTags(input *ec2v2.CreateTagsInput) (*ec2v2.CreateTagsOutput, error)
 	DescribeSubnets(input *ec2v2.DescribeSubnetsInput) (*ec2v2.DescribeSubnetsOutput, error)
 	AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error)
 	DescribeTrunkInterfaceAssociations(input *ec2v2.DescribeTrunkInterfaceAssociationsInput) (*ec2v2.DescribeTrunkInterfaceAssociationsOutput, error)
@@ -710,9 +710,9 @@ func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddr
 	return unAssignPrivateIPAddressesOutput, err
 }
 
-func (e *ec2Wrapper) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
+func (e *ec2Wrapper) CreateTags(input *ec2v2.CreateTagsInput) (*ec2v2.CreateTagsOutput, error) {
 	start := time.Now()
-	createTagsOutput, err := e.userServiceClient.CreateTags(input)
+	output, err := e.userServiceClientV2.CreateTags(context.Background(), input)
 	ec2APICallLatencies.WithLabelValues("create_tags").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -724,7 +724,7 @@ func (e *ec2Wrapper) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutp
 		ec2TagNetworkInterfaceAPIErrCnt.Inc()
 	}
 
-	return createTagsOutput, err
+	return output, err
 }
 
 func (e *ec2Wrapper) DescribeSubnets(input *ec2v2.DescribeSubnetsInput) (*ec2v2.DescribeSubnetsOutput, error) {
