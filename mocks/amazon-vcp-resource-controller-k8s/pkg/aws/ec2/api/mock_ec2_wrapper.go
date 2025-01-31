@@ -49,10 +49,10 @@ func (m *MockEC2Wrapper) EXPECT() *MockEC2WrapperMockRecorder {
 }
 
 // AssignPrivateIPAddresses mocks base method.
-func (m *MockEC2Wrapper) AssignPrivateIPAddresses(arg0 *ec20.AssignPrivateIpAddressesInput) (*ec20.AssignPrivateIpAddressesOutput, error) {
+func (m *MockEC2Wrapper) AssignPrivateIPAddresses(arg0 *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AssignPrivateIPAddresses", arg0)
-	ret0, _ := ret[0].(*ec20.AssignPrivateIpAddressesOutput)
+	ret0, _ := ret[0].(*ec2.AssignPrivateIpAddressesOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

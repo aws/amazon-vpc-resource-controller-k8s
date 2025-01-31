@@ -54,7 +54,7 @@ type EC2Wrapper interface {
 	AttachNetworkInterface(input *ec2.AttachNetworkInterfaceInput) (*ec2.AttachNetworkInterfaceOutput, error)
 	DetachNetworkInterface(input *ec2.DetachNetworkInterfaceInput) (*ec2.DetachNetworkInterfaceOutput, error)
 	DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error)
-	AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
+	AssignPrivateIPAddresses(input *ec2v2.AssignPrivateIpAddressesInput) (*ec2v2.AssignPrivateIpAddressesOutput, error)
 	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2v2.DescribeNetworkInterfacesInput) (*ec2v2.DescribeNetworkInterfacesOutput, error)
 	CreateTags(input *ec2v2.CreateTagsInput) (*ec2v2.CreateTagsOutput, error)
@@ -663,9 +663,9 @@ func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2v2.DescribeNetworkInter
 	return output, err
 }
 
-func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
+func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2v2.AssignPrivateIpAddressesInput) (*ec2v2.AssignPrivateIpAddressesOutput, error) {
 	start := time.Now()
-	assignPrivateIPAddressesOutput, err := e.userServiceClient.AssignPrivateIpAddresses(input)
+	output, err := e.userServiceClientV2.AssignPrivateIpAddresses(context.Background(), input)
 	ec2APICallLatencies.WithLabelValues("assign_private_ip").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -675,9 +675,9 @@ func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddresse
 	// Since the same API AssignPrivateIPAddresses is called to either allocate a secondary IPv4 address or a IPv4 prefix,
 	// the metric count needs to be distinguished as to which resource is assigned by the call
 	if input.SecondaryPrivateIpAddressCount != nil && *input.SecondaryPrivateIpAddressCount != 0 {
-		numAssignedSecondaryIPAddress.Add(float64(aws.Int64Value(input.SecondaryPrivateIpAddressCount)))
+		numAssignedSecondaryIPAddress.Add(float64(*input.SecondaryPrivateIpAddressCount))
 	} else if input.Ipv4PrefixCount != nil && *input.Ipv4PrefixCount != 0 {
-		numAssignedIPv4Prefixes.Add(float64(aws.Int64Value(input.Ipv4PrefixCount)))
+		numAssignedIPv4Prefixes.Add(float64(*input.Ipv4PrefixCount))
 	}
 
 	if err != nil {
@@ -685,7 +685,7 @@ func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddresse
 		ec2AssignPrivateIPAddressAPIErrCnt.Inc()
 	}
 
-	return assignPrivateIPAddressesOutput, err
+	return output, err
 }
 
 func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error) {

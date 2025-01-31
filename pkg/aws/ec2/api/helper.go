@@ -452,18 +452,18 @@ func (h *ec2APIHelper) GetInstanceDetails(instanceId *string) (*types.Instance, 
 
 func (h *ec2APIHelper) AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error) {
 	var assignedResources []string
-	input := &ec2.AssignPrivateIpAddressesInput{}
+	input := &ec2v2.AssignPrivateIpAddressesInput{}
 
 	switch resourceType {
 	case config.ResourceTypeIPv4Address:
-		input = &ec2.AssignPrivateIpAddressesInput{
+		input = &ec2v2.AssignPrivateIpAddressesInput{
 			NetworkInterfaceId:             &eniID,
-			SecondaryPrivateIpAddressCount: aws.Int64(int64(count)),
+			SecondaryPrivateIpAddressCount: aws.Int32(int32(count)),
 		}
 	case config.ResourceTypeIPv4Prefix:
-		input = &ec2.AssignPrivateIpAddressesInput{
+		input = &ec2v2.AssignPrivateIpAddressesInput{
 			NetworkInterfaceId: &eniID,
-			Ipv4PrefixCount:    aws.Int64(int64(count)),
+			Ipv4PrefixCount:    aws.Int32(int32(count)),
 		}
 	}
 
