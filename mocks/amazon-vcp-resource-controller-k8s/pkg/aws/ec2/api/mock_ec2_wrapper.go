@@ -94,10 +94,10 @@ func (mr *MockEC2WrapperMockRecorder) AttachNetworkInterface(arg0 interface{}) *
 }
 
 // CreateNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) CreateNetworkInterface(arg0 *ec20.CreateNetworkInterfaceInput) (*ec20.CreateNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) CreateNetworkInterface(arg0 *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateNetworkInterface", arg0)
-	ret0, _ := ret[0].(*ec20.CreateNetworkInterfaceOutput)
+	ret0, _ := ret[0].(*ec2.CreateNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

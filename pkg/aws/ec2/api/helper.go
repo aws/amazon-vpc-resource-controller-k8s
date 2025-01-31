@@ -54,11 +54,11 @@ var (
 		Steps:    7,
 		Cap:      time.Minute,
 	}
-	defaultControllerTag = &ec2.Tag{
+	defaultControllerTag = types.Tag{
 		Key:   aws.String(config.NetworkInterfaceOwnerTagKey),
 		Value: aws.String(config.NetworkInterfaceOwnerTagValue),
 	}
-	clusterNameTag *ec2.Tag
+	clusterNameTag types.Tag
 )
 
 type ec2APIHelper struct {
@@ -68,7 +68,7 @@ type ec2APIHelper struct {
 func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
 	// Set the key and value of the cluster name tag which will be used to tag all the network interfaces created by
 	// the controller
-	clusterNameTag = &ec2.Tag{
+	clusterNameTag = types.Tag{
 		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
 		Value: aws.String(config.ClusterNameTagValue),
 	}
@@ -77,16 +77,16 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
 
 type EC2APIHelper interface {
 	AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string, vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error)
-	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
-		ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2.NetworkInterface, error)
+	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []types.Tag,
+		ipResourceCount *config.IPResourceCount, interfaceType *string) (*types.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*types.Subnet, error)
 	GetBranchNetworkInterface(trunkID, subnetID *string) ([]types.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]types.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []string) ([]types.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]types.TrunkInterfaceAssociation, error)
-	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []*ec2.Tag, deviceIndex *int64,
-		description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*ec2.NetworkInterface, error)
+	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []types.Tag, deviceIndex *int64,
+		description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*types.NetworkInterface, error)
 	AttachNetworkInterfaceToInstance(instanceId *string, nwInterfaceId *string, deviceIndex *int64) (*string, error)
 	SetDeleteOnTermination(attachmentId *string, eniId *string) error
 	DetachNetworkInterfaceFromInstance(attachmentId *string) error
@@ -98,32 +98,32 @@ type EC2APIHelper interface {
 }
 
 // CreateNetworkInterface creates a new network interface
-func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []*ec2.Tag,
-	ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2.NetworkInterface, error) {
+func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []types.Tag,
+	ipResourceCount *config.IPResourceCount, interfaceType *string) (*types.NetworkInterface, error) {
 	eniDescription := CreateENIDescriptionPrefix + *description
 
-	var ec2SecurityGroups []*string
+	var ec2SecurityGroups []string
 	if securityGroups != nil && len(securityGroups) != 0 {
 		// Only add security groups if there are one or more security group provided, otherwise API call will fail instead
 		// of creating the interface with default security groups
-		ec2SecurityGroups = aws.StringSlice(securityGroups)
+		ec2SecurityGroups = securityGroups
 	}
 
 	if tags == nil {
-		tags = []*ec2.Tag{}
+		tags = []types.Tag{}
 	}
 
 	// Append the default controller tag to scope down the permissions on network interfaces using IAM roles and add the
 	// k8s cluster name tag which will be used by the controller to clean up dangling ENIs
 	tags = append(tags, defaultControllerTag, clusterNameTag)
-	tagSpecifications := []*ec2.TagSpecification{
+	tagSpecifications := []types.TagSpecification{
 		{
-			ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),
+			ResourceType: types.ResourceTypeNetworkInterface,
 			Tags:         tags,
 		},
 	}
 
-	createInput := &ec2.CreateNetworkInterfaceInput{
+	createInput := &ec2v2.CreateNetworkInterfaceInput{
 		Description:       aws.String(eniDescription),
 		Groups:            ec2SecurityGroups,
 		SubnetId:          subnetId,
@@ -139,14 +139,14 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 		}
 
 		if secondaryPrivateIPCount != 0 {
-			createInput.SecondaryPrivateIpAddressCount = aws.Int64(int64(secondaryPrivateIPCount))
+			createInput.SecondaryPrivateIpAddressCount = aws.Int32(int32(secondaryPrivateIPCount))
 		} else if ipV4PrefixCount != 0 {
-			createInput.Ipv4PrefixCount = aws.Int64(int64(ipV4PrefixCount))
+			createInput.Ipv4PrefixCount = aws.Int32(int32(ipV4PrefixCount))
 		}
 	}
 
 	if interfaceType != nil {
-		createInput.InterfaceType = interfaceType
+		createInput.InterfaceType = types.NetworkInterfaceCreationType(*interfaceType)
 	}
 
 	createOutput, err := h.ec2Wrapper.CreateNetworkInterface(createInput)
@@ -316,7 +316,7 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 // CreateAndAttachNetworkInterface creates and attaches the network interface to the instance. The function will
 // wait till the interface is successfully attached
 func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string,
-	tags []*ec2.Tag, deviceIndex *int64, description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*ec2.NetworkInterface, error) {
+	tags []types.Tag, deviceIndex *int64, description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*types.NetworkInterface, error) {
 
 	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, ipResourceCount, interfaceType)
 	if err != nil {

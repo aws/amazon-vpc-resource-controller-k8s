@@ -50,7 +50,7 @@ const (
 
 type EC2Wrapper interface {
 	DescribeInstances(input *ec2v2.DescribeInstancesInput) (*ec2v2.DescribeInstancesOutput, error)
-	CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error)
+	CreateNetworkInterface(input *ec2v2.CreateNetworkInterfaceInput) (*ec2v2.CreateNetworkInterfaceOutput, error)
 	AttachNetworkInterface(input *ec2v2.AttachNetworkInterfaceInput) (*ec2v2.AttachNetworkInterfaceOutput, error)
 	DetachNetworkInterface(input *ec2v2.DetachNetworkInterfaceInput) (*ec2v2.DetachNetworkInterfaceOutput, error)
 	DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error)
@@ -577,22 +577,25 @@ func (e *ec2Wrapper) DescribeInstances(input *ec2v2.DescribeInstancesInput) (*ec
 	return describeInstancesOutput, err
 }
 
-func (e *ec2Wrapper) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error) {
+func (e *ec2Wrapper) CreateNetworkInterface(input *ec2v2.CreateNetworkInterfaceInput) (*ec2v2.CreateNetworkInterfaceOutput, error) {
 	start := time.Now()
-	createNetworkInterfaceOutput, err := e.userServiceClient.CreateNetworkInterface(input)
+	output, err := e.userServiceClientV2.CreateNetworkInterface(context.Background(), input)
 	ec2APICallLatencies.WithLabelValues("create_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
 	ec2APICallCnt.Inc()
 	ec2CreateNetworkInterfaceAPICallCnt.Inc()
-	numAssignedSecondaryIPAddress.Add(float64(aws.Int64Value(input.SecondaryPrivateIpAddressCount)))
+
+	if input.SecondaryPrivateIpAddressCount != nil {
+		numAssignedSecondaryIPAddress.Add(float64(*input.SecondaryPrivateIpAddressCount))
+	}
 
 	if err != nil {
 		ec2APIErrCnt.Inc()
 		ec2CreateNetworkInterfaceAPIErrCnt.Inc()
 	}
 
-	return createNetworkInterfaceOutput, err
+	return output, err
 }
 
 func (e *ec2Wrapper) AttachNetworkInterface(input *ec2v2.AttachNetworkInterfaceInput) (*ec2v2.AttachNetworkInterfaceOutput, error) {

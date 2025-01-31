@@ -397,7 +397,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 
 	var newENIs []*ENIDetails
 	var err error
-	var nwInterface *awsEC2.NetworkInterface
+	var nwInterface *types.NetworkInterface
 	var vlanID int
 
 	for i := 0; i < eniCount; i++ {
@@ -410,7 +410,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		}
 
 		// Vlan ID tag workaround, as describe trunk association is not supported with assumed role
-		tags := []*awsEC2.Tag{
+		tags := []types.Tag{
 			{
 				Key:   aws.String(config.VLandIDTag),
 				Value: aws.String(strconv.Itoa(vlanID)),
