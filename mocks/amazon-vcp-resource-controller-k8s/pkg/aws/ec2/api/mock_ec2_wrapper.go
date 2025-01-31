@@ -139,10 +139,10 @@ func (mr *MockEC2WrapperMockRecorder) CreateTags(arg0 interface{}) *gomock.Call 
 }
 
 // DeleteNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) DeleteNetworkInterface(arg0 *ec20.DeleteNetworkInterfaceInput) (*ec20.DeleteNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) DeleteNetworkInterface(arg0 *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DeleteNetworkInterface", arg0)
-	ret0, _ := ret[0].(*ec20.DeleteNetworkInterfaceOutput)
+	ret0, _ := ret[0].(*ec2.DeleteNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

@@ -53,7 +53,7 @@ type EC2Wrapper interface {
 	CreateNetworkInterface(input *ec2v2.CreateNetworkInterfaceInput) (*ec2v2.CreateNetworkInterfaceOutput, error)
 	AttachNetworkInterface(input *ec2v2.AttachNetworkInterfaceInput) (*ec2v2.AttachNetworkInterfaceOutput, error)
 	DetachNetworkInterface(input *ec2v2.DetachNetworkInterfaceInput) (*ec2v2.DetachNetworkInterfaceOutput, error)
-	DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error)
+	DeleteNetworkInterface(input *ec2v2.DeleteNetworkInterfaceInput) (*ec2v2.DeleteNetworkInterfaceOutput, error)
 	AssignPrivateIPAddresses(input *ec2v2.AssignPrivateIpAddressesInput) (*ec2v2.AssignPrivateIpAddressesOutput, error)
 	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2v2.DescribeNetworkInterfacesInput) (*ec2v2.DescribeNetworkInterfacesOutput, error)
@@ -615,9 +615,9 @@ func (e *ec2Wrapper) AttachNetworkInterface(input *ec2v2.AttachNetworkInterfaceI
 	return output, err
 }
 
-func (e *ec2Wrapper) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
+func (e *ec2Wrapper) DeleteNetworkInterface(input *ec2v2.DeleteNetworkInterfaceInput) (*ec2v2.DeleteNetworkInterfaceOutput, error) {
 	start := time.Now()
-	deleteNetworkInterfaceOutput, err := e.userServiceClient.DeleteNetworkInterface(input)
+	output, err := e.userServiceClientV2.DeleteNetworkInterface(context.Background(), input)
 	ec2APICallLatencies.WithLabelValues("delete_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -629,7 +629,7 @@ func (e *ec2Wrapper) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInp
 		ec2DeleteNetworkInterfaceAPIErrCnt.Inc()
 	}
 
-	return deleteNetworkInterfaceOutput, err
+	return output, err
 }
 
 func (e *ec2Wrapper) DetachNetworkInterface(input *ec2v2.DetachNetworkInterfaceInput) (*ec2v2.DetachNetworkInterfaceOutput, error) {

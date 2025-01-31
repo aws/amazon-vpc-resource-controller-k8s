@@ -20,6 +20,8 @@ import (
 
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	ec2v2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -58,7 +60,7 @@ var (
 	securityGroup2 = "sg-00000000000000002"
 	securityGroups = []string{securityGroup1, securityGroup2}
 
-	tags = []*ec2.Tag{
+	tags = []types.Tag{
 		{
 			Key:   aws.String("mock-key"),
 			Value: aws.String("mock-val"),
@@ -81,18 +83,18 @@ var (
 		InterfaceAssociation: &ec2.TrunkInterfaceAssociation{AssociationId: &branchAssociationId},
 	}
 
-	defaultClusterNameTag = &ec2.Tag{
+	defaultClusterNameTag = types.Tag{
 		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
 		Value: aws.String(config.ClusterNameTagValue),
 	}
 
-	createNetworkInterfaceInput = &ec2.CreateNetworkInterfaceInput{
+	createNetworkInterfaceInput = &ec2v2.CreateNetworkInterfaceInput{
 		Description: &eniDescriptionWithPrefix,
-		Groups:      aws.StringSlice(securityGroups),
+		Groups:      securityGroups,
 		SubnetId:    &subnetId,
-		TagSpecifications: []*ec2.TagSpecification{
+		TagSpecifications: []types.TagSpecification{
 			{
-				ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),
+				ResourceType: types.ResourceTypeNetworkInterface,
 				Tags:         append(tags, defaultControllerTag, defaultClusterNameTag),
 			},
 		},
@@ -445,7 +447,7 @@ func TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIP(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	ipCount := int64(5)
+	ipCount := int32(5)
 
 	createNetworkInterfaceInput.SecondaryPrivateIpAddressCount = &ipCount
 
@@ -468,7 +470,7 @@ func TestEc2APIHelper_CreateNetworkInterface_WithPrefixCount(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	prefixCount := int64(5)
+	prefixCount := int32(5)
 
 	createNetworkInterfaceInput.Ipv4PrefixCount = &prefixCount
 
@@ -491,7 +493,7 @@ func TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIPAndPrefixCount_Error
 
 	ec2ApiHelper, _ := getMockWrapper(ctrl)
 
-	ipCount := int64(5)
+	ipCount := int32(5)
 
 	createNetworkInterfaceInput.SecondaryPrivateIpAddressCount = &ipCount
 	createNetworkInterfaceInput.Ipv4PrefixCount = &ipCount
@@ -511,18 +513,18 @@ func TestEc2APIHelper_CreateNetworkInterface_TypeTrunk(t *testing.T) {
 	defer ctrl.Finish()
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
-	interfaceTypeTrunk := "trunk"
+	interfaceTypeTrunk := types.NetworkInterfaceCreationTypeTrunk
 
-	createNetworkInterfaceInput.InterfaceType = &interfaceTypeTrunk
+	createNetworkInterfaceInput.InterfaceType = interfaceTypeTrunk
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(
-		&ec2.CreateNetworkInterfaceOutput{
-			NetworkInterface: &ec2.NetworkInterface{NetworkInterfaceId: &trunkInterfaceId}}, nil)
+		&ec2v2.CreateNetworkInterfaceOutput{
+			NetworkInterface: &types.NetworkInterface{NetworkInterfaceId: &trunkInterfaceId}}, nil)
 	mockWrapper.EXPECT().CreateNetworkInterfacePermission(createNetworkInterfacePermissionInputTrunk).
 		Return(nil, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, nil, &interfaceTypeTrunk)
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, nil, aws.String(string(interfaceTypeTrunk)))
 
-	createNetworkInterfaceInput.InterfaceType = nil
+	createNetworkInterfaceInput.InterfaceType = types.NetworkInterfaceCreationType(interfaceTypeTrunk)
 
 	assert.NoError(t, err)
 	assert.Equal(t, trunkInterfaceId, *output.NetworkInterfaceId)

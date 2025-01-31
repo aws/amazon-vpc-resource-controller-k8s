@@ -206,7 +206,7 @@ func (h *ec2APIHelper) GetSubnet(subnetId *string) (*types.Subnet, error) {
 
 // DeleteNetworkInterface deletes a network interface with retries with exponential back offs
 func (h *ec2APIHelper) DeleteNetworkInterface(interfaceId *string) error {
-	deleteNetworkInterface := &ec2.DeleteNetworkInterfaceInput{
+	deleteNetworkInterface := &ec2v2.DeleteNetworkInterfaceInput{
 		NetworkInterfaceId: interfaceId,
 	}
 

@@ -168,7 +168,7 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 
 				// The ENI in available state has been sitting for at least the eni clean up interval and it should
 				// be removed
-				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2v2.DeleteNetworkInterfaceInput{
 					NetworkInterfaceId: networkInterface.NetworkInterfaceId,
 				})
 				if err != nil {
