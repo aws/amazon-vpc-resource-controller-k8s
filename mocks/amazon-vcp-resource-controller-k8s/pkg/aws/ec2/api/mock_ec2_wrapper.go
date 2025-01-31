@@ -21,7 +21,6 @@ import (
 	reflect "reflect"
 
 	ec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
-	ec20 "github.com/aws/aws-sdk-go/service/ec2"
 	gomock "github.com/golang/mock/gomock"
 )
 
@@ -109,10 +108,10 @@ func (mr *MockEC2WrapperMockRecorder) CreateNetworkInterface(arg0 interface{}) *
 }
 
 // CreateNetworkInterfacePermission mocks base method.
-func (m *MockEC2Wrapper) CreateNetworkInterfacePermission(arg0 *ec20.CreateNetworkInterfacePermissionInput) (*ec20.CreateNetworkInterfacePermissionOutput, error) {
+func (m *MockEC2Wrapper) CreateNetworkInterfacePermission(arg0 *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateNetworkInterfacePermission", arg0)
-	ret0, _ := ret[0].(*ec20.CreateNetworkInterfacePermissionOutput)
+	ret0, _ := ret[0].(*ec2.CreateNetworkInterfacePermissionOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

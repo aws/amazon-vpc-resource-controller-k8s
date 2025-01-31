@@ -62,7 +62,7 @@ type EC2Wrapper interface {
 	AssociateTrunkInterface(input *ec2v2.AssociateTrunkInterfaceInput) (*ec2v2.AssociateTrunkInterfaceOutput, error)
 	DescribeTrunkInterfaceAssociations(input *ec2v2.DescribeTrunkInterfaceAssociationsInput) (*ec2v2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2v2.ModifyNetworkInterfaceAttributeInput) (*ec2v2.ModifyNetworkInterfaceAttributeOutput, error)
-	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
+	CreateNetworkInterfacePermission(input *ec2v2.CreateNetworkInterfacePermissionInput) (*ec2v2.CreateNetworkInterfacePermissionOutput, error)
 }
 
 var (
@@ -798,10 +798,10 @@ func (e *ec2Wrapper) ModifyNetworkInterfaceAttribute(input *ec2v2.ModifyNetworkI
 	return output, err
 }
 
-func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error) {
+func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2v2.CreateNetworkInterfacePermissionInput) (*ec2v2.CreateNetworkInterfacePermissionOutput, error) {
 	// Add the account ID of the instance running the controller
 	input.AwsAccountId = &e.accountID
-	output, err := e.userServiceClient.CreateNetworkInterfacePermission(input)
+	output, err := e.userServiceClientV2.CreateNetworkInterfacePermission(context.Background(), input)
 
 	// Metric Update
 	ec2APICallCnt.Inc()

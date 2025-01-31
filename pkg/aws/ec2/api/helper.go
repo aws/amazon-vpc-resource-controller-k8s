@@ -164,9 +164,9 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 	// If the interface type is trunk then attach interface permissions
 	if interfaceType != nil && *interfaceType == "trunk" {
 		// Get attach permission from User's Service Linked Role. Account ID will be added by the EC2 API Wrapper
-		input := &ec2.CreateNetworkInterfacePermissionInput{
+		input := &ec2v2.CreateNetworkInterfacePermissionInput{
 			NetworkInterfaceId: nwInterface.NetworkInterfaceId,
-			Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
+			Permission:         types.InterfacePermissionTypeInstanceAttach,
 		}
 
 		_, err = h.ec2Wrapper.CreateNetworkInterfacePermission(input)
@@ -282,9 +282,9 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 	vlanId int) (*ec2v2.AssociateTrunkInterfaceOutput, error) {
 
 	// Get attach permission from User's Service Linked Role. Account ID will be added by the EC2 API Wrapper
-	input := &ec2.CreateNetworkInterfacePermissionInput{
+	input := &ec2v2.CreateNetworkInterfacePermissionInput{
 		NetworkInterfaceId: branchInterfaceId,
-		Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
+		Permission:         types.InterfacePermissionTypeInstanceAttach,
 	}
 
 	_, err := h.ec2Wrapper.CreateNetworkInterfacePermission(input)
