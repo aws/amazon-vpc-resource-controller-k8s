@@ -360,8 +360,8 @@ func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subne
 
 // SetDeleteOnTermination sets the deletion on termination of the network interface to true
 func (h *ec2APIHelper) SetDeleteOnTermination(attachmentId *string, eniId *string) error {
-	modifyNetworkInterfaceInput := &ec2.ModifyNetworkInterfaceAttributeInput{
-		Attachment: &ec2.NetworkInterfaceAttachmentChanges{
+	modifyNetworkInterfaceInput := &ec2v2.ModifyNetworkInterfaceAttributeInput{
+		Attachment: &types.NetworkInterfaceAttachmentChanges{
 			AttachmentId:        attachmentId,
 			DeleteOnTermination: aws.Bool(true),
 		},

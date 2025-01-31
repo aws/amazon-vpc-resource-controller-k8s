@@ -61,7 +61,7 @@ type EC2Wrapper interface {
 	DescribeSubnets(input *ec2v2.DescribeSubnetsInput) (*ec2v2.DescribeSubnetsOutput, error)
 	AssociateTrunkInterface(input *ec2v2.AssociateTrunkInterfaceInput) (*ec2v2.AssociateTrunkInterfaceOutput, error)
 	DescribeTrunkInterfaceAssociations(input *ec2v2.DescribeTrunkInterfaceAssociationsInput) (*ec2v2.DescribeTrunkInterfaceAssociationsOutput, error)
-	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
+	ModifyNetworkInterfaceAttribute(input *ec2v2.ModifyNetworkInterfaceAttributeInput) (*ec2v2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
 }
 
@@ -781,12 +781,12 @@ func (e *ec2Wrapper) AssociateTrunkInterface(input *ec2v2.AssociateTrunkInterfac
 	return output, err
 }
 
-func (e *ec2Wrapper) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error) {
+func (e *ec2Wrapper) ModifyNetworkInterfaceAttribute(input *ec2v2.ModifyNetworkInterfaceAttributeInput) (*ec2v2.ModifyNetworkInterfaceAttributeOutput, error) {
 	start := time.Now()
-	modifyNetworkInterfaceAttributeOutput, err := e.userServiceClient.ModifyNetworkInterfaceAttribute(input)
+	output, err := e.userServiceClientV2.ModifyNetworkInterfaceAttribute(context.Background(), input)
 	ec2APICallLatencies.WithLabelValues("modify_network_interface_attribute").Observe(timeSinceMs(start))
 
-	// Metric Update
+	// Metric updates
 	ec2APICallCnt.Inc()
 	ec2modifyNetworkInterfaceAttributeAPICallCnt.Inc()
 
@@ -795,7 +795,7 @@ func (e *ec2Wrapper) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInt
 		ec2modifyNetworkInterfaceAttributeAPIErrCnt.Inc()
 	}
 
-	return modifyNetworkInterfaceAttributeOutput, err
+	return output, err
 }
 
 func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error) {

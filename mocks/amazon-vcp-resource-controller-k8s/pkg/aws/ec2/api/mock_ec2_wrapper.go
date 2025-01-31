@@ -229,10 +229,10 @@ func (mr *MockEC2WrapperMockRecorder) DetachNetworkInterface(arg0 interface{}) *
 }
 
 // ModifyNetworkInterfaceAttribute mocks base method.
-func (m *MockEC2Wrapper) ModifyNetworkInterfaceAttribute(arg0 *ec20.ModifyNetworkInterfaceAttributeInput) (*ec20.ModifyNetworkInterfaceAttributeOutput, error) {
+func (m *MockEC2Wrapper) ModifyNetworkInterfaceAttribute(arg0 *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ModifyNetworkInterfaceAttribute", arg0)
-	ret0, _ := ret[0].(*ec20.ModifyNetworkInterfaceAttributeOutput)
+	ret0, _ := ret[0].(*ec2.ModifyNetworkInterfaceAttributeOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
