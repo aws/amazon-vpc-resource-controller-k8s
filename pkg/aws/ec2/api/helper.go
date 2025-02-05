@@ -14,6 +14,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -62,6 +63,19 @@ var (
 
 type ec2APIHelper struct {
 	ec2Wrapper EC2Wrapper
+}
+
+func convertToInt32(value int) (int32, error) {
+	const (
+		minInt32 = -2147483648
+		maxInt32 = 2147483647
+	)
+
+	if value < minInt32 || value > maxInt32 {
+		return 0, errors.New("value out of int32 range")
+	}
+
+	return int32(value), nil
 }
 
 func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
@@ -290,10 +304,12 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 		return nil, fmt.Errorf("failed to get attach network interface permissions for branch %v", err)
 	}
 
+	vlanId32, err := convertToInt32(vlanId)
+
 	associateTrunkInterfaceIP := &ec2.AssociateTrunkInterfaceInput{
 		BranchInterfaceId: branchInterfaceId,
 		TrunkInterfaceId:  trunkInterfaceId,
-		VlanId:            aws.Int32(int32(vlanId)),
+		VlanId:            aws.Int32(vlanId32),
 	}
 
 	associateTrunkInterfaceOutput, err := h.ec2Wrapper.AssociateTrunkInterface(associateTrunkInterfaceIP)
@@ -373,8 +389,13 @@ func (h *ec2APIHelper) SetDeleteOnTermination(attachmentId *string, eniId *strin
 
 // AttachNetworkInterfaceToInstance attaches the network interface to the instance
 func (h *ec2APIHelper) AttachNetworkInterfaceToInstance(instanceId *string, nwInterfaceId *string, deviceIndex *int64) (*string, error) {
+	deviceIndex32, err := convertToInt32(int(*deviceIndex))
+	if err != nil {
+		return nil, err
+	}
+
 	attachNetworkInterfaceInput := &ec2.AttachNetworkInterfaceInput{
-		DeviceIndex:        aws.Int32(int32(*deviceIndex)),
+		DeviceIndex:        aws.Int32(deviceIndex32),
 		InstanceId:         instanceId,
 		NetworkInterfaceId: nwInterfaceId,
 	}
@@ -451,16 +472,21 @@ func (h *ec2APIHelper) AssignIPv4ResourcesAndWaitTillReady(eniID string, resourc
 	var assignedResources []string
 	input := &ec2.AssignPrivateIpAddressesInput{}
 
+	count32, err := convertToInt32(count)
+	if err != nil {
+		return nil, err
+	}
+
 	switch resourceType {
 	case config.ResourceTypeIPv4Address:
 		input = &ec2.AssignPrivateIpAddressesInput{
 			NetworkInterfaceId:             &eniID,
-			SecondaryPrivateIpAddressCount: aws.Int32(int32(count)),
+			SecondaryPrivateIpAddressCount: aws.Int32(count32),
 		}
 	case config.ResourceTypeIPv4Prefix:
 		input = &ec2.AssignPrivateIpAddressesInput{
 			NetworkInterfaceId: &eniID,
-			Ipv4PrefixCount:    aws.Int32(int32(count)),
+			Ipv4PrefixCount:    aws.Int32(count32),
 		}
 	}
 
