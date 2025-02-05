@@ -24,12 +24,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/exp/slices"
 
-	ec2v2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -117,11 +116,11 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 	vpccniAvailableCount := 0
 	leakedENICount := 0
 
-	describeNetworkInterfaceIp := &ec2v2.DescribeNetworkInterfacesInput{
+	describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
 		Filters: []types.Filter{
 			{
 				Name:   aws.String("status"),
-				Values: []string{ec2.NetworkInterfaceStatusAvailable},
+				Values: []string{string(types.NetworkInterfaceStatusAvailable)},
 			},
 			{
 				Name:   aws.String("tag:" + e.clusterNameTagKey),
@@ -129,8 +128,10 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 			},
 			{
 				Name: aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
-				Values: ([]string{config.NetworkInterfaceOwnerTagValue,
-					config.NetworkInterfaceOwnerVPCCNITagValue}),
+				Values: ([]string{
+					config.NetworkInterfaceOwnerTagValue,
+					config.NetworkInterfaceOwnerVPCCNITagValue,
+				}),
 			},
 			{
 				Name:   aws.String("vpc-id"),
@@ -168,7 +169,7 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 
 				// The ENI in available state has been sitting for at least the eni clean up interval and it should
 				// be removed
-				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2v2.DeleteNetworkInterfaceInput{
+				_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 					NetworkInterfaceId: networkInterface.NetworkInterfaceId,
 				})
 				if err != nil {
