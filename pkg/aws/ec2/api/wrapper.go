@@ -16,26 +16,15 @@ package api
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
-	"github.com/aws/aws-sdk-go/aws/ec2metadata"
-	"github.com/aws/aws-sdk-go/aws/endpoints"
-	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/aws/aws-sdk-go/service/sts"
-
-	// Add v2 SDK imports
-
 	configv2 "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	ec2v2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -317,7 +306,6 @@ var (
 
 func prometheusRegister() {
 	if !prometheusRegistered {
-
 		metrics.Registry.MustRegister(
 			ec2APICallCnt,
 			ec2APIErrCnt,
@@ -350,9 +338,8 @@ func prometheusRegister() {
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
 			ec2APICallLatencies,
-			vpccniAvailableENICnt,
-			vpcrcAvailableENICnt,
-			leakedENICnt,
+			ec2CreateNetworkInterfacePermissionCallCnt,
+			ec2CreateNetworkInterfacePermissionErrCnt,
 		)
 
 		prometheusRegistered = true
@@ -360,11 +347,9 @@ func prometheusRegister() {
 }
 
 type ec2Wrapper struct {
-	log                   logr.Logger
-	instanceServiceClient *ec2.EC2
-	userServiceClient     *ec2.EC2
-	userServiceClientV2   *ec2v2.Client // Add v2 client
-	accountID             string
+	log                 logr.Logger
+	userServiceClientV2 *ec2v2.Client
+	accountID           string
 }
 
 // NewEC2Wrapper takes the roleARN that will be assumed to make all the EC2 API Calls, if no roleARN
@@ -376,184 +361,65 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 
 	ec2Wrapper := &ec2Wrapper{log: log}
 
-	instanceSession, err := ec2Wrapper.getInstanceSession()
+	// Load default AWS config with user agent
+	userAgentCfg := getUserAgentConfig()
+	cfg, err := configv2.LoadDefaultConfig(context.Background(),
+		configv2.WithRegion(region),
+		configv2.WithAppID(userAgentCfg.AppID))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to load SDK config: %v", err)
 	}
 
-	// Initialize v2 SDK config
-	cfg, err := configv2.LoadDefaultConfig(context.Background(),
-		configv2.WithRegion(*instanceSession.Config.Region),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("unable to load SDK config, %v", err)
+	// Get instance metadata
+	imdsClient := imds.NewFromConfig(cfg)
+	if region == "" {
+		regionOutput, err := imdsClient.GetRegion(context.Background(), &imds.GetRegionInput{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
+		}
+		cfg.Region = regionOutput.Region
 	}
+
+	identity, err := imdsClient.GetInstanceIdentityDocument(context.Background(), &imds.GetInstanceIdentityDocumentInput{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get the instance identity document: %v", err)
+	}
+	ec2Wrapper.accountID = identity.AccountID
 
 	// Role ARN is passed, assume the role ARN to make EC2 API Calls
 	if roleARN != "" {
-		// Create the instance service client with low QPS, it will be only used for associate branch to trunk calls
-		log.Info("Creating INSTANCE service client with configured QPS", "QPS", instanceClientQPS, "Burst", instanceClientBurst)
-		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(instanceClientQPS, instanceClientBurst,
-			instanceSession)
+		// Get source account and ARN
+		sourceAcct, _, sourceArn, err := utils.GetSourceAcctAndArn(roleARN, region, clusterName)
 		if err != nil {
 			return nil, err
 		}
-		ec2Wrapper.instanceServiceClient = instanceServiceClient
 
-		// Create the user service client with higher QPS, this will be used to make rest of the EC2 API Calls
-		log.Info("Creating USER service client with configured QPS", "QPS", userClientQPS, "Burst", userClientBurst)
-		userServiceClient, err := ec2Wrapper.getClientUsingAssumedRole(*instanceSession.Config.Region, roleARN, clusterName, region,
-			userClientQPS, userClientBurst)
+		// Create STS client with assumed role
+		stsClient := sts.NewFromConfig(cfg)
+		provider := stscreds.NewAssumeRoleProvider(stsClient, roleARN, func(o *stscreds.AssumeRoleOptions) {
+			o.Duration = time.Hour
+			if sourceAcct != "" && sourceArn != "" {
+				o.RoleSessionName = AppName
+			}
+		})
+
+		// Create new config with assumed role credentials
+		cfgWithRole, err := configv2.LoadDefaultConfig(context.Background(),
+			configv2.WithRegion(region),
+			configv2.WithCredentialsProvider(provider),
+			configv2.WithAppID(userAgentCfg.AppID))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to load config with assumed role: %v", err)
 		}
-		ec2Wrapper.userServiceClient = userServiceClient
 
-		// Initialize v2 client with assumed role
-		// TODO: Add proper credentials provider with assumed role for v2 client
-		ec2Wrapper.userServiceClientV2 = ec2v2.NewFromConfig(cfg)
+		// Create EC2 client with assumed role
+		ec2Wrapper.userServiceClientV2 = ec2v2.NewFromConfig(cfgWithRole)
 	} else {
-		// Role ARN is not provided, assuming that instance service client is allowlisted for ENI branching and use
-		// the instance service client as the user service client with higher QPS.
-		log.Info("Creating INSTANCE service client with configured USER Service QPS", "QPS", userClientQPS, "Burst", userClientBurst)
-		instanceServiceClient, err := ec2Wrapper.getInstanceServiceClient(userClientQPS,
-			userClientBurst, instanceSession)
-		if err != nil {
-			return nil, err
-		}
-		ec2Wrapper.instanceServiceClient = instanceServiceClient
-		ec2Wrapper.userServiceClient = instanceServiceClient
-
-		// Initialize v2 client with default config
+		// Use instance role
 		ec2Wrapper.userServiceClientV2 = ec2v2.NewFromConfig(cfg)
 	}
 
 	return ec2Wrapper, nil
-}
-
-func (e *ec2Wrapper) getInstanceSession() (instanceSession *session.Session, err error) {
-	// Create a new session
-	instanceSession = session.Must(session.NewSession())
-	injectUserAgent(&instanceSession.Handlers)
-
-	// Get the region from the ec2 Metadata if the region is missing in the session config
-	ec2Metadata := ec2metadata.New(instanceSession)
-	region, err := ec2Metadata.Region()
-	if err != nil {
-		return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
-	}
-	instanceSession.Config.Region = aws.String(region)
-
-	instanceIdentity, err := ec2Metadata.GetInstanceIdentityDocument()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get the instance identity document %v", err)
-	}
-	// Set the Account ID
-	e.accountID = instanceIdentity.AccountID
-	return instanceSession, nil
-}
-
-func (e *ec2Wrapper) getInstanceServiceClient(qps int, burst int, instanceSession *session.Session) (*ec2.EC2, error) {
-	instanceClient, err := utils.NewRateLimitedClient(qps, burst)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v",
-			qps, burst, err)
-	}
-	return ec2.New(instanceSession, aws.NewConfig().WithMaxRetries(MaxRetries).
-		WithRegion(*instanceSession.Config.Region).WithHTTPClient(instanceClient)), nil
-}
-
-func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterName, region string, qps, burst int) (*ec2.EC2, error) {
-	var providers []credentials.Provider
-
-	userStsSession := session.Must(session.NewSession())
-	userStsSession.Config.Region = &instanceRegion
-	injectUserAgent(&userStsSession.Handlers)
-
-	// Create a rate limited http client for the
-	client, err := utils.NewRateLimitedClient(qps, burst)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create reate limited client with %d qps and %d burst: %v", qps, burst, err)
-	}
-	e.log.Info("created rate limited http client", "qps", qps, "burst", burst)
-
-	// GetPartition ID, SourceAccount and SourceARN
-	roleARN = strings.Trim(roleARN, "\"")
-
-	sourceAcct, partitionID, sourceArn, err := utils.GetSourceAcctAndArn(roleARN, region, clusterName)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get the regional sts end point
-	regionalSTSEndpoint, err := e.getRegionalStsEndpoint(partitionID, region)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get the regional sts endpoint for region %s: %v %v",
-			*userStsSession.Config.Region, err, partitionID)
-	}
-
-	regionalProvider := &stscreds.AssumeRoleProvider{
-		Client:          e.createSTSClient(userStsSession, client, regionalSTSEndpoint, sourceAcct, sourceArn),
-		RoleARN:         roleARN,
-		Duration:        time.Minute * 60,
-		RoleSessionName: AppName,
-	}
-	providers = append(providers, regionalProvider)
-
-	// Get the global sts end point
-	// TODO: we should revisit the global sts endpoint and check if we should remove global endpoint
-	// we are not using it since the concern on availability and performance
-	// https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_enable-regions.html
-
-	globalSTSEndpoint, err := endpoints.DefaultResolver().
-		EndpointFor("sts", aws.StringValue(userStsSession.Config.Region))
-	if err != nil {
-		e.log.Info("failed to get the global STS Endpoint, ignoring", "roleARN", roleARN)
-	} else {
-		// If the regional STS endpoint is different than the global STS endpoint then add the global sts endpoint
-		if regionalSTSEndpoint.URL != globalSTSEndpoint.URL {
-			globalProvider := &stscreds.AssumeRoleProvider{
-				Client:   e.createSTSClient(userStsSession, client, regionalSTSEndpoint, sourceAcct, sourceArn),
-				RoleARN:  roleARN,
-				Duration: time.Minute * 60,
-			}
-			providers = append(providers, globalProvider)
-		}
-	}
-
-	e.log.Info("initialized the regional/global providers", "roleARN", roleARN)
-
-	userStsSession.Config.Credentials = credentials.NewChainCredentials(providers)
-
-	return ec2.New(userStsSession, aws.NewConfig().WithHTTPClient(client)), nil
-
-}
-
-func (e *ec2Wrapper) createSTSClient(
-	userStsSession *session.Session,
-	client *http.Client,
-	endpoint endpoints.ResolvedEndpoint,
-	sourceAcct, sourceArn string) *sts.STS {
-
-	stsClient := sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
-		WithEndpoint(endpoint.URL).WithMaxRetries(MaxRetries))
-
-	// only both sourceAcct and sourceArn are provided, we send extra header context
-	// otherwise we fallback to the default client
-	if sourceAcct != "" && sourceArn != "" {
-		stsClient.Handlers.Sign.PushFront(func(s *request.Request) {
-			s.ApplyOptions(request.WithSetRequestHeaders(map[string]string{
-				SourceKey:  sourceArn,
-				AccountKey: sourceAcct,
-			}))
-		})
-		// TODO: change this log verbosity to 1 after we have configured clients in place for some time
-		e.log.Info("Will use configured STS client with extra headers")
-	} else {
-		e.log.Info("Will use default STS client since empty source account or/and empty source arn", "SourceAcct", sourceAcct, "SourceArn", sourceArn)
-	}
-
-	return stsClient
 }
 
 func timeSinceMs(start time.Time) float64 {
@@ -813,36 +679,4 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2v2.CreateNetwork
 	}
 
 	return output, err
-}
-
-func (e *ec2Wrapper) getRegionalStsEndpoint(partitionID, region string) (endpoints.ResolvedEndpoint, error) {
-	var partition *endpoints.Partition
-	var stsServiceID = "sts"
-	for _, p := range endpoints.DefaultPartitions() {
-		if partitionID == p.ID() {
-			partition = &p
-			break
-		}
-	}
-	if partition == nil {
-		return endpoints.ResolvedEndpoint{}, fmt.Errorf("partition %s not valid", partitionID)
-	}
-
-	stsSvc, ok := partition.Services()[stsServiceID]
-	if !ok {
-		e.log.Info("STS service not found in partition, generating default endpoint.", "Partition:", partitionID)
-		// Add the host of the current instances region if the service doesn't already exists in the partition
-		// so we don't fail if the service is not present in the go sdk but matches the instances region.
-		res, err := partition.EndpointFor(stsServiceID, region, endpoints.STSRegionalEndpointOption, endpoints.ResolveUnknownServiceOption)
-		if err != nil {
-			return endpoints.ResolvedEndpoint{}, fmt.Errorf("error resolving endpoint for %s in partition %s. err: %v", region, partition.ID(), err)
-		}
-		return res, nil
-	}
-
-	res, err := stsSvc.ResolveEndpoint(region, endpoints.STSRegionalEndpointOption)
-	if err != nil {
-		return endpoints.ResolvedEndpoint{}, fmt.Errorf("error resolving endpoint for %s in partition %s. err: %v", region, partition.ID(), err)
-	}
-	return res, nil
 }

@@ -21,7 +21,6 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
-	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/exp/slices"
 
 	ec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -45,27 +44,6 @@ type ENICleaner struct {
 	clusterNameTagKey string
 	ctx               context.Context
 }
-
-var (
-	vpccniAvailableENICnt = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "vpc_cni_created_available_eni_count",
-			Help: "The number of available ENIs created by VPC-CNI that controller will try to delete in each cleanup cycle",
-		},
-	)
-	vpcrcAvailableENICnt = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "vpc_rc_created_available_eni_count",
-			Help: "The number of available ENIs created by VPC-RC that controller will try to delete in each cleanup cycle",
-		},
-	)
-	leakedENICnt = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "leaked_eni_count",
-			Help: "The number of available ENIs that failed to be deleted by the controller in each cleanup cycle",
-		},
-	)
-)
 
 func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager, healthzHandler *rcHealthz.HealthzHandler) error {
 	e.clusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
