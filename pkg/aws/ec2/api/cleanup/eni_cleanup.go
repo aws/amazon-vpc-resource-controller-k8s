@@ -39,7 +39,7 @@ type NetworkInterfaceManager interface {
 	GetENITagFilters() []*ec2.Filter
 	ShouldDeleteENI(eniID *string) bool
 	UpdateAvailableENIsIfNeeded(eniMap *map[string]struct{})
-	UpdateCleanupMetrics(vpcrcAvailableCount int, vpccniAvailableCount int, leakedENICount int)
+	UpdateCleanupMetrics(vpcrcAvailableCount *int, vpccniAvailableCount *int, leakedENICount *int)
 }
 
 type ENICleaner struct {
@@ -112,6 +112,7 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 	vpcrcAvailableCount := 0
 	vpccniAvailableCount := 0
 	leakedENICount := 0
+	defer e.Manager.UpdateCleanupMetrics(&vpcrcAvailableCount, &vpccniAvailableCount, &leakedENICount)
 
 	filters := CommonNetworkInterfaceFilters
 	// Append the VPC-ID deep filter for the paginated call
@@ -175,7 +176,6 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 		}
 		describeNetworkInterfaceIp.NextToken = describeNetworkInterfaceOp.NextToken
 	}
-	e.Manager.UpdateCleanupMetrics(vpcrcAvailableCount, vpccniAvailableCount, leakedENICount)
 	e.Manager.UpdateAvailableENIsIfNeeded(&availableENIs)
 	return kerrors.NewAggregate(errors)
 }
@@ -214,8 +214,8 @@ func (e *ClusterENICleaner) UpdateAvailableENIsIfNeeded(eniMap *map[string]struc
 }
 
 // Update cluster cleanup metrics for the current cleanup cycle
-func (e *ClusterENICleaner) UpdateCleanupMetrics(vpcrcAvailableCount int, vpccniAvailableCount int, leakedENICount int) {
-	api.VpcRcAvailableClusterENICnt.Set(float64(vpcrcAvailableCount))
-	api.VpcCniAvailableClusterENICnt.Set(float64(vpccniAvailableCount))
-	api.LeakedENIClusterCleanupCnt.Set(float64(leakedENICount))
+func (e *ClusterENICleaner) UpdateCleanupMetrics(vpcrcAvailableCount *int, vpccniAvailableCount *int, leakedENICount *int) {
+	api.VpcRcAvailableClusterENICnt.Set(float64(*vpcrcAvailableCount))
+	api.VpcCniAvailableClusterENICnt.Set(float64(*vpccniAvailableCount))
+	api.LeakedENIClusterCleanupCnt.Set(float64(*leakedENICount))
 }

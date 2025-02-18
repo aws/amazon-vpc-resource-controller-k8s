@@ -45,6 +45,6 @@ func (n *NodeTerminationCleaner) UpdateAvailableENIsIfNeeded(eniMap *map[string]
 }
 
 // Updating node termination metrics does not make much sense as it will be updated on each node deletion and does not give us much info
-func (n *NodeTerminationCleaner) UpdateCleanupMetrics(vpcrcAvailableCount int, vpccniAvailableCount int, leakedENICount int) {
+func (n *NodeTerminationCleaner) UpdateCleanupMetrics(vpcrcAvailableCount *int, vpccniAvailableCount *int, leakedENICount *int) {
 	return
 }
