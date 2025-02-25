@@ -16,7 +16,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -24,9 +23,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
-	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/sts"
@@ -480,12 +477,19 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 			*userStsSession.Config.Region, err, partitionID)
 	}
 
-	regionalProvider := &stscreds.AssumeRoleProvider{
-		Client:          e.createSTSClient(userStsSession, client, regionalSTSEndpoint, sourceAcct, sourceArn),
-		RoleARN:         roleARN,
-		Duration:        time.Minute * 60,
-		RoleSessionName: AppName,
+	// Create the STS client using AWS SDK v1
+	stsClient := sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
+		WithEndpoint(regionalSTSEndpoint.URL).WithMaxRetries(MaxRetries))
+	
+	// Create our STS client wrapper
+	stsClientWrapper := NewSTSClientV1(stsClient, sourceAcct, sourceArn)
+	
+	// Get the assume role provider from our wrapper
+	regionalProvider, err := stsClientWrapper.AssumeRole(roleARN, AppName, time.Minute * 60)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create regional provider: %v", err)
 	}
+	
 	providers = append(providers, regionalProvider)
 
 	// Get the global sts end point
@@ -500,11 +504,19 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 	} else {
 		// If the regional STS endpoint is different than the global STS endpoint then add the global sts endpoint
 		if regionalSTSEndpoint.URL != globalSTSEndpoint.URL {
-			globalProvider := &stscreds.AssumeRoleProvider{
-				Client:   e.createSTSClient(userStsSession, client, regionalSTSEndpoint, sourceAcct, sourceArn),
-				RoleARN:  roleARN,
-				Duration: time.Minute * 60,
+			// Create the global STS client using AWS SDK v1
+			globalStsClient := sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
+				WithEndpoint(globalSTSEndpoint.URL).WithMaxRetries(MaxRetries))
+			
+			// Create our global STS client wrapper
+			globalStsClientWrapper := NewSTSClientV1(globalStsClient, sourceAcct, sourceArn)
+			
+			// Get the assume role provider from our wrapper
+			globalProvider, err := globalStsClientWrapper.AssumeRole(roleARN, AppName, time.Minute * 60)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create global provider: %v", err)
 			}
+			
 			providers = append(providers, globalProvider)
 		}
 	}
@@ -515,33 +527,6 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 
 	return ec2.New(userStsSession, aws.NewConfig().WithHTTPClient(client)), nil
 
-}
-
-func (e *ec2Wrapper) createSTSClient(
-	userStsSession *session.Session,
-	client *http.Client,
-	endpoint endpoints.ResolvedEndpoint,
-	sourceAcct, sourceArn string) *sts.STS {
-
-	stsClient := sts.New(userStsSession, aws.NewConfig().WithHTTPClient(client).
-		WithEndpoint(endpoint.URL).WithMaxRetries(MaxRetries))
-
-	// only both sourceAcct and sourceArn are provided, we send extra header context
-	// otherwise we fallback to the default client
-	if sourceAcct != "" && sourceArn != "" {
-		stsClient.Handlers.Sign.PushFront(func(s *request.Request) {
-			s.ApplyOptions(request.WithSetRequestHeaders(map[string]string{
-				SourceKey:  sourceArn,
-				AccountKey: sourceAcct,
-			}))
-		})
-		// TODO: change this log verbosity to 1 after we have configured clients in place for some time
-		e.log.Info("Will use configured STS client with extra headers")
-	} else {
-		e.log.Info("Will use default STS client since empty source account or/and empty source arn", "SourceAcct", sourceAcct, "SourceArn", sourceArn)
-	}
-
-	return stsClient
 }
 
 func timeSinceMs(start time.Time) float64 {
