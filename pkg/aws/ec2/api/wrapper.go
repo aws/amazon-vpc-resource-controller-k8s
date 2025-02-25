@@ -14,6 +14,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -24,12 +25,15 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
-	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/sts"
+	
+	// AWS SDK v2 imports
+	v2imds "github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
+	
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -414,15 +418,21 @@ func (e *ec2Wrapper) getInstanceSession() (instanceSession *session.Session, err
 	instanceSession = session.Must(session.NewSession())
 	injectUserAgent(&instanceSession.Handlers)
 
-	// Get the region from the ec2 Metadata if the region is missing in the session config
-	ec2Metadata := ec2metadata.New(instanceSession)
-	region, err := ec2Metadata.Region()
+	// Create the EC2 metadata client using AWS SDK v2
+	v2Client := v2imds.New(v2imds.Options{})
+	metadataClient := NewEC2MetadataClientV2(v2Client)
+	
+	// Create a context for the metadata API calls
+	ctx := context.Background()
+	
+	// Get the region from the EC2 Metadata
+	region, err := metadataClient.Region(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
 	}
 	instanceSession.Config.Region = aws.String(region)
 
-	instanceIdentity, err := ec2Metadata.GetInstanceIdentityDocument()
+	instanceIdentity, err := metadataClient.GetInstanceIdentityDocument(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get the instance identity document %v", err)
 	}

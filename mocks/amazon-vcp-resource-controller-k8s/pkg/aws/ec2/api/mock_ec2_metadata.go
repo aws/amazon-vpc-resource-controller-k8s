@@ -18,6 +18,7 @@
 package mock_api
 
 import (
+	context "context"
 	ec2metadata "github.com/aws/aws-sdk-go/aws/ec2metadata"
 	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
@@ -47,31 +48,31 @@ func (m *MockEC2MetadataClient) EXPECT() *MockEC2MetadataClientMockRecorder {
 }
 
 // GetInstanceIdentityDocument mocks base method
-func (m *MockEC2MetadataClient) GetInstanceIdentityDocument() (ec2metadata.EC2InstanceIdentityDocument, error) {
+func (m *MockEC2MetadataClient) GetInstanceIdentityDocument(ctx context.Context) (ec2metadata.EC2InstanceIdentityDocument, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetInstanceIdentityDocument")
+	ret := m.ctrl.Call(m, "GetInstanceIdentityDocument", ctx)
 	ret0, _ := ret[0].(ec2metadata.EC2InstanceIdentityDocument)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetInstanceIdentityDocument indicates an expected call of GetInstanceIdentityDocument
-func (mr *MockEC2MetadataClientMockRecorder) GetInstanceIdentityDocument() *gomock.Call {
+func (mr *MockEC2MetadataClientMockRecorder) GetInstanceIdentityDocument(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInstanceIdentityDocument", reflect.TypeOf((*MockEC2MetadataClient)(nil).GetInstanceIdentityDocument))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInstanceIdentityDocument", reflect.TypeOf((*MockEC2MetadataClient)(nil).GetInstanceIdentityDocument), ctx)
 }
 
 // Region mocks base method
-func (m *MockEC2MetadataClient) Region() (string, error) {
+func (m *MockEC2MetadataClient) Region(ctx context.Context) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Region")
+	ret := m.ctrl.Call(m, "Region", ctx)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Region indicates an expected call of Region
-func (mr *MockEC2MetadataClientMockRecorder) Region() *gomock.Call {
+func (mr *MockEC2MetadataClientMockRecorder) Region(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Region", reflect.TypeOf((*MockEC2MetadataClient)(nil).Region))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Region", reflect.TypeOf((*MockEC2MetadataClient)(nil).Region), ctx)
 }
