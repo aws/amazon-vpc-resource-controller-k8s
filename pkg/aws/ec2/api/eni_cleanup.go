@@ -21,12 +21,13 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
-	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/exp/slices"
 
+	ec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
 	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -43,27 +44,6 @@ type ENICleaner struct {
 	clusterNameTagKey string
 	ctx               context.Context
 }
-
-var (
-	vpccniAvailableENICnt = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "vpc_cni_created_available_eni_count",
-			Help: "The number of available ENIs created by VPC-CNI that controller will try to delete in each cleanup cycle",
-		},
-	)
-	vpcrcAvailableENICnt = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "vpc_rc_created_available_eni_count",
-			Help: "The number of available ENIs created by VPC-RC that controller will try to delete in each cleanup cycle",
-		},
-	)
-	leakedENICnt = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "leaked_eni_count",
-			Help: "The number of available ENIs that failed to be deleted by the controller in each cleanup cycle",
-		},
-	)
-)
 
 func (e *ENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager, healthzHandler *rcHealthz.HealthzHandler) error {
 	e.clusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
@@ -115,23 +95,25 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 	leakedENICount := 0
 
 	describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{
+		Filters: []types.Filter{
 			{
 				Name:   aws.String("status"),
-				Values: []*string{aws.String(ec2.NetworkInterfaceStatusAvailable)},
+				Values: []string{string(types.NetworkInterfaceStatusAvailable)},
 			},
 			{
 				Name:   aws.String("tag:" + e.clusterNameTagKey),
-				Values: []*string{aws.String(config.ClusterNameTagValue)},
+				Values: []string{config.ClusterNameTagValue},
 			},
 			{
 				Name: aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
-				Values: aws.StringSlice([]string{config.NetworkInterfaceOwnerTagValue,
-					config.NetworkInterfaceOwnerVPCCNITagValue}),
+				Values: ([]string{
+					config.NetworkInterfaceOwnerTagValue,
+					config.NetworkInterfaceOwnerVPCCNITagValue,
+				}),
 			},
 			{
 				Name:   aws.String("vpc-id"),
-				Values: []*string{aws.String(e.VPCID)},
+				Values: []string{(e.VPCID)},
 			},
 		},
 	}
@@ -148,7 +130,7 @@ func (e *ENICleaner) cleanUpAvailableENIs() {
 		for _, networkInterface := range describeNetworkInterfaceOp.NetworkInterfaces {
 			if _, exists := e.availableENIs[*networkInterface.NetworkInterfaceId]; exists {
 				// Increment promethues metrics for number of leaked ENIs cleaned up
-				if tagIdx := slices.IndexFunc(networkInterface.TagSet, func(tag *ec2.Tag) bool {
+				if tagIdx := slices.IndexFunc(networkInterface.TagSet, func(tag types.Tag) bool {
 					return *tag.Key == config.NetworkInterfaceOwnerTagKey
 				}); tagIdx != -1 {
 					switch *networkInterface.TagSet[tagIdx].Value {

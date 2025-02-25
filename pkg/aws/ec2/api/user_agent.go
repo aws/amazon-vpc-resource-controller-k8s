@@ -18,13 +18,12 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
 
-	"github.com/aws/aws-sdk-go/aws/request"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// injectUserAgent will inject app specific user-agent into awsSDK
-func injectUserAgent(handlers *request.Handlers) {
-	handlers.Build.PushFrontNamed(request.NamedHandler{
-		Name: fmt.Sprintf("%s/user-agent", AppName),
-		Fn:   request.MakeAddToUserAgentHandler(AppName, version.GitVersion),
-	})
+// getUserAgentConfig returns the config with app specific user-agent for AWS SDK v2
+func getUserAgentConfig() aws.Config {
+	return aws.Config{
+		AppID: fmt.Sprintf("%s/%s", AppName, version.GitVersion),
+	}
 }
