@@ -26,6 +26,7 @@ import (
 	vpcresourcesv1beta1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/controllers/apps"
 	corecontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/core"
+	crdcontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/crds"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	eniCleaner "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
@@ -423,6 +424,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	finalizerManager := k8s.NewDefaultFinalizerManager(mgr.GetClient(), ctrl.Log.WithName("finalizer manager"))
+	if err = (&crdcontroller.CNINodeReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Context:          ctx,
+		Log:              ctrl.Log.WithName("controllers").WithName("CNINode"),
+		EC2Wrapper:       ec2Wrapper,
+		K8sAPI:           k8sApi,
+		ClusterName:      clusterName,
+		VpcId:            vpcID,
+		FinalizerManager: finalizerManager,
+	}).SetupWithManager(mgr, maxNodeConcurrentReconciles); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CNINode")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 	setupLog.Info("setting up webhook server")
 	webhookServer := mgr.GetWebhookServer()

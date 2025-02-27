@@ -82,7 +82,7 @@ var (
 
 	// NodeDeleteRequeueRequestDelay represents the time after which the resources belonging to a node will be cleaned
 	// up after receiving the actual node delete event.
-	NodeDeleteRequeueRequestDelay = time.Minute * 5
+	NodeDeleteRequeueRequestDelay = time.Minute * 1
 
 	prometheusRegistered = false
 

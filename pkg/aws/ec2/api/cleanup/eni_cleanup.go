@@ -87,7 +87,6 @@ func (e *ClusterENICleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manag
 func (e *ClusterENICleaner) Start(ctx context.Context) error {
 	e.Log.Info("starting eni clean up routine")
 
-	// Start routine to listen for shut down signal, on receiving the signal it set shutdown to true
 	go func() {
 		<-ctx.Done()
 		e.shutdown = true
