@@ -244,8 +244,8 @@ func getMockTrunk() trunkENI {
 		uidToBranchENIMap: map[string][]*ENIDetails{},
 		nodeNameTag: []*awsEc2.Tag{
 			{
-				Key:   aws.String(config.NetworkInterfaceNodenameKey),
-				Value: aws.String(FakeInstance.Name()),
+				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
+				Value: aws.String(FakeInstance.InstanceID()),
 			},
 		},
 	}

@@ -154,7 +154,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			if val, ok := cniNode.ObjectMeta.Labels[config.NodeLabelOS]; ok && val == config.OSLinux {
 				r.Log.Info("running the finalizer routine on cniNode", "cniNode", cniNode.Name)
 				cleaner := &cleanup.NodeTerminationCleaner{
-					NodeName: cniNode.Name,
+					NodeID: cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey],
 				}
 				cleaner.ENICleaner = &cleanup.ENICleaner{
 					EC2Wrapper: r.EC2Wrapper,
@@ -164,9 +164,9 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				}
 
 				if err := cleaner.DeleteLeakedResources(); err != nil {
-					r.Log.Error(err, "failed to cleanup resources during node termination, request will be requeued")
+					r.Log.Error(err, "failed to cleanup resources during node termination")
 					// Return err if failed to delete leaked ENIs on node so it can be retried
-					return ctrl.Result{}, err
+					return ctrl.Result{}, nil
 				}
 			}
 

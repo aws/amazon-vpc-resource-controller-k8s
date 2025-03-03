@@ -67,7 +67,7 @@ const (
 	NetworkInterfaceOwnerTagKey         = "eks:eni:owner"
 	NetworkInterfaceOwnerTagValue       = "eks-vpc-resource-controller"
 	NetworkInterfaceOwnerVPCCNITagValue = "amazon-vpc-cni"
-	NetworkInterfaceNodenameKey         = "node.k8s.amazonaws.com/nodename"
+	NetworkInterfaceNodeIDKey           = "node.k8s.amazonaws.com/instance_id"
 	CNINodeClusterNameKey               = "cluster.k8s.amazonaws.com/name"
 )
 

@@ -180,8 +180,8 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 		uidToBranchENIMap: make(map[string][]*ENIDetails),
 		nodeNameTag: []*awsEC2.Tag{
 			{
-				Key:   aws.String(config.NetworkInterfaceNodenameKey),
-				Value: aws.String(instance.Name()),
+				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
+				Value: aws.String(instance.InstanceID()),
 			},
 		},
 	}

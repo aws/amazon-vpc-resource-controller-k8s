@@ -21,15 +21,15 @@ import (
 
 // NodeTerminationCleanerto handle resource cleanup at node termination
 type NodeTerminationCleaner struct {
-	NodeName string
+	NodeID string
 	*ENICleaner
 }
 
 func (n *NodeTerminationCleaner) GetENITagFilters() []*ec2.Filter {
 	return []*ec2.Filter{
 		{
-			Name:   aws.String("tag:" + config.NetworkInterfaceNodenameKey),
-			Values: []*string{aws.String(n.NodeName)},
+			Name:   aws.String("tag:" + config.NetworkInterfaceNodeIDKey),
+			Values: []*string{aws.String(n.NodeID)},
 		},
 	}
 }

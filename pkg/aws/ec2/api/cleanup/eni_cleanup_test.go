@@ -31,7 +31,7 @@ import (
 
 var (
 	mockClusterName       = "cluster-name"
-	mockNodeName          = "node-name"
+	mockNodeID            = "i-00000000000000001"
 	mockClusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, mockClusterName)
 
 	mockNetworkInterfaceId1 = "eni-000000000000000"
@@ -62,7 +62,7 @@ var (
 		},
 	}
 
-	mockNodenameTagInput = &ec2.DescribeNetworkInterfacesInput{
+	mockNodeIDTagInput = &ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{
 				Name:   aws.String("status"),
@@ -78,8 +78,8 @@ var (
 				Values: []*string{aws.String(mockVpcId)},
 			},
 			{
-				Name:   aws.String("tag:" + config.NetworkInterfaceNodenameKey),
-				Values: []*string{aws.String(mockNodeName)},
+				Name:   aws.String("tag:" + config.NetworkInterfaceNodeIDKey),
+				Values: []*string{aws.String(mockNodeID)},
 			},
 		},
 	}
@@ -172,7 +172,7 @@ func TestENICleaner_DeleteLeakedResources(t *testing.T) {
 			name: "NodeTerminationENICleaner, verifies ENIs are deleted on node termination",
 			getENICleaner: func() (*ENICleaner, *ClusterENICleaner) {
 				mocknodeCleaner := &NodeTerminationCleaner{
-					NodeName: mockNodeName,
+					NodeID: mockNodeID,
 				}
 				mocknodeCleaner.ENICleaner = &ENICleaner{
 					Manager: mocknodeCleaner,
@@ -185,14 +185,14 @@ func TestENICleaner_DeleteLeakedResources(t *testing.T) {
 				gomock.InOrder(
 
 					// Return network interface 1 and 2 in first cycle, expect to call delete on both
-					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfaces(mockNodenameTagInput).
+					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfaces(mockNodeIDTagInput).
 						Return(mockDescribeInterfaceOpWith1And2, nil),
 					f.mockEC2Wrapper.EXPECT().DeleteNetworkInterface(
 						&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId1}).Return(nil, nil),
 					f.mockEC2Wrapper.EXPECT().DeleteNetworkInterface(
 						&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId2}).Return(nil, nil),
 					// Return network interface 1 and 3 in the second cycle, again expect to call delete on both
-					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfaces(mockNodenameTagInput).
+					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfaces(mockNodeIDTagInput).
 						Return(mockDescribeInterfaceOpWith1And3, nil),
 					f.mockEC2Wrapper.EXPECT().DeleteNetworkInterface(
 						&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId1}).Return(nil, nil),
