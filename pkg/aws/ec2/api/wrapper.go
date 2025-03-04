@@ -357,6 +357,12 @@ var (
 			Help: "The number of errors encountered while making call to describe network interfaces (paginated)",
 		},
 	)
+	NodeTerminationENICleanupFailure = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "node_termination_eni_cleanup_failures_total",
+			Help: "Total number of ENI cleanup failures during node termination, tracked per cleanup attempt",
+		},
+	)
 
 	prometheusRegistered = false
 )
@@ -403,6 +409,7 @@ func prometheusRegister() {
 			LeakedENIClusterCleanupCnt,
 			ec2DescribeNetworkInterfacesPagesAPICallCnt,
 			ec2DescribeNetworkInterfacesPagesAPIErrCnt,
+			NodeTerminationENICleanupFailure,
 		)
 
 		prometheusRegistered = true

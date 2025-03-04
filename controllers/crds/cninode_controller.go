@@ -165,6 +165,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 				if err := cleaner.DeleteLeakedResources(); err != nil {
 					r.Log.Error(err, "failed to cleanup resources during node termination")
+					ec2API.NodeTerminationENICleanupFailure.Inc()
 				}
 			}
 
