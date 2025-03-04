@@ -23,12 +23,13 @@ import (
 const (
 	UnsupportedInstanceTypeReason       = "Unsupported"
 	InsufficientCidrBlocksReason        = "InsufficientCidrBlocks"
-	CNINodeCreatedReason                = "CNINodeCreation"
 	NodeTrunkInitiatedReason            = "NodeTrunkInitiated"
 	NodeTrunkFailedInitializationReason = "NodeTrunkFailedInit"
 	EniConfigNameNotFoundReason         = "EniConfigNameNotFound"
 	VersionNotice                       = "ControllerVersionNotice"
 	BranchENICoolDownUpdateReason       = "BranchENICoolDownPeriodUpdated"
+	CNINodeDeleteFailed                 = "CNINodeDeletionFailed"
+	CNINodeCreateFailed                 = "CNINodeCreationFailed"
 )
 
 func SendNodeEventWithNodeName(client k8s.K8sWrapper, nodeName, reason, msg, eventType string, logger logr.Logger) {
