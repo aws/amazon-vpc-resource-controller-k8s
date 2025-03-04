@@ -86,15 +86,15 @@ var (
 
 	mockDescribeInterfaceOpWith1And2 = &ec2.DescribeNetworkInterfacesOutput{
 		NetworkInterfaces: []*ec2.NetworkInterface{
-			{NetworkInterfaceId: &mockNetworkInterfaceId1},
-			{NetworkInterfaceId: &mockNetworkInterfaceId2},
+			{NetworkInterfaceId: &mockNetworkInterfaceId1, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
+			{NetworkInterfaceId: &mockNetworkInterfaceId2, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
 		},
 	}
 
 	mockDescribeInterfaceOpWith1And3 = &ec2.DescribeNetworkInterfacesOutput{
 		NetworkInterfaces: []*ec2.NetworkInterface{
-			{NetworkInterfaceId: &mockNetworkInterfaceId1},
-			{NetworkInterfaceId: &mockNetworkInterfaceId3},
+			{NetworkInterfaceId: &mockNetworkInterfaceId1, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
+			{NetworkInterfaceId: &mockNetworkInterfaceId3, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
 		},
 	}
 )
