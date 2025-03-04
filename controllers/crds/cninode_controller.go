@@ -165,8 +165,6 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 				if err := cleaner.DeleteLeakedResources(); err != nil {
 					r.Log.Error(err, "failed to cleanup resources during node termination")
-					// Return err if failed to delete leaked ENIs on node so it can be retried
-					return ctrl.Result{}, nil
 				}
 			}
 
