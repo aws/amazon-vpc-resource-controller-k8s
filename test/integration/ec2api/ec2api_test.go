@@ -90,7 +90,7 @@ var _ = Describe("[LOCAL] Test IAM permissions for EC2 API calls", func() {
 			Expect(err != nil).To(Equal(wantErr))
 		})
 		Context("CreateNetworkInterfacePermission on ENI WITH required tag eks:eni:owner=eks-vpc-resource-controller", func() {
-			It("it should not grant CreateNetworkInterfacePermission", func() {
+			It("it should grant CreateNetworkInterfacePermission", func() {
 				By("creating network interface")
 				nwInterfaceOp, err := ec2Client.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
 					SubnetId: aws.String(subnetID),

@@ -161,7 +161,7 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 					}
 					continue
 				}
-				e.Log.Info("deleted leaked ENI successfully", "eni id", nwInterface.NetworkInterfaceId)
+				e.Log.Info("deleted leaked ENI successfully", "eni id", nwInterface.NetworkInterfaceId, "instance id", nwInterface.Attachment.InstanceId)
 			} else {
 				// Seeing the ENI for the first time, add it to the new list of available network interfaces
 				availableENIs[*nwInterface.NetworkInterfaceId] = struct{}{}
