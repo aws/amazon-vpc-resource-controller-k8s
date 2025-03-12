@@ -24,13 +24,11 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/go-logr/logr"
 )
 
-var (
-	ENIDescription = "aws-k8s-eni"
-)
+var ENIDescription = "aws-k8s-eni"
 
 type eniManager struct {
 	// instance is the pointer to the instance details
