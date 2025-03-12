@@ -14,34 +14,34 @@
 package autoscaling
 
 import (
+	"context"
 	"fmt"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/autoscaling"
-	"github.com/aws/aws-sdk-go/service/autoscaling/autoscalingiface"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
+	autoscalingtypes "github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 )
 
 type Manager interface {
-	DescribeAutoScalingGroup(autoScalingGroupName string) ([]*autoscaling.Group, error)
-	UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int64) error
+	DescribeAutoScalingGroup(autoScalingGroupName string) ([]autoscalingtypes.AutoScalingGroup, error)
+	UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int32) error
 }
 
 type defaultManager struct {
-	autoscalingiface.AutoScalingAPI
+	AutoScalingAPI *autoscaling.Client
 }
 
-func NewManager(session *session.Session) Manager {
+func NewManager(cfg aws.Config) Manager {
 	return &defaultManager{
-		AutoScalingAPI: autoscaling.New(session),
+		AutoScalingAPI: autoscaling.NewFromConfig(cfg),
 	}
 }
 
-func (d defaultManager) DescribeAutoScalingGroup(autoScalingGroupName string) ([]*autoscaling.Group, error) {
+func (d defaultManager) DescribeAutoScalingGroup(autoScalingGroupName string) ([]autoscalingtypes.AutoScalingGroup, error) {
 	describeAutoScalingGroupIp := &autoscaling.DescribeAutoScalingGroupsInput{
-		AutoScalingGroupNames: aws.StringSlice([]string{autoScalingGroupName}),
+		AutoScalingGroupNames: []string{autoScalingGroupName},
 	}
-	asg, err := d.AutoScalingAPI.DescribeAutoScalingGroups(describeAutoScalingGroupIp)
+	asg, err := d.AutoScalingAPI.DescribeAutoScalingGroups(context.TODO(), describeAutoScalingGroupIp)
 	if err != nil {
 		return nil, err
 	}
@@ -52,13 +52,13 @@ func (d defaultManager) DescribeAutoScalingGroup(autoScalingGroupName string) ([
 	return asg.AutoScalingGroups, nil
 }
 
-func (d defaultManager) UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int64) error {
+func (d defaultManager) UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int32) error {
 	updateASGInput := &autoscaling.UpdateAutoScalingGroupInput{
 		AutoScalingGroupName: aws.String(asgName),
-		DesiredCapacity:      aws.Int64(desiredSize),
-		MaxSize:              aws.Int64(maxSize),
-		MinSize:              aws.Int64(minSize),
+		DesiredCapacity:      aws.Int32(desiredSize),
+		MaxSize:              aws.Int32(maxSize),
+		MinSize:              aws.Int32(minSize),
 	}
-	_, err := d.AutoScalingAPI.UpdateAutoScalingGroup(updateASGInput)
+	_, err := d.AutoScalingAPI.UpdateAutoScalingGroup(context.TODO(), updateASGInput)
 	return err
 }
