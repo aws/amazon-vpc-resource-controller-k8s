@@ -15,7 +15,6 @@ package windows_test
 
 import (
 	"fmt"
-
 	"math/rand"
 	"strconv"
 	"time"
@@ -27,7 +26,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
 	testUtils "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -336,7 +335,6 @@ var _ = Describe("Windows Integration Stress Tests", func() {
 		})
 
 		It("controller should not impact existing Pods", func() {
-
 			By("creating a job and waiting it to run")
 			_, err = frameWork.JobManager.CreateJobAndWaitForJobToRun(ctx, clientJob)
 			Expect(err).ToNot(HaveOccurred())
@@ -386,7 +384,8 @@ func RestartControllerAtRandomIntervals(interval int, force bool, done chan stru
 }
 
 func CreateAndDeleteDeploymentAtRandomInterval(maxInterval int, deployment *appsV1.Deployment,
-	podLabelKey string, podLabelVal string, done chan struct{}) {
+	podLabelKey string, podLabelVal string, done chan struct{},
+) {
 	defer GinkgoRecover()
 
 	By("starting continuous deployment creation and deletion")
