@@ -15,6 +15,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -22,7 +23,6 @@ import (
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
 	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
-
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
@@ -206,4 +206,21 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentUnmanagedWithoutInstanceNode(
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
+}
+
+func TestNodeReconciler_Reconcile_AddNode_Internal_Server_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	internalServerError := errors.NewInternalError(fmt.Errorf("internal server error"))
+	mock := NewNodeMock(ctrl, mockNodeObj)
+
+	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	mock.Manager.EXPECT().GetNode(mockNodeName).Return(nil, false).Times(1)
+	mock.Manager.EXPECT().AddNode(mockNodeName).Return(internalServerError)
+	mock.Manager.EXPECT().CheckNodeForLeakedENIs(mockNodeName).Times(0)
+	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
+
+	assert.Error(t, err, "We return error on internal server error to make sure it gets requeued by controller-runtime.")
+	assert.False(t, res.Requeue)
 }
