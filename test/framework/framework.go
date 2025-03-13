@@ -14,6 +14,8 @@
 package framework
 
 import (
+	"context"
+
 	eniConfig "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	cninode "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	sgp "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
@@ -30,9 +32,8 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/service"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/serviceaccount"
 	sgpManager "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	awsConfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -45,7 +46,7 @@ import (
 type Framework struct {
 	Options            Options
 	K8sClient          client.Client
-	ec2Client          *ec2.EC2
+	ec2Client          *ec2.Client
 	DeploymentManager  deployment.Manager
 	PodManager         pod.Manager
 	EC2Manager         *ec2Manager.Manager
@@ -87,10 +88,11 @@ func New(options Options) *Framework {
 	k8sClient, err := client.New(config, client.Options{Scheme: k8sSchema, Cache: &client.CacheOptions{Reader: cache}})
 	Expect(err).NotTo(HaveOccurred())
 
-	sess := session.Must(session.NewSession(&aws.Config{
-		Region: aws.String(options.AWSRegion),
-	}))
-	ec2 := ec2.New(sess, &aws.Config{Region: aws.String(options.AWSRegion)})
+	cfg, err := awsConfig.LoadDefaultConfig(context.TODO(),
+		awsConfig.WithRegion(options.AWSRegion),
+	)
+
+	ec2 := ec2.NewFromConfig(cfg)
 
 	return &Framework{
 		K8sClient:          k8sClient,
@@ -107,7 +109,7 @@ func New(options Options) *Framework {
 		ControllerManager:  controller.NewManager(k8sClient),
 		RBACManager:        rbac.NewManager(k8sClient),
 		ConfigMapManager:   configmap.NewManager(k8sClient),
-		AutoScalingManager: autoscaling.NewManager(sess),
+		AutoScalingManager: autoscaling.NewManager(cfg),
 		Options:            options,
 	}
 }

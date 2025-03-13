@@ -14,17 +14,25 @@
 package api
 
 import (
-	"fmt"
+	"context"
+	"net/url"
 
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
-
-	"github.com/aws/aws-sdk-go/aws/request"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
+	smithyendpoints "github.com/aws/smithy-go/endpoints"
 )
 
-// injectUserAgent will inject app specific user-agent into awsSDK
-func injectUserAgent(handlers *request.Handlers) {
-	handlers.Build.PushFrontNamed(request.NamedHandler{
-		Name: fmt.Sprintf("%s/user-agent", AppName),
-		Fn:   request.MakeAddToUserAgentHandler(AppName, version.GitVersion),
-	})
+type stsResolverV2 struct {
+	endpoint string
+}
+
+func (r stsResolverV2) ResolveEndpoint(ctx context.Context, param sts.EndpointParameters) (
+	smithyendpoints.Endpoint, error,
+) {
+	u, err := url.Parse(r.endpoint)
+	if err != nil {
+		return smithyendpoints.Endpoint{}, err
+	}
+	return smithyendpoints.Endpoint{
+		URI: *u,
+	}, nil
 }

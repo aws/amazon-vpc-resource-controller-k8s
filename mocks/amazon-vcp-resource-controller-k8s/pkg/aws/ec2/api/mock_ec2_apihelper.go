@@ -21,7 +21,8 @@ import (
 	reflect "reflect"
 
 	config "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	ec2 "github.com/aws/aws-sdk-go/service/ec2"
+	ec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	gomock "github.com/golang/mock/gomock"
 )
 
@@ -79,7 +80,7 @@ func (mr *MockEC2APIHelperMockRecorder) AssociateBranchToTrunk(arg0, arg1, arg2 
 }
 
 // AttachNetworkInterfaceToInstance mocks base method.
-func (m *MockEC2APIHelper) AttachNetworkInterfaceToInstance(arg0, arg1 *string, arg2 *int64) (*string, error) {
+func (m *MockEC2APIHelper) AttachNetworkInterfaceToInstance(arg0, arg1 *string, arg2 *int32) (*string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AttachNetworkInterfaceToInstance", arg0, arg1, arg2)
 	ret0, _ := ret[0].(*string)
@@ -94,10 +95,10 @@ func (mr *MockEC2APIHelperMockRecorder) AttachNetworkInterfaceToInstance(arg0, a
 }
 
 // CreateAndAttachNetworkInterface mocks base method.
-func (m *MockEC2APIHelper) CreateAndAttachNetworkInterface(arg0, arg1 *string, arg2 []string, arg3 []*ec2.Tag, arg4 *int64, arg5, arg6 *string, arg7 *config.IPResourceCount) (*ec2.NetworkInterface, error) {
+func (m *MockEC2APIHelper) CreateAndAttachNetworkInterface(arg0, arg1 *string, arg2 []string, arg3 []types.Tag, arg4 *int32, arg5, arg6 *string, arg7 *config.IPResourceCount) (*types.NetworkInterface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateAndAttachNetworkInterface", arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
-	ret0, _ := ret[0].(*ec2.NetworkInterface)
+	ret0, _ := ret[0].(*types.NetworkInterface)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -109,10 +110,10 @@ func (mr *MockEC2APIHelperMockRecorder) CreateAndAttachNetworkInterface(arg0, ar
 }
 
 // CreateNetworkInterface mocks base method.
-func (m *MockEC2APIHelper) CreateNetworkInterface(arg0, arg1 *string, arg2 []string, arg3 []*ec2.Tag, arg4 *config.IPResourceCount, arg5 *string) (*ec2.NetworkInterface, error) {
+func (m *MockEC2APIHelper) CreateNetworkInterface(arg0, arg1 *string, arg2 []string, arg3 []types.Tag, arg4 *config.IPResourceCount, arg5 *string) (*types.NetworkInterface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateNetworkInterface", arg0, arg1, arg2, arg3, arg4, arg5)
-	ret0, _ := ret[0].(*ec2.NetworkInterface)
+	ret0, _ := ret[0].(*types.NetworkInterface)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -138,10 +139,10 @@ func (mr *MockEC2APIHelperMockRecorder) DeleteNetworkInterface(arg0 interface{})
 }
 
 // DescribeNetworkInterfaces mocks base method.
-func (m *MockEC2APIHelper) DescribeNetworkInterfaces(arg0 []*string) ([]*ec2.NetworkInterface, error) {
+func (m *MockEC2APIHelper) DescribeNetworkInterfaces(arg0 []string) ([]types.NetworkInterface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DescribeNetworkInterfaces", arg0)
-	ret0, _ := ret[0].([]*ec2.NetworkInterface)
+	ret0, _ := ret[0].([]types.NetworkInterface)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -153,10 +154,10 @@ func (mr *MockEC2APIHelperMockRecorder) DescribeNetworkInterfaces(arg0 interface
 }
 
 // DescribeTrunkInterfaceAssociation mocks base method.
-func (m *MockEC2APIHelper) DescribeTrunkInterfaceAssociation(arg0 *string) ([]*ec2.TrunkInterfaceAssociation, error) {
+func (m *MockEC2APIHelper) DescribeTrunkInterfaceAssociation(arg0 *string) ([]types.TrunkInterfaceAssociation, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "DescribeTrunkInterfaceAssociation", arg0)
-	ret0, _ := ret[0].([]*ec2.TrunkInterfaceAssociation)
+	ret0, _ := ret[0].([]types.TrunkInterfaceAssociation)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -196,10 +197,10 @@ func (mr *MockEC2APIHelperMockRecorder) DetachNetworkInterfaceFromInstance(arg0 
 }
 
 // GetBranchNetworkInterface mocks base method.
-func (m *MockEC2APIHelper) GetBranchNetworkInterface(arg0, arg1 *string) ([]*ec2.NetworkInterface, error) {
+func (m *MockEC2APIHelper) GetBranchNetworkInterface(arg0, arg1 *string) ([]*types.NetworkInterface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetBranchNetworkInterface", arg0, arg1)
-	ret0, _ := ret[0].([]*ec2.NetworkInterface)
+	ret0, _ := ret[0].([]*types.NetworkInterface)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -211,10 +212,10 @@ func (mr *MockEC2APIHelperMockRecorder) GetBranchNetworkInterface(arg0, arg1 int
 }
 
 // GetInstanceDetails mocks base method.
-func (m *MockEC2APIHelper) GetInstanceDetails(arg0 *string) (*ec2.Instance, error) {
+func (m *MockEC2APIHelper) GetInstanceDetails(arg0 *string) (*types.Instance, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetInstanceDetails", arg0)
-	ret0, _ := ret[0].(*ec2.Instance)
+	ret0, _ := ret[0].(*types.Instance)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -226,10 +227,10 @@ func (mr *MockEC2APIHelperMockRecorder) GetInstanceDetails(arg0 interface{}) *go
 }
 
 // GetInstanceNetworkInterface mocks base method.
-func (m *MockEC2APIHelper) GetInstanceNetworkInterface(arg0 *string) ([]*ec2.InstanceNetworkInterface, error) {
+func (m *MockEC2APIHelper) GetInstanceNetworkInterface(arg0 *string) ([]types.InstanceNetworkInterface, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetInstanceNetworkInterface", arg0)
-	ret0, _ := ret[0].([]*ec2.InstanceNetworkInterface)
+	ret0, _ := ret[0].([]types.InstanceNetworkInterface)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -241,10 +242,10 @@ func (mr *MockEC2APIHelperMockRecorder) GetInstanceNetworkInterface(arg0 interfa
 }
 
 // GetSubnet mocks base method.
-func (m *MockEC2APIHelper) GetSubnet(arg0 *string) (*ec2.Subnet, error) {
+func (m *MockEC2APIHelper) GetSubnet(arg0 *string) (*types.Subnet, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetSubnet", arg0)
-	ret0, _ := ret[0].(*ec2.Subnet)
+	ret0, _ := ret[0].(*types.Subnet)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

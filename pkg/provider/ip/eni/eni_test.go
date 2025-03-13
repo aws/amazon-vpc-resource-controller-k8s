@@ -18,12 +18,13 @@ import (
 	"reflect"
 	"testing"
 
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -60,54 +61,54 @@ var (
 
 	instanceType = "t3.small"
 
-	nwInterfaces = []*ec2.InstanceNetworkInterface{
+	nwInterfaces = []ec2types.InstanceNetworkInterface{
 		{
 			NetworkInterfaceId: &eniID1,
-			PrivateIpAddresses: []*ec2.InstancePrivateIpAddress{
+			PrivateIpAddresses: []ec2types.InstancePrivateIpAddress{
 				{PrivateIpAddress: &ip1, Primary: aws.Bool(false)},
 				{PrivateIpAddress: &ip2, Primary: aws.Bool(false)},
 			},
-			Ipv4Prefixes: []*ec2.InstanceIpv4Prefix{
+			Ipv4Prefixes: []ec2types.InstanceIpv4Prefix{
 				{Ipv4Prefix: &prefix1},
 			},
 		},
 		{
 			NetworkInterfaceId: &eniID2,
-			PrivateIpAddresses: []*ec2.InstancePrivateIpAddress{
+			PrivateIpAddresses: []ec2types.InstancePrivateIpAddress{
 				{PrivateIpAddress: &ip3, Primary: aws.Bool(false)},
 			},
 		},
 	}
 
-	networkInterface1 = &ec2.NetworkInterface{
+	networkInterface1 = ec2types.NetworkInterface{
 		NetworkInterfaceId: &eniID2,
-		PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+		PrivateIpAddresses: []ec2types.NetworkInterfacePrivateIpAddress{
 			{PrivateIpAddress: &ip1, Primary: aws.Bool(true)},
 			{PrivateIpAddress: &ip2, Primary: aws.Bool(false)},
 			{PrivateIpAddress: &ip3, Primary: aws.Bool(false)},
 			{PrivateIpAddress: &ip4, Primary: aws.Bool(false)},
 		},
 	}
-	networkInterface2 = &ec2.NetworkInterface{
+	networkInterface2 = ec2types.NetworkInterface{
 		NetworkInterfaceId: &eniID2,
-		PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+		PrivateIpAddresses: []ec2types.NetworkInterfacePrivateIpAddress{
 			{PrivateIpAddress: &ip5, Primary: aws.Bool(true)},
 			{PrivateIpAddress: &ip6, Primary: aws.Bool(false)},
 		},
 	}
-	networkInterface3 = &ec2.NetworkInterface{
+	networkInterface3 = ec2types.NetworkInterface{
 		NetworkInterfaceId: &eniID3,
-		PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+		PrivateIpAddresses: []ec2types.NetworkInterfacePrivateIpAddress{
 			{PrivateIpAddress: &ip1, Primary: aws.Bool(true)},
 		},
-		Ipv4Prefixes: []*ec2.Ipv4PrefixSpecification{{Ipv4Prefix: &prefix1}},
+		Ipv4Prefixes: []ec2types.Ipv4PrefixSpecification{{Ipv4Prefix: &prefix1}},
 	}
-	networkInterface4 = &ec2.NetworkInterface{
+	networkInterface4 = ec2types.NetworkInterface{
 		NetworkInterfaceId: &eniID3,
-		PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+		PrivateIpAddresses: []ec2types.NetworkInterfacePrivateIpAddress{
 			{PrivateIpAddress: &ip1, Primary: aws.Bool(true)},
 		},
-		Ipv4Prefixes: []*ec2.Ipv4PrefixSpecification{{Ipv4Prefix: &prefix1}, {Ipv4Prefix: &prefix2}, {Ipv4Prefix: &prefix3}},
+		Ipv4Prefixes: []ec2types.Ipv4PrefixSpecification{{Ipv4Prefix: &prefix1}, {Ipv4Prefix: &prefix2}, {Ipv4Prefix: &prefix3}},
 	}
 	log = zap.New(zap.UseDevMode(true)).WithName("eni manager")
 

@@ -7,7 +7,7 @@ The list of direct and indirect dependency for this package.
 
 * `https://github.com/google/uuid`
 
-* `https://github.com/aws/aws-sdk-go`
+* `https://github.com/aws/aws-sdk-go-v2`
 
 * `https://gopkg.in/yaml.v2`
 
@@ -163,7 +163,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ###License Attribution 
 Copyright (c) 2009,2014 Google Inc. All rights reserved.
 
-##https://github.com/aws/aws-sdk-go
+##https://github.com/aws/aws-sdk-go-v2
 
 ###License: Apache-2.0
 
