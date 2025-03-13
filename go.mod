@@ -1,6 +1,8 @@
 module github.com/aws/amazon-vpc-resource-controller-k8s
 
-go 1.22.5
+go 1.23.0
+
+toolchain go1.23.4
 
 require (
 	github.com/aws/amazon-vpc-cni-k8s v1.18.3
@@ -67,7 +69,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d
 	golang.org/x/net v0.30.0 // indirect
-	golang.org/x/oauth2 v0.21.0 // indirect
+	golang.org/x/oauth2 v0.27.0 // indirect
 	golang.org/x/sys v0.26.0 // indirect
 	golang.org/x/term v0.25.0 // indirect
 	golang.org/x/text v0.19.0 // indirect
