@@ -248,7 +248,7 @@ func main() {
 	var cancelFn context.CancelFunc
 	var ctx context.Context
 	ctx, cancelFn = context.WithCancel(ctrl.SetupSignalHandler())
-	setupLog.Info("Enable network policy controller based on configuration", "configmap", utils.GetControllerConfigMapId())
+	setupLog.Info("Enable the controller based on configuration", "configmap", utils.GetControllerConfigMapId())
 	configMapManager := netpolconfig.NewConfigmapManager(utils.GetControllerConfigMapId(),
 		clientSet, cancelFn, utils.GetConfigmapCheckFn(), ctrl.Log.WithName("configmap-manager"))
 	if err := configMapManager.MonitorConfigMap(ctx); err != nil {
@@ -256,10 +256,10 @@ func main() {
 		os.Exit(1)
 	}
 	enableController = configMapManager.IsControllerEnabled()
-	if !enableController {
-		setupLog.Info("Disabling leader election since network policy controller is not enabled")
-		enableLeaderElection = false
-	}
+	// if !enableController {
+	// 	setupLog.Info("Disabling leader election since the controller is not enabled")
+	// 	enableLeaderElection = false
+	// }
 
 	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
 		Scheme:                     scheme,
