@@ -27,6 +27,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -55,6 +56,7 @@ func RemoveDuplicatedSg(list []string) []string {
 
 type SecurityGroupForPodsAPI interface {
 	GetMatchingSecurityGroupForPods(pod *corev1.Pod) ([]string, error)
+	GetSecurityGroupPolicyListLength() int
 }
 
 type SecurityGroupForPods struct {
@@ -109,6 +111,19 @@ func (s *SecurityGroupForPods) GetMatchingSecurityGroupForPods(pod *corev1.Pod) 
 			"Security Groups", sgList)
 	}
 	return sgList, nil
+}
+
+// GetSecurityGroupPolicyListLength check if the cluster has SecurityGrouPolicy resources created
+// if List call failed for any reason the func return 1 as assuming the feature is on
+func (s *SecurityGroupForPods) GetSecurityGroupPolicyListLength() int {
+	ctx := context.Background()
+	sgpList := &vpcresourcesv1beta1.SecurityGroupPolicyList{}
+
+	if err := s.Client.List(ctx, sgpList, &client.ListOptions{Namespace: v1.NamespaceAll}); err != nil {
+		s.Log.Info("list sgp failed")
+		return 1
+	}
+	return len(sgpList.Items)
 }
 
 func (s *SecurityGroupForPods) filterPodSecurityGroups(

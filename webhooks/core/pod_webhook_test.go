@@ -159,6 +159,7 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 			},
 			mockInvocation: func(mock Mock) {
 				mock.SGPMock.EXPECT().GetMatchingSecurityGroupForPods(gomock.AssignableToTypeOf(sgpPod)).Return(sgList, nil)
+				mock.SGPMock.EXPECT().GetSecurityGroupPolicyListLength().Return(1)
 			},
 
 			want: admission.Response{
@@ -192,6 +193,7 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 			},
 			mockInvocation: func(mock Mock) {
 				mock.SGPMock.EXPECT().GetMatchingSecurityGroupForPods(gomock.AssignableToTypeOf(sgpPod)).Return(sgList, nil)
+				mock.SGPMock.EXPECT().GetSecurityGroupPolicyListLength().Return(1)
 			},
 
 			want: admission.Response{
@@ -225,6 +227,7 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 			},
 			mockInvocation: func(mock Mock) {
 				mock.SGPMock.EXPECT().GetMatchingSecurityGroupForPods(gomock.AssignableToTypeOf(sgpPod)).Return([]string{}, nil)
+				mock.SGPMock.EXPECT().GetSecurityGroupPolicyListLength().Return(1)
 			},
 
 			want: admission.Response{
@@ -245,6 +248,7 @@ func TestPodMutationWebHook_Handle(t *testing.T) {
 			},
 			mockInvocation: func(mock Mock) {
 				mock.SGPMock.EXPECT().GetMatchingSecurityGroupForPods(gomock.AssignableToTypeOf(sgpPod)).Return(nil, mockErr)
+				mock.SGPMock.EXPECT().GetSecurityGroupPolicyListLength().Return(1)
 			},
 
 			want: admission.Response{
