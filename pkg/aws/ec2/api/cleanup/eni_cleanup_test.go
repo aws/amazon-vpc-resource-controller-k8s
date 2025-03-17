@@ -84,18 +84,14 @@ var (
 		},
 	}
 
-	mockDescribeInterfaceOpWith1And2 = &ec2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*ec2.NetworkInterface{
-			{NetworkInterfaceId: &mockNetworkInterfaceId1, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
-			{NetworkInterfaceId: &mockNetworkInterfaceId2, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
-		},
+	NetworkInterfacesWith1And2 = []*ec2.NetworkInterface{
+		{NetworkInterfaceId: &mockNetworkInterfaceId1, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
+		{NetworkInterfaceId: &mockNetworkInterfaceId2, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
 	}
 
-	mockDescribeInterfaceOpWith1And3 = &ec2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*ec2.NetworkInterface{
-			{NetworkInterfaceId: &mockNetworkInterfaceId1, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
-			{NetworkInterfaceId: &mockNetworkInterfaceId3, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
-		},
+	NetworkInterfacesWith1And3 = []*ec2.NetworkInterface{
+		{NetworkInterfaceId: &mockNetworkInterfaceId1, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
+		{NetworkInterfaceId: &mockNetworkInterfaceId3, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
 	}
 )
 
@@ -145,11 +141,11 @@ func TestENICleaner_DeleteLeakedResources(t *testing.T) {
 			prepare: func(f *fields) {
 				gomock.InOrder(
 					// Return network interface 1 and 2 in first cycle
-					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfaces(mockClusterTagInput).
-						Return(mockDescribeInterfaceOpWith1And2, nil),
+					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfacesPagesWithRetry(mockClusterTagInput).
+						Return(NetworkInterfacesWith1And2, nil),
 					// Return network interface 1 and 3 in the second cycle
-					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfaces(mockClusterTagInput).
-						Return(mockDescribeInterfaceOpWith1And3, nil),
+					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfacesPagesWithRetry(mockClusterTagInput).
+						Return(NetworkInterfacesWith1And3, nil),
 					// Expect to delete the network interface 1
 					f.mockEC2Wrapper.EXPECT().DeleteNetworkInterface(
 						&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId1}).Return(nil, nil),
@@ -185,15 +181,15 @@ func TestENICleaner_DeleteLeakedResources(t *testing.T) {
 				gomock.InOrder(
 
 					// Return network interface 1 and 2 in first cycle, expect to call delete on both
-					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfaces(mockNodeIDTagInput).
-						Return(mockDescribeInterfaceOpWith1And2, nil),
+					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfacesPagesWithRetry(mockNodeIDTagInput).
+						Return(NetworkInterfacesWith1And2, nil),
 					f.mockEC2Wrapper.EXPECT().DeleteNetworkInterface(
 						&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId1}).Return(nil, nil),
 					f.mockEC2Wrapper.EXPECT().DeleteNetworkInterface(
 						&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId2}).Return(nil, nil),
 					// Return network interface 1 and 3 in the second cycle, again expect to call delete on both
-					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfaces(mockNodeIDTagInput).
-						Return(mockDescribeInterfaceOpWith1And3, nil),
+					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfacesPagesWithRetry(mockNodeIDTagInput).
+						Return(NetworkInterfacesWith1And3, nil),
 					f.mockEC2Wrapper.EXPECT().DeleteNetworkInterface(
 						&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId1}).Return(nil, nil),
 					f.mockEC2Wrapper.EXPECT().DeleteNetworkInterface(

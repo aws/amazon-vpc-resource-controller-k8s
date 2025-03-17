@@ -53,7 +53,7 @@ type EC2Wrapper interface {
 	AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
 	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error)
-	DescribeNetworkInterfacesPages(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2.NetworkInterface, error)
+	DescribeNetworkInterfacesPagesWithRetry(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2.NetworkInterface, error)
 	CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
 	DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error)
 	AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error)
@@ -704,35 +704,57 @@ func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfa
 	return describeNetworkInterfacesOutput, err
 }
 
-// DescribeNetworkInterfacesPages returns network interfaces that match the filters specified in the input with MaxResult set to 1000(max value)
-// The API is not used today, adding it for future use
-func (e *ec2Wrapper) DescribeNetworkInterfacesPages(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2.NetworkInterface, error) {
-	var networkInterfaces []*ec2.NetworkInterface
-	input.MaxResults = aws.Int64(config.DescribeNetworkInterfacesMaxResults)
+// DescribeNetworkInterfacesPages returns network interfaces that match the filters specified in the input
+// with retry mechanism for handling API throttling
+func (e *ec2Wrapper) DescribeNetworkInterfacesPagesWithRetry(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2.NetworkInterface, error) {
+	if input.MaxResults == nil {
+		input.MaxResults = aws.Int64(config.DescribeNetworkInterfacesMaxResults)
+	}
 
 	start := time.Now()
-	if err := e.userServiceClient.DescribeNetworkInterfacesPages(input, func(output *ec2.DescribeNetworkInterfacesOutput, _ bool) bool {
-		ec2APICallCnt.Inc()
-		ec2DescribeNetworkInterfacesPagesAPICallCnt.Inc()
-		//Currently only network interface ID and the tag set is require, only add required details to avoid consuming extra memory
-		for _, nwInterface := range output.NetworkInterfaces {
-			networkInterfaces = append(networkInterfaces, &ec2.NetworkInterface{
-				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
-				TagSet:             nwInterface.TagSet,
-			})
-		}
-		// Add jitter to avoid EC2 API throttling in the account
-		time.Sleep(wait.Jitter(500*time.Millisecond, 0.5))
-		return true
+	defer func() {
+		ec2APICallLatencies.WithLabelValues("describe_network_interfaces_pages").Observe(timeSinceMs(start))
+	}()
 
-	}); err != nil {
+	var apiError error
+	for attempt := 1; attempt <= MaxRetries; attempt++ {
+		attemptInterfaces := make([]*ec2.NetworkInterface, 0, config.DescribeNetworkInterfacesMaxResults)
+
+		err := e.userServiceClient.DescribeNetworkInterfacesPages(input, func(output *ec2.DescribeNetworkInterfacesOutput, _ bool) bool {
+			ec2APICallCnt.Inc()
+			ec2DescribeNetworkInterfacesPagesAPICallCnt.Inc()
+
+			// Currently only network interface ID and the tag set is required, only add required details to avoid consuming extra memory
+			for _, nwInterface := range output.NetworkInterfaces {
+				attemptInterfaces = append(attemptInterfaces, &ec2.NetworkInterface{
+					NetworkInterfaceId: nwInterface.NetworkInterfaceId,
+					TagSet:             nwInterface.TagSet,
+				})
+			}
+			// Default bucket size for paginated non-mutating call is 100 and refill rate is 20.
+			// According to this doc https://docs.aws.amazon.com/ec2/latest/devguide/ec2-api-throttling.html.
+			// This sleep range will keep api calls in range of 8-12 requests per second, well under refill rate.
+			time.Sleep(wait.Jitter(100*time.Millisecond, 0.2))
+			return true
+
+		})
+
+		if err == nil {
+			return attemptInterfaces, nil
+		}
 		ec2APIErrCnt.Inc()
 		ec2DescribeNetworkInterfacesPagesAPIErrCnt.Inc()
+		apiError = err
+
+		if request.IsErrorThrottle(err) && attempt < MaxRetries {
+			e.log.Info("Throttling error, will retry", "attempt", attempt)
+			backoff := time.Duration(attempt) * 500 * time.Millisecond
+			time.Sleep(wait.Jitter(backoff, 0.1))
+			continue
+		}
 		return nil, err
 	}
-	ec2APICallLatencies.WithLabelValues("describe_network_interfaces_pages").Observe(timeSinceMs(start))
-
-	return networkInterfaces, nil
+	return nil, apiError
 }
 
 func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
