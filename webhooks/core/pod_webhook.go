@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -41,10 +42,11 @@ const (
 
 // PodResourceInjector injects resources into Pods
 type PodMutationWebHook struct {
-	decoder   admission.Decoder
-	SGPAPI    utils.SecurityGroupForPodsAPI
-	Log       logr.Logger
-	Condition condition.Conditions
+	decoder    admission.Decoder
+	SGPAPI     utils.SecurityGroupForPodsAPI
+	Log        logr.Logger
+	Condition  condition.Conditions
+	sgpEnabled atomic.Bool
 }
 
 func NewPodMutationWebHook(
@@ -182,6 +184,14 @@ func (i *PodMutationWebHook) HandleWindowsPod(req admission.Request, pod *corev1
 // matches any SGP
 func (i *PodMutationWebHook) HandleLinuxPod(req admission.Request, pod *corev1.Pod,
 	log logr.Logger) (response admission.Response) {
+	if !i.sgpEnabled.Load() && i.SGPAPI.GetSecurityGroupPolicyListLength() == 0 {
+		i.Log.Info("security group for pods is disabled and webhook will be shortcut on linux pods requests")
+		return admission.Allowed("security group for pods is not enabled for linux pods at this moment")
+	}
+	if !i.sgpEnabled.Load() {
+		i.Log.Info("security group for pods is enabled and webhook will no longer shortcut linux pods requests")
+		i.sgpEnabled.Store(true)
+	}
 
 	sgList, err := i.SGPAPI.GetMatchingSecurityGroupForPods(pod)
 	if err != nil {

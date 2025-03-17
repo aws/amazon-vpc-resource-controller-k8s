@@ -61,3 +61,17 @@ func (mr *MockSecurityGroupForPodsAPIMockRecorder) GetMatchingSecurityGroupForPo
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMatchingSecurityGroupForPods", reflect.TypeOf((*MockSecurityGroupForPodsAPI)(nil).GetMatchingSecurityGroupForPods), arg0)
 }
+
+// GetSecurityGroupPolicyListLength mocks base method.
+func (m *MockSecurityGroupForPodsAPI) GetSecurityGroupPolicyListLength() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSecurityGroupPolicyListLength")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// GetSecurityGroupPolicyListLength indicates an expected call of GetSecurityGroupPolicyListLength.
+func (mr *MockSecurityGroupForPodsAPIMockRecorder) GetSecurityGroupPolicyListLength() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSecurityGroupPolicyListLength", reflect.TypeOf((*MockSecurityGroupForPodsAPI)(nil).GetSecurityGroupPolicyListLength))
+}
