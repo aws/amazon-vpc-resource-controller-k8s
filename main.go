@@ -425,17 +425,17 @@ func main() {
 	}
 
 	finalizerManager := k8s.NewDefaultFinalizerManager(mgr.GetClient(), ctrl.Log.WithName("finalizer manager"))
-	if err = (&crdcontroller.CNINodeReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		Context:          ctx,
-		Log:              ctrl.Log.WithName("controllers").WithName("CNINode"),
-		EC2Wrapper:       ec2Wrapper,
-		K8sAPI:           k8sApi,
-		ClusterName:      clusterName,
-		VpcId:            vpcID,
-		FinalizerManager: finalizerManager,
-	}).SetupWithManager(mgr, maxNodeConcurrentReconciles); err != nil {
+	if err = (crdcontroller.NewCNINodeReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		ctx,
+		ctrl.Log.WithName("controllers").WithName("CNINode"),
+		ec2Wrapper,
+		k8sApi,
+		clusterName,
+		vpcID,
+		finalizerManager,
+	).SetupWithManager(mgr, maxNodeConcurrentReconciles)); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CNINode")
 		os.Exit(1)
 	}

@@ -50,10 +50,10 @@ func NewCNINodeMock(ctrl *gomock.Controller, mockObjects ...client.Object) CNINo
 	return CNINodeMock{
 		Reconciler: CNINodeReconciler{
 			Client:      client,
-			Scheme:      scheme,
-			Log:         zap.New(),
-			ClusterName: mockClusterName,
-			VpcId:       "vpc-000000000000",
+			scheme:      scheme,
+			log:         zap.New(),
+			clusterName: mockClusterName,
+			vpcId:       "vpc-000000000000",
 		},
 	}
 }

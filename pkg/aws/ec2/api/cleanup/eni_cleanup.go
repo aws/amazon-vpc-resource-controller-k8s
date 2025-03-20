@@ -113,9 +113,7 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 	leakedENICount := 0
 	defer e.Manager.UpdateCleanupMetrics(&vpcrcAvailableCount, &vpccniAvailableCount, &leakedENICount)
 
-	filters := CommonNetworkInterfaceFilters
-	// Append the VPC-ID deep filter for the paginated call
-	filters = append(filters, []*ec2.Filter{
+	filters := append(CommonNetworkInterfaceFilters, []*ec2.Filter{
 		{
 			Name:   aws.String("vpc-id"),
 			Values: []*string{aws.String(e.VpcId)},
