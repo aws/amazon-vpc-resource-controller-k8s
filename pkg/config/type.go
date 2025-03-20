@@ -67,6 +67,7 @@ const (
 	NetworkInterfaceOwnerTagKey         = "eks:eni:owner"
 	NetworkInterfaceOwnerTagValue       = "eks-vpc-resource-controller"
 	NetworkInterfaceOwnerVPCCNITagValue = "amazon-vpc-cni"
+	NetworkInterfaceNodeIDKey           = "node.k8s.amazonaws.com/instance_id"
 	CNINodeClusterNameKey               = "cluster.k8s.amazonaws.com/name"
 )
 
@@ -89,6 +90,8 @@ const (
 	VpcCNIDaemonSetName            = "aws-node"
 	OldVPCControllerDeploymentName = "vpc-resource-controller"
 	BranchENICooldownPeriodKey     = "branch-eni-cooldown"
+	// DescribeNetworkInterfacesMaxResults defines the max number of requests to return for DescribeNetworkInterfaces API call
+	DescribeNetworkInterfacesMaxResults = int64(1000)
 )
 
 type ResourceType string

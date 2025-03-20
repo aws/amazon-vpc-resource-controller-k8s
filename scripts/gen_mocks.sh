@@ -3,9 +3,11 @@ alias mockgen='mockgen -copyright_file=templates/copyright.txt'
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api/mock_ec2_wrapper.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api EC2Wrapper
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api/mock_ec2_apihelper.go  github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api EC2APIHelper
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/mock_instance.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2 EC2Instance
+mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api/cleanup/mock_resource_cleaner.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup ResourceCleaner
 # package k8s mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/mock_k8swrapper.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s K8sWrapper
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod/mock_podapiwrapper.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s/pod PodClientAPIWrapper
+mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/mock_finalizer.go github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s FinalizerManager
 # package worker mocks
 mockgen -destination=../mocks/amazon-vcp-resource-controller-k8s/pkg/worker/mock_worker.go  github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker Worker
 # package handler mocks
