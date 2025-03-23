@@ -3250,6 +3250,51 @@ var Limits = map[string]*VPCLimits{
 		Hypervisor:  "xen",
 		IsBareMetal: false,
 	},
+	"f2.12xlarge": {
+		Interface:               8,
+		IPv4PerInterface:        30,
+		IsTrunkingCompatible:    true,
+		BranchInterface:         114,
+		DefaultNetworkCardIndex: 0,
+		NetworkCards: []NetworkCard{
+			{
+				MaximumNetworkInterfaces: 8,
+				NetworkCardIndex:         0,
+			},
+		},
+		Hypervisor:  "nitro",
+		IsBareMetal: false,
+	},
+	"f2.48xlarge": {
+		Interface:               15,
+		IPv4PerInterface:        50,
+		IsTrunkingCompatible:    true,
+		BranchInterface:         107,
+		DefaultNetworkCardIndex: 0,
+		NetworkCards: []NetworkCard{
+			{
+				MaximumNetworkInterfaces: 15,
+				NetworkCardIndex:         0,
+			},
+		},
+		Hypervisor:  "nitro",
+		IsBareMetal: false,
+	},
+	"f2.6xlarge": {
+		Interface:               8,
+		IPv4PerInterface:        30,
+		IsTrunkingCompatible:    true,
+		BranchInterface:         84,
+		DefaultNetworkCardIndex: 0,
+		NetworkCards: []NetworkCard{
+			{
+				MaximumNetworkInterfaces: 8,
+				NetworkCardIndex:         0,
+			},
+		},
+		Hypervisor:  "nitro",
+		IsBareMetal: false,
+	},
 	"g3.16xlarge": {
 		Interface:               15,
 		IPv4PerInterface:        50,
@@ -7649,6 +7694,36 @@ var Limits = map[string]*VPCLimits{
 		NetworkCards: []NetworkCard{
 			{
 				MaximumNetworkInterfaces: 4,
+				NetworkCardIndex:         0,
+			},
+		},
+		Hypervisor:  "nitro",
+		IsBareMetal: false,
+	},
+	"m7i-flex.12xlarge": {
+		Interface:               8,
+		IPv4PerInterface:        30,
+		IsTrunkingCompatible:    true,
+		BranchInterface:         114,
+		DefaultNetworkCardIndex: 0,
+		NetworkCards: []NetworkCard{
+			{
+				MaximumNetworkInterfaces: 8,
+				NetworkCardIndex:         0,
+			},
+		},
+		Hypervisor:  "nitro",
+		IsBareMetal: false,
+	},
+	"m7i-flex.16xlarge": {
+		Interface:               15,
+		IPv4PerInterface:        50,
+		IsTrunkingCompatible:    true,
+		BranchInterface:         107,
+		DefaultNetworkCardIndex: 0,
+		NetworkCards: []NetworkCard{
+			{
+				MaximumNetworkInterfaces: 15,
 				NetworkCardIndex:         0,
 			},
 		},

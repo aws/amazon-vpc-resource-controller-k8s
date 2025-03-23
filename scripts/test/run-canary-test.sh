@@ -115,6 +115,7 @@ function run_canary_tests() {
     echo "skipping Windows tests"
   fi
   (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 5m $GINKGO_TEST_BUILD_DIR/webhook.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
+  # (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 10m $GINKGO_TEST_BUILD_DIR/cninode.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
 }
 
 echo "Starting the ginkgo test suite"

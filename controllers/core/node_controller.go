@@ -58,6 +58,7 @@ var (
 // when the controller has to be restarted for various reasons.
 const (
 	NodeTerminationFinalizer = "networking.k8s.aws/resource-cleanup"
+	NodeTerminationFinalizer = "networking.k8s.aws/resource-cleanup"
 )
 
 // NodeReconciler reconciles a Node object
@@ -111,11 +112,34 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			}
 
 			// clean up local cached nodes
+	if nodeErr := r.Client.Get(ctx, req.NamespacedName, node); nodeErr != nil {
+		if errors.IsNotFound(nodeErr) {
+			// clean up CNINode finalizer
+			cniNode := &v1alpha1.CNINode{}
+			if cninodeErr := r.Client.Get(ctx, req.NamespacedName, cniNode); cninodeErr == nil {
+				if yes := controllerutil.ContainsFinalizer(cniNode, NodeTerminationFinalizer); yes {
+					updated := cniNode.DeepCopy()
+					if yes = controllerutil.RemoveFinalizer(updated, NodeTerminationFinalizer); yes {
+						if err := r.Client.Patch(ctx, updated, client.MergeFrom(cniNode)); err != nil {
+							return ctrl.Result{}, err
+						}
+						r.Log.Info("removed leaked CNINode resource's finalizer", "cninode", cniNode.Name)
+					}
+					leakedCNINodeResourceCount.Inc()
+				}
+			} else if !errors.IsNotFound(cninodeErr) {
+				return ctrl.Result{}, fmt.Errorf("failed getting CNINode %s from cached client, %w", cniNode.Name, cninodeErr)
+			}
+
+			// clean up local cached nodes
 			_, found := r.Manager.GetNode(req.Name)
 			if found {
 				cacheErr := r.Manager.DeleteNode(req.Name)
 				if cacheErr != nil {
+				cacheErr := r.Manager.DeleteNode(req.Name)
+				if cacheErr != nil {
 					// The request is not retryable so not returning the error
+					logger.Error(cacheErr, "failed to delete node from manager")
 					logger.Error(cacheErr, "failed to delete node from manager")
 					return ctrl.Result{}, nil
 				}
@@ -123,7 +147,10 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			}
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(nodeErr)
+		return ctrl.Result{}, client.IgnoreNotFound(nodeErr)
 	}
+
+	var err error
 
 	var err error
 
@@ -143,6 +170,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 }
 
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrentReconciles int, healthzHandler *rcHealthz.HealthzHandler) error {
+func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrentReconciles int, healthzHandler *rcHealthz.HealthzHandler) error {
 	// add health check on subpath for node controller
 	healthzHandler.AddControllersHealthCheckers(
 		map[string]healthz.Checker{"health-node-controller": r.Check()},
@@ -150,8 +178,11 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrentReconci
 
 	prometheusRegister()
 
+	prometheusRegister()
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles}).
 		Owns(&v1alpha1.CNINode{}).
 		Complete(r)
@@ -164,6 +195,12 @@ func (r *NodeReconciler) Check() healthz.Checker {
 		// this can test the referenced cached pod datastore
 		if !r.Conditions.GetPodDataStoreSyncStatus() {
 			r.Log.V(1).Info("***** node controller healthz enpoint tested Simple Ping *****")
+			return nil
+		}
+
+		if r.Manager.SkipHealthCheck() {
+			// node manager observes EC2 error on processing node, pausing reconciler check to avoid stressing the system
+			r.Log.Info("due to EC2 error, node controller skips node reconciler health check for now")
 			return nil
 		}
 
@@ -191,6 +228,14 @@ func (r *NodeReconciler) Check() healthz.Checker {
 		}, r.Log)
 
 		return err
+	}
+}
+
+func prometheusRegister() {
+	if !prometheusRegistered {
+		metrics.Registry.MustRegister(leakedCNINodeResourceCount)
+
+		prometheusRegistered = true
 	}
 }
 
