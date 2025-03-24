@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	"k8s.io/apimachinery/pkg/util/wait"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
@@ -51,12 +53,14 @@ type EC2Wrapper interface {
 	AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
 	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error)
+	DescribeNetworkInterfacesPagesWithRetry(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2.NetworkInterface, error)
 	CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
 	DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error)
 	AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error)
 	DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error)
 	ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error)
 	CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error)
+	DisassociateTrunkInterface(input *ec2.DisassociateTrunkInterfaceInput) error
 }
 
 var (
@@ -252,7 +256,7 @@ var (
 	ec2AssociateTrunkInterfaceAPIErrCnt = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "ec2_associate_trunk_interface_api_err_count",
-			Help: "The number of errors encountered while disassociating Trunk with Branch ENI",
+			Help: "The number of errors encountered while associating Trunk with Branch ENI",
 		},
 	)
 
@@ -306,6 +310,60 @@ var (
 		},
 	)
 
+	ec2DisassociateTrunkInterfaceCallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_disassociate_trunk_interface_api_req_count",
+			Help: "The number of calls made to EC2 to remove association between a branch and trunk network interface",
+		},
+	)
+
+	ec2DisassociateTrunkInterfaceErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_disassociate_trunk_interface_api_err_count",
+			Help: "The number of errors encountered while removing association between a branch and trunk network interface",
+		},
+	)
+
+	VpcCniAvailableClusterENICnt = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "vpc_cni_created_available_eni_count",
+			Help: "The number of available ENIs created by VPC-CNI that will tried to be deleted by the controller",
+		},
+	)
+
+	VpcRcAvailableClusterENICnt = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "vpc_rc_created_available_eni_count",
+			Help: "The number of available ENIs created by VPC-RC that will tried to be deleted by the controller",
+		},
+	)
+
+	LeakedENIClusterCleanupCnt = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "leaked_eni_count",
+			Help: "The number of available ENIs that failed to be deleted by the controller",
+		},
+	)
+
+	ec2DescribeNetworkInterfacesPagesAPICallCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_describe_network_interfaces_pages_api_call_count",
+			Help: "The number of calls made to describe network interfaces (paginated)",
+		},
+	)
+	ec2DescribeNetworkInterfacesPagesAPIErrCnt = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "ec2_describe_network_interfaces_pages_api_err_count",
+			Help: "The number of errors encountered while making call to describe network interfaces (paginated)",
+		},
+	)
+	NodeTerminationENICleanupFailure = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "node_termination_eni_cleanup_failures_total",
+			Help: "Total number of ENI cleanup failures during node termination, tracked per cleanup attempt",
+		},
+	)
+
 	prometheusRegistered = false
 )
 
@@ -344,9 +402,14 @@ func prometheusRegister() {
 			ec2modifyNetworkInterfaceAttributeAPICallCnt,
 			ec2modifyNetworkInterfaceAttributeAPIErrCnt,
 			ec2APICallLatencies,
-			vpccniAvailableENICnt,
-			vpcrcAvailableENICnt,
-			leakedENICnt,
+			ec2DisassociateTrunkInterfaceCallCnt,
+			ec2DisassociateTrunkInterfaceErrCnt,
+			VpcRcAvailableClusterENICnt,
+			VpcCniAvailableClusterENICnt,
+			LeakedENIClusterCleanupCnt,
+			ec2DescribeNetworkInterfacesPagesAPICallCnt,
+			ec2DescribeNetworkInterfacesPagesAPIErrCnt,
+			NodeTerminationENICleanupFailure,
 		)
 
 		prometheusRegistered = true
@@ -641,6 +704,59 @@ func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfa
 	return describeNetworkInterfacesOutput, err
 }
 
+// DescribeNetworkInterfacesPages returns network interfaces that match the filters specified in the input
+// with retry mechanism for handling API throttling
+func (e *ec2Wrapper) DescribeNetworkInterfacesPagesWithRetry(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2.NetworkInterface, error) {
+	if input.MaxResults == nil {
+		input.MaxResults = aws.Int64(config.DescribeNetworkInterfacesMaxResults)
+	}
+
+	start := time.Now()
+	defer func() {
+		ec2APICallLatencies.WithLabelValues("describe_network_interfaces_pages").Observe(timeSinceMs(start))
+	}()
+
+	var apiError error
+	for attempt := 1; attempt <= MaxRetries; attempt++ {
+		attemptInterfaces := make([]*ec2.NetworkInterface, 0, config.DescribeNetworkInterfacesMaxResults)
+
+		err := e.userServiceClient.DescribeNetworkInterfacesPages(input, func(output *ec2.DescribeNetworkInterfacesOutput, _ bool) bool {
+			ec2APICallCnt.Inc()
+			ec2DescribeNetworkInterfacesPagesAPICallCnt.Inc()
+
+			// Currently only network interface ID and the tag set is required, only add required details to avoid consuming extra memory
+			for _, nwInterface := range output.NetworkInterfaces {
+				attemptInterfaces = append(attemptInterfaces, &ec2.NetworkInterface{
+					NetworkInterfaceId: nwInterface.NetworkInterfaceId,
+					TagSet:             nwInterface.TagSet,
+				})
+			}
+			// Default bucket size for paginated non-mutating call is 100 and refill rate is 20.
+			// According to this doc https://docs.aws.amazon.com/ec2/latest/devguide/ec2-api-throttling.html.
+			// This sleep range will keep api calls in range of 8-12 requests per second, well under refill rate.
+			time.Sleep(wait.Jitter(100*time.Millisecond, 0.2))
+			return true
+
+		})
+
+		if err == nil {
+			return attemptInterfaces, nil
+		}
+		ec2APIErrCnt.Inc()
+		ec2DescribeNetworkInterfacesPagesAPIErrCnt.Inc()
+		apiError = err
+
+		if request.IsErrorThrottle(err) && attempt < MaxRetries {
+			e.log.Info("Throttling error, will retry", "attempt", attempt)
+			backoff := time.Duration(attempt) * 500 * time.Millisecond
+			time.Sleep(wait.Jitter(backoff, 0.1))
+			continue
+		}
+		return nil, err
+	}
+	return nil, apiError
+}
+
 func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
 	start := time.Now()
 	assignPrivateIPAddressesOutput, err := e.userServiceClient.AssignPrivateIpAddresses(input)
@@ -674,9 +790,9 @@ func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddr
 	// Metric updates
 	ec2APICallCnt.Inc()
 	ec2UnassignPrivateIPAddressAPICallCnt.Inc()
-	if input.PrivateIpAddresses != nil && len(input.PrivateIpAddresses) != 0 {
+	if len(input.PrivateIpAddresses) > 0 {
 		numUnassignedSecondaryIPAddress.Add(float64(len(input.PrivateIpAddresses)))
-	} else if input.Ipv4Prefixes != nil && len(input.Ipv4Prefixes) != 0 {
+	} else if len(input.Ipv4Prefixes) > 0 {
 		numUnassignedIPv4Prefixes.Add(float64(len(input.Ipv4Prefixes)))
 	}
 
@@ -821,4 +937,20 @@ func (e *ec2Wrapper) getRegionalStsEndpoint(partitionID, region string) (endpoin
 		return endpoints.ResolvedEndpoint{}, fmt.Errorf("error resolving endpoint for %s in partition %s. err: %v", region, partition.ID(), err)
 	}
 	return res, nil
+}
+
+func (e *ec2Wrapper) DisassociateTrunkInterface(input *ec2.DisassociateTrunkInterfaceInput) error {
+	start := time.Now()
+	// Using the instance role
+	_, err := e.instanceServiceClient.DisassociateTrunkInterface(input)
+	ec2APICallLatencies.WithLabelValues("disassociate_branch_from_trunk").Observe(timeSinceMs(start))
+
+	ec2APICallCnt.Inc()
+	ec2DisassociateTrunkInterfaceCallCnt.Inc()
+
+	if err != nil {
+		ec2APIErrCnt.Inc()
+		ec2DisassociateTrunkInterfaceErrCnt.Inc()
+	}
+	return err
 }
