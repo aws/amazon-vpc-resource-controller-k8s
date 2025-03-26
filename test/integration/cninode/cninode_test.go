@@ -15,14 +15,21 @@ package cninode_test
 
 import (
 	"context"
+	"time"
 
+	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/node"
 	testUtils "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 var _ = Describe("[CANARY]CNINode test", func() {
@@ -71,6 +78,73 @@ var _ = Describe("[CANARY]CNINode test", func() {
 			})
 		})
 	})
+
+	Describe("CNINode is re-created when node exists", func() {
+		Context("when CNINode is deleted but node exists", func() {
+			It("it should re-create CNINode", func() {
+				nodeList, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
+				Expect(err).ToNot(HaveOccurred())
+				cniNode, err := frameWork.NodeManager.GetCNINode(&nodeList.Items[0])
+				Expect(err).ToNot(HaveOccurred())
+				err = frameWork.NodeManager.DeleteCNINode(cniNode)
+				Expect(err).ToNot(HaveOccurred())
+				time.Sleep(testUtils.PollIntervalShort) // allow time to re-create CNINode
+				_, err = frameWork.NodeManager.GetCNINode(&nodeList.Items[0])
+				Expect(err).ToNot(HaveOccurred())
+				VerifyCNINodeFields(cniNode)
+			})
+		})
+
+	})
+
+	Describe("CNINode update tests", func() {
+		var cniNode *v1alpha1.CNINode
+		var node *v1.Node
+		BeforeEach(func() {
+			nodeList, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
+			Expect(err).ToNot(HaveOccurred())
+			node = &nodeList.Items[0]
+			cniNode, err = frameWork.NodeManager.GetCNINode(node)
+			Expect(err).ToNot(HaveOccurred())
+			VerifyCNINodeFields(cniNode)
+		})
+		AfterEach(func() {
+			time.Sleep(testUtils.PollIntervalShort)
+			newCNINode, err := frameWork.NodeManager.GetCNINode(node)
+			Expect(err).ToNot(HaveOccurred())
+			// Verify CNINode after update matches CNINode before update
+			Expect(newCNINode).To(BeComparableTo(cniNode, cmp.Options{
+				cmpopts.IgnoreTypes(metav1.TypeMeta{}),
+				cmpopts.IgnoreFields(metav1.ObjectMeta{}, "ResourceVersion", "Generation", "ManagedFields"),
+			}))
+		})
+
+		Context("when finalizer is removed", func() {
+			It("it should add the finalizer", func() {
+				cniNodeCopy := cniNode.DeepCopy()
+				controllerutil.RemoveFinalizer(cniNodeCopy, config.NodeTerminationFinalizer)
+				err := frameWork.NodeManager.UpdateCNINode(cniNode, cniNodeCopy)
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+		Context("when Tags is removed", func() {
+			It("it should add the Tags", func() {
+				cniNodeCopy := cniNode.DeepCopy()
+				cniNodeCopy.Spec.Tags = map[string]string{}
+				err := frameWork.NodeManager.UpdateCNINode(cniNode, cniNodeCopy)
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+		Context("when Label is removed", func() {
+			It("it should add the label", func() {
+				cniNodeCopy := cniNode.DeepCopy()
+				cniNodeCopy.ObjectMeta.Labels = map[string]string{}
+				err := frameWork.NodeManager.UpdateCNINode(cniNode, cniNodeCopy)
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+	})
+
 })
 
 func ListNodesAndGetAutoScalingGroupName() string {
@@ -103,4 +177,18 @@ func WaitTillNodeSizeUpdated(desiredSize int) error {
 			return true, nil
 		})
 	return err
+}
+
+// Verify finalizer, tag, and label is set on new CNINode
+func VerifyCNINodeFields(cniNode *v1alpha1.CNINode) {
+	By("verifying finalizer is set")
+	Expect(cniNode.ObjectMeta.Finalizers).To(ContainElement(config.NodeTerminationFinalizer))
+	// For maps, ContainElement searches through the map's values.
+	By("verifying cluster name tag is set")
+	Expect(cniNode.Spec.Tags).To(ContainElement(frameWork.Options.ClusterName))
+	Expect(config.CNINodeClusterNameKey).To(BeKeyOf(cniNode.Spec.Tags))
+
+	By("verifying node OS label is set")
+	Expect(cniNode.ObjectMeta.Labels).To(ContainElement(config.OSLinux))
+	Expect(config.NodeLabelOS).To(BeKeyOf(cniNode.ObjectMeta.Labels))
 }
