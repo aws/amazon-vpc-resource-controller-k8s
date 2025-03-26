@@ -32,7 +32,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	fakeClient "sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -141,43 +140,6 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentNode(t *testing.T) {
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
-}
-
-func TestNodeReconciler_Reconcile_DeleteNonExistentNodesCNINode(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewNodeMock(ctrl)
-	cniNode := &v1alpha1.CNINode{
-		ObjectMeta: v1.ObjectMeta{
-			Name:       mockNodeName,
-			Finalizers: []string{NodeTerminationFinalizer},
-		},
-	}
-	mock.Reconciler.Client = fakeClient.NewClientBuilder().WithScheme(mock.Reconciler.Scheme).WithObjects(cniNode).Build()
-
-	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
-	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
-
-	original := &v1alpha1.CNINode{}
-	err := mock.Reconciler.Client.Get(context.TODO(), types.NamespacedName{Name: cniNode.Name}, original)
-	assert.NoError(t, err)
-	assert.True(t, controllerutil.ContainsFinalizer(original, NodeTerminationFinalizer), "the CNINode has finalizer")
-
-	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
-	assert.NoError(t, err)
-	assert.Equal(t, res, reconcile.Result{})
-
-	node := &corev1.Node{}
-	updated := &v1alpha1.CNINode{}
-	err = mock.Reconciler.Client.Get(context.TODO(), types.NamespacedName{Name: cniNode.Name}, node)
-	assert.Error(t, err, "the node shouldn't existing")
-	assert.True(t, errors.IsNotFound(err))
-
-	err = mock.Reconciler.Client.Get(context.TODO(), types.NamespacedName{Name: cniNode.Name}, updated)
-	assert.NoError(t, err)
-	assert.True(t, updated.Name == mockNodeName, "the CNINode should existing and waiting for finalizer removal")
-	assert.False(t, controllerutil.ContainsFinalizer(updated, NodeTerminationFinalizer), "CNINode finalizer should be removed when the node is gone")
 }
 
 func TestNodeReconciler_Reconcile_DeleteNonExistentUnmanagedNode(t *testing.T) {

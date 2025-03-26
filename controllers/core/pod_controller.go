@@ -153,7 +153,7 @@ func (r *PodReconciler) Reconcile(request custom.Request) (ctrl.Result, error) {
 		} else {
 			result, err = resourceHandler.HandleCreate(int(totalCount), pod)
 		}
-		if err != nil || result.Requeue == true {
+		if err != nil || result.Requeue {
 			return result, err
 		}
 		logger.V(1).Info("handled resource without error",

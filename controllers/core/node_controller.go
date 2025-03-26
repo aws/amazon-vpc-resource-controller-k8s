@@ -15,7 +15,6 @@ package controllers
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -25,8 +24,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -36,19 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-)
-
-var (
-	leakedCNINodeResourceCount = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "orphaned_cninode_objects",
-			Help: "The number of CNINode objects that do not have a parent Node object (likely indicating a leak from a deleted node)",
-		},
-	)
-
-	prometheusRegistered = false
 )
 
 // MaxNodeConcurrentReconciles is the number of go routines that can invoke
@@ -93,23 +78,6 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	if nodeErr := r.Client.Get(ctx, req.NamespacedName, node); nodeErr != nil {
 		if errors.IsNotFound(nodeErr) {
-			// clean up CNINode finalizer
-			cniNode := &v1alpha1.CNINode{}
-			if cninodeErr := r.Client.Get(ctx, req.NamespacedName, cniNode); cninodeErr == nil {
-				if yes := controllerutil.ContainsFinalizer(cniNode, NodeTerminationFinalizer); yes {
-					updated := cniNode.DeepCopy()
-					if yes = controllerutil.RemoveFinalizer(updated, NodeTerminationFinalizer); yes {
-						if err := r.Client.Patch(ctx, updated, client.MergeFrom(cniNode)); err != nil {
-							return ctrl.Result{}, err
-						}
-						r.Log.Info("removed leaked CNINode resource's finalizer", "cninode", cniNode.Name)
-					}
-					leakedCNINodeResourceCount.Inc()
-				}
-			} else if !errors.IsNotFound(cninodeErr) {
-				return ctrl.Result{}, fmt.Errorf("failed getting CNINode %s from cached client, %w", cniNode.Name, cninodeErr)
-			}
-
 			// clean up local cached nodes
 			_, found := r.Manager.GetNode(req.Name)
 			if found {
@@ -147,8 +115,6 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrentReconci
 	healthzHandler.AddControllersHealthCheckers(
 		map[string]healthz.Checker{"health-node-controller": r.Check()},
 	)
-
-	prometheusRegister()
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}).
@@ -191,13 +157,5 @@ func (r *NodeReconciler) Check() healthz.Checker {
 		}, r.Log)
 
 		return err
-	}
-}
-
-func prometheusRegister() {
-	if !prometheusRegistered {
-		metrics.Registry.MustRegister(leakedCNINodeResourceCount)
-
-		prometheusRegistered = true
 	}
 }
