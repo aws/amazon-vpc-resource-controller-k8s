@@ -58,6 +58,7 @@ type manager struct {
 	conditions        condition.Conditions
 	controllerVersion string
 	stopHealthCheckAt time.Time
+	clusterName       string
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -102,7 +103,7 @@ const pausingHealthCheckDuration = 10 * time.Minute
 
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
-	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
 
 	manager := &manager{
 		resourceManager:   resourceManager,
@@ -112,6 +113,7 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 		worker:            worker,
 		conditions:        conditions,
 		controllerVersion: controllerVersion,
+		clusterName:       clusterName,
 	}
 
 	// add health check on subpath for node manager
@@ -228,7 +230,7 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 	); err != nil {
 		if apierrors.IsNotFound(err) {
 			m.Log.Info("Will create a new CNINode", "CNINodeName", node.Name)
-			return m.wrapper.K8sAPI.CreateCNINode(node)
+			return m.wrapper.K8sAPI.CreateCNINode(node, m.clusterName)
 		}
 		return err
 	} else {
@@ -459,7 +461,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		log.V(1).Info("successfully performed node operation")
 		return ctrl.Result{}, nil
 	}
-	log.Error(err, "failed to performed node operation")
+	log.Error(err, "failed to perform node operation")
 
 	return ctrl.Result{}, nil
 }

@@ -195,6 +195,20 @@ func (mr *MockEC2APIHelperMockRecorder) DetachNetworkInterfaceFromInstance(arg0 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetachNetworkInterfaceFromInstance", reflect.TypeOf((*MockEC2APIHelper)(nil).DetachNetworkInterfaceFromInstance), arg0)
 }
 
+// DisassociateTrunkInterface mocks base method.
+func (m *MockEC2APIHelper) DisassociateTrunkInterface(arg0 *string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DisassociateTrunkInterface", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DisassociateTrunkInterface indicates an expected call of DisassociateTrunkInterface.
+func (mr *MockEC2APIHelperMockRecorder) DisassociateTrunkInterface(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DisassociateTrunkInterface", reflect.TypeOf((*MockEC2APIHelper)(nil).DisassociateTrunkInterface), arg0)
+}
+
 // GetBranchNetworkInterface mocks base method.
 func (m *MockEC2APIHelper) GetBranchNetworkInterface(arg0, arg1 *string) ([]*ec2.NetworkInterface, error) {
 	m.ctrl.T.Helper()
