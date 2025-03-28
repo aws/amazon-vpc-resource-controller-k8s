@@ -38,6 +38,7 @@ type node struct {
 	// ready status indicates if the node is ready to process request or not
 	ready bool
 	// managed status indicates if the node is managed by the controller or not
+	// This field should stay immutable in the lifecycle of node object
 	managed bool
 	// instance stores the ec2 instance details that is shared by all the providers
 	instance ec2.EC2Instance
@@ -237,9 +238,6 @@ func (n *node) IsReady() bool {
 
 // IsManaged returns true if the node is managed by the controller
 func (n *node) IsManaged() bool {
-	n.lock.RLock()
-	defer n.lock.RUnlock()
-
 	return n.managed
 }
 
