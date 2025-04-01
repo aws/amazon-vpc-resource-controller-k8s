@@ -14,7 +14,7 @@
 package utils
 
 import (
-	"github.com/aws/aws-sdk-go/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
 // Difference returns a-b, elements present in a and not in b
@@ -40,7 +40,7 @@ func GetKeyValSlice(m map[string]string) (key []string, val []string) {
 	return
 }
 
-func GetTagKeyValueMap(tagSet []*ec2.Tag) map[string]string {
+func GetTagKeyValueMap(tagSet []ec2types.Tag) map[string]string {
 	m := make(map[string]string)
 	for _, tag := range tagSet {
 		m[*tag.Key] = *tag.Value
