@@ -146,7 +146,7 @@ func main() {
 	flag.IntVar(&listPageLimit, "page-limit", 100,
 		"The page size limiting the number of response for list operation to API Server")
 	flag.StringVar(&outputPath, "log-file", "stderr", "The path to redirect controller logs")
-	flag.IntVar(&healthCheckTimeout, "health-check-timeout", 10,
+	flag.IntVar(&healthCheckTimeout, "health-check-timeout", 28,
 		"How long healthz check waits before failing the attempt")
 	flag.StringVar(&introspectBindAddr, "introspect-bind-addr", ":22775",
 		"Port for serving the introspection API")
