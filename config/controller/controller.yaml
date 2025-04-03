@@ -45,13 +45,14 @@ spec:
             cpu: 0.3
             memory: 400Mi
         livenessProbe:
-          failureThreshold: 2
+          failureThreshold: 5
           httpGet:
             path: /healthz
             port: 61779
             scheme: HTTP
           initialDelaySeconds: 30
-          timeoutSeconds: 10
+          timeoutSeconds: 30
+          periodSeconds: 30
         ports:
           - containerPort: 9443
             name: webhook-server
