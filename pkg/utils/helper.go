@@ -15,6 +15,7 @@ package utils
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,7 +24,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
-	"github.com/aws/aws-sdk-go/aws/arn"
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -96,7 +97,8 @@ func (s *SecurityGroupForPods) GetMatchingSecurityGroupForPods(pod *corev1.Pod) 
 	sa := &corev1.ServiceAccount{}
 	key := types.NamespacedName{
 		Namespace: pod.Namespace,
-		Name:      pod.Spec.ServiceAccountName}
+		Name:      pod.Spec.ServiceAccountName,
+	}
 
 	// Get metadata of SA associated with Pod from cache
 	if err := s.Client.Get(ctx, key, sa); err != nil {
@@ -114,7 +116,8 @@ func (s *SecurityGroupForPods) GetMatchingSecurityGroupForPods(pod *corev1.Pod) 
 func (s *SecurityGroupForPods) filterPodSecurityGroups(
 	sgpList *vpcresourcesv1beta1.SecurityGroupPolicyList,
 	pod *corev1.Pod,
-	sa *corev1.ServiceAccount) []string {
+	sa *corev1.ServiceAccount,
+) []string {
 	var sgList []string
 	sgpLogger := s.Log.WithValues("Pod name", pod.Name, "Pod namespace", pod.Namespace)
 	for _, sgp := range sgpList.Items {
@@ -132,8 +135,7 @@ func (s *SecurityGroupForPods) filterPodSecurityGroups(
 		}
 
 		podMatched, saMatched := false, false
-		if podSelector, podSelectorError :=
-			metav1.LabelSelectorAsSelector(sgp.Spec.PodSelector); podSelectorError == nil {
+		if podSelector, podSelectorError := metav1.LabelSelectorAsSelector(sgp.Spec.PodSelector); podSelectorError == nil {
 			if podSelector.Matches(labels.Set(pod.Labels)) {
 				podMatched = true
 			}
@@ -142,8 +144,7 @@ func (s *SecurityGroupForPods) filterPodSecurityGroups(
 				"SGP name", sgp.Name, "SGP namespace", sgp.Namespace)
 		}
 
-		if saSelector, saSelectorError :=
-			metav1.LabelSelectorAsSelector(sgp.Spec.ServiceAccountSelector); saSelectorError == nil {
+		if saSelector, saSelectorError := metav1.LabelSelectorAsSelector(sgp.Spec.ServiceAccountSelector); saSelectorError == nil {
 			if saSelector.Matches(labels.Set(sa.Labels)) {
 				saMatched = true
 			}
@@ -246,4 +247,17 @@ func PodHasENIRequest(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+func IntToInt32(value int) (int32, error) {
+	const (
+		minInt32 = -2147483648
+		maxInt32 = 2147483647
+	)
+
+	if value < minInt32 || value > maxInt32 {
+		return 0, errors.New("value out of int32 range")
+	}
+
+	return int32(value), nil
 }

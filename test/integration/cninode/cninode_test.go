@@ -34,10 +34,10 @@ import (
 
 var _ = Describe("[CANARY]CNINode test", func() {
 	Describe("CNINode count verification on adding or removing node", func() {
-		var oldDesiredSize int64
-		var oldMinSize int64
-		var oldMaxSize int64
-		var newSize int64
+		var oldDesiredSize int32
+		var oldMinSize int32
+		var oldMaxSize int32
+		var newSize int32
 		var asgName string
 		BeforeEach(func() {
 			By("getting autoscaling group name")

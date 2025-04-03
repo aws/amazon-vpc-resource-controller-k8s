@@ -13,15 +13,18 @@
 package ec2api_test
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -42,8 +45,7 @@ var _ = Describe("[LOCAL] Test IAM permissions for EC2 API calls", func() {
 		ec2Instance, err := frameWork.EC2Manager.GetInstanceDetails(instanceID)
 		Expect(err).ToNot(HaveOccurred())
 		subnetID = *ec2Instance.SubnetId
-		instanceType = *ec2Instance.InstanceType
-
+		instanceType = string(ec2Instance.InstanceType)
 	})
 	AfterEach(func() {
 		By("deleting test interface")
@@ -68,23 +70,33 @@ var _ = Describe("[LOCAL] Test IAM permissions for EC2 API calls", func() {
 		})
 	})
 	Describe("Test CreateNetworkInterfacePermission permission", func() {
-		var ec2Client *ec2.EC2
+		var ec2Client *ec2.Client
 		var accountID string
 		var wantErr bool
 		JustBeforeEach(func() {
 			arnSplit := strings.Split(frameWork.Options.ClusterRoleArn, ":")
 			accountID = arnSplit[len(arnSplit)-2]
 			By("assuming EKS cluster role")
-			sess := session.Must(session.NewSession())
-			creds := stscreds.NewCredentials(sess, frameWork.Options.ClusterRoleArn)
-			ec2Client = ec2.New(sess, &aws.Config{Credentials: creds})
+			cfg, err := awsconfig.LoadDefaultConfig(context.TODO())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create the STS client
+			stsClient := sts.NewFromConfig(cfg)
+
+			// Create the credentials provider using STS AssumeRole
+			provider := stscreds.NewAssumeRoleProvider(stsClient, frameWork.Options.ClusterRoleArn)
+
+			// Create the EC2 client with the assumed role credentials
+			ec2Client = ec2.NewFromConfig(cfg, func(o *ec2.Options) {
+				o.Credentials = aws.NewCredentialsCache(provider)
+			})
 		})
 		JustAfterEach(func() {
 			By("creating network interface permission")
-			_, err = ec2Client.CreateNetworkInterfacePermission(&ec2.CreateNetworkInterfacePermissionInput{
+			_, err = ec2Client.CreateNetworkInterfacePermission(context.TODO(), &ec2.CreateNetworkInterfacePermissionInput{
 				AwsAccountId:       aws.String(accountID),
 				NetworkInterfaceId: aws.String(nwInterfaceID),
-				Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
+				Permission:         types.InterfacePermissionTypeInstanceAttach,
 			})
 			By("validating error is nil or as expected")
 			Expect(err != nil).To(Equal(wantErr))
@@ -92,12 +104,12 @@ var _ = Describe("[LOCAL] Test IAM permissions for EC2 API calls", func() {
 		Context("CreateNetworkInterfacePermission on ENI WITH required tag eks:eni:owner=eks-vpc-resource-controller", func() {
 			It("it should grant CreateNetworkInterfacePermission", func() {
 				By("creating network interface")
-				nwInterfaceOp, err := ec2Client.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+				nwInterfaceOp, err := ec2Client.CreateNetworkInterface(context.TODO(), &ec2.CreateNetworkInterfaceInput{
 					SubnetId: aws.String(subnetID),
-					TagSpecifications: []*ec2.TagSpecification{
+					TagSpecifications: []types.TagSpecification{
 						{
-							ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),
-							Tags: []*ec2.Tag{
+							ResourceType: types.ResourceTypeNetworkInterface,
+							Tags: []types.Tag{
 								{
 									Key:   aws.String(config.NetworkInterfaceOwnerTagKey),
 									Value: aws.String((config.NetworkInterfaceOwnerTagValue)),
@@ -115,7 +127,7 @@ var _ = Describe("[LOCAL] Test IAM permissions for EC2 API calls", func() {
 		Context("CreateNetworkInterfacePermission on ENI WITHOUT required tag eks:eni:owner=eks-vpc-resource-controller", func() {
 			It("it should not grant CreateNetworkInterfacePermission", func() {
 				By("creating network interface")
-				nwInterfaceOp, err := ec2Client.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+				nwInterfaceOp, err := ec2Client.CreateNetworkInterface(context.TODO(), &ec2.CreateNetworkInterfaceInput{
 					SubnetId:    aws.String(subnetID),
 					Description: aws.String("VPC-Resource-Controller integration test ENI"),
 				})

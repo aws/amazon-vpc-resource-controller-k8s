@@ -16,6 +16,7 @@ package branch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -35,8 +36,8 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	"github.com/aws/smithy-go"
 
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
@@ -108,7 +109,8 @@ type branchENIProvider struct {
 
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
 func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
-	worker worker.Worker, _ config.ResourceConfig, ctx context.Context) provider.ResourceProvider {
+	worker worker.Worker, _ config.ResourceConfig, ctx context.Context,
+) provider.ResourceProvider {
 	prometheusRegister()
 	trunk.PrometheusRegister()
 
@@ -158,14 +160,18 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	if err := trunkENI.InitTrunk(instance, podList); err != nil {
 		// If it's an AWS Error, get the exit code without the error message to avoid
 		// broadcasting multiple different messaged events
-		if awsErr, ok := err.(awserr.Error); ok {
+
+		var apiErr smithy.APIError
+
+		if errors.As(err, &apiErr) {
+
 			node, errGetNode := b.apiWrapper.K8sAPI.GetNode(instance.Name())
 			if errGetNode != nil {
 				return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, err)
 			}
-			var eventMessage = fmt.Sprintf("Failed to create trunk interface: "+
-				"Error Code: %s", awsErr.Code())
-			if awsErr.Code() == "UnauthorizedOperation" {
+			eventMessage := fmt.Sprintf("Failed to create trunk interface: "+
+				"Error Code: %s", apiErr.ErrorCode())
+			if apiErr.ErrorCode() == "UnauthorizedOperation" {
 				// Append resolution to the event message for users for common error
 				eventMessage = fmt.Sprintf("%s: %s", eventMessage,
 					"Please verify the cluster IAM role has AmazonEKSVPCResourceController policy")

@@ -21,8 +21,9 @@ import (
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -32,7 +33,7 @@ var (
 	clusterName = "cluster-name"
 	// instance id of EC2 worker node
 	instanceId   = "i-00000000000000000"
-	instanceType = "m5.xlarge"
+	instanceType = ec2types.InstanceTypeM5Xlarge
 	subnetId     = "subnet-00000000000000000"
 
 	// network interface ids
@@ -41,7 +42,7 @@ var (
 	branchInterfaceId2 = "eni-00000000000000002"
 	attachmentId       = "attach-000000000000000"
 	eniID              = "eni-00000000000000003"
-	deviceIndex        = int64(0)
+	deviceIndex        = int32(0)
 
 	ipAddress1 = "192.168.1.1"
 	ipAddress2 = "192.168.1.2"
@@ -58,7 +59,7 @@ var (
 	securityGroup2 = "sg-00000000000000002"
 	securityGroups = []string{securityGroup1, securityGroup2}
 
-	tags = []*ec2.Tag{
+	tags = []ec2types.Tag{
 		{
 			Key:   aws.String("mock-key"),
 			Value: aws.String("mock-val"),
@@ -74,56 +75,57 @@ var (
 	associateTrunkInterfaceInput = &ec2.AssociateTrunkInterfaceInput{
 		BranchInterfaceId: &branchInterfaceId,
 		TrunkInterfaceId:  &trunkInterfaceId,
-		VlanId:            aws.Int64(int64(vlanId)),
+		VlanId:            aws.Int32(int32(vlanId)),
 	}
 
 	associateTrunkInterfaceOutput = &ec2.AssociateTrunkInterfaceOutput{
-		InterfaceAssociation: &ec2.TrunkInterfaceAssociation{AssociationId: &branchAssociationId},
+		InterfaceAssociation: &ec2types.TrunkInterfaceAssociation{AssociationId: &branchAssociationId},
 	}
 
-	defaultClusterNameTag = &ec2.Tag{
+	defaultClusterNameTag = ec2types.Tag{
 		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
 		Value: aws.String(config.ClusterNameTagValue),
 	}
 
 	createNetworkInterfaceInput = &ec2.CreateNetworkInterfaceInput{
 		Description: &eniDescriptionWithPrefix,
-		Groups:      aws.StringSlice(securityGroups),
+		Groups:      securityGroups,
 		SubnetId:    &subnetId,
-		TagSpecifications: []*ec2.TagSpecification{
+		TagSpecifications: []ec2types.TagSpecification{
 			{
-				ResourceType: aws.String(ec2.ResourceTypeNetworkInterface),
+				ResourceType: ec2types.ResourceTypeNetworkInterface,
 				Tags:         append(tags, defaultControllerTag, defaultClusterNameTag),
 			},
 		},
 	}
 
 	createNetworkInterfaceOutput = &ec2.CreateNetworkInterfaceOutput{
-		NetworkInterface: &ec2.NetworkInterface{NetworkInterfaceId: &branchInterfaceId}}
+		NetworkInterface: &ec2types.NetworkInterface{NetworkInterfaceId: &branchInterfaceId},
+	}
 
 	deleteNetworkInterfaceInput = &ec2.DeleteNetworkInterfaceInput{
 		NetworkInterfaceId: &branchInterfaceId,
 	}
 
 	describeSubnetInput = &ec2.DescribeSubnetsInput{
-		SubnetIds: []*string{&subnetId},
+		SubnetIds: []string{subnetId},
 	}
 
-	describeSubnetOutput = &ec2.DescribeSubnetsOutput{Subnets: []*ec2.Subnet{{SubnetId: &subnetId}}}
+	describeSubnetOutput = &ec2.DescribeSubnetsOutput{Subnets: []ec2types.Subnet{{SubnetId: &subnetId}}}
 
 	describeNetworkInterfaceInputUsingInstanceId = &ec2.DescribeInstancesInput{
-		InstanceIds: []*string{&instanceId},
+		InstanceIds: []string{instanceId},
 	}
 
 	describeNetworkInterfaceOutputUsingInstanceId = &ec2.DescribeInstancesOutput{
-		Reservations: []*ec2.Reservation{
+		Reservations: []ec2types.Reservation{
 			{
-				Instances: []*ec2.Instance{
+				Instances: []ec2types.Instance{
 					{
-						NetworkInterfaces: []*ec2.InstanceNetworkInterface{
+						NetworkInterfaces: []ec2types.InstanceNetworkInterface{
 							{
 								NetworkInterfaceId: &branchInterfaceId,
-								Status:             aws.String(ec2.AttachmentStatusDetached),
+								Status:             ec2types.NetworkInterfaceStatusDetaching,
 							},
 						},
 					},
@@ -133,84 +135,86 @@ var (
 	}
 
 	describeNetworkInterfaceInputUsingInterfaceId = &ec2.DescribeNetworkInterfacesInput{
-		NetworkInterfaceIds: []*string{&branchInterfaceId, &branchInterfaceId2},
+		NetworkInterfaceIds: []string{branchInterfaceId, branchInterfaceId2},
 	}
 
 	describeNetworkInterfaceOutputUsingInterfaceId = &ec2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*ec2.NetworkInterface{
-			{NetworkInterfaceId: &branchInterfaceId, InterfaceType: aws.String("interface")},
-			{NetworkInterfaceId: &trunkInterfaceId, InterfaceType: aws.String("trunk")},
+		NetworkInterfaces: []ec2types.NetworkInterface{
+			{NetworkInterfaceId: &branchInterfaceId, InterfaceType: ec2types.NetworkInterfaceTypeInterface},
+			{NetworkInterfaceId: &trunkInterfaceId, InterfaceType: ec2types.NetworkInterfaceTypeTrunk},
 		},
 	}
 
 	describeNetworkInterfaceInputUsingOneInterfaceId = &ec2.DescribeNetworkInterfacesInput{
-		NetworkInterfaceIds: []*string{&branchInterfaceId},
+		NetworkInterfaceIds: []string{branchInterfaceId},
 	}
 
 	describeNetworkInterfaceOutputUsingOneInterfaceId = &ec2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*ec2.NetworkInterface{
+		NetworkInterfaces: []ec2types.NetworkInterface{
 			{
 				NetworkInterfaceId: &branchInterfaceId,
-				InterfaceType:      aws.String("interface"),
-				Attachment: &ec2.NetworkInterfaceAttachment{
-					Status: aws.String(ec2.AttachmentStatusDetached),
+				InterfaceType:      ec2types.NetworkInterfaceTypeInterface,
+				Attachment: &ec2types.NetworkInterfaceAttachment{
+					Status: ec2types.AttachmentStatusDetached,
 				},
 			},
 		},
 	}
 
-	branchTag1 = []*ec2.Tag{{
+	branchTag1 = []ec2types.Tag{{
 		Key:   aws.String("tag-key-1"),
 		Value: aws.String("tag-val-1"),
 	}}
-	branchTag2 = []*ec2.Tag{{
+	branchTag2 = []ec2types.Tag{{
 		Key:   aws.String("tag-key-2"),
 		Value: aws.String("tag-val-2"),
 	}}
 
-	networkInterface1 = ec2.NetworkInterface{
+	networkInterface1 = ec2types.NetworkInterface{
 		NetworkInterfaceId: &branchInterfaceId,
 		TagSet:             branchTag1,
 	}
-	networkInterface2 = ec2.NetworkInterface{
-		NetworkInterfaceId: &branchInterfaceId,
+	networkInterface2 = ec2types.NetworkInterface{
+		NetworkInterfaceId: &branchInterfaceId2,
 		TagSet:             branchTag2,
 	}
 
+	tokenID = "token"
+
 	describeTrunkInterfaceInput = &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{
+		Filters: []ec2types.Filter{
 			{
 				Name:   aws.String("tag:" + config.TrunkENIIDTag),
-				Values: []*string{&trunkInterfaceId},
+				Values: []string{trunkInterfaceId},
 			},
 			{
 				Name:   aws.String("subnet-id"),
-				Values: aws.StringSlice([]string{subnetId}),
+				Values: []string{subnetId},
 			},
 		},
 	}
 
 	describeTrunkInterfaceOutput = &ec2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*ec2.NetworkInterface{&networkInterface1, &networkInterface2},
+		NetworkInterfaces: []ec2types.NetworkInterface{networkInterface1, networkInterface2},
 	}
 
 	describeTrunkInterfaceAssociationsInput = &ec2.DescribeTrunkInterfaceAssociationsInput{
-		Filters: []*ec2.Filter{{
+		Filters: []ec2types.Filter{{
 			Name:   aws.String("trunk-interface-association.trunk-interface-id"),
-			Values: []*string{&trunkInterfaceId},
+			Values: []string{trunkInterfaceId},
 		}},
 	}
 
-	describeTrunkInterfaceAssociationsOutput = &ec2.DescribeTrunkInterfaceAssociationsOutput{InterfaceAssociations: []*ec2.TrunkInterfaceAssociation{
+	describeTrunkInterfaceAssociationsOutput = &ec2.DescribeTrunkInterfaceAssociationsOutput{InterfaceAssociations: []ec2types.TrunkInterfaceAssociation{
 		{
 			BranchInterfaceId: &branchInterfaceId,
 			TrunkInterfaceId:  &trunkInterfaceId,
-			VlanId:            aws.Int64(int64(vlanId)),
+			VlanId:            aws.Int32(int32(vlanId)),
 		},
 	}}
 
 	modifyNetworkInterfaceAttributeInput = &ec2.ModifyNetworkInterfaceAttributeInput{
-		Attachment: &ec2.NetworkInterfaceAttachmentChanges{
+		Attachment: &ec2types.NetworkInterfaceAttachmentChanges{
 			AttachmentId:        &attachmentId,
 			DeleteOnTermination: aws.Bool(true),
 		},
@@ -230,14 +234,14 @@ var (
 	}
 
 	describeInstanceInput = &ec2.DescribeInstancesInput{
-		InstanceIds: []*string{&instanceId},
+		InstanceIds: []string{instanceId},
 	}
 
 	describeInstanceOutput = &ec2.DescribeInstancesOutput{
-		Reservations: []*ec2.Reservation{{
-			Instances: []*ec2.Instance{{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
 				InstanceId:   &instanceId,
-				InstanceType: &instanceType,
+				InstanceType: instanceType,
 				SubnetId:     &subnetId,
 			}},
 		}},
@@ -245,11 +249,11 @@ var (
 
 	assignPrivateIPInput = &ec2.AssignPrivateIpAddressesInput{
 		NetworkInterfaceId:             &eniID,
-		SecondaryPrivateIpAddressCount: aws.Int64(int64(2)),
+		SecondaryPrivateIpAddressCount: aws.Int32(int32(2)),
 	}
 
 	assignPrivateIPOutput = &ec2.AssignPrivateIpAddressesOutput{
-		AssignedPrivateIpAddresses: []*ec2.AssignedPrivateIpAddress{
+		AssignedPrivateIpAddresses: []ec2types.AssignedPrivateIpAddress{
 			{
 				PrivateIpAddress: &ipAddress1,
 			},
@@ -261,11 +265,11 @@ var (
 
 	assignPrivateIPInputPrefix = &ec2.AssignPrivateIpAddressesInput{
 		NetworkInterfaceId: &eniID,
-		Ipv4PrefixCount:    aws.Int64(int64(2)),
+		Ipv4PrefixCount:    aws.Int32(int32(2)),
 	}
 
 	assignPrivateIPOutputPrefix = &ec2.AssignPrivateIpAddressesOutput{
-		AssignedIpv4Prefixes: []*ec2.Ipv4PrefixSpecification{
+		AssignedIpv4Prefixes: []ec2types.Ipv4PrefixSpecification{
 			{
 				Ipv4Prefix: &ipPrefix1,
 			},
@@ -276,13 +280,13 @@ var (
 	}
 
 	describeNetworkInterfaceInput = &ec2.DescribeNetworkInterfacesInput{
-		NetworkInterfaceIds: []*string{&eniID},
+		NetworkInterfaceIds: []string{eniID},
 	}
 
 	describeNetworkInterfaceOutput = &ec2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*ec2.NetworkInterface{
+		NetworkInterfaces: []ec2types.NetworkInterface{
 			{
-				PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+				PrivateIpAddresses: []ec2types.NetworkInterfacePrivateIpAddress{
 					{PrivateIpAddress: &ipAddress1},
 					{PrivateIpAddress: &ipAddress2},
 				},
@@ -291,13 +295,13 @@ var (
 	}
 
 	describeNetworkInterfaceInputPrefix = &ec2.DescribeNetworkInterfacesInput{
-		NetworkInterfaceIds: []*string{&eniID},
+		NetworkInterfaceIds: []string{eniID},
 	}
 
 	describeNetworkInterfaceOutputPrefix = &ec2.DescribeNetworkInterfacesOutput{
-		NetworkInterfaces: []*ec2.NetworkInterface{
+		NetworkInterfaces: []ec2types.NetworkInterface{
 			{
-				Ipv4Prefixes: []*ec2.Ipv4PrefixSpecification{
+				Ipv4Prefixes: []ec2types.Ipv4PrefixSpecification{
 					{Ipv4Prefix: &ipPrefix1},
 					{Ipv4Prefix: &ipPrefix2},
 				},
@@ -307,12 +311,12 @@ var (
 
 	createNetworkInterfacePermissionInputBranch = &ec2.CreateNetworkInterfacePermissionInput{
 		NetworkInterfaceId: &branchInterfaceId,
-		Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
+		Permission:         ec2types.InterfacePermissionTypeInstanceAttach,
 	}
 
 	createNetworkInterfacePermissionInputTrunk = &ec2.CreateNetworkInterfacePermissionInput{
 		NetworkInterfaceId: &trunkInterfaceId,
-		Permission:         aws.String(ec2.InterfacePermissionTypeInstanceAttach),
+		Permission:         ec2types.InterfacePermissionTypeInstanceAttach,
 	}
 
 	maxRetryOnError = 3
@@ -320,7 +324,6 @@ var (
 
 // getMockWrapper returns the Mock EC2Wrapper along with the EC2APIHelper with mock EC2Wrapper set up
 func getMockWrapper(ctrl *gomock.Controller) (EC2APIHelper, *mock_api.MockEC2Wrapper) {
-
 	defaultBackOff = wait.Backoff{
 		Duration: time.Millisecond,
 		Factor:   1.0,
@@ -426,7 +429,7 @@ func TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIP(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	ipCount := int64(5)
+	ipCount := int32(5)
 
 	createNetworkInterfaceInput.SecondaryPrivateIpAddressCount = &ipCount
 
@@ -449,7 +452,7 @@ func TestEc2APIHelper_CreateNetworkInterface_WithPrefixCount(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	prefixCount := int64(5)
+	prefixCount := int32(5)
 
 	createNetworkInterfaceInput.Ipv4PrefixCount = &prefixCount
 
@@ -472,7 +475,7 @@ func TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIPAndPrefixCount_Error
 
 	ec2ApiHelper, _ := getMockWrapper(ctrl)
 
-	ipCount := int64(5)
+	ipCount := int32(5)
 
 	createNetworkInterfaceInput.SecondaryPrivateIpAddressCount = &ipCount
 	createNetworkInterfaceInput.Ipv4PrefixCount = &ipCount
@@ -492,18 +495,21 @@ func TestEc2APIHelper_CreateNetworkInterface_TypeTrunk(t *testing.T) {
 	defer ctrl.Finish()
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
-	interfaceTypeTrunk := "trunk"
 
-	createNetworkInterfaceInput.InterfaceType = &interfaceTypeTrunk
+	interfaceTypeTrunk := ec2types.NetworkInterfaceCreationTypeTrunk
+	interfaceTypeTrunkString := string(interfaceTypeTrunk)
+
+	createNetworkInterfaceInput.InterfaceType = interfaceTypeTrunk
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(
 		&ec2.CreateNetworkInterfaceOutput{
-			NetworkInterface: &ec2.NetworkInterface{NetworkInterfaceId: &trunkInterfaceId}}, nil)
+			NetworkInterface: &ec2types.NetworkInterface{NetworkInterfaceId: &trunkInterfaceId},
+		}, nil)
 	mockWrapper.EXPECT().CreateNetworkInterfacePermission(createNetworkInterfacePermissionInputTrunk).
 		Return(nil, nil)
 
-	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, nil, &interfaceTypeTrunk)
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, nil, &interfaceTypeTrunkString)
 
-	createNetworkInterfaceInput.InterfaceType = nil
+	createNetworkInterfaceInput.InterfaceType = ""
 
 	assert.NoError(t, err)
 	assert.Equal(t, trunkInterfaceId, *output.NetworkInterfaceId)
@@ -535,7 +541,7 @@ func TestEc2APIHelper_CreateNetworkInterface_Error(t *testing.T) {
 
 	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, nil, nil)
 
-	assert.Error(t, err, errMock)
+	assert.Error(t, errMock, err)
 }
 
 // TestEc2APIHelper_DeleteNetworkInterface tests delete network interface returns correct response in case of valid
@@ -603,7 +609,7 @@ func TestEc2APIHelper_GetSubnet_NoSubnetReturned(t *testing.T) {
 	defer ctrl.Finish()
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
-	mockWrapper.EXPECT().DescribeSubnets(describeSubnetInput).Return(&ec2.DescribeSubnetsOutput{Subnets: []*ec2.Subnet{}}, nil)
+	mockWrapper.EXPECT().DescribeSubnets(describeSubnetInput).Return(&ec2.DescribeSubnetsOutput{Subnets: []ec2types.Subnet{}}, nil)
 
 	_, err := ec2ApiHelper.GetSubnet(&subnetId)
 	assert.NotNil(t, err)
@@ -662,7 +668,7 @@ func TestEc2APIHelper_DescribeNetworkInterfaces(t *testing.T) {
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingInterfaceId).
 		Return(describeNetworkInterfaceOutputUsingInterfaceId, nil)
 
-	nwInterfaces, err := ec2ApiHelper.DescribeNetworkInterfaces([]*string{&branchInterfaceId, &branchInterfaceId2})
+	nwInterfaces, err := ec2ApiHelper.DescribeNetworkInterfaces([]string{branchInterfaceId, branchInterfaceId2})
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(nwInterfaces))
 }
@@ -678,7 +684,7 @@ func TestEc2APIHelper_DescribeNetworkInterfaces_Error(t *testing.T) {
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingInterfaceId).
 		Return(nil, errMock)
 
-	_, err := ec2ApiHelper.DescribeNetworkInterfaces([]*string{&branchInterfaceId, &branchInterfaceId2})
+	_, err := ec2ApiHelper.DescribeNetworkInterfaces([]string{branchInterfaceId, branchInterfaceId2})
 	assert.Error(t, errMock, err)
 }
 
@@ -735,8 +741,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface(t *testing.T) {
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
 	oldStatus := describeNetworkInterfaceOutputUsingOneInterfaceId.NetworkInterfaces[0].Attachment.Status
-	describeNetworkInterfaceOutputUsingOneInterfaceId.NetworkInterfaces[0].Attachment.Status =
-		aws.String(ec2.AttachmentStatusAttached)
+	describeNetworkInterfaceOutputUsingOneInterfaceId.NetworkInterfaces[0].Attachment.Status = ec2types.AttachmentStatusAttached
 
 	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).Return(createNetworkInterfaceOutput, nil)
 	mockWrapper.EXPECT().AttachNetworkInterface(attachNetworkInterfaceInput).Return(attachNetworkInterfaceOutput, nil)
@@ -901,7 +906,8 @@ func TestEC2APIHelper_WaitForNetworkInterfaceStatusChange(t *testing.T) {
 		// Status changed to attached state, must return
 		mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingOneInterfaceId).
 			Return(&ec2.DescribeNetworkInterfacesOutput{
-				NetworkInterfaces: []*ec2.NetworkInterface{{Attachment: &ec2.NetworkInterfaceAttachment{Status: &statusAttached}}}}, nil).Times(1),
+				NetworkInterfaces: []ec2types.NetworkInterface{{Attachment: &ec2types.NetworkInterfaceAttachment{Status: ec2types.AttachmentStatusAttached}}},
+			}, nil).Times(1),
 	)
 
 	err := ec2ApiHelper.WaitForNetworkInterfaceStatusChange(&branchInterfaceId, statusAttached)
@@ -933,8 +939,7 @@ func TestEc2APIHelper_DetachAndDeleteNetworkInterface(t *testing.T) {
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
 	oldStatus := describeNetworkInterfaceOutputUsingOneInterfaceId.NetworkInterfaces[0].Attachment.Status
-	describeNetworkInterfaceOutputUsingOneInterfaceId.NetworkInterfaces[0].Attachment.Status =
-		aws.String(ec2.AttachmentStatusDetached)
+	describeNetworkInterfaceOutputUsingOneInterfaceId.NetworkInterfaces[0].Attachment.Status = ec2types.AttachmentStatusDetached
 
 	mockWrapper.EXPECT().DetachNetworkInterface(detachNetworkInterfaceInput).Return(nil, nil)
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingOneInterfaceId).
@@ -959,7 +964,6 @@ func TestEc2APIHelper_DetachAndDeleteNetworkInterface_Error(t *testing.T) {
 
 	err := ec2ApiHelper.DetachAndDeleteNetworkInterface(&attachmentId, &branchInterfaceId)
 	assert.Error(t, errMock, err)
-
 }
 
 // TestEC2APIHelper_GetInstanceDetails tests no error is returned on valid input
@@ -1082,10 +1086,12 @@ func TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady_TypeIPv4Address_Attach
 	gomock.InOrder(
 		// First call returns just one ip address
 		mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInput).Return(&ec2.DescribeNetworkInterfacesOutput{
-			NetworkInterfaces: []*ec2.NetworkInterface{
-				{PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+			NetworkInterfaces: []ec2types.NetworkInterface{
+				{PrivateIpAddresses: []ec2types.NetworkInterfacePrivateIpAddress{
 					{PrivateIpAddress: &ipAddress1},
-				}}}}, nil),
+				}},
+			},
+		}, nil),
 		// Second call all created IPs returned
 		mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInput).Return(describeNetworkInterfaceOutput, nil),
 	)
@@ -1108,10 +1114,12 @@ func TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady_TypeIPv4Prefix_Attache
 	gomock.InOrder(
 		// First call returns just one ip prefix
 		mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputPrefix).Return(&ec2.DescribeNetworkInterfacesOutput{
-			NetworkInterfaces: []*ec2.NetworkInterface{
-				{Ipv4Prefixes: []*ec2.Ipv4PrefixSpecification{
+			NetworkInterfaces: []ec2types.NetworkInterface{
+				{Ipv4Prefixes: []ec2types.Ipv4PrefixSpecification{
 					{Ipv4Prefix: &ipPrefix1},
-				}}}}, nil),
+				}},
+			},
+		}, nil),
 		// Second call all created prefixes returned
 		mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputPrefix).Return(describeNetworkInterfaceOutputPrefix, nil),
 	)
@@ -1133,10 +1141,12 @@ func TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady_TypeIPv4Address_Descri
 	gomock.InOrder(
 		// First call returns just one ip address
 		mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInput).Return(&ec2.DescribeNetworkInterfacesOutput{
-			NetworkInterfaces: []*ec2.NetworkInterface{
-				{PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
+			NetworkInterfaces: []ec2types.NetworkInterface{
+				{PrivateIpAddresses: []ec2types.NetworkInterfacePrivateIpAddress{
 					{PrivateIpAddress: &ipAddress1},
-				}}}}, nil).Times(maxRetryOnError),
+				}},
+			},
+		}, nil).Times(maxRetryOnError),
 	)
 
 	createdIPs, err := ec2ApiHelper.AssignIPv4ResourcesAndWaitTillReady(eniID, config.ResourceTypeIPv4Address, 2)
@@ -1157,10 +1167,12 @@ func TestEC2APIHelper_AssignIPv4ResourcesAndWaitTillReady_TypeIPv4Prefix_Describ
 	gomock.InOrder(
 		// First call returns just one ip address
 		mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputPrefix).Return(&ec2.DescribeNetworkInterfacesOutput{
-			NetworkInterfaces: []*ec2.NetworkInterface{
-				{Ipv4Prefixes: []*ec2.Ipv4PrefixSpecification{
+			NetworkInterfaces: []ec2types.NetworkInterface{
+				{Ipv4Prefixes: []ec2types.Ipv4PrefixSpecification{
 					{Ipv4Prefix: &ipPrefix1},
-				}}}}, nil).Times(maxRetryOnError),
+				}},
+			},
+		}, nil).Times(maxRetryOnError),
 	)
 
 	createdPrefixes, err := ec2ApiHelper.AssignIPv4ResourcesAndWaitTillReady(eniID, config.ResourceTypeIPv4Prefix, 2)
@@ -1181,5 +1193,5 @@ func TestEc2APIHelper_GetBranchNetworkInterface(t *testing.T) {
 
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
 	assert.NoError(t, err)
-	assert.ElementsMatch(t, []*ec2.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
+	assert.ElementsMatch(t, []*ec2types.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
 }

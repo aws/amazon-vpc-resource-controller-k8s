@@ -25,8 +25,9 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/go-logr/logr"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -36,7 +37,7 @@ import (
 // NetworkInterfaceManager interface allows to define the ENI filters and checks if ENI should be deleted for different callers like in the periodic cleanup routine or
 // during node termination
 type NetworkInterfaceManager interface {
-	GetENITagFilters() []*ec2.Filter
+	GetENITagFilters() []ec2types.Filter
 	ShouldDeleteENI(eniID *string) bool
 	UpdateAvailableENIsIfNeeded(eniMap *map[string]struct{})
 	UpdateCleanupMetrics(vpcrcAvailableCount *int, vpccniAvailableCount *int, leakedENICount *int)
@@ -50,15 +51,17 @@ type ENICleaner struct {
 }
 
 // common filters for describing network interfaces
-var CommonNetworkInterfaceFilters = []*ec2.Filter{
+var CommonNetworkInterfaceFilters = []ec2types.Filter{
 	{
 		Name:   aws.String("status"),
-		Values: []*string{aws.String(ec2.NetworkInterfaceStatusAvailable)},
+		Values: []string{string(ec2types.NetworkInterfaceStatusAvailable)},
 	},
 	{
 		Name: aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
-		Values: aws.StringSlice([]string{config.NetworkInterfaceOwnerTagValue,
-			config.NetworkInterfaceOwnerVPCCNITagValue}),
+		Values: []string{
+			config.NetworkInterfaceOwnerTagValue,
+			config.NetworkInterfaceOwnerVPCCNITagValue,
+		},
 	},
 }
 
@@ -113,10 +116,10 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 	leakedENICount := 0
 	defer e.Manager.UpdateCleanupMetrics(&vpcrcAvailableCount, &vpccniAvailableCount, &leakedENICount)
 
-	filters := append(CommonNetworkInterfaceFilters, []*ec2.Filter{
+	filters := append(CommonNetworkInterfaceFilters, []ec2types.Filter{
 		{
 			Name:   aws.String("vpc-id"),
-			Values: []*string{aws.String(e.VpcId)},
+			Values: []string{e.VpcId},
 		},
 	}...)
 	// get cleaner specific filters
@@ -172,12 +175,12 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 	return kerrors.NewAggregate(errors)
 }
 
-func (e *ClusterENICleaner) GetENITagFilters() []*ec2.Filter {
+func (e *ClusterENICleaner) GetENITagFilters() []ec2types.Filter {
 	clusterNameTagKey := fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
-	return []*ec2.Filter{
+	return []ec2types.Filter{
 		{
 			Name:   aws.String("tag:" + clusterNameTagKey),
-			Values: []*string{aws.String(config.ClusterNameTagValue)},
+			Values: []string{config.ClusterNameTagValue},
 		},
 	}
 }
