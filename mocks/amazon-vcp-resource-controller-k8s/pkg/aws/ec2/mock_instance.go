@@ -62,7 +62,7 @@ func (mr *MockEC2InstanceMockRecorder) CurrentInstanceSecurityGroups() *gomock.C
 }
 
 // FreeDeviceIndex mocks base method.
-func (m *MockEC2Instance) FreeDeviceIndex(arg0 int64) {
+func (m *MockEC2Instance) FreeDeviceIndex(arg0 int32) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "FreeDeviceIndex", arg0)
 }
@@ -89,10 +89,10 @@ func (mr *MockEC2InstanceMockRecorder) GetCustomNetworkingSpec() *gomock.Call {
 }
 
 // GetHighestUnusedDeviceIndex mocks base method.
-func (m *MockEC2Instance) GetHighestUnusedDeviceIndex() (int64, error) {
+func (m *MockEC2Instance) GetHighestUnusedDeviceIndex() (int32, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetHighestUnusedDeviceIndex")
-	ret0, _ := ret[0].(int64)
+	ret0, _ := ret[0].(int32)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

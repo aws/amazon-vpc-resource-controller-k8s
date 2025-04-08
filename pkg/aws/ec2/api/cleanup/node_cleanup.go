@@ -15,8 +15,8 @@ package cleanup
 
 import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
 // NodeTerminationCleanerto handle resource cleanup at node termination
@@ -25,11 +25,11 @@ type NodeTerminationCleaner struct {
 	*ENICleaner
 }
 
-func (n *NodeTerminationCleaner) GetENITagFilters() []*ec2.Filter {
-	return []*ec2.Filter{
+func (n *NodeTerminationCleaner) GetENITagFilters() []ec2types.Filter {
+	return []ec2types.Filter{
 		{
 			Name:   aws.String("tag:" + config.NetworkInterfaceNodeIDKey),
-			Values: []*string{aws.String(n.NodeID)},
+			Values: []string{n.NodeID},
 		},
 	}
 }
