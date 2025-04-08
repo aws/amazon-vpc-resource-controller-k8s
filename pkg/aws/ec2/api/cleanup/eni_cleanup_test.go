@@ -23,8 +23,9 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
@@ -41,57 +42,61 @@ var (
 	mockVpcId = "vpc-0000000000000000"
 
 	mockClusterTagInput = &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{
+		Filters: []ec2types.Filter{
 			{
 				Name:   aws.String("status"),
-				Values: []*string{aws.String(ec2.NetworkInterfaceStatusAvailable)},
+				Values: []string{string(ec2types.NetworkInterfaceStatusAvailable)},
 			},
 			{
 				Name: aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
-				Values: aws.StringSlice([]string{config.NetworkInterfaceOwnerTagValue,
-					config.NetworkInterfaceOwnerVPCCNITagValue}),
+				Values: []string{
+					config.NetworkInterfaceOwnerTagValue,
+					config.NetworkInterfaceOwnerVPCCNITagValue,
+				},
 			},
 			{
 				Name:   aws.String("vpc-id"),
-				Values: []*string{aws.String(mockVpcId)},
+				Values: []string{mockVpcId},
 			},
 			{
 				Name:   aws.String("tag:" + mockClusterNameTagKey),
-				Values: []*string{aws.String(config.ClusterNameTagValue)},
+				Values: []string{config.ClusterNameTagValue},
 			},
 		},
 	}
 
 	mockNodeIDTagInput = &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{
+		Filters: []ec2types.Filter{
 			{
 				Name:   aws.String("status"),
-				Values: []*string{aws.String(ec2.NetworkInterfaceStatusAvailable)},
+				Values: []string{string(ec2types.NetworkInterfaceStatusAvailable)},
 			},
 			{
 				Name: aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
-				Values: aws.StringSlice([]string{config.NetworkInterfaceOwnerTagValue,
-					config.NetworkInterfaceOwnerVPCCNITagValue}),
+				Values: []string{
+					config.NetworkInterfaceOwnerTagValue,
+					config.NetworkInterfaceOwnerVPCCNITagValue,
+				},
 			},
 			{
 				Name:   aws.String("vpc-id"),
-				Values: []*string{aws.String(mockVpcId)},
+				Values: []string{mockVpcId},
 			},
 			{
 				Name:   aws.String("tag:" + config.NetworkInterfaceNodeIDKey),
-				Values: []*string{aws.String(mockNodeID)},
+				Values: []string{mockNodeID},
 			},
 		},
 	}
 
-	NetworkInterfacesWith1And2 = []*ec2.NetworkInterface{
-		{NetworkInterfaceId: &mockNetworkInterfaceId1, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
-		{NetworkInterfaceId: &mockNetworkInterfaceId2, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
+	NetworkInterfacesWith1And2 = []*ec2types.NetworkInterface{
+		{NetworkInterfaceId: &mockNetworkInterfaceId1, Attachment: &ec2types.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
+		{NetworkInterfaceId: &mockNetworkInterfaceId2, Attachment: &ec2types.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
 	}
 
-	NetworkInterfacesWith1And3 = []*ec2.NetworkInterface{
-		{NetworkInterfaceId: &mockNetworkInterfaceId1, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
-		{NetworkInterfaceId: &mockNetworkInterfaceId3, Attachment: &ec2.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
+	NetworkInterfacesWith1And3 = []*ec2types.NetworkInterface{
+		{NetworkInterfaceId: &mockNetworkInterfaceId1, Attachment: &ec2types.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
+		{NetworkInterfaceId: &mockNetworkInterfaceId3, Attachment: &ec2types.NetworkInterfaceAttachment{InstanceId: &mockNodeID}},
 	}
 )
 
@@ -150,13 +155,11 @@ func TestENICleaner_DeleteLeakedResources(t *testing.T) {
 					f.mockEC2Wrapper.EXPECT().DeleteNetworkInterface(
 						&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId1}).Return(nil, nil),
 				)
-
 			},
 			assertFirstCall: func(f *fields) {
 				// After first call, network interface 1 and 2 should be added to the map of available ENIs
 				assert.True(t, reflect.DeepEqual(
 					map[string]struct{}{mockNetworkInterfaceId1: {}, mockNetworkInterfaceId2: {}}, f.clusterENICleaner.availableENIs))
-
 			},
 			assertSecondCall: func(f *fields) {
 				// After second call, network interface 1 should be deleted and network interface 3 added to list

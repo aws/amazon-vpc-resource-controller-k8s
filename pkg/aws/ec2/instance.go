@@ -65,8 +65,8 @@ type ec2Instance struct {
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
 type EC2Instance interface {
 	LoadDetails(ec2APIHelper api.EC2APIHelper) error
-	GetHighestUnusedDeviceIndex() (int64, error)
-	FreeDeviceIndex(index int64)
+	GetHighestUnusedDeviceIndex() (int32, error)
+	FreeDeviceIndex(index int32)
 	Name() string
 	Os() string
 	Type() string
@@ -126,7 +126,7 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		}
 	}
 
-	i.instanceType = *instance.InstanceType
+	i.instanceType = string(instance.InstanceType)
 	limits, ok := vpc.Limits[i.instanceType]
 	if !ok {
 		return fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s, error: %w", i.instanceType, utils.ErrNotFound)
@@ -224,21 +224,21 @@ func (i *ec2Instance) CurrentInstanceSecurityGroups() []string {
 
 // GetHighestUnusedDeviceIndex assigns a free device index from the end of the list since IPAMD assigns indexes from
 // the beginning of the list
-func (i *ec2Instance) GetHighestUnusedDeviceIndex() (int64, error) {
+func (i *ec2Instance) GetHighestUnusedDeviceIndex() (int32, error) {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
 	for index := len(i.deviceIndexes) - 1; index >= 0; index-- {
 		if i.deviceIndexes[index] == false {
 			i.deviceIndexes[index] = true
-			return int64(index), nil
+			return utils.IntToInt32(index)
 		}
 	}
 	return 0, fmt.Errorf("no free device index found")
 }
 
 // FreeDeviceIndex frees a device index from the list of managed index
-func (i *ec2Instance) FreeDeviceIndex(index int64) {
+func (i *ec2Instance) FreeDeviceIndex(index int32) {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
