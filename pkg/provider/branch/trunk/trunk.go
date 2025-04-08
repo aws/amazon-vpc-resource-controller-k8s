@@ -30,8 +30,9 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/samber/lo"
 
-	"github.com/aws/aws-sdk-go/aws"
-	awsEC2 "github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsEc2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
@@ -51,10 +52,8 @@ var (
 	BranchEniDescription = "branch-eni"
 )
 
-var (
-	ErrCurrentlyAtMaxCapacity = fmt.Errorf("cannot create more branches at this point as used branches plus the " +
-		"delete queue is at max capacity")
-)
+var ErrCurrentlyAtMaxCapacity = fmt.Errorf("cannot create more branches at this point as used branches plus the " +
+	"delete queue is at max capacity")
 
 var (
 	trunkENIOperationsErrCount = prometheus.NewCounterVec(
@@ -125,7 +124,7 @@ type trunkENI struct {
 	// deleteQueue is the queue of ENIs that are being cooled down before being deleted
 	deleteQueue []*ENIDetails
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
-	nodeNameTag []*awsEC2.Tag
+	nodeNameTag []ec2types.Tag
 }
 
 // PodENI is a json convertible structure that stores the Branch ENI details that can be
@@ -167,7 +166,6 @@ type IntrospectSummaryResponse struct {
 
 // NewTrunkENI returns a new Trunk ENI interface.
 func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2APIHelper) TrunkENI {
-
 	availVlans := make([]bool, MaxAllocatableVlanIds)
 	// VlanID 0 cannot be assigned.
 	availVlans[0] = true
@@ -178,7 +176,7 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 		ec2ApiHelper:      helper,
 		instance:          instance,
 		uidToBranchENIMap: make(map[string][]*ENIDetails),
-		nodeNameTag: []*awsEC2.Tag{
+		nodeNameTag: []ec2types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
 				Value: aws.String(instance.InstanceID()),
@@ -210,22 +208,22 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		return err
 	}
 
-	var trunk awsEC2.InstanceNetworkInterface
+	var trunk ec2types.InstanceNetworkInterface
 	// Get trunk network interface
 	for _, nwInterface := range nwInterfaces {
 		// It's possible to get an empty network interface response if the instance is being deleted.
-		if nwInterface == nil || nwInterface.InterfaceType == nil {
+		if nwInterface.InterfaceType == nil {
 			return fmt.Errorf("received an empty network interface response "+
 				"from EC2 %+v", nwInterface)
 		}
 		if *nwInterface.InterfaceType == "trunk" {
 			// Check that the trunkENI is in attached state before adding to cache
-			if err = t.ec2ApiHelper.WaitForNetworkInterfaceStatusChange(nwInterface.NetworkInterfaceId, awsEC2.AttachmentStatusAttached); err == nil {
+			if err = t.ec2ApiHelper.WaitForNetworkInterfaceStatusChange(nwInterface.NetworkInterfaceId, string(ec2types.AttachmentStatusAttached)); err == nil {
 				t.trunkENIId = *nwInterface.NetworkInterfaceId
 			} else {
 				return fmt.Errorf("failed to verify network interface status attached for %v", *nwInterface.NetworkInterfaceId)
 			}
-			trunk = *nwInterface
+			trunk = nwInterface
 		}
 	}
 
@@ -255,7 +253,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	expectedSubnetID, expectedSecurityGroups := t.instance.GetCustomNetworkingSpec()
 	if len(expectedSecurityGroups) > 0 || expectedSubnetID != "" {
 		slices.Sort(expectedSecurityGroups)
-		trunkSGs := lo.Map(trunk.Groups, func(g *awsEC2.GroupIdentifier, _ int) string {
+		trunkSGs := lo.Map(trunk.Groups, func(g ec2types.GroupIdentifier, _ int) string {
 			return lo.FromPtr(g.GroupId)
 		})
 		slices.Sort(trunkSGs)
@@ -293,7 +291,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	}
 
 	// Convert the list of interfaces to a set
-	associatedBranchInterfaces := make(map[string]*awsEC2.NetworkInterface)
+	associatedBranchInterfaces := make(map[string]*ec2types.NetworkInterface)
 	for _, branchInterface := range branchInterfaces {
 		associatedBranchInterfaces[*branchInterface.NetworkInterfaceId] = branchInterface
 	}
@@ -403,7 +401,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 
 	var newENIs []*ENIDetails
 	var err error
-	var nwInterface *awsEC2.NetworkInterface
+	var nwInterface *ec2types.NetworkInterface
 	var vlanID int
 
 	for i := 0; i < eniCount; i++ {
@@ -416,7 +414,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		}
 
 		// Vlan ID tag workaround, as describe trunk association is not supported with assumed role
-		tags := []*awsEC2.Tag{
+		tags := []ec2types.Tag{
 			{
 				Key:   aws.String(config.VLandIDTag),
 				Value: aws.String(strconv.Itoa(vlanID)),
@@ -448,13 +446,15 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		if nwInterface.Ipv6Address != nil {
 			v6Addr = *nwInterface.Ipv6Address
 		}
-		newENI := &ENIDetails{ID: *nwInterface.NetworkInterfaceId, MACAdd: *nwInterface.MacAddress,
+		newENI := &ENIDetails{
+			ID: *nwInterface.NetworkInterfaceId, MACAdd: *nwInterface.MacAddress,
 			IPV4Addr: v4Addr, IPV6Addr: v6Addr, SubnetCIDR: t.instance.SubnetCidrBlock(),
-			SubnetV6CIDR: t.instance.SubnetV6CidrBlock(), VlanID: vlanID}
+			SubnetV6CIDR: t.instance.SubnetV6CidrBlock(), VlanID: vlanID,
+		}
 		newENIs = append(newENIs, newENI)
 
 		// Associate Branch to trunk
-		var associationOutput *awsEC2.AssociateTrunkInterfaceOutput
+		var associationOutput *awsEc2.AssociateTrunkInterfaceOutput
 		associationOutput, err = t.ec2ApiHelper.AssociateBranchToTrunk(&t.trunkENIId, nwInterface.NetworkInterfaceId, vlanID)
 		if err != nil {
 			err = fmt.Errorf("associating branch to trunk, %w", err)
@@ -685,8 +685,7 @@ func (t *trunkENI) freeVlanId(vlanId int) {
 	t.usedVlanIds[vlanId] = false
 }
 
-func (t *trunkENI) getVlanIdFromTag(tags []*awsEC2.Tag) (int, error) {
-
+func (t *trunkENI) getVlanIdFromTag(tags []ec2types.Tag) (int, error) {
 	for _, tag := range tags {
 		if *tag.Key == config.VLandIDTag {
 			return strconv.Atoi(*tag.Value)
