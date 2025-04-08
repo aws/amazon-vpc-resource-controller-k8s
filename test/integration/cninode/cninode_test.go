@@ -82,6 +82,7 @@ var _ = Describe("[CANARY]CNINode test", func() {
 	Describe("CNINode is re-created when node exists", func() {
 		Context("when CNINode is deleted but node exists", func() {
 			It("it should re-create CNINode", func() {
+				Skip("Skipping this test until we make release with manifest update of cni-node")
 				nodeList, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
 				Expect(err).ToNot(HaveOccurred())
 				cniNode, err := frameWork.NodeManager.GetCNINode(&nodeList.Items[0])
@@ -121,6 +122,7 @@ var _ = Describe("[CANARY]CNINode test", func() {
 
 		Context("when finalizer is removed", func() {
 			It("it should add the finalizer", func() {
+				Skip("Skipping this test until we make release with manifest update of cni-node")
 				cniNodeCopy := cniNode.DeepCopy()
 				controllerutil.RemoveFinalizer(cniNodeCopy, config.NodeTerminationFinalizer)
 				err := frameWork.NodeManager.UpdateCNINode(cniNode, cniNodeCopy)
@@ -129,6 +131,7 @@ var _ = Describe("[CANARY]CNINode test", func() {
 		})
 		Context("when Tags is removed", func() {
 			It("it should add the Tags", func() {
+				Skip("Skipping this test until we make release with manifest update of cni-node")
 				cniNodeCopy := cniNode.DeepCopy()
 				cniNodeCopy.Spec.Tags = map[string]string{}
 				err := frameWork.NodeManager.UpdateCNINode(cniNode, cniNodeCopy)
@@ -137,6 +140,7 @@ var _ = Describe("[CANARY]CNINode test", func() {
 		})
 		Context("when Label is removed", func() {
 			It("it should add the label", func() {
+				Skip("Skipping this test until we make release with manifest update of cni-node")
 				cniNodeCopy := cniNode.DeepCopy()
 				cniNodeCopy.ObjectMeta.Labels = map[string]string{}
 				err := frameWork.NodeManager.UpdateCNINode(cniNode, cniNodeCopy)
