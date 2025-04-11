@@ -497,10 +497,11 @@ func main() {
 		ClusterName: clusterName,
 	}
 	cleaner.ENICleaner = &eniCleaner.ENICleaner{
-		EC2Wrapper: ec2Wrapper,
-		Manager:    cleaner,
-		VpcId:      vpcID,
-		Log:        ctrl.Log.WithName("eniCleaner").WithName("cluster"),
+		EC2Wrapper:         ec2Wrapper,
+		Manager:            cleaner,
+		VpcId:              vpcID,
+		Log:                ctrl.Log.WithName("eniCleaner").WithName("cluster"),
+		ControllerDisabled: disableController,
 	}
 
 	if err := cleaner.SetupWithManager(ctx, mgr, healthzHandler); err != nil {
