@@ -44,10 +44,11 @@ type NetworkInterfaceManager interface {
 }
 
 type ENICleaner struct {
-	EC2Wrapper api.EC2Wrapper
-	Manager    NetworkInterfaceManager
-	VpcId      string
-	Log        logr.Logger
+	EC2Wrapper         api.EC2Wrapper
+	Manager            NetworkInterfaceManager
+	VpcId              string
+	Log                logr.Logger
+	ControllerDisabled bool
 }
 
 // common filters for describing network interfaces
@@ -122,8 +123,12 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 			Values: []string{e.VpcId},
 		},
 	}...)
-	// get cleaner specific filters
-	filters = append(filters, e.Manager.GetENITagFilters()...)
+
+	// only apply extra filters when the controller is enabled which provides cninode resources
+	if !e.ControllerDisabled {
+		// get cleaner specific filters
+		filters = append(filters, e.Manager.GetENITagFilters()...)
+	}
 	describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
 		Filters: filters,
 	}
