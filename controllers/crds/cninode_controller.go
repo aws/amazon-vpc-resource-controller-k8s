@@ -15,6 +15,7 @@ package crds
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -23,6 +24,8 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	"github.com/awslabs/operatorpkg/reasonable"
+	"github.com/awslabs/operatorpkg/singleton"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
@@ -35,7 +38,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 var (
@@ -269,4 +274,50 @@ func (r *CNINodeReconciler) createCNINodeFromObj(ctx context.Context, newCNINode
 		func() error {
 			return r.Client.Create(ctx, newCNINode)
 		})
+}
+
+type CNINodeCleaner struct {
+	k8sClient k8s.K8sWrapper
+	log       logr.Logger
+}
+
+func NewCNINodeCleaner(client k8s.K8sWrapper, log logr.Logger) *CNINodeCleaner {
+	return &CNINodeCleaner{
+		k8sClient: client,
+		log:       log,
+	}
+}
+
+func (c *CNINodeCleaner) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		Named("cninode-cleaner").
+		WithOptions(controller.Options{RateLimiter: reasonable.RateLimiter()}).
+		WatchesRawSource(singleton.Source()).
+		Complete(singleton.AsReconciler(c))
+}
+
+func (c *CNINodeCleaner) Reconcile(ctx context.Context) (reconcile.Result, error) {
+	cniNodeList, err := c.k8sClient.ListCNINodes()
+	c.log.Info("get cninodes", "cninodes", len(cniNodeList))
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("listing cni nodes, %w", err)
+	}
+
+	for _, oldCNINode := range cniNodeList {
+		newCNINode := oldCNINode.DeepCopy()
+		// if the cninode has finalizer, remove it and then delete the resource
+		// otherwise just delete the resource
+		if yes := controllerutil.RemoveFinalizer(newCNINode, config.NodeTerminationFinalizer); yes {
+			if err := c.k8sClient.PatchCNINode(oldCNINode, newCNINode); err != nil {
+				c.log.Info("patch cninode failed", "cninode", newCNINode.Name, "error", err.Error())
+				continue
+			}
+		}
+		if err := c.k8sClient.DeleteCNINode(newCNINode); err != nil {
+			c.log.Info("delete cninode failed", "cninode", newCNINode.Name, "error", err.Error())
+		}
+		c.log.Info("deleted cninode", "cninode", oldCNINode.Name)
+	}
+
+	return reconcile.Result{RequeueAfter: 1 * time.Hour}, nil
 }
