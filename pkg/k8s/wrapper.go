@@ -82,6 +82,9 @@ type K8sWrapper interface {
 	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
 	GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error)
 	CreateCNINode(node *v1.Node, clusterName string) error
+	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
+	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
+	DeleteCNINode(cniNode *rcv1alpha1.CNINode) error
 }
 
 // k8sWrapper is the wrapper object with the client
@@ -264,4 +267,20 @@ func (k *k8sWrapper) CreateCNINode(node *v1.Node, clusterName string) error {
 
 	// TODO: need think more if we should retry on "already exists" error.
 	return client.IgnoreAlreadyExists(k.cacheClient.Create(k.context, cniNode))
+}
+
+func (k *k8sWrapper) DeleteCNINode(cniNode *rcv1alpha1.CNINode) error {
+	return k.cacheClient.Delete(k.context, cniNode)
+}
+
+func (k *k8sWrapper) ListCNINodes() ([]*rcv1alpha1.CNINode, error) {
+	cniNodes := &rcv1alpha1.CNINodeList{}
+	if err := k.cacheClient.List(k.context, cniNodes); err != nil {
+		return nil, err
+	}
+	return lo.ToSlicePtr(cniNodes.Items), nil
+}
+
+func (k *k8sWrapper) PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error {
+	return k.cacheClient.Patch(k.context, newCNINode, client.MergeFromWithOptions(oldCNINode, client.MergeFromWithOptimisticLock{}))
 }

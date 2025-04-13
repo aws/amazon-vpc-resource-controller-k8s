@@ -23,6 +23,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	"github.com/samber/lo"
 
 	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -44,10 +45,11 @@ type NetworkInterfaceManager interface {
 }
 
 type ENICleaner struct {
-	EC2Wrapper api.EC2Wrapper
-	Manager    NetworkInterfaceManager
-	VpcId      string
-	Log        logr.Logger
+	EC2Wrapper         api.EC2Wrapper
+	Manager            NetworkInterfaceManager
+	VpcId              string
+	Log                logr.Logger
+	ControllerDisabled bool
 }
 
 // common filters for describing network interfaces
@@ -122,8 +124,12 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 			Values: []string{e.VpcId},
 		},
 	}...)
-	// get cleaner specific filters
-	filters = append(filters, e.Manager.GetENITagFilters()...)
+
+	// only apply extra filters when the controller is enabled which provides cninode resources
+	if !e.ControllerDisabled {
+		// get cleaner specific filters
+		filters = append(filters, e.Manager.GetENITagFilters()...)
+	}
 	describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
 		Filters: filters,
 	}
@@ -163,7 +169,9 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 				}
 				continue
 			}
-			e.Log.Info("deleted leaked ENI successfully", "eni id", nwInterface.NetworkInterfaceId, "instance id", nwInterface.Attachment.InstanceId)
+			e.Log.Info("deleted leaked ENI successfully",
+				"eniID", nwInterface.NetworkInterfaceId,
+				"instanceID", lo.TernaryF(nwInterface.Attachment == nil, func() *string { return lo.ToPtr("") }, func() *string { return nwInterface.Attachment.InstanceId }))
 		} else {
 			// Seeing the ENI for the first time, add it to the new list of available network interfaces
 			availableENIs[*nwInterface.NetworkInterfaceId] = struct{}{}
