@@ -22,18 +22,6 @@ rules:
   - patch
   - watch
 - apiGroups:
-  - admissionregistration.k8s.io
-  resources:
-  - mutatingwebhookconfigurations
-  verbs:
-  - delete
-- apiGroups:
-  - admissionregistration.k8s.io
-  resources:
-  - validatingwebhookconfigurations
-  verbs:
-  - delete
-- apiGroups:
   - ""
   resources:
   - nodes

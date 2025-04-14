@@ -42,7 +42,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
 	asyncWorkers "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	webhookcore "github.com/aws/amazon-vpc-resource-controller-k8s/webhooks/core"
-	webhookidle "github.com/aws/amazon-vpc-resource-controller-k8s/webhooks/idle"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/go-logr/zapr"
@@ -318,32 +317,6 @@ func main() {
 
 	if disableController {
 		setupLog.Info("vpc resource controller is disabled")
-		// +kubebuilder:scaffold:builder
-		setupLog.Info("setting up idle webhook servers")
-		webhookServer := mgr.GetWebhookServer()
-
-		// these webhooks are backup in case configurations are still existing for any reason
-		webhookServer.Register("/mutate-v1-pod", &webhook.Admission{
-			Handler: webhookidle.NewPodMutationWebHook(),
-		})
-
-		webhookServer.Register("/validate-v1-node", &webhook.Admission{
-			Handler: webhookidle.NewNodeUpdateWebhook()})
-
-		webhookServer.Register("/validate-v1-pod", &webhook.Admission{
-			Handler: webhookidle.NewAnnotationValidator()})
-
-		cninodeCleaner := crdcontroller.NewCNINodeCleaner(k8sApi, ctrl.Log.WithName("cninodeCleaner"))
-		if err := cninodeCleaner.SetupWithManager(ctx, mgr); err != nil {
-			setupLog.Error(err, "unable to start cninode cleaner")
-			os.Exit(1)
-		}
-		webhookManager := utils.NewWebhookManager(clientSet, ctrl.Log.WithName("webhookCleaner"))
-		if err := webhookManager.SetupWithManager(ctx, mgr); err != nil {
-			setupLog.Error(err, "unable to start webhook cleaner")
-			os.Exit(1)
-		}
-
 		featureGauge.Set(float64(0))
 	} else {
 		ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName)
