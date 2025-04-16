@@ -15,6 +15,7 @@ package cleanup
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -32,7 +33,7 @@ import (
 var (
 	mockClusterName       = "cluster-name"
 	mockNodeID            = "i-00000000000000001"
-	mockClusterNameTagKey = config.CNINodeClusterNameKey
+	mockClusterNameTagKey = config.VPCCNIClusterNameKey
 
 	mockNetworkInterfaceId1 = "eni-000000000000000"
 	mockNetworkInterfaceId2 = "eni-000000000000001"
@@ -143,16 +144,53 @@ func TestENICleaner_DeleteLeakedResources(t *testing.T) {
 				return mockClusterENICleaner.ENICleaner, mockClusterENICleaner
 			},
 			prepare: func(f *fields) {
+				commonFilters := CommonNetworkInterfaceFilters
+				vpcFilter := ec2types.Filter{
+					Name:   aws.String("vpc-id"),
+					Values: []string{mockVpcId},
+				}
+
+				firstOrFilter := ec2types.Filter{
+					Name:   aws.String("tag:" + config.VPCCNIClusterNameKey),
+					Values: []string{mockClusterName},
+				}
+
+				secondOrFilter := ec2types.Filter{
+					Name:   aws.String("tag:" + fmt.Sprintf(config.VPCRCClusterNameTagKeyFormat, mockClusterName)),
+					Values: []string{config.VPCRCClusterNameTagValue},
+				}
+
+				filtersWithFirstTag := append(append(commonFilters, vpcFilter), firstOrFilter)
+				filtersWithSecondTag := append(append(commonFilters, vpcFilter), secondOrFilter)
 				gomock.InOrder(
-					// Return network interface 1 and 2 in first cycle
-					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfacesPagesWithRetry(mockClusterTagInput).
-						Return(NetworkInterfacesWith1And2, nil),
+					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfacesPagesWithRetry(
+						&ec2.DescribeNetworkInterfacesInput{
+							Filters: filtersWithFirstTag,
+						},
+					).Return(NetworkInterfacesWith1And2, nil),
+
+					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfacesPagesWithRetry(
+						&ec2.DescribeNetworkInterfacesInput{
+							Filters: filtersWithSecondTag,
+						},
+					).Return([]*ec2types.NetworkInterface{}, nil),
+
 					// Return network interface 1 and 3 in the second cycle
-					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfacesPagesWithRetry(mockClusterTagInput).
-						Return(NetworkInterfacesWith1And3, nil),
-					// Expect to delete the network interface 1
+					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfacesPagesWithRetry(
+						&ec2.DescribeNetworkInterfacesInput{
+							Filters: filtersWithFirstTag,
+						},
+					).Return(NetworkInterfacesWith1And3, nil),
+
+					f.mockEC2Wrapper.EXPECT().DescribeNetworkInterfacesPagesWithRetry(
+						&ec2.DescribeNetworkInterfacesInput{
+							Filters: filtersWithSecondTag,
+						},
+					).Return([]*ec2types.NetworkInterface{}, nil),
+
 					f.mockEC2Wrapper.EXPECT().DeleteNetworkInterface(
-						&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId1}).Return(nil, nil),
+						&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: &mockNetworkInterfaceId1},
+					).Return(nil, nil),
 				)
 			},
 			assertFirstCall: func(f *fields) {

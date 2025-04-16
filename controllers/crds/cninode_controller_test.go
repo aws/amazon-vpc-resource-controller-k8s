@@ -89,7 +89,7 @@ func TestCNINodeReconcile(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, res, reconcile.Result{})
 				assert.Equal(t, cniNode.Labels, map[string]string{config.NodeLabelOS: "linux"})
-				assert.Equal(t, cniNode.Spec.Tags, map[string]string{config.CNINodeClusterNameKey: mockClusterName})
+				assert.Equal(t, cniNode.Spec.Tags, map[string]string{config.VPCCNIClusterNameKey: mockClusterName})
 			},
 		},
 	}
