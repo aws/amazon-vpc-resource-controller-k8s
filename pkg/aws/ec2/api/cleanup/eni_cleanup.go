@@ -23,7 +23,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
-	"github.com/samber/lo"
 
 	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -133,7 +132,6 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 	describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
 		Filters: filters,
 	}
-
 	networkInterfaces, err := e.EC2Wrapper.DescribeNetworkInterfacesPagesWithRetry(describeNetworkInterfaceIp)
 	if err != nil {
 		e.Log.Error(err, "failed to describe network interfaces, cleanup will be retried in next cycle")
@@ -169,9 +167,12 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 				}
 				continue
 			}
-			e.Log.Info("deleted leaked ENI successfully",
-				"eniID", nwInterface.NetworkInterfaceId,
-				"instanceID", lo.TernaryF(nwInterface.Attachment == nil, func() *string { return lo.ToPtr("") }, func() *string { return nwInterface.Attachment.InstanceId }))
+			// It is possible for eni attachment to be nil, if it was never attached to instance
+			instanceID := ""
+			if nwInterface.Attachment != nil && nwInterface.Attachment.InstanceId != nil {
+				instanceID = aws.ToString(nwInterface.Attachment.InstanceId)
+			}
+			e.Log.Info("deleted leaked ENI successfully", "eni id", *nwInterface.NetworkInterfaceId, "instance id", instanceID)
 		} else {
 			// Seeing the ENI for the first time, add it to the new list of available network interfaces
 			availableENIs[*nwInterface.NetworkInterfaceId] = struct{}{}
@@ -184,11 +185,11 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 }
 
 func (e *ClusterENICleaner) GetENITagFilters() []ec2types.Filter {
-	clusterNameTagKey := fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
+	clusterNameTagKey := config.CNINodeClusterNameKey
 	return []ec2types.Filter{
 		{
 			Name:   aws.String("tag:" + clusterNameTagKey),
-			Values: []string{config.ClusterNameTagValue},
+			Values: []string{e.ClusterName},
 		},
 	}
 }

@@ -15,7 +15,6 @@ package cleanup
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"testing"
 
@@ -33,7 +32,7 @@ import (
 var (
 	mockClusterName       = "cluster-name"
 	mockNodeID            = "i-00000000000000001"
-	mockClusterNameTagKey = fmt.Sprintf(config.ClusterNameTagKeyFormat, mockClusterName)
+	mockClusterNameTagKey = config.CNINodeClusterNameKey
 
 	mockNetworkInterfaceId1 = "eni-000000000000000"
 	mockNetworkInterfaceId2 = "eni-000000000000001"
@@ -60,7 +59,7 @@ var (
 			},
 			{
 				Name:   aws.String("tag:" + mockClusterNameTagKey),
-				Values: []string{config.ClusterNameTagValue},
+				Values: []string{mockClusterName},
 			},
 		},
 	}

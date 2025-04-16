@@ -69,8 +69,8 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
 	// Set the key and value of the cluster name tag which will be used to tag all the network interfaces created by
 	// the controller
 	clusterNameTag = ec2types.Tag{
-		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
-		Value: aws.String(config.ClusterNameTagValue),
+		Key:   aws.String(config.CNINodeClusterNameKey),
+		Value: aws.String(clusterName),
 	}
 	return &ec2APIHelper{ec2Wrapper: ec2Wrapper}
 }
