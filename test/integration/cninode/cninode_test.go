@@ -190,7 +190,7 @@ func VerifyCNINodeFields(cniNode *v1alpha1.CNINode) {
 	// For maps, ContainElement searches through the map's values.
 	By("verifying cluster name tag is set")
 	Expect(cniNode.Spec.Tags).To(ContainElement(frameWork.Options.ClusterName))
-	Expect(config.CNINodeClusterNameKey).To(BeKeyOf(cniNode.Spec.Tags))
+	Expect(config.VPCCNIClusterNameKey).To(BeKeyOf(cniNode.Spec.Tags))
 
 	By("verifying node OS label is set")
 	Expect(cniNode.ObjectMeta.Labels).To(ContainElement(config.OSLinux))

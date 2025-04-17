@@ -761,6 +761,7 @@ func (e *ec2Wrapper) DescribeNetworkInterfacesPagesWithRetry(input *ec2.Describe
 				attemptInterfaces = append(attemptInterfaces, &ec2types.NetworkInterface{
 					NetworkInterfaceId: nwInterface.NetworkInterfaceId,
 					TagSet:             nwInterface.TagSet,
+					Attachment:         nwInterface.Attachment,
 				})
 			}
 
