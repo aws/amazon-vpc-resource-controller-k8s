@@ -67,14 +67,15 @@ func prometheusRegister() {
 // CNINodeReconciler reconciles a CNINode object
 type CNINodeReconciler struct {
 	client.Client
-	scheme           *runtime.Scheme
-	context          context.Context
-	log              logr.Logger
-	eC2Wrapper       ec2API.EC2Wrapper
-	k8sAPI           k8s.K8sWrapper
-	clusterName      string
-	vpcId            string
-	finalizerManager k8s.FinalizerManager
+	scheme             *runtime.Scheme
+	context            context.Context
+	log                logr.Logger
+	eC2Wrapper         ec2API.EC2Wrapper
+	k8sAPI             k8s.K8sWrapper
+	clusterName        string
+	vpcId              string
+	finalizerManager   k8s.FinalizerManager
+	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner
 }
 
 func NewCNINodeReconciler(
@@ -87,17 +88,19 @@ func NewCNINodeReconciler(
 	clusterName string,
 	vpcId string,
 	finalizerManager k8s.FinalizerManager,
+	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner,
 ) *CNINodeReconciler {
 	return &CNINodeReconciler{
-		Client:           client,
-		scheme:           scheme,
-		context:          ctx,
-		log:              logger,
-		eC2Wrapper:       ec2Wrapper,
-		k8sAPI:           k8sWrapper,
-		clusterName:      clusterName,
-		vpcId:            vpcId,
-		finalizerManager: finalizerManager,
+		Client:             client,
+		scheme:             scheme,
+		context:            ctx,
+		log:                logger,
+		eC2Wrapper:         ec2Wrapper,
+		k8sAPI:             k8sWrapper,
+		clusterName:        clusterName,
+		vpcId:              vpcId,
+		finalizerManager:   finalizerManager,
+		newResourceCleaner: newResourceCleaner,
 	}
 }
 
@@ -174,19 +177,12 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			// run cleanup for Linux nodes only
 			if val, ok := cniNode.ObjectMeta.Labels[config.NodeLabelOS]; ok && val == config.OSLinux {
 				r.log.Info("running the finalizer routine on cniNode", "cniNode", cniNode.Name)
-				cleaner := &cleanup.NodeTerminationCleaner{
-					NodeID: cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey],
-				}
-				cleaner.ENICleaner = &cleanup.ENICleaner{
-					EC2Wrapper: r.eC2Wrapper,
-					Manager:    cleaner,
-					VpcId:      r.vpcId,
-					Log:        ctrl.Log.WithName("eniCleaner").WithName("node"),
-				}
-
-				if err := cleaner.DeleteLeakedResources(); err != nil {
-					r.log.Error(err, "failed to cleanup resources during node termination")
-					ec2API.NodeTerminationENICleanupFailure.Inc()
+				// run cleanup when node id is present
+				if nodeID, ok := cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey]; ok && nodeID != "" {
+					if err := r.newResourceCleaner(nodeID, r.eC2Wrapper, r.vpcId).DeleteLeakedResources(); err != nil {
+						r.log.Error(err, "failed to cleanup resources during node termination")
+						ec2API.NodeTerminationENICleanupFailure.Inc()
+					}
 				}
 			}
 
