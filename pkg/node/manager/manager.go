@@ -573,14 +573,14 @@ func (m *manager) check() healthz.Checker {
 	return func(req *http.Request) error {
 		err := rcHealthz.PingWithTimeout(func(c chan<- error) {
 			randomName := uuid.New().String()
-			m.Log.Info("starting health check call to acquire read lock of node manager through get node function")
+			m.Log.V(1).Info("starting health check call to acquire read lock of node manager through get node function")
 			_, found := m.GetNode(randomName)
 			m.Log.V(1).Info("health check tested ping GetNode to check on datastore cache in node manager successfully", "TesedNodeName", randomName, "NodeFound", found)
 			if m.SkipHealthCheck() {
 				m.Log.Info("due to EC2 error, node manager skips node worker queue health check for now")
 			} else {
 				var ping interface{}
-				m.Log.Info("starting health check to acquire lock on work queue of node manager")
+				m.Log.V(1).Info("starting health check to acquire lock on work queue of node manager")
 				m.worker.SubmitJob(ping)
 				m.Log.V(1).Info("health check tested ping SubmitJob with a nil job to check on worker queue in node manager successfully")
 			}
