@@ -127,7 +127,7 @@ var (
 	// CoolDownPeriod is the time to let kube-proxy propagates IP tables rules before assigning the resource back to new pod
 	CoolDownPeriod = time.Second * 30
 	// ENICleanUpInterval is the time interval between each dangling ENI clean up task
-	ENICleanUpInterval = time.Minute * 2
+	ENICleanUpInterval = time.Minute * 30
 )
 
 // ResourceConfig is the configuration for each resource type
