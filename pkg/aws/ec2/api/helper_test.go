@@ -83,8 +83,8 @@ var (
 	}
 
 	defaultClusterNameTag = ec2types.Tag{
-		Key:   aws.String(fmt.Sprintf(config.ClusterNameTagKeyFormat, clusterName)),
-		Value: aws.String(config.ClusterNameTagValue),
+		Key:   aws.String(fmt.Sprintf(config.VPCRCClusterNameTagKeyFormat, clusterName)),
+		Value: aws.String(config.VPCRCClusterNameTagValue),
 	}
 
 	createNetworkInterfaceInput = &ec2.CreateNetworkInterfaceInput{

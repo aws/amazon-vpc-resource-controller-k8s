@@ -128,13 +128,13 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		shouldPatch := false
 		cniNodeCopy := cniNode.DeepCopy()
 		// Add cluster name tag if it does not exist
-		val, ok := cniNode.Spec.Tags[config.CNINodeClusterNameKey]
+		val, ok := cniNode.Spec.Tags[config.VPCCNIClusterNameKey]
 		if !ok || val != r.clusterName {
 			if len(cniNodeCopy.Spec.Tags) != 0 {
-				cniNodeCopy.Spec.Tags[config.CNINodeClusterNameKey] = r.clusterName
+				cniNodeCopy.Spec.Tags[config.VPCCNIClusterNameKey] = r.clusterName
 			} else {
 				cniNodeCopy.Spec.Tags = map[string]string{
-					config.CNINodeClusterNameKey: r.clusterName,
+					config.VPCCNIClusterNameKey: r.clusterName,
 				}
 			}
 			shouldPatch = true
