@@ -126,7 +126,7 @@ type trunkENI struct {
 	// deleteQueue is the queue of ENIs that are being cooled down before being deleted
 	deleteQueue []*ENIDetails
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
-	nodeNameTag []ec2types.Tag
+	nodeIDTag []ec2types.Tag
 }
 
 // PodENI is a json convertible structure that stores the Branch ENI details that can be
@@ -178,7 +178,7 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 		ec2ApiHelper:      helper,
 		instance:          instance,
 		uidToBranchENIMap: make(map[string][]*ENIDetails),
-		nodeNameTag: []ec2types.Tag{
+		nodeIDTag: []ec2types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
 				Value: aws.String(instance.InstanceID()),
@@ -239,7 +239,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		}
 
 		trunk, err := t.ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceID, aws.String(t.instance.SubnetID()),
-			t.instance.CurrentInstanceSecurityGroups(), t.nodeNameTag, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil)
+			t.instance.CurrentInstanceSecurityGroups(), t.nodeIDTag, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil)
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("create_trunk_eni").Inc()
 			return err
@@ -427,7 +427,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 			},
 		}
 		// append the nodeName tag to add to branch ENIs
-		tags = append(tags, t.nodeNameTag...)
+		tags = append(tags, t.nodeIDTag...)
 		// Create Branch ENI
 		nwInterface, err = t.ec2ApiHelper.CreateNetworkInterface(&BranchEniDescription,
 			aws.String(t.instance.SubnetID()), securityGroups, tags, nil, nil)
