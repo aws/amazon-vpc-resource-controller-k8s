@@ -29,6 +29,7 @@ import (
 	crdcontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/crds"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	eniCleaner "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -438,6 +439,7 @@ func main() {
 			clusterName,
 			vpcID,
 			finalizerManager,
+			cleanup.NewNodeResourceCleaner,
 		).SetupWithManager(mgr, maxNodeConcurrentReconciles)); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "CNINode")
 			os.Exit(1)

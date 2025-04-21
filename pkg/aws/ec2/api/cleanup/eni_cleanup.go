@@ -23,7 +23,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
-	"github.com/samber/lo"
 
 	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -38,6 +37,7 @@ import (
 // NetworkInterfaceManager interface allows to define the ENI filters and checks if ENI should be deleted for different callers like in the periodic cleanup routine or
 // during node termination
 type NetworkInterfaceManager interface {
+	// If there are multiple filters then we will OR them.
 	GetENITagFilters() []ec2types.Filter
 	ShouldDeleteENI(eniID *string) bool
 	UpdateAvailableENIsIfNeeded(eniMap *map[string]struct{})
@@ -126,18 +126,36 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 	}...)
 
 	// only apply extra filters when the controller is enabled which provides cninode resources
+	var OrFilters []ec2types.Filter
+	var err error
+	var networkInterfaces []*ec2types.NetworkInterface
 	if !e.ControllerDisabled {
 		// get cleaner specific filters
-		filters = append(filters, e.Manager.GetENITagFilters()...)
-	}
-	describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
-		Filters: filters,
-	}
+		OrFilters = e.Manager.GetENITagFilters()
+		for _, OrFilter := range OrFilters {
+			filterCopy := append([]ec2types.Filter{}, filters...)
+			filterCopy = append(filterCopy, OrFilter)
 
-	networkInterfaces, err := e.EC2Wrapper.DescribeNetworkInterfacesPagesWithRetry(describeNetworkInterfaceIp)
-	if err != nil {
-		e.Log.Error(err, "failed to describe network interfaces, cleanup will be retried in next cycle")
-		return err
+			describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
+				Filters: filterCopy,
+			}
+
+			tempNetworkInterfaces, err := e.EC2Wrapper.DescribeNetworkInterfacesPagesWithRetry(describeNetworkInterfaceIp)
+			if err != nil {
+				e.Log.Error(err, "failed to describe network interfaces, cleanup will be retried in next cycle")
+				return err
+			}
+			networkInterfaces = append(networkInterfaces, tempNetworkInterfaces...)
+		}
+	} else {
+		describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
+			Filters: filters,
+		}
+		networkInterfaces, err = e.EC2Wrapper.DescribeNetworkInterfacesPagesWithRetry(describeNetworkInterfaceIp)
+		if err != nil {
+			e.Log.Error(err, "failed to describe network interfaces, cleanup will be retried in next cycle")
+			return err
+		}
 	}
 
 	for _, nwInterface := range networkInterfaces {
@@ -169,9 +187,12 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 				}
 				continue
 			}
-			e.Log.Info("deleted leaked ENI successfully",
-				"eniID", nwInterface.NetworkInterfaceId,
-				"instanceID", lo.TernaryF(nwInterface.Attachment == nil, func() *string { return lo.ToPtr("") }, func() *string { return nwInterface.Attachment.InstanceId }))
+			// It is possible for eni attachment to be nil, if it was never attached to instance
+			instanceID := ""
+			if nwInterface.Attachment != nil && nwInterface.Attachment.InstanceId != nil {
+				instanceID = aws.ToString(nwInterface.Attachment.InstanceId)
+			}
+			e.Log.Info("deleted leaked ENI successfully", "eni id", *nwInterface.NetworkInterfaceId, "instance id", instanceID)
 		} else {
 			// Seeing the ENI for the first time, add it to the new list of available network interfaces
 			availableENIs[*nwInterface.NetworkInterfaceId] = struct{}{}
@@ -184,11 +205,14 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 }
 
 func (e *ClusterENICleaner) GetENITagFilters() []ec2types.Filter {
-	clusterNameTagKey := fmt.Sprintf(config.ClusterNameTagKeyFormat, e.ClusterName)
 	return []ec2types.Filter{
 		{
-			Name:   aws.String("tag:" + clusterNameTagKey),
-			Values: []string{config.ClusterNameTagValue},
+			Name:   aws.String("tag:" + config.VPCCNIClusterNameKey),
+			Values: []string{e.ClusterName},
+		},
+		{
+			Name:   aws.String("tag:" + fmt.Sprintf(config.VPCRCClusterNameTagKeyFormat, e.ClusterName)),
+			Values: []string{config.VPCRCClusterNameTagValue},
 		},
 	}
 }

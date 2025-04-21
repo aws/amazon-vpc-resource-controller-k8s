@@ -57,18 +57,16 @@ const (
 
 // EC2 Tags
 const (
-	ControllerTagPrefix = "vpcresources.k8s.aws/"
-	VLandIDTag          = ControllerTagPrefix + "vlan-id"
-	TrunkENIIDTag       = ControllerTagPrefix + "trunk-eni-id"
-
-	ClusterNameTagKeyFormat = "kubernetes.io/cluster/%s"
-	ClusterNameTagValue     = "owned"
-
+	ControllerTagPrefix                 = "vpcresources.k8s.aws/"
+	VLandIDTag                          = ControllerTagPrefix + "vlan-id"
+	TrunkENIIDTag                       = ControllerTagPrefix + "trunk-eni-id"
+	VPCRCClusterNameTagKeyFormat        = "kubernetes.io/cluster/%s"
+	VPCRCClusterNameTagValue            = "owned"
 	NetworkInterfaceOwnerTagKey         = "eks:eni:owner"
 	NetworkInterfaceOwnerTagValue       = "eks-vpc-resource-controller"
 	NetworkInterfaceOwnerVPCCNITagValue = "amazon-vpc-cni"
 	NetworkInterfaceNodeIDKey           = "node.k8s.amazonaws.com/instance_id"
-	CNINodeClusterNameKey               = "cluster.k8s.amazonaws.com/name"
+	VPCCNIClusterNameKey                = "cluster.k8s.amazonaws.com/name"
 )
 
 const (

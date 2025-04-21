@@ -14,9 +14,11 @@
 package cleanup
 
 import (
+	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 // NodeTerminationCleanerto handle resource cleanup at node termination
@@ -47,4 +49,17 @@ func (n *NodeTerminationCleaner) UpdateAvailableENIsIfNeeded(eniMap *map[string]
 // Updating node termination metrics does not make much sense as it will be updated on each node deletion and does not give us much info
 func (n *NodeTerminationCleaner) UpdateCleanupMetrics(vpcrcAvailableCount *int, vpccniAvailableCount *int, leakedENICount *int) {
 	return
+}
+
+func NewNodeResourceCleaner(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) ResourceCleaner {
+	cleaner := &NodeTerminationCleaner{
+		NodeID: nodeID,
+	}
+	cleaner.ENICleaner = &ENICleaner{
+		EC2Wrapper: eC2Wrapper,
+		Manager:    cleaner,
+		VpcId:      vpcID,
+		Log:        ctrl.Log.WithName("eniCleaner").WithName("node"),
+	}
+	return cleaner.ENICleaner
 }
