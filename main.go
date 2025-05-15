@@ -147,7 +147,7 @@ func main() {
 	flag.BoolVar(&enableProfiling, "enable-profiling", false,
 		"Enable runtime profiling for debugging purposes.")
 	flag.StringVar(&clusterName, "cluster-name", "", "The name of the k8s cluster")
-	flag.IntVar(&listPageLimit, "page-limit", 100,
+	flag.IntVar(&listPageLimit, "page-limit", 1000,
 		"The page size limiting the number of response for list operation to API Server")
 	flag.StringVar(&outputPath, "log-file", "stderr", "The path to redirect controller logs")
 	flag.IntVar(&healthCheckTimeout, "health-check-timeout", 28,

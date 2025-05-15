@@ -170,7 +170,7 @@ func (c *CustomController) Start(ctx context.Context) error {
 func (c *CustomController) WaitForCacheSync(controller cache.Controller) {
 	for !controller.HasSynced() && controller.LastSyncResourceVersion() == "" {
 		c.log.Info("waiting for controller to sync")
-		time.Sleep(time.Second * 5)
+		time.Sleep(time.Second * 1)
 	}
 	c.conditions.SetPodDataStoreSyncStatus(true)
 
