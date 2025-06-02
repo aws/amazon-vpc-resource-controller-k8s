@@ -15,6 +15,8 @@ package crds
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -75,7 +77,7 @@ type CNINodeReconciler struct {
 	clusterName        string
 	vpcId              string
 	finalizerManager   k8s.FinalizerManager
-	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner
+	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner
 }
 
 func NewCNINodeReconciler(
@@ -88,7 +90,7 @@ func NewCNINodeReconciler(
 	clusterName string,
 	vpcId string,
 	finalizerManager k8s.FinalizerManager,
-	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner,
+	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner,
 ) *CNINodeReconciler {
 	return &CNINodeReconciler{
 		Client:             client,
@@ -133,16 +135,12 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		// Add cluster name tag if it does not exist
 		val, ok := cniNode.Spec.Tags[config.VPCCNIClusterNameKey]
 		if !ok || val != r.clusterName {
-			if len(cniNodeCopy.Spec.Tags) != 0 {
-				cniNodeCopy.Spec.Tags[config.VPCCNIClusterNameKey] = r.clusterName
-			} else {
-				cniNodeCopy.Spec.Tags = map[string]string{
-					config.VPCCNIClusterNameKey: r.clusterName,
-				}
+			cniNodeCopy.Spec.Tags = map[string]string{
+				config.VPCCNIClusterNameKey: r.clusterName,
 			}
 			shouldPatch = true
 		}
-		// if node exists, get & add OS label if it does not exist on CNINode
+
 		if nodeFound {
 			nodeLabelOS := node.ObjectMeta.Labels[config.NodeLabelOS]
 			val, ok = cniNode.ObjectMeta.Labels[config.NodeLabelOS]
@@ -155,6 +153,17 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					}
 				}
 				shouldPatch = true
+			}
+
+			// add node id tag if it does not exist
+			if nodeId, ok := cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey]; !ok || nodeId == "" {
+				nodeId, err := r.GetNodeID(ctx, cniNode.Name)
+				if err != nil {
+					r.log.Error(err, "failed to get node id for CNINode, will retry", "cniNode", cniNode.Name)
+				} else {
+					cniNodeCopy.Spec.Tags[config.NetworkInterfaceNodeIDKey] = nodeId
+					shouldPatch = true
+				}
 			}
 		}
 
@@ -179,7 +188,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				r.log.Info("running the finalizer routine on cniNode", "cniNode", cniNode.Name)
 				// run cleanup when node id is present
 				if nodeID, ok := cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey]; ok && nodeID != "" {
-					if err := r.newResourceCleaner(nodeID, r.eC2Wrapper, r.vpcId).DeleteLeakedResources(); err != nil {
+					if err := r.newResourceCleaner(nodeID, r.eC2Wrapper, r.vpcId, r.log).DeleteLeakedResources(); err != nil {
 						r.log.Error(err, "failed to cleanup resources during node termination")
 						ec2API.NodeTerminationENICleanupFailure.Inc()
 					}
@@ -265,4 +274,19 @@ func (r *CNINodeReconciler) createCNINodeFromObj(ctx context.Context, newCNINode
 		func() error {
 			return r.Client.Create(ctx, newCNINode)
 		})
+}
+
+func (r *CNINodeReconciler) GetNodeID(ctx context.Context, nodeName string) (string, error) {
+	node := &v1.Node{}
+	err := r.Client.Get(ctx, types.NamespacedName{Name: nodeName}, node)
+	if err != nil {
+		return "", fmt.Errorf("failed to get the node object %s node, err: %s", nodeName, err)
+	}
+	if node.Spec.ProviderID == "" {
+		return "", fmt.Errorf("provider ID is not set for node %s", nodeName)
+	}
+	if idx := strings.LastIndex(node.Spec.ProviderID, "/"); idx != -1 && idx < len(node.Spec.ProviderID)-1 {
+		return node.Spec.ProviderID[idx+1:], nil
+	}
+	return "", fmt.Errorf("invalid provider ID format for node %s, with providerId", node.Spec.ProviderID)
 }
