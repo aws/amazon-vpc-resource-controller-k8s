@@ -167,6 +167,32 @@ func TestCNINodeReconcile(t *testing.T) {
 				assert.Equal(t, res, reconcile.Result{})
 			},
 		},
+		{
+			name: "verify finalizer is added when labels and tags are present",
+			args: args{
+				mockNode: mockNodeWithLabel,
+				mockCNINode: &v1alpha1.CNINode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: mockName,
+						Labels: map[string]string{
+							config.NodeLabelOS: "linux",
+						},
+					},
+					Spec: v1alpha1.CNINodeSpec{
+						Tags: map[string]string{
+							config.VPCCNIClusterNameKey: mockClusterName,
+							config.NetworkInterfaceNodeIDKey: "i-1234567890",
+						},
+					},
+				},
+			},
+			prepare: nil,
+			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
+				assert.NoError(t, err)
+				assert.Equal(t, res, reconcile.Result{})
+				assert.Contains(t, cniNode.Finalizers, config.NodeTerminationFinalizer)
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

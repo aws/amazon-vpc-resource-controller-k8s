@@ -29,6 +29,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -37,6 +38,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
@@ -120,7 +122,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	nodeFound := true
 	node := &v1.Node{}
 	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			nodeFound = false
 		} else {
 			r.log.Error(err, "failed to get the node object in CNINode reconciliation, will retry")
@@ -130,54 +132,21 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	if cniNode.GetDeletionTimestamp().IsZero() {
-		shouldPatch := false
 		cniNodeCopy := cniNode.DeepCopy()
-		// Add cluster name tag if it does not exist
-		val, ok := cniNode.Spec.Tags[config.VPCCNIClusterNameKey]
-		if !ok || val != r.clusterName {
-			cniNodeCopy.Spec.Tags = map[string]string{
-				config.VPCCNIClusterNameKey: r.clusterName,
-			}
-			shouldPatch = true
-		}
-
-		if nodeFound {
-			nodeLabelOS := node.ObjectMeta.Labels[config.NodeLabelOS]
-			val, ok = cniNode.ObjectMeta.Labels[config.NodeLabelOS]
-			if !ok || val != nodeLabelOS {
-				if len(cniNodeCopy.ObjectMeta.Labels) != 0 {
-					cniNodeCopy.ObjectMeta.Labels[config.NodeLabelOS] = nodeLabelOS
-				} else {
-					cniNodeCopy.ObjectMeta.Labels = map[string]string{
-						config.NodeLabelOS: nodeLabelOS,
-					}
-				}
-				shouldPatch = true
-			}
-
-			// add node id tag if it does not exist
-			if nodeId, ok := cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey]; !ok || nodeId == "" {
-				nodeId, err := r.GetNodeID(ctx, cniNode.Name)
-				if err != nil {
-					r.log.Error(err, "failed to get node id for CNINode, will retry", "cniNode", cniNode.Name)
-				} else {
-					cniNodeCopy.Spec.Tags[config.NetworkInterfaceNodeIDKey] = nodeId
-					shouldPatch = true
-				}
-			}
-		}
+		shouldPatch, err := r.ensureTagsAndLables(cniNodeCopy, node, nodeFound)
+		shouldPatch = r.ensureFinalizer(cniNodeCopy) || shouldPatch
 
 		if shouldPatch {
-			r.log.Info("patching CNINode to add required fields Tags and Labels", "cninode", cniNode.Name)
-			return ctrl.Result{}, r.Client.Patch(ctx, cniNodeCopy, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{}))
+			r.log.Info("patching CNINode to add fields Tags, Labels and finalizer", "cninode", cniNode.Name)
+			if err := r.Client.Patch(ctx, cniNodeCopy, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{})); err != nil {
+				if apierrors.IsConflict(err) {
+					r.log.Info("failed to update cninode", "cninode", cniNode.Name, "error", err)
+					return ctrl.Result{Requeue: true}, nil
+				}
+				return ctrl.Result{}, err
+			}
 		}
-
-		// Add finalizer if it does not exist
-		if err := r.finalizerManager.AddFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
-			r.log.Error(err, "failed to add finalizer on CNINode, will retry", "cniNode", cniNode.Name, "finalizer", config.NodeTerminationFinalizer)
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, err
 
 	} else { // CNINode is marked for deletion
 		if !nodeFound {
@@ -276,17 +245,54 @@ func (r *CNINodeReconciler) createCNINodeFromObj(ctx context.Context, newCNINode
 		})
 }
 
-func (r *CNINodeReconciler) GetNodeID(ctx context.Context, nodeName string) (string, error) {
-	node := &v1.Node{}
-	err := r.Client.Get(ctx, types.NamespacedName{Name: nodeName}, node)
-	if err != nil {
-		return "", fmt.Errorf("failed to get the node object %s node, err: %s", nodeName, err)
-	}
+func (r *CNINodeReconciler) GetNodeID(node *v1.Node) (string, error) {
 	if node.Spec.ProviderID == "" {
-		return "", fmt.Errorf("provider ID is not set for node %s", nodeName)
+		return "", fmt.Errorf("provider ID is not set for node %s", node.Name)
 	}
 	if idx := strings.LastIndex(node.Spec.ProviderID, "/"); idx != -1 && idx < len(node.Spec.ProviderID)-1 {
 		return node.Spec.ProviderID[idx+1:], nil
 	}
 	return "", fmt.Errorf("invalid provider ID format for node %s, with providerId", node.Spec.ProviderID)
+}
+
+func (r *CNINodeReconciler) ensureTagsAndLables(cniNode *v1alpha1.CNINode, node *v1.Node, nodeFound bool) (bool, error) {
+	shouldPatch := false
+	var err error
+	if cniNode.Spec.Tags == nil {
+		cniNode.Spec.Tags = make(map[string]string)
+	}
+	// add cluster name tag if it does not exist
+	if cniNode.Spec.Tags[config.VPCCNIClusterNameKey] != r.clusterName {
+		cniNode.Spec.Tags[config.VPCCNIClusterNameKey] = r.clusterName
+		shouldPatch = true
+	}
+	if nodeFound {
+		var nodeID string
+		nodeID, err = r.GetNodeID(node)
+
+		if cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey] != nodeID {
+			cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey] = nodeID
+			shouldPatch = true
+		}
+
+		// add node label if it does not exist
+		if cniNode.ObjectMeta.Labels == nil {
+			cniNode.ObjectMeta.Labels = make(map[string]string)
+		}
+		if cniNode.ObjectMeta.Labels[config.NodeLabelOS] != node.ObjectMeta.Labels[config.NodeLabelOS] {
+			cniNode.ObjectMeta.Labels[config.NodeLabelOS] = node.ObjectMeta.Labels[config.NodeLabelOS]
+			shouldPatch = true
+		}
+	}
+	return shouldPatch, err
+}
+
+func (r *CNINodeReconciler) ensureFinalizer(cniNode *v1alpha1.CNINode) bool {
+	shouldPatch := false
+	if !controllerutil.ContainsFinalizer(cniNode, config.NodeTerminationFinalizer) {
+		r.log.Info("adding finalizer", "object", cniNode.GetObjectKind().GroupVersionKind().Kind, "name", cniNode.GetName(), "finalizer", config.NodeTerminationFinalizer)
+		controllerutil.AddFinalizer(cniNode, config.NodeTerminationFinalizer)
+		shouldPatch = true
+	}
+	return shouldPatch
 }
