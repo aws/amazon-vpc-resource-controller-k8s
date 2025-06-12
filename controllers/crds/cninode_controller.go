@@ -133,7 +133,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	if cniNode.GetDeletionTimestamp().IsZero() {
 		cniNodeCopy := cniNode.DeepCopy()
-		shouldPatch, err := r.ensureTagsAndLables(cniNodeCopy, node, nodeFound)
+		shouldPatch, err := r.ensureTagsAndLabels(cniNodeCopy, node, nodeFound)
 		shouldPatch = r.ensureFinalizer(cniNodeCopy) || shouldPatch
 
 		if shouldPatch {
@@ -164,8 +164,11 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				}
 			}
 
-			if err := r.finalizerManager.RemoveFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
+			if err := r.removeFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
 				r.log.Error(err, "failed to remove finalizer on CNINode, will retry", "cniNode", cniNode.Name, "finalizer", config.NodeTerminationFinalizer)
+				if apierrors.IsConflict(err) {
+					return ctrl.Result{Requeue: true}, nil
+				}
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{}, nil
@@ -185,7 +188,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				Spec: cniNode.Spec,
 			}
 
-			if err := r.finalizerManager.RemoveFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
+			if err := r.removeFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
 				r.log.Error(err, "failed to remove finalizer on CNINode, will retry")
 				return ctrl.Result{}, err
 			}
@@ -255,7 +258,7 @@ func (r *CNINodeReconciler) GetNodeID(node *v1.Node) (string, error) {
 	return "", fmt.Errorf("invalid provider ID format for node %s, with providerId", node.Spec.ProviderID)
 }
 
-func (r *CNINodeReconciler) ensureTagsAndLables(cniNode *v1alpha1.CNINode, node *v1.Node, nodeFound bool) (bool, error) {
+func (r *CNINodeReconciler) ensureTagsAndLabels(cniNode *v1alpha1.CNINode, node *v1.Node, nodeFound bool) (bool, error) {
 	shouldPatch := false
 	var err error
 	if cniNode.Spec.Tags == nil {
@@ -295,4 +298,20 @@ func (r *CNINodeReconciler) ensureFinalizer(cniNode *v1alpha1.CNINode) bool {
 		shouldPatch = true
 	}
 	return shouldPatch
+}
+
+func (r *CNINodeReconciler) removeFinalizers(ctx context.Context, cniNode *v1alpha1.CNINode, finalizer string) error {
+	cniNodeCopy := cniNode.DeepCopy()
+	needsUpdate := false
+
+	if controllerutil.ContainsFinalizer(cniNodeCopy, finalizer) {
+		r.log.Info("removing finalizer for cninode", "name", cniNode.GetName(), "finalizer", finalizer)
+		controllerutil.RemoveFinalizer(cniNodeCopy, finalizer)
+		needsUpdate = true
+	}
+
+	if !needsUpdate {
+		return nil
+	}
+	return r.Client.Patch(ctx, cniNodeCopy, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{}))
 }

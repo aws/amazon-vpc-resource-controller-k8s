@@ -121,10 +121,6 @@ func TestCNINodeReconcile(t *testing.T) {
 					return f.mockResourceCleaner
 				}
 				f.mockResourceCleaner.EXPECT().DeleteLeakedResources().Times(0)
-
-				f.mockFinalizerManager.EXPECT().
-					RemoveFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
-					Return(nil)
 			},
 			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
 				assert.NoError(t, err)
@@ -157,9 +153,6 @@ func TestCNINodeReconcile(t *testing.T) {
 					return f.mockResourceCleaner
 				}
 				f.mockResourceCleaner.EXPECT().DeleteLeakedResources().Times(1).Return(nil)
-				f.mockFinalizerManager.EXPECT().
-					RemoveFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
-					Return(nil)
 
 			},
 			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
@@ -180,7 +173,7 @@ func TestCNINodeReconcile(t *testing.T) {
 					},
 					Spec: v1alpha1.CNINodeSpec{
 						Tags: map[string]string{
-							config.VPCCNIClusterNameKey: mockClusterName,
+							config.VPCCNIClusterNameKey:      mockClusterName,
 							config.NetworkInterfaceNodeIDKey: "i-1234567890",
 						},
 					},
@@ -193,6 +186,7 @@ func TestCNINodeReconcile(t *testing.T) {
 				assert.Contains(t, cniNode.Finalizers, config.NodeTerminationFinalizer)
 			},
 		},
+		
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -218,8 +212,10 @@ func TestCNINodeReconcile(t *testing.T) {
 			res, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
 
 			cniNode := &v1alpha1.CNINode{}
-			getErr := mock.Reconciler.Client.Get(context.Background(), reconcileRequest.NamespacedName, cniNode)
-			assert.NoError(t, getErr)
+			if tt.args.mockCNINode.GetDeletionTimestamp() == nil {
+				getErr := mock.Reconciler.Client.Get(context.Background(), reconcileRequest.NamespacedName, cniNode)
+				assert.NoError(t, getErr)
+			}
 
 			if tt.asserts != nil {
 				tt.asserts(res, err, cniNode)
