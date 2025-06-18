@@ -15,8 +15,6 @@ package crds
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -157,10 +155,15 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				r.log.Info("running the finalizer routine on cniNode", "cniNode", cniNode.Name)
 				// run cleanup when node id is present
 				if nodeID, ok := cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey]; ok && nodeID != "" {
-					if err := r.newResourceCleaner(nodeID, r.eC2Wrapper, r.vpcId, r.log).DeleteLeakedResources(); err != nil {
-						r.log.Error(err, "failed to cleanup resources during node termination")
-						ec2API.NodeTerminationENICleanupFailure.Inc()
-					}
+					go func(nodeID string) {
+						childCtx, cancel := context.WithTimeout(context.TODO(), config.NodeTerminationTimeout)
+						defer cancel()
+						if err := r.newResourceCleaner(nodeID, r.eC2Wrapper, r.vpcId, r.log).DeleteLeakedResources(childCtx); err != nil {
+							r.log.Error(err, "failed to cleanup resources during node termination")
+							ec2API.NodeTerminationENICleanupFailure.Inc()
+						}
+					}(nodeID)
+
 				}
 			}
 
@@ -248,16 +251,6 @@ func (r *CNINodeReconciler) createCNINodeFromObj(ctx context.Context, newCNINode
 		})
 }
 
-func (r *CNINodeReconciler) GetNodeID(node *v1.Node) (string, error) {
-	if node.Spec.ProviderID == "" {
-		return "", fmt.Errorf("provider ID is not set for node %s", node.Name)
-	}
-	if idx := strings.LastIndex(node.Spec.ProviderID, "/"); idx != -1 && idx < len(node.Spec.ProviderID)-1 {
-		return node.Spec.ProviderID[idx+1:], nil
-	}
-	return "", fmt.Errorf("invalid provider ID format for node %s, with providerId", node.Spec.ProviderID)
-}
-
 func (r *CNINodeReconciler) ensureTagsAndLabels(cniNode *v1alpha1.CNINode, node *v1.Node, nodeFound bool) (bool, error) {
 	shouldPatch := false
 	var err error
@@ -271,7 +264,7 @@ func (r *CNINodeReconciler) ensureTagsAndLabels(cniNode *v1alpha1.CNINode, node 
 	}
 	if nodeFound {
 		var nodeID string
-		nodeID, err = r.GetNodeID(node)
+		nodeID, err = utils.GetNodeID(node)
 
 		if cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey] != nodeID {
 			cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey] = nodeID
