@@ -14,6 +14,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/sync/semaphore"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -39,7 +40,7 @@ var (
 			},
 		},
 		Spec: corev1.NodeSpec{
-			ProviderID: "aws:///us-west-2c/i-1234567890",
+			ProviderID: "aws:///us-west-2a/i-0123456789abcdef0",
 		},
 	}
 	reconcileRequest = reconcile.Request{
@@ -61,6 +62,7 @@ func NewCNINodeMock(ctrl *gomock.Controller, mockObjects ...client.Object) *CNIN
 			log:         zap.New(),
 			clusterName: mockClusterName,
 			vpcId:       "vpc-000000000000",
+			deletePool:  semaphore.NewWeighted(10),
 		},
 	}
 }
@@ -98,7 +100,7 @@ func TestCNINodeReconcile(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, res, reconcile.Result{})
 				assert.Equal(t, cniNode.Labels, map[string]string{config.NodeLabelOS: "linux"})
-				assert.Equal(t, cniNode.Spec.Tags, map[string]string{config.VPCCNIClusterNameKey: mockClusterName, config.NetworkInterfaceNodeIDKey: "i-1234567890"})
+				assert.Equal(t, cniNode.Spec.Tags, map[string]string{config.VPCCNIClusterNameKey: mockClusterName, config.NetworkInterfaceNodeIDKey: "i-0123456789abcdef0"})
 			},
 		},
 		{
@@ -120,7 +122,7 @@ func TestCNINodeReconcile(t *testing.T) {
 				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner {
 					return f.mockResourceCleaner
 				}
-				f.mockResourceCleaner.EXPECT().DeleteLeakedResources().Times(0)
+				f.mockResourceCleaner.EXPECT().DeleteLeakedResources(gomock.Any()).Times(0)
 			},
 			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
 				assert.NoError(t, err)
@@ -142,17 +144,17 @@ func TestCNINodeReconcile(t *testing.T) {
 					},
 					Spec: v1alpha1.CNINodeSpec{
 						Tags: map[string]string{
-							config.NetworkInterfaceNodeIDKey: "i-1234567890",
+							config.NetworkInterfaceNodeIDKey: "i-0123456789abcdef0",
 						},
 					},
 				},
 			},
 			prepare: func(f *fields) {
 				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner {
-					assert.Equal(t, "i-1234567890", nodeID)
+					assert.Equal(t, "i-0123456789abcdef0", nodeID)
 					return f.mockResourceCleaner
 				}
-				f.mockResourceCleaner.EXPECT().DeleteLeakedResources().Times(1).Return(nil)
+				f.mockResourceCleaner.EXPECT().DeleteLeakedResources(gomock.Any()).Times(1).Return(nil)
 
 			},
 			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
@@ -174,7 +176,7 @@ func TestCNINodeReconcile(t *testing.T) {
 					Spec: v1alpha1.CNINodeSpec{
 						Tags: map[string]string{
 							config.VPCCNIClusterNameKey:      mockClusterName,
-							config.NetworkInterfaceNodeIDKey: "i-1234567890",
+							config.NetworkInterfaceNodeIDKey: "i-0123456789abcdef0",
 						},
 					},
 				},
@@ -186,7 +188,6 @@ func TestCNINodeReconcile(t *testing.T) {
 				assert.Contains(t, cniNode.Finalizers, config.NodeTerminationFinalizer)
 			},
 		},
-		
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
