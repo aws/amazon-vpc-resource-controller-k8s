@@ -261,3 +261,13 @@ func IntToInt32(value int) (int32, error) {
 
 	return int32(value), nil
 }
+
+func GetNodeID(node *corev1.Node) (string, error) {
+	if node.Spec.ProviderID == "" {
+		return "", fmt.Errorf("provider ID is not set for node %s", node.Name)
+	}
+	if idx := strings.LastIndex(node.Spec.ProviderID, "/"); idx != -1 && idx < len(node.Spec.ProviderID)-1 {
+		return node.Spec.ProviderID[idx+1:], nil
+	}
+	return "", fmt.Errorf("invalid provider ID format for node %s, with providerId", node.Spec.ProviderID)
+}

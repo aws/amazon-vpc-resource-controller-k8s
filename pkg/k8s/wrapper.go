@@ -81,7 +81,7 @@ type K8sWrapper interface {
 	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error)
 	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
 	GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error)
-	CreateCNINode(node *v1.Node, clusterName string) error
+	CreateCNINode(node *v1.Node, clusterName string, nodeID string) error
 	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
 	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
 	DeleteCNINode(cniNode *rcv1alpha1.CNINode) error
@@ -237,7 +237,7 @@ func (k *k8sWrapper) GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha
 	return cninode, nil
 }
 
-func (k *k8sWrapper) CreateCNINode(node *v1.Node, clusterName string) error {
+func (k *k8sWrapper) CreateCNINode(node *v1.Node, clusterName string, nodeID string) error {
 	cniNode := &rcv1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      node.Name,
@@ -260,7 +260,8 @@ func (k *k8sWrapper) CreateCNINode(node *v1.Node, clusterName string) error {
 		},
 		Spec: rcv1alpha1.CNINodeSpec{
 			Tags: map[string]string{
-				fmt.Sprintf(config.VPCCNIClusterNameKey): clusterName,
+				fmt.Sprintf(config.VPCCNIClusterNameKey):      clusterName,
+				fmt.Sprintf(config.NetworkInterfaceNodeIDKey): nodeID,
 			},
 		},
 	}
