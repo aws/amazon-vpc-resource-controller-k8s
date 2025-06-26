@@ -101,6 +101,8 @@ type TrunkENI interface {
 	Reconcile(pods []v1.Pod) bool
 	// PushENIsToFrontOfDeleteQueue pushes the eni network interfaces to the front of the delete queue
 	PushENIsToFrontOfDeleteQueue(*v1.Pod, []*ENIDetails)
+	// DeleteAllBranchENIs deletes all the branch ENI associated with the trunk and also clears the cool down queue
+	DeleteAllBranchENIs()
 	// Introspect returns the state of the Trunk ENI
 	Introspect() IntrospectResponse
 }
@@ -477,6 +479,31 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		"security group used", securityGroups)
 
 	return newENIs, nil
+}
+
+// DeleteAllBranchENIs deletes all the branch ENIs associated with the trunk and all the ENIs present in the cool down
+// queue, this is the last API call to the the Trunk ENI before it is removed from cache
+func (t *trunkENI) DeleteAllBranchENIs() {
+	// Delete all the branch used by the pod on this trunk ENI
+	// Since after this call, the trunk will be removed from cache. No need to clean up its branch map
+	for _, podENIs := range t.uidToBranchENIMap {
+		for _, eni := range podENIs {
+			err := t.deleteENI(eni)
+			if err != nil {
+				// Just log, if the ENI still exists it can be removed by the dangling ENI cleaner routine
+				t.log.Error(err, "failed to delete eni", "eni id", eni.ID)
+			}
+		}
+	}
+
+	// Delete all the branch ENI present in the cool down queue
+	for _, eni := range t.deleteQueue {
+		err := t.deleteENI(eni)
+		if err != nil {
+			// Just log, if the ENI still exists it can be removed by the dangling ENI cleaner routine
+			t.log.Error(err, "failed to delete eni", "eni id", eni.ID)
+		}
+	}
 }
 
 // DeleteBranchNetworkInterface deletes the branch network interface and returns an error in case of failure to delete
