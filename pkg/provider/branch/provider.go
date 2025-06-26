@@ -244,14 +244,12 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 
 // DeleteNode deletes all the cached branch ENIs associated with the trunk and removes the trunk from the cache.
 func (b *branchENIProvider) DeleteNode(nodeName string) (ctrl.Result, error) {
-	_, isPresent := b.getTrunkFromCache(nodeName)
+	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
 	if !isPresent {
 		return ctrl.Result{}, fmt.Errorf("failed to find node %s", nodeName)
 	}
 
-	// At this point, the finalizer routine should have deleted all available branch ENIs
-	// Any leaked ENIs will be deleted by the periodic cleanup routine if cluster is active
-	// remove trunk from cache and de-initializer the resource provider
+	trunkENI.DeleteAllBranchENIs()
 	b.removeTrunkFromCache(nodeName)
 
 	b.log.Info("de-initialized resource provider successfully", "nodeName", nodeName)
