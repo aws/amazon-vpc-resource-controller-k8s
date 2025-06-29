@@ -69,7 +69,7 @@ var _ = Describe("validating webhook test cases", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, newPod, utils.ResourceCreationTimeout)
+			_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, newPod, utils.ResourceOperationTimeout)
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -81,7 +81,7 @@ var _ = Describe("validating webhook test cases", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, newPod, utils.ResourceCreationTimeout)
+			_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, newPod, utils.ResourceOperationTimeout)
 			Expect(err).ToNot(HaveOccurred())
 
 			// Allow the cache to sync

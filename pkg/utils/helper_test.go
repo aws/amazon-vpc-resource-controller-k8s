@@ -18,6 +18,7 @@ import (
 
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -675,6 +676,72 @@ func TestPodHasENIRequest(t *testing.T) {
 			result := PodHasENIRequest(tt.pod)
 			if result != tt.expected {
 				t.Errorf("PodHasENIRequest() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetNodeID(t *testing.T) {
+	tests := []struct {
+		name       string
+		providerID string
+		want       string
+		wantErr    bool
+	}{
+		{
+			name:       "valid 8char id",
+			providerID: "aws:///us-west-2a/i-1234abcd",
+			want:       "i-1234abcd",
+			wantErr:    false,
+		},
+		{
+			name:       "valid 17char id",
+			providerID: "aws:///us-west-2a/i-0123456789abcdef0",
+			want:       "i-0123456789abcdef0",
+			wantErr:    false,
+		},
+		{
+			name:       "missing provider id",
+			providerID: "",
+			want:       "",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid format - no slash",
+			providerID: "i-1234abcd",
+			want:       "",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid id - not hex",
+			providerID: "aws:///us-west-2a/i-1234abcg",
+			want:       "",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid id - too short",
+			providerID: "aws:///us-west-2a/i-1234abc",
+			want:       "",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid id - too long",
+			providerID: "aws:///us-west-2a/i-0123456789abcdef01",
+			want:       "",
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &corev1.Node{}
+			node.Spec.ProviderID = tt.providerID
+			got, err := GetNodeID(node)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GetNodeID() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("GetNodeID() = %v, want %v", got, tt.want)
 			}
 		})
 	}

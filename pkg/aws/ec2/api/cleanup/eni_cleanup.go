@@ -99,7 +99,7 @@ func (e *ClusterENICleaner) Start(ctx context.Context) error {
 	// Perform ENI cleanup after fixed time intervals till shut down variable is set to true on receiving the shutdown
 	// signal
 	for !e.shutdown {
-		e.DeleteLeakedResources()
+		e.DeleteLeakedResources(ctx)
 		time.Sleep(config.ENICleanUpInterval)
 	}
 
@@ -110,7 +110,7 @@ func (e *ClusterENICleaner) Start(ctx context.Context) error {
 // This is called by periodically by ClusterENICleaner which deletes available ENIs cluster-wide, and by the NodeTermination cleaner on node termination
 // The available ENIs are deleted if ShouldDeleteENI is true, defined in the respective cleaners
 // The function also updates metrics for the periodic cleanup routine and the node termination cleanup
-func (e *ENICleaner) DeleteLeakedResources() error {
+func (e *ENICleaner) DeleteLeakedResources(ctx context.Context) error {
 	var errors []error
 	availableENIs := make(map[string]struct{})
 	vpcrcAvailableCount := 0
@@ -140,7 +140,7 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 				Filters: filterCopy,
 			}
 
-			tempNetworkInterfaces, err := e.EC2Wrapper.DescribeNetworkInterfacesPagesWithRetry(describeNetworkInterfaceIp)
+			tempNetworkInterfaces, err := e.EC2Wrapper.DescribeNetworkInterfacesPages(ctx, describeNetworkInterfaceIp)
 			if err != nil {
 				e.Log.Error(err, "failed to describe network interfaces, cleanup will be retried in next cycle")
 				return err
@@ -151,7 +151,7 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 		describeNetworkInterfaceIp := &ec2.DescribeNetworkInterfacesInput{
 			Filters: filters,
 		}
-		networkInterfaces, err = e.EC2Wrapper.DescribeNetworkInterfacesPagesWithRetry(describeNetworkInterfaceIp)
+		networkInterfaces, err = e.EC2Wrapper.DescribeNetworkInterfacesPages(ctx, describeNetworkInterfaceIp)
 		if err != nil {
 			e.Log.Error(err, "failed to describe network interfaces, cleanup will be retried in next cycle")
 			return err
@@ -174,7 +174,7 @@ func (e *ENICleaner) DeleteLeakedResources() error {
 					continue
 				}
 			}
-			_, err := e.EC2Wrapper.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+			_, err := e.EC2Wrapper.DeleteNetworkInterface(ctx, &ec2.DeleteNetworkInterfaceInput{
 				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
 			})
 			if err != nil {

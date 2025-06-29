@@ -11,8 +11,10 @@ import (
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/go-logr/logr"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/sync/semaphore"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,6 +39,9 @@ var (
 				config.NodeLabelOS: "linux",
 			},
 		},
+		Spec: corev1.NodeSpec{
+			ProviderID: "aws:///us-west-2a/i-0123456789abcdef0",
+		},
 	}
 	reconcileRequest = reconcile.Request{
 		NamespacedName: types.NamespacedName{
@@ -57,6 +62,7 @@ func NewCNINodeMock(ctrl *gomock.Controller, mockObjects ...client.Object) *CNIN
 			log:         zap.New(),
 			clusterName: mockClusterName,
 			vpcId:       "vpc-000000000000",
+			deletePool:  semaphore.NewWeighted(10),
 		},
 	}
 }
@@ -80,7 +86,7 @@ func TestCNINodeReconcile(t *testing.T) {
 		asserts func(reconcile.Result, error, *v1alpha1.CNINode)
 	}{
 		{
-			name: "verify clusterName tag and labels are added if missing",
+			name: "verify clusterName, instanceID, os label are added if missing",
 			args: args{
 				mockNode: mockNodeWithLabel,
 				mockCNINode: &v1alpha1.CNINode{
@@ -94,7 +100,7 @@ func TestCNINodeReconcile(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, res, reconcile.Result{})
 				assert.Equal(t, cniNode.Labels, map[string]string{config.NodeLabelOS: "linux"})
-				assert.Equal(t, cniNode.Spec.Tags, map[string]string{config.VPCCNIClusterNameKey: mockClusterName})
+				assert.Equal(t, cniNode.Spec.Tags, map[string]string{config.VPCCNIClusterNameKey: mockClusterName, config.NetworkInterfaceNodeIDKey: "i-0123456789abcdef0"})
 			},
 		},
 		{
@@ -113,14 +119,10 @@ func TestCNINodeReconcile(t *testing.T) {
 				},
 			},
 			prepare: func(f *fields) {
-				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner {
+				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner {
 					return f.mockResourceCleaner
 				}
-				f.mockResourceCleaner.EXPECT().DeleteLeakedResources().Times(0)
-
-				f.mockFinalizerManager.EXPECT().
-					RemoveFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
-					Return(nil)
+				f.mockResourceCleaner.EXPECT().DeleteLeakedResources(gomock.Any()).Times(0)
 			},
 			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
 				assert.NoError(t, err)
@@ -142,25 +144,48 @@ func TestCNINodeReconcile(t *testing.T) {
 					},
 					Spec: v1alpha1.CNINodeSpec{
 						Tags: map[string]string{
-							config.NetworkInterfaceNodeIDKey: "i-1234567890",
+							config.NetworkInterfaceNodeIDKey: "i-0123456789abcdef0",
 						},
 					},
 				},
 			},
 			prepare: func(f *fields) {
-				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner {
-					assert.Equal(t, "i-1234567890", nodeID)
+				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner {
+					assert.Equal(t, "i-0123456789abcdef0", nodeID)
 					return f.mockResourceCleaner
 				}
-				f.mockResourceCleaner.EXPECT().DeleteLeakedResources().Times(1).Return(nil)
-				f.mockFinalizerManager.EXPECT().
-					RemoveFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
-					Return(nil)
+				f.mockResourceCleaner.EXPECT().DeleteLeakedResources(gomock.Any()).Times(1).Return(nil)
 
 			},
 			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
 				assert.NoError(t, err)
 				assert.Equal(t, res, reconcile.Result{})
+			},
+		},
+		{
+			name: "verify finalizer is added when labels and tags are present",
+			args: args{
+				mockNode: mockNodeWithLabel,
+				mockCNINode: &v1alpha1.CNINode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: mockName,
+						Labels: map[string]string{
+							config.NodeLabelOS: "linux",
+						},
+					},
+					Spec: v1alpha1.CNINodeSpec{
+						Tags: map[string]string{
+							config.VPCCNIClusterNameKey:      mockClusterName,
+							config.NetworkInterfaceNodeIDKey: "i-0123456789abcdef0",
+						},
+					},
+				},
+			},
+			prepare: nil,
+			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
+				assert.NoError(t, err)
+				assert.Equal(t, res, reconcile.Result{})
+				assert.Contains(t, cniNode.Finalizers, config.NodeTerminationFinalizer)
 			},
 		},
 	}
@@ -188,8 +213,10 @@ func TestCNINodeReconcile(t *testing.T) {
 			res, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
 
 			cniNode := &v1alpha1.CNINode{}
-			getErr := mock.Reconciler.Client.Get(context.Background(), reconcileRequest.NamespacedName, cniNode)
-			assert.NoError(t, getErr)
+			if tt.args.mockCNINode.GetDeletionTimestamp() == nil {
+				getErr := mock.Reconciler.Client.Get(context.Background(), reconcileRequest.NamespacedName, cniNode)
+				assert.NoError(t, getErr)
+			}
 
 			if tt.asserts != nil {
 				tt.asserts(res, err, cniNode)

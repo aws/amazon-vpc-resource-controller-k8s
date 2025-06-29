@@ -41,7 +41,7 @@ var _ = Describe("[CANARY]CNINode test", func() {
 		var asgName string
 		BeforeEach(func() {
 			By("getting autoscaling group name")
-			asgName = ListNodesAndGetAutoScalingGroupName()
+			asgName = GetAutoScalingGroupName(config.OSLinux)
 			asg, err := frameWork.AutoScalingManager.DescribeAutoScalingGroup(asgName)
 			Expect(err).ToNot(HaveOccurred())
 			oldDesiredSize = *asg[0].DesiredCapacity
@@ -151,9 +151,9 @@ var _ = Describe("[CANARY]CNINode test", func() {
 
 })
 
-func ListNodesAndGetAutoScalingGroupName() string {
+func GetAutoScalingGroupName(os string) string {
 	By("getting instance details")
-	nodeList, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
+	nodeList, err := frameWork.NodeManager.GetNodesWithOS(os)
 	Expect(err).ToNot(HaveOccurred())
 	Expect(nodeList.Items).ToNot(BeEmpty())
 	instanceID := frameWork.NodeManager.GetInstanceID(&nodeList.Items[0])
@@ -169,7 +169,7 @@ func ListNodesAndGetAutoScalingGroupName() string {
 // Verifies (linux) node size is updated after ASG is updated
 func WaitTillNodeSizeUpdated(desiredSize int) error {
 	By("waiting till node list is updated")
-	err := wait.PollUntilContextTimeout(context.Background(), testUtils.PollIntervalShort, testUtils.ResourceCreationTimeout, true,
+	err := wait.PollUntilContextTimeout(context.Background(), testUtils.PollIntervalShort, testUtils.ResourceOperationTimeout, true,
 		func(ctx context.Context) (bool, error) {
 			nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux) // since we are only updating the linux ASG in the test
 			if err != nil {

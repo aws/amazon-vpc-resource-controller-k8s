@@ -439,6 +439,7 @@ func main() {
 			clusterName,
 			vpcID,
 			finalizerManager,
+			maxNodeConcurrentReconciles,
 			cleanup.NewNodeResourceCleaner,
 		).SetupWithManager(mgr, maxNodeConcurrentReconciles)); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "CNINode")

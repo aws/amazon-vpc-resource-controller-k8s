@@ -15,6 +15,7 @@ package scale_test
 
 import (
 	"context"
+	"flag"
 	"testing"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
@@ -24,12 +25,21 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var frameWork *framework.Framework
-var verify *verifier.PodVerification
-var ctx context.Context
-var securityGroupID string
-var err error
-var namespace = "podsg-scale-" + utils.TestNameSpace
+var (
+	frameWork       *framework.Framework
+	verify          *verifier.PodVerification
+	ctx             context.Context
+	securityGroupID string
+	err             error
+	namespace       = "podsg-scale-" + utils.TestNameSpace
+	nodes           int
+	deletePerMin    int
+)
+
+func init() {
+	flag.IntVar(&nodes, "nodes", 20, "Number nodes to scale cluster to")
+	flag.IntVar(&deletePerMin, "deletePerMin", 5, "Number of nodes to delete per min")
+}
 
 func TestScale(t *testing.T) {
 	RegisterFailHandler(Fail)

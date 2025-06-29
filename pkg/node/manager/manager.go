@@ -229,8 +229,12 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 		types.NamespacedName{Name: node.Name},
 	); err != nil {
 		if apierrors.IsNotFound(err) {
+			nodeID, err := utils.GetNodeID(node)
+			if err != nil {
+				m.Log.Error(err, "failed to get node ID")
+			}
 			m.Log.Info("Will create a new CNINode", "CNINodeName", node.Name)
-			return m.wrapper.K8sAPI.CreateCNINode(node, m.clusterName)
+			return m.wrapper.K8sAPI.CreateCNINode(node, m.clusterName, nodeID)
 		}
 		return err
 	} else {
