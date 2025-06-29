@@ -29,7 +29,7 @@ import (
 func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResource string) *v1.NodeList {
 	observedNodeList := &v1.NodeList{}
 	var err error
-	err = wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.ResourceCreationTimeout, true,
+	err = wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.ResourceOperationTimeout, true,
 		func(ctx context.Context) (bool, error) {
 			By("checking nodes have capacity present")
 			observedNodeList, err = manager.GetNodesWithOS(os)

@@ -48,7 +48,7 @@ func (m *defaultManager) CreateAndWaitUntilDeploymentReady(ctx context.Context, 
 	}
 
 	observedDP := &appsv1.Deployment{}
-	return observedDP, wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
+	return observedDP, wait.PollUntilContextTimeout(ctx, utils.PollIntervalMedium, utils.ResourceOperationTimeout, false, func(ctx context.Context) (bool, error) {
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(dp), observedDP); err != nil {
 			return false, err
 		}
@@ -59,7 +59,7 @@ func (m *defaultManager) CreateAndWaitUntilDeploymentReady(ctx context.Context, 
 			return true, nil
 		}
 		return false, nil
-	}, ctx.Done())
+	})
 }
 
 func (m *defaultManager) DeleteAndWaitUntilDeploymentDeleted(ctx context.Context, dp *appsv1.Deployment) error {
@@ -67,7 +67,7 @@ func (m *defaultManager) DeleteAndWaitUntilDeploymentDeleted(ctx context.Context
 	if err != nil {
 		return err
 	}
-	return wait.PollUntil(utils.PollIntervalShort, func() (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, utils.PollIntervalMedium, utils.ResourceOperationTimeout, false, func(ctx context.Context) (bool, error) {
 		observedDP := &appsv1.Deployment{}
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(dp), observedDP); err != nil {
 			if errors.IsNotFound(err) {
@@ -76,7 +76,7 @@ func (m *defaultManager) DeleteAndWaitUntilDeploymentDeleted(ctx context.Context
 			return false, err
 		}
 		return false, nil
-	}, ctx.Done())
+	})
 }
 
 func (m *defaultManager) ScaleDeploymentAndWaitTillReady(ctx context.Context, namespace string, name string, replicas int32) error {

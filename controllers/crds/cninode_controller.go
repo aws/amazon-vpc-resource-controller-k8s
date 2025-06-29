@@ -25,8 +25,9 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/semaphore"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -35,6 +36,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
@@ -75,7 +77,8 @@ type CNINodeReconciler struct {
 	clusterName        string
 	vpcId              string
 	finalizerManager   k8s.FinalizerManager
-	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner
+	deletePool         *semaphore.Weighted
+	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner
 }
 
 func NewCNINodeReconciler(
@@ -88,7 +91,8 @@ func NewCNINodeReconciler(
 	clusterName string,
 	vpcId string,
 	finalizerManager k8s.FinalizerManager,
-	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner,
+	maxConcurrentWorkers int,
+	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner,
 ) *CNINodeReconciler {
 	return &CNINodeReconciler{
 		Client:             client,
@@ -100,6 +104,7 @@ func NewCNINodeReconciler(
 		clusterName:        clusterName,
 		vpcId:              vpcId,
 		finalizerManager:   finalizerManager,
+		deletePool:         semaphore.NewWeighted(int64(maxConcurrentWorkers)),
 		newResourceCleaner: newResourceCleaner,
 	}
 }
@@ -118,7 +123,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	nodeFound := true
 	node := &v1.Node{}
 	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			nodeFound = false
 		} else {
 			r.log.Error(err, "failed to get the node object in CNINode reconciliation, will retry")
@@ -128,66 +133,50 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	if cniNode.GetDeletionTimestamp().IsZero() {
-		shouldPatch := false
 		cniNodeCopy := cniNode.DeepCopy()
-		// Add cluster name tag if it does not exist
-		val, ok := cniNode.Spec.Tags[config.VPCCNIClusterNameKey]
-		if !ok || val != r.clusterName {
-			if len(cniNodeCopy.Spec.Tags) != 0 {
-				cniNodeCopy.Spec.Tags[config.VPCCNIClusterNameKey] = r.clusterName
-			} else {
-				cniNodeCopy.Spec.Tags = map[string]string{
-					config.VPCCNIClusterNameKey: r.clusterName,
-				}
-			}
-			shouldPatch = true
-		}
-		// if node exists, get & add OS label if it does not exist on CNINode
-		if nodeFound {
-			nodeLabelOS := node.ObjectMeta.Labels[config.NodeLabelOS]
-			val, ok = cniNode.ObjectMeta.Labels[config.NodeLabelOS]
-			if !ok || val != nodeLabelOS {
-				if len(cniNodeCopy.ObjectMeta.Labels) != 0 {
-					cniNodeCopy.ObjectMeta.Labels[config.NodeLabelOS] = nodeLabelOS
-				} else {
-					cniNodeCopy.ObjectMeta.Labels = map[string]string{
-						config.NodeLabelOS: nodeLabelOS,
-					}
-				}
-				shouldPatch = true
-			}
-		}
+		shouldPatch, err := r.ensureTagsAndLabels(cniNodeCopy, node)
+		shouldPatch = controllerutil.AddFinalizer(cniNodeCopy, config.NodeTerminationFinalizer) || shouldPatch
 
 		if shouldPatch {
-			r.log.Info("patching CNINode to add required fields Tags and Labels", "cninode", cniNode.Name)
-			return ctrl.Result{}, r.Client.Patch(ctx, cniNodeCopy, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{}))
+			r.log.Info("patching CNINode to add fields Tags, Labels and finalizer", "cninode", cniNode.Name)
+			if err := r.Client.Patch(ctx, cniNodeCopy, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{})); err != nil {
+				if apierrors.IsConflict(err) {
+					r.log.Info("failed to update cninode", "cninode", cniNode.Name, "error", err)
+					return ctrl.Result{Requeue: true}, nil
+				}
+				return ctrl.Result{}, err
+			}
 		}
-
-		// Add finalizer if it does not exist
-		if err := r.finalizerManager.AddFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
-			r.log.Error(err, "failed to add finalizer on CNINode, will retry", "cniNode", cniNode.Name, "finalizer", config.NodeTerminationFinalizer)
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
-
+		return ctrl.Result{}, err
 	} else { // CNINode is marked for deletion
 		if !nodeFound {
 			//  node is also deleted, proceed with running the cleanup routine and remove the finalizer
-
 			// run cleanup for Linux nodes only
 			if val, ok := cniNode.ObjectMeta.Labels[config.NodeLabelOS]; ok && val == config.OSLinux {
 				r.log.Info("running the finalizer routine on cniNode", "cniNode", cniNode.Name)
 				// run cleanup when node id is present
 				if nodeID, ok := cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey]; ok && nodeID != "" {
-					if err := r.newResourceCleaner(nodeID, r.eC2Wrapper, r.vpcId).DeleteLeakedResources(); err != nil {
-						r.log.Error(err, "failed to cleanup resources during node termination")
-						ec2API.NodeTerminationENICleanupFailure.Inc()
+					if !r.deletePool.TryAcquire(1) {
+						r.log.Info("d, will requeue request")
+						return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 					}
+					go func(nodeID string) {
+						defer r.deletePool.Release(1)
+						childCtx, cancel := context.WithTimeout(ctx, config.NodeTerminationTimeout)
+						defer cancel()
+						if err := r.newResourceCleaner(nodeID, r.eC2Wrapper, r.vpcId, r.log).DeleteLeakedResources(childCtx); err != nil {
+							r.log.Error(err, "failed to cleanup resources during node termination")
+							ec2API.NodeTerminationENICleanupFailure.Inc()
+						}
+					}(nodeID)
 				}
 			}
 
-			if err := r.finalizerManager.RemoveFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
+			if err := r.removeFinalizer(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
 				r.log.Error(err, "failed to remove finalizer on CNINode, will retry", "cniNode", cniNode.Name, "finalizer", config.NodeTerminationFinalizer)
+				if apierrors.IsConflict(err) {
+					return ctrl.Result{Requeue: true}, nil
+				}
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{}, nil
@@ -207,7 +196,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				Spec: cniNode.Spec,
 			}
 
-			if err := r.finalizerManager.RemoveFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
+			if err := r.removeFinalizer(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
 				r.log.Error(err, "failed to remove finalizer on CNINode, will retry")
 				return ctrl.Result{}, err
 			}
@@ -252,7 +241,7 @@ func (r *CNINodeReconciler) waitTillCNINodeDeleted(nameSpacedCNINode types.Names
 	oldCNINode := &v1alpha1.CNINode{}
 
 	return wait.PollUntilContextTimeout(context.TODO(), 500*time.Millisecond, time.Second*3, true, func(ctx context.Context) (bool, error) {
-		if err := r.Client.Get(ctx, nameSpacedCNINode, oldCNINode); err != nil && errors.IsNotFound(err) {
+		if err := r.Client.Get(ctx, nameSpacedCNINode, oldCNINode); err != nil && apierrors.IsNotFound(err) {
 			return true, nil
 		}
 		return false, nil
@@ -265,4 +254,46 @@ func (r *CNINodeReconciler) createCNINodeFromObj(ctx context.Context, newCNINode
 		func() error {
 			return r.Client.Create(ctx, newCNINode)
 		})
+}
+
+func (r *CNINodeReconciler) ensureTagsAndLabels(cniNode *v1alpha1.CNINode, node *v1.Node) (bool, error) {
+	shouldPatch := false
+	var err error
+	if cniNode.Spec.Tags == nil {
+		cniNode.Spec.Tags = make(map[string]string)
+	}
+	// add cluster name tag if it does not exist
+	if cniNode.Spec.Tags[config.VPCCNIClusterNameKey] != r.clusterName {
+		cniNode.Spec.Tags[config.VPCCNIClusterNameKey] = r.clusterName
+		shouldPatch = true
+	}
+	if node != nil {
+		var nodeID string
+		nodeID, err = utils.GetNodeID(node)
+
+		if nodeID != "" && cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey] != nodeID {
+			cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey] = nodeID
+			shouldPatch = true
+		}
+
+		// add node label if it does not exist
+		if cniNode.ObjectMeta.Labels == nil {
+			cniNode.ObjectMeta.Labels = make(map[string]string)
+		}
+		if cniNode.ObjectMeta.Labels[config.NodeLabelOS] != node.ObjectMeta.Labels[config.NodeLabelOS] {
+			cniNode.ObjectMeta.Labels[config.NodeLabelOS] = node.ObjectMeta.Labels[config.NodeLabelOS]
+			shouldPatch = true
+		}
+	}
+	return shouldPatch, err
+}
+
+func (r *CNINodeReconciler) removeFinalizer(ctx context.Context, cniNode *v1alpha1.CNINode, finalizer string) error {
+	cniNodeCopy := cniNode.DeepCopy()
+
+	if controllerutil.RemoveFinalizer(cniNodeCopy, finalizer) {
+		r.log.Info("removing finalizer for cninode", "name", cniNode.GetName(), "finalizer", finalizer)
+		return r.Client.Patch(ctx, cniNodeCopy, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{}))
+	}
+	return nil
 }

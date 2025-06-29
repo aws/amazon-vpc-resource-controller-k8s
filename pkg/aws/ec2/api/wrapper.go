@@ -15,7 +15,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -23,7 +22,6 @@ import (
 
 	vpc_rc_config "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
-	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
 	smithymiddleware "github.com/aws/smithy-go/middleware"
@@ -37,7 +35,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 
 	"github.com/aws/aws-sdk-go/aws/endpoints"
-	"github.com/aws/smithy-go"
 
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -60,11 +57,11 @@ type EC2Wrapper interface {
 	CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error)
 	AttachNetworkInterface(input *ec2.AttachNetworkInterfaceInput) (*ec2.AttachNetworkInterfaceOutput, error)
 	DetachNetworkInterface(input *ec2.DetachNetworkInterfaceInput) (*ec2.DetachNetworkInterfaceOutput, error)
-	DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error)
+	DeleteNetworkInterface(ctx context.Context, input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error)
 	AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
 	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error)
-	DescribeNetworkInterfacesPagesWithRetry(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2types.NetworkInterface, error)
+	DescribeNetworkInterfacesPages(ctx context.Context, input *ec2.DescribeNetworkInterfacesInput) ([]*ec2types.NetworkInterface, error)
 	CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
 	DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error)
 	AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error)
@@ -668,9 +665,9 @@ func (e *ec2Wrapper) AttachNetworkInterface(input *ec2.AttachNetworkInterfaceInp
 	return attachNetworkInterfaceOutput, err
 }
 
-func (e *ec2Wrapper) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
+func (e *ec2Wrapper) DeleteNetworkInterface(ctx context.Context, input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
 	start := time.Now()
-	deleteNetworkInterfaceOutput, err := e.userServiceClient.DeleteNetworkInterface(context.TODO(), input)
+	deleteNetworkInterfaceOutput, err := e.userServiceClient.DeleteNetworkInterface(ctx, input)
 	ec2APICallLatencies.WithLabelValues("delete_network_interface").Observe(timeSinceMs(start))
 
 	// Metric updates
@@ -721,7 +718,7 @@ func (e *ec2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfa
 
 // DescribeNetworkInterfacesPagesWithRetry returns network interfaces that match the filters specified in the input
 // with retry mechanism for handling API throttling
-func (e *ec2Wrapper) DescribeNetworkInterfacesPagesWithRetry(input *ec2.DescribeNetworkInterfacesInput) ([]*ec2types.NetworkInterface, error) {
+func (e *ec2Wrapper) DescribeNetworkInterfacesPages(ctx context.Context, input *ec2.DescribeNetworkInterfacesInput) ([]*ec2types.NetworkInterface, error) {
 	if input.MaxResults == nil {
 		input.MaxResults = aws.Int32(int32(vpc_rc_config.DescribeNetworkInterfacesMaxResults))
 	}
@@ -731,50 +728,29 @@ func (e *ec2Wrapper) DescribeNetworkInterfacesPagesWithRetry(input *ec2.Describe
 		ec2APICallLatencies.WithLabelValues("describe_network_interfaces_pages").Observe(timeSinceMs(start))
 	}()
 
-	var apiError error
-	for attempt := 1; attempt <= MaxRetries; attempt++ {
-		attemptInterfaces := make([]*ec2types.NetworkInterface, 0, vpc_rc_config.DescribeNetworkInterfacesMaxResults)
+	nwInterfaces := make([]*ec2types.NetworkInterface, 0, vpc_rc_config.DescribeNetworkInterfacesMaxResults)
 
-		paginator := ec2.NewDescribeNetworkInterfacesPaginator(e.userServiceClient, input)
+	paginator := ec2.NewDescribeNetworkInterfacesPaginator(e.userServiceClient, input)
 
-		for paginator.HasMorePages() {
-			output, err := paginator.NextPage(context.TODO())
-			if err != nil {
-				ec2APIErrCnt.Inc()
-				ec2DescribeNetworkInterfacesPagesAPIErrCnt.Inc()
-				apiError = err
-
-				var ae smithy.APIError
-				if errors.As(err, &ae) && ae.ErrorCode() == "Throttling" && attempt < MaxRetries {
-					e.log.Info("Throttling error, will retry", "attempt", attempt)
-					backoff := time.Duration(attempt) * 500 * time.Millisecond
-					time.Sleep(wait.Jitter(backoff, 0.1))
-					goto Retry
-				}
-				return nil, err
-			}
-
-			ec2APICallCnt.Inc()
-			ec2DescribeNetworkInterfacesPagesAPICallCnt.Inc()
-
-			for _, nwInterface := range output.NetworkInterfaces {
-				attemptInterfaces = append(attemptInterfaces, &ec2types.NetworkInterface{
-					NetworkInterfaceId: nwInterface.NetworkInterfaceId,
-					TagSet:             nwInterface.TagSet,
-					Attachment:         nwInterface.Attachment,
-				})
-			}
-
-			time.Sleep(wait.Jitter(100*time.Millisecond, 0.2))
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			ec2APIErrCnt.Inc()
+			ec2DescribeNetworkInterfacesPagesAPIErrCnt.Inc()
+			return nil, err
 		}
+		ec2APICallCnt.Inc()
+		ec2DescribeNetworkInterfacesPagesAPICallCnt.Inc()
 
-		return attemptInterfaces, nil
-
-	Retry:
-		continue
+		for _, nwInterface := range output.NetworkInterfaces {
+			nwInterfaces = append(nwInterfaces, &ec2types.NetworkInterface{
+				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
+				TagSet:             nwInterface.TagSet,
+				Attachment:         nwInterface.Attachment,
+			})
+		}
 	}
-
-	return nil, apiError
+	return nwInterfaces, nil
 }
 
 func (e *ec2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {

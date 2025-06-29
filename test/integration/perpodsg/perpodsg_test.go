@@ -451,7 +451,7 @@ var _ = Describe("Branch ENI Pods", func() {
 
 						firstPod := podTemplate.DeepCopy()
 						By("creating a Pod on the un-managed node and verifying it fails")
-						_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, firstPod, utils.ResourceCreationTimeout)
+						_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, firstPod, utils.ResourceOperationTimeout)
 						Expect(err).To(HaveOccurred())
 
 						By("deleting the pod")
@@ -471,7 +471,7 @@ var _ = Describe("Branch ENI Pods", func() {
 
 						By("creating the Pod on now managed node and verify it runs")
 						secondPod := podTemplate.DeepCopy()
-						secondPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, secondPod, utils.ResourceCreationTimeout)
+						secondPod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, secondPod, utils.ResourceOperationTimeout)
 						Expect(err).ToNot(HaveOccurred())
 
 						verify.VerifyNetworkingOfPodUsingENI(*secondPod, []string{securityGroupID1})
