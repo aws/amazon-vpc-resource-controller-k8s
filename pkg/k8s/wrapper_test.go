@@ -38,6 +38,7 @@ import (
 var (
 	nodeName         = "node-name"
 	mockClusterName  = "cluster-name"
+	mockNodeID       = "i-123456789"
 	mockResourceName = config.ResourceNamePodENI
 
 	existingResource         = "extended-resource"
@@ -200,22 +201,25 @@ func TestK8sWrapper_CreateCNINodeWithExistedObject_NoError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockCNINode})
 
-	err := wrapper.CreateCNINode(mockNode, mockClusterName)
+	err := wrapper.CreateCNINode(mockNode, mockClusterName, mockNodeID)
 	assert.NoError(t, err)
 	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name})
 	assert.NoError(t, err)
 	assert.Equal(t, mockNode.Name, cniNode.Name)
-	err = wrapper.CreateCNINode(mockNode, mockClusterName)
+	err = wrapper.CreateCNINode(mockNode, mockClusterName, mockNodeID)
 	assert.NoError(t, err)
 }
 
 func TestK8sWrapper_CreateCNINode_NoError(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockCNINode})
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{})
 
-	err := wrapper.CreateCNINode(mockNode, mockClusterName)
+	err := wrapper.CreateCNINode(mockNode, mockClusterName, mockNodeID)
 	assert.NoError(t, err)
 	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name})
 	assert.NoError(t, err)
 	assert.Equal(t, mockNode.Name, cniNode.Name)
+	assert.Equal(t, mockNodeID, cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey])
+	assert.Equal(t, mockClusterName, cniNode.Spec.Tags[config.VPCCNIClusterNameKey])
+	assert.Contains(t, cniNode.Finalizers, config.NodeTerminationFinalizer)
 }

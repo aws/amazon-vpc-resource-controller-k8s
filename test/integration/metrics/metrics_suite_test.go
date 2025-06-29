@@ -80,7 +80,7 @@ func createCurlPod() (*v1.Pod, error) {
 	if err != nil {
 		return nil, err
 	}
-	return frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, pod, utils.ResourceCreationTimeout)
+	return frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, pod, utils.ResourceOperationTimeout)
 }
 
 func ensureControllerReadyTobeScraped() error {
