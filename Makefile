@@ -14,6 +14,7 @@ IMAGE ?= $(REPO):$(VERSION)
 BASE_IMAGE ?= public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-base-nonroot:latest.2
 GOLANG_VERSION ?= $(shell cat .go-version)
 BUILD_IMAGE ?= public.ecr.aws/docker/library/golang:$(GOLANG_VERSION)
+GORUNNER_VERSION ?= public.ecr.aws/eks-distro/kubernetes/go-runner:v0.18.0-eks-1-32-latest
 GOARCH ?= amd64
 PLATFORM ?= linux/amd64
 USER_ROLE_ARN ?= arn:aws:iam::$(AWS_ACCOUNT):role/VPCResourceControllerRole
@@ -77,16 +78,16 @@ delete: ## Delete controller from ~/.kube/config
 
 # Build the docker image with buildx
 docker-buildx: check-env test
-	docker buildx build --platform=$(PLATFORM) -t $(IMAGE)-$(GOARCH) --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) --build-arg $(GOARCH) --load .
+	docker buildx build --platform=$(PLATFORM) -t $(IMAGE)-$(GOARCH) --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) --build-arg GORUNNER_VERSION=$(GORUNNER_VERSION) --build-arg $(GOARCH) --load .
 
 # Build the docker image
 docker-build: check-env test
-	docker build --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg ARCH=$(GOARCH) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) . -t ${IMAGE}
+	docker build --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg ARCH=$(GOARCH) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) --build-arg GORUNNER_VERSION=$(GORUNNER_VERSION) . -t ${IMAGE}
 
 
 # Build the docker image with buildx and no tests
 docker-buildx-no-test:
-	docker buildx build --platform=$(PLATFORM) -t $(IMAGE)_$(GOARCH) --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) --build-arg $(GOARCH) --load .
+	docker buildx build --platform=$(PLATFORM) -t $(IMAGE)_$(GOARCH) --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg BUILD_IMAGE=$(BUILD_IMAGE) --build-arg GORUNNER_VERSION=$(GORUNNER_VERSION) --build-arg $(GOARCH) --load .
 
 # Push the docker image
 docker-push: check-env
