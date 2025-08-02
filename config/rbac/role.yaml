@@ -15,16 +15,8 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - patch
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - nodes
+  - serviceaccounts
   verbs:
   - get
   - list
@@ -39,10 +31,11 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - serviceaccounts
+  - pods
   verbs:
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - crd.k8s.amazonaws.com
@@ -80,21 +73,21 @@ metadata:
   namespace: kube-system
 rules:
 - apiGroups:
-  - apps
-  resourceNames:
-  - vpc-resource-controller
-  resources:
-  - deployments
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - ""
   resourceNames:
   - amazon-vpc-cni
   resources:
   - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resourceNames:
+  - vpc-resource-controller
+  resources:
+  - deployments
   verbs:
   - get
   - list
