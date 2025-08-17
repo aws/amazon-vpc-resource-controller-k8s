@@ -35,6 +35,7 @@ spec:
           - --metrics-bind-address=:8443
           - --introspect-bind-addr=:22775
           - --vpc-id=VPC_ID
+          - --aws-region=AWS_REGION
         image: controller:latest
         name: controller
         resources:

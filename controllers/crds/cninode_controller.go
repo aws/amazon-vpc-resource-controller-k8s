@@ -54,6 +54,23 @@ var (
 			Help: "The number of requests that failed when controller tried to recreate the CNINode",
 		},
 	)
+	cninodeOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "cninode_operation_latency",
+		Help:    "The latency of CNINode operation",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"operation"})
+)
+
+type CleanupTask struct {
+	cniNode    *v1alpha1.CNINode
+	retryAfter time.Duration
+	hasRetried int
+}
+
+const (
+	cleanupTaskRetryFactor = 2
+	cleanupTaskMaxRetry    = 5
+	initalRetryDelay       = 20
 )
 
 func prometheusRegister() {
@@ -61,7 +78,9 @@ func prometheusRegister() {
 
 	metrics.Registry.MustRegister(
 		recreateCNINodeCallCount,
-		recreateCNINodeErrCount)
+		recreateCNINodeErrCount,
+		cninodeOperationLatency,
+	)
 
 	prometheusRegistered = true
 }
@@ -79,6 +98,7 @@ type CNINodeReconciler struct {
 	finalizerManager   k8s.FinalizerManager
 	deletePool         *semaphore.Weighted
 	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner
+	cleanupChan        chan any
 }
 
 func NewCNINodeReconciler(
@@ -106,6 +126,9 @@ func NewCNINodeReconciler(
 		finalizerManager:   finalizerManager,
 		deletePool:         semaphore.NewWeighted(int64(maxConcurrentWorkers)),
 		newResourceCleaner: newResourceCleaner,
+		// use 200% workers to high throughput
+		// TODO: tune this value based on UX
+		cleanupChan: make(chan any, maxConcurrentWorkers*2),
 	}
 }
 
@@ -134,10 +157,11 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	if cniNode.GetDeletionTimestamp().IsZero() {
 		cniNodeCopy := cniNode.DeepCopy()
-		shouldPatch, err := r.ensureTagsAndLabels(cniNodeCopy, node)
-		shouldPatch = controllerutil.AddFinalizer(cniNodeCopy, config.NodeTerminationFinalizer) || shouldPatch
+		shouldPatchTags, err := r.ensureTagsAndLabels(cniNodeCopy, node)
+		shouldPatchFinalizer := controllerutil.AddFinalizer(cniNodeCopy, config.NodeTerminationFinalizer)
+		createAt := time.Now()
 
-		if shouldPatch {
+		if shouldPatchTags || shouldPatchFinalizer {
 			r.log.Info("patching CNINode to add fields Tags, Labels and finalizer", "cninode", cniNode.Name)
 			if err := r.Client.Patch(ctx, cniNodeCopy, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{})); err != nil {
 				if apierrors.IsConflict(err) {
@@ -146,29 +170,25 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				}
 				return ctrl.Result{}, err
 			}
+			if shouldPatchTags {
+				cninodeOperationLatency.WithLabelValues("add_tag").Observe(time.Since(createAt).Seconds())
+			}
+			if shouldPatchFinalizer {
+				cninodeOperationLatency.WithLabelValues("add_finalizer").Observe(time.Since(createAt).Seconds())
+			}
 		}
 		return ctrl.Result{}, err
 	} else { // CNINode is marked for deletion
+		startAt := time.Now()
 		if !nodeFound {
 			//  node is also deleted, proceed with running the cleanup routine and remove the finalizer
 			// run cleanup for Linux nodes only
 			if val, ok := cniNode.ObjectMeta.Labels[config.NodeLabelOS]; ok && val == config.OSLinux {
-				r.log.Info("running the finalizer routine on cniNode", "cniNode", cniNode.Name)
-				// run cleanup when node id is present
-				if nodeID, ok := cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey]; ok && nodeID != "" {
-					if !r.deletePool.TryAcquire(1) {
-						r.log.Info("d, will requeue request")
-						return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-					}
-					go func(nodeID string) {
-						defer r.deletePool.Release(1)
-						childCtx, cancel := context.WithTimeout(ctx, config.NodeTerminationTimeout)
-						defer cancel()
-						if err := r.newResourceCleaner(nodeID, r.eC2Wrapper, r.vpcId, r.log).DeleteLeakedResources(childCtx); err != nil {
-							r.log.Error(err, "failed to cleanup resources during node termination")
-							ec2API.NodeTerminationENICleanupFailure.Inc()
-						}
-					}(nodeID)
+				// add the CNINode to the cleanup channel to run the cleanup routine
+				r.cleanupChan <- CleanupTask{
+					cniNode:    cniNode,
+					retryAfter: initalRetryDelay * time.Millisecond,
+					hasRetried: 0,
 				}
 			}
 
@@ -179,6 +199,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				}
 				return ctrl.Result{}, err
 			}
+			cninodeOperationLatency.WithLabelValues("remove_finalizer").Observe(time.Since(startAt).Seconds())
 			return ctrl.Result{}, nil
 		} else {
 			// node exists, do not run the cleanup routine(periodic cleanup routine will delete leaked ENIs), remove the finalizer,
@@ -200,6 +221,8 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				r.log.Error(err, "failed to remove finalizer on CNINode, will retry")
 				return ctrl.Result{}, err
 			}
+			cninodeOperationLatency.WithLabelValues("remove_finalizer").Observe(time.Since(startAt).Seconds())
+
 			// wait till CNINode is deleted before recreation as the new object will be created with same name to avoid "object already exists" error
 			if err := r.waitTillCNINodeDeleted(client.ObjectKeyFromObject(newCNINode)); err != nil {
 				// raise event if CNINode was not deleted after removing the finalizer
@@ -219,6 +242,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				// return nil as object is deleted and we cannot recreate the object now
 				return ctrl.Result{}, nil
 			}
+			cninodeOperationLatency.WithLabelValues("re_create").Observe(time.Since(startAt).Seconds())
 			r.log.Info("successfully recreated CNINode", "cniNode", newCNINode.Name)
 		}
 	}
@@ -230,10 +254,56 @@ func (r *CNINodeReconciler) SetupWithManager(mgr ctrl.Manager, maxNodeConcurrent
 	if !prometheusRegistered {
 		prometheusRegister()
 	}
+
+	// start a watching goroutine for taking cninode cleanup tasks
+	go r.watchCleanupTasks()
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.CNINode{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxNodeConcurrentReconciles}).
 		Complete(r)
+}
+
+func (r *CNINodeReconciler) watchCleanupTasks() {
+	for {
+		select {
+		case task := <-r.cleanupChan:
+			r.processCleanupTasks(r.context, task.(CleanupTask))
+		case <-r.context.Done():
+			r.log.Info("context cancelled and stop cninodes cleanup task")
+			return
+		}
+	}
+}
+
+func (r *CNINodeReconciler) processCleanupTasks(ctx context.Context, task CleanupTask) {
+	log := r.log.WithValues("cniNode", task.cniNode.Name)
+	log.Info("running the finalizer routine on cniNode", "cniNode", task.cniNode.Name)
+	// run cleanup when node id is present
+	if nodeID, ok := task.cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey]; ok && nodeID != "" {
+		if !r.deletePool.TryAcquire(1) {
+			if task.hasRetried >= cleanupTaskMaxRetry {
+				log.Info("will not requeue request as max retries are already done")
+				return
+			}
+			log.Info("will requeue request after", "after", task.retryAfter)
+			time.Sleep(task.retryAfter)
+			task.retryAfter *= cleanupTaskRetryFactor
+			task.hasRetried += 1
+			r.cleanupChan <- task
+			return
+		}
+		go func(nodeID string) {
+			defer r.deletePool.Release(1)
+			childCtx, cancel := context.WithTimeout(ctx, config.NodeTerminationTimeout)
+			defer cancel()
+			if err := r.newResourceCleaner(nodeID, r.eC2Wrapper, r.vpcId, r.log).DeleteLeakedResources(childCtx); err != nil {
+				log.Error(err, "failed to cleanup resources during node termination")
+				ec2API.NodeTerminationENICleanupFailure.Inc()
+			}
+			log.Info("successfully cleaned up resources during node termination", "nodeID", nodeID)
+		}(nodeID)
+	}
 }
 
 // waitTillCNINodeDeleted waits for CNINode to be deleted with timeout and returns error
