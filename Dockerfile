@@ -3,7 +3,7 @@ ARG BUILD_IMAGE
 ARG GORUNNER_VERSION=public.ecr.aws/eks-distro/kubernetes/go-runner:v0.18.0-eks-1-34-latest
 ARG ARCH
 # Build the controller binary
-FROM $BUILD_IMAGE as builder
+FROM $BUILD_IMAGE AS builder
 
 WORKDIR /workspace
 ENV GOPROXY direct
@@ -33,10 +33,13 @@ RUN GIT_VERSION=$(git describe --tags --always) && \
         CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build \
         -ldflags="-X ${VERSION_PKG}.GitVersion=${GIT_VERSION} -X ${VERSION_PKG}.GitCommit=${GIT_COMMIT} -X ${VERSION_PKG}.BuildDate=${BUILD_DATE}" -a -o controller main.go
 
+
+FROM $GORUNNER_VERSION AS go-runner
+
 FROM $BASE_IMAGE
 
 WORKDIR /
-COPY --from=public.ecr.aws/eks-distro/kubernetes/go-runner:v0.18.0-eks-1-32-11 /go-runner /usr/local/bin/go-runner
+COPY --from=go-runner /go-runner /usr/local/bin/go-runner
 COPY --from=builder /workspace/controller .
 
 ENTRYPOINT ["/controller"]
