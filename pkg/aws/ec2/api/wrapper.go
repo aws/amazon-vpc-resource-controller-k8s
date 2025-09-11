@@ -34,8 +34,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 
-	"github.com/aws/aws-sdk-go/aws/endpoints"
-
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -551,14 +549,15 @@ func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterN
 	}
 
 	// Get the regional sts end point
-	regionalSTSEndpoint, err := e.getRegionalStsEndpoint(partitionID, region)
+	regionalSTSEndpoint, err := e.getRegionalStsEndpoint(region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get the regional sts endpoint for region %s: %v %v",
 			instanceRegion, err, partitionID)
 	}
+	e.log.Info("got the regional sts endpoint", "endpoint", regionalSTSEndpoint)
 
 	regionalProvider := stscreds.NewAssumeRoleProvider(
-		e.createSTSClient(cfg, client, regionalSTSEndpoint.URL, sourceAcct, sourceArn),
+		e.createSTSClient(cfg, client, regionalSTSEndpoint, sourceAcct, sourceArn),
 		roleARN,
 		func(o *stscreds.AssumeRoleOptions) {
 			o.Duration = time.Minute * 60
@@ -903,36 +902,14 @@ func (e *ec2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkIn
 	return output, err
 }
 
-func (e *ec2Wrapper) getRegionalStsEndpoint(partitionID, region string) (endpoints.ResolvedEndpoint, error) {
-	var partition *endpoints.Partition
-	stsServiceID := "sts"
-	for _, p := range endpoints.DefaultPartitions() {
-		if partitionID == p.ID() {
-			partition = &p
-			break
-		}
-	}
-	if partition == nil {
-		return endpoints.ResolvedEndpoint{}, fmt.Errorf("partition %s not valid", partitionID)
-	}
-
-	stsSvc, ok := partition.Services()[stsServiceID]
-	if !ok {
-		e.log.Info("STS service not found in partition, generating default endpoint.", "Partition:", partitionID)
-		// Add the host of the current instances region if the service doesn't already exists in the partition
-		// so we don't fail if the service is not present in the go sdk but matches the instances region.
-		res, err := partition.EndpointFor(stsServiceID, region, endpoints.STSRegionalEndpointOption, endpoints.ResolveUnknownServiceOption)
-		if err != nil {
-			return endpoints.ResolvedEndpoint{}, fmt.Errorf("error resolving endpoint for %s in partition %s. err: %v", region, partition.ID(), err)
-		}
-		return res, nil
-	}
-
-	res, err := stsSvc.ResolveEndpoint(region, endpoints.STSRegionalEndpointOption)
+func (e *ec2Wrapper) getRegionalStsEndpoint(region string) (string, error) {
+	r := sts.NewDefaultEndpointResolverV2()
+	params := sts.EndpointParameters{Region: &region}
+	ep, err := r.ResolveEndpoint(context.Background(), params)
 	if err != nil {
-		return endpoints.ResolvedEndpoint{}, fmt.Errorf("error resolving endpoint for %s in partition %s. err: %v", region, partition.ID(), err)
+		return "", err
 	}
-	return res, nil
+	return ep.URI.String(), nil
 }
 
 func (e *ec2Wrapper) DisassociateTrunkInterface(input *ec2.DisassociateTrunkInterfaceInput) error {
