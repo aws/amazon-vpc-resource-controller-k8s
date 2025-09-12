@@ -23,15 +23,6 @@ func Test_getRegionalStsEndpoint(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "service doesn't exist in partition",
-			args: args{
-				partitionID: "aws-iso-f",
-				region:      "testregions",
-			},
-			want:    "https://sts.testregions.csp.hci.ic.gov",
-			wantErr: false,
-		},
-		{
 			name: "region doesn't exist in partition",
 			args: args{
 				partitionID: "aws",
@@ -52,12 +43,12 @@ func Test_getRegionalStsEndpoint(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ec2Wapper.getRegionalStsEndpoint(tt.args.partitionID, tt.args.region)
+			got, err := ec2Wapper.getRegionalStsEndpoint(tt.args.region)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("getRegionalStsEndpoint() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if got.URL != tt.want {
+			if got != tt.want {
 				t.Errorf("getRegionalStsEndpoint() = %v, want %v", got, tt.want)
 			}
 		})
