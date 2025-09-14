@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -40,8 +39,6 @@ const (
 	PartitionIndex = 1
 	AccountIndex   = 4
 )
-
-var instanceIDRegex = regexp.MustCompile(`^i-(?:[a-f0-9]{8}|[a-f0-9]{17})$`)
 
 // RemoveDuplicatedSg removes duplicated items from a string slice.
 // It returns a no duplicates string slice.
@@ -263,19 +260,4 @@ func IntToInt32(value int) (int32, error) {
 	}
 
 	return int32(value), nil
-}
-
-func GetNodeID(node *corev1.Node) (string, error) {
-	if node.Spec.ProviderID == "" {
-		return "", fmt.Errorf("provider ID is not set for node %s", node.Name)
-	}
-	idx := strings.LastIndex(node.Spec.ProviderID, "/")
-	if idx == -1 || idx >= len(node.Spec.ProviderID)-1 {
-		return "", fmt.Errorf("invalid provider ID format for node %s, with providerId %s", node.Name, node.Spec.ProviderID)
-	}
-	instanceID := node.Spec.ProviderID[idx+1:]
-	if !instanceIDRegex.MatchString(instanceID) {
-		return "", fmt.Errorf("provider ID for node %s does not match AWS EC2 instance ID format: %s", node.Name, instanceID)
-	}
-	return instanceID, nil
 }

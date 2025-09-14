@@ -14,7 +14,6 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -553,7 +552,7 @@ func TestEc2APIHelper_DeleteNetworkInterface(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DeleteNetworkInterface(context.TODO(), deleteNetworkInterfaceInput).Return(nil, nil)
+	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil)
 
 	err := ec2ApiHelper.DeleteNetworkInterface(&branchInterfaceId)
 	assert.NoError(t, err)
@@ -567,7 +566,7 @@ func TestEc2APIHelper_DeleteNetworkInterface_Error(t *testing.T) {
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DeleteNetworkInterface(context.TODO(), deleteNetworkInterfaceInput).Return(nil, errMock).Times(maxRetryOnError)
+	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, errMock).Times(maxRetryOnError)
 
 	err := ec2ApiHelper.DeleteNetworkInterface(&branchInterfaceId)
 	assert.Error(t, errMock, err)
@@ -582,8 +581,8 @@ func TestEc2APIHelper_DeleteNetworkInterface_ErrorThenSuccess(t *testing.T) {
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
 	gomock.InOrder(
-		mockWrapper.EXPECT().DeleteNetworkInterface(context.TODO(), deleteNetworkInterfaceInput).Return(nil, errMock).Times(2),
-		mockWrapper.EXPECT().DeleteNetworkInterface(context.TODO(), deleteNetworkInterfaceInput).Return(nil, nil).Times(1),
+		mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, errMock).Times(2),
+		mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil).Times(1),
 	)
 
 	err := ec2ApiHelper.DeleteNetworkInterface(&branchInterfaceId)
@@ -772,7 +771,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface_DeleteOnAttachFailed(t *te
 	mockWrapper.EXPECT().AttachNetworkInterface(attachNetworkInterfaceInput).Return(attachNetworkInterfaceOutput, errMock)
 
 	// Test delete is called
-	mockWrapper.EXPECT().DeleteNetworkInterface(context.TODO(), deleteNetworkInterfaceInput).Return(nil, nil)
+	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil)
 
 	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
 		&deviceIndex, &eniDescription, nil, nil)
@@ -797,7 +796,7 @@ func TestEc2APIHelper_CreateAndAttachNetworkInterface_DeleteOnSetTerminationFail
 	mockWrapper.EXPECT().DetachNetworkInterface(detachNetworkInterfaceInput).Return(nil, nil)
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingOneInterfaceId).
 		Return(describeNetworkInterfaceOutputUsingOneInterfaceId, nil)
-	mockWrapper.EXPECT().DeleteNetworkInterface(context.TODO(), deleteNetworkInterfaceInput).Return(nil, nil)
+	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil)
 
 	nwInterface, err := ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceId, &subnetId, securityGroups, tags,
 		&deviceIndex, &eniDescription, nil, nil)
@@ -945,7 +944,7 @@ func TestEc2APIHelper_DetachAndDeleteNetworkInterface(t *testing.T) {
 	mockWrapper.EXPECT().DetachNetworkInterface(detachNetworkInterfaceInput).Return(nil, nil)
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeNetworkInterfaceInputUsingOneInterfaceId).
 		Return(describeNetworkInterfaceOutputUsingOneInterfaceId, nil)
-	mockWrapper.EXPECT().DeleteNetworkInterface(context.TODO(), deleteNetworkInterfaceInput).Return(nil, nil)
+	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil)
 
 	err := ec2ApiHelper.DetachAndDeleteNetworkInterface(&attachmentId, &branchInterfaceId)
 	assert.NoError(t, err)
