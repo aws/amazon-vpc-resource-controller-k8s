@@ -18,7 +18,6 @@
 package mock_cleanup
 
 import (
-	context "context"
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
@@ -48,15 +47,15 @@ func (m *MockResourceCleaner) EXPECT() *MockResourceCleanerMockRecorder {
 }
 
 // DeleteLeakedResources mocks base method.
-func (m *MockResourceCleaner) DeleteLeakedResources(arg0 context.Context) error {
+func (m *MockResourceCleaner) DeleteLeakedResources() error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteLeakedResources", arg0)
+	ret := m.ctrl.Call(m, "DeleteLeakedResources")
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteLeakedResources indicates an expected call of DeleteLeakedResources.
-func (mr *MockResourceCleanerMockRecorder) DeleteLeakedResources(arg0 interface{}) *gomock.Call {
+func (mr *MockResourceCleanerMockRecorder) DeleteLeakedResources() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteLeakedResources", reflect.TypeOf((*MockResourceCleaner)(nil).DeleteLeakedResources), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteLeakedResources", reflect.TypeOf((*MockResourceCleaner)(nil).DeleteLeakedResources))
 }

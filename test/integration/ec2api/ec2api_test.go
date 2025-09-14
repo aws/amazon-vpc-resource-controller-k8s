@@ -62,7 +62,7 @@ var _ = Describe("[LOCAL] Test IAM permissions for EC2 API calls", func() {
 				err = frameWork.EC2Manager.TerminateInstances(instanceID)
 				Expect(err).ToNot(HaveOccurred())
 				// allow time for instance to be deleted and ENI to be available, new node to be ready
-				time.Sleep(utils.ResourceOperationTimeout)
+				time.Sleep(utils.ResourceCreationTimeout)
 				By("verifying ENI is not deleted by controller")
 				err = frameWork.EC2Manager.DescribeNetworkInterface(nwInterfaceID)
 				Expect(err).ToNot(HaveOccurred())

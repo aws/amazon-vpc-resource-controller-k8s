@@ -91,7 +91,7 @@ var _ = BeforeSuite(func() {
 		Build()
 	Expect(err).ToNot(HaveOccurred())
 
-	pod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, pod, utils.ResourceOperationTimeout)
+	pod, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, pod, utils.ResourceCreationTimeout)
 	Expect(err).ToNot(HaveOccurred())
 
 	By("verifying the pod eni annotation is present on branch pod")

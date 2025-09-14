@@ -25,7 +25,7 @@ import (
 
 func CreateAndWaitForPodToStart(podManager Manager, ctx context.Context, pod *v1.Pod) *v1.Pod {
 	By("create the pod")
-	pod, err := podManager.CreateAndWaitTillPodIsRunning(ctx, pod, utils.ResourceOperationTimeout)
+	pod, err := podManager.CreateAndWaitTillPodIsRunning(ctx, pod, utils.ResourceCreationTimeout)
 	Expect(err).NotTo(HaveOccurred())
 
 	return pod

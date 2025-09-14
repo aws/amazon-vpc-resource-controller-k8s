@@ -118,10 +118,9 @@ const (
 
 // customized configurations for BigCache
 const (
-	InstancesCacheTTL      = 30 * time.Minute // scaling < 1k nodes should be under 20 minutes
-	InstancesCacheShards   = 32               // must be power of 2
-	InstancesCacheMaxSize  = 2                // in MB
-	NodeTerminationTimeout = 3 * time.Minute
+	InstancesCacheTTL     = 30 * time.Minute // scaling < 1k nodes should be under 20 minutes
+	InstancesCacheShards  = 32               // must be power of 2
+	InstancesCacheMaxSize = 2                // in MB
 )
 
 var (
