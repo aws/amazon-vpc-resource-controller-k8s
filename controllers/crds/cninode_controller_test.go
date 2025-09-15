@@ -3,6 +3,7 @@ package crds
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
@@ -12,6 +13,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,7 +26,8 @@ import (
 )
 
 type CNINodeMock struct {
-	Reconciler CNINodeReconciler
+	Reconciler        CNINodeReconciler
+	initialStaleCount float64
 }
 
 var (
@@ -161,6 +164,50 @@ func TestCNINodeReconcile(t *testing.T) {
 			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
 				assert.NoError(t, err)
 				assert.Equal(t, res, reconcile.Result{})
+			},
+		},
+		{
+			name: "verify stale CNINode metric is incremented when deletion timestamp is older than 15 minutes",
+			args: args{
+				mockNode: nil,
+				mockCNINode: &v1alpha1.CNINode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: mockName,
+						Labels: map[string]string{
+							config.NodeLabelOS: config.OSLinux,
+						},
+						Finalizers:        []string{config.NodeTerminationFinalizer},
+						DeletionTimestamp: &metav1.Time{Time: metav1.Now().Add(-20 * time.Minute)}, // 20 minutes ago
+					},
+					Spec: v1alpha1.CNINodeSpec{
+						Tags: map[string]string{
+							config.NetworkInterfaceNodeIDKey: "i-1234567890",
+						},
+					},
+				},
+			},
+			prepare: func(f *fields) {
+				// Get initial metric value
+				initialValue := testutil.ToFloat64(staleCNINodeCount)
+
+				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner {
+					return f.mockResourceCleaner
+				}
+				f.mockResourceCleaner.EXPECT().DeleteLeakedResources().Times(1).Return(nil)
+				f.mockFinalizerManager.EXPECT().
+					RemoveFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
+					Return(nil)
+
+				// Store initial value for comparison in asserts
+				f.mockCNINode.initialStaleCount = initialValue
+			},
+			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
+				assert.NoError(t, err)
+				assert.Equal(t, res, reconcile.Result{})
+
+				// Verify the stale metric was incremented
+				finalValue := testutil.ToFloat64(staleCNINodeCount)
+				assert.Greater(t, finalValue, float64(0))
 			},
 		},
 	}
