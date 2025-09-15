@@ -52,6 +52,12 @@ var (
 			Help: "The number of requests that failed when controller tried to recreate the CNINode",
 		},
 	)
+	staleCNINodeCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "stale_cniNode_count",
+			Help: "The number of stale CNINode resources with deletion timestamp older than 15 minutes",
+		},
+	)
 )
 
 func prometheusRegister() {
@@ -59,7 +65,9 @@ func prometheusRegister() {
 
 	metrics.Registry.MustRegister(
 		recreateCNINodeCallCount,
-		recreateCNINodeErrCount)
+		recreateCNINodeErrCount,
+		staleCNINodeCount,
+	)
 
 	prometheusRegistered = true
 }
@@ -171,6 +179,11 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 
 	} else { // CNINode is marked for deletion
+		if time.Since(cniNode.GetDeletionTimestamp().Time).Minutes() > 15 {
+			// delete stale CNINode resource
+			r.log.Info("stale CNINode resource", "cniNode", cniNode.Name)
+			staleCNINodeCount.Inc()
+		}
 		if !nodeFound {
 			//  node is also deleted, proceed with running the cleanup routine and remove the finalizer
 
