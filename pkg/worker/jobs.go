@@ -50,6 +50,8 @@ type OnDemandJob struct {
 	RequestCount int
 	// NodeName is the k8s node name
 	NodeName string
+	// InstnaceID of node
+	InstanceID string
 }
 
 // NewOnDemandDeleteJob returns an on demand job for operation Create or Update
@@ -72,10 +74,10 @@ func NewOnDemandDeletedJob(nodeName string, uid types.UID) OnDemandJob {
 }
 
 // NewOnDemandReconcileJob returns a reconcile job
-func NewOnDemandReconcileNodeJob(nodeName string) OnDemandJob {
+func NewOnDemandReconcileNodeJob(id string) OnDemandJob {
 	return OnDemandJob{
-		Operation: OperationReconcileNode,
-		NodeName:  nodeName,
+		Operation:  OperationReconcileNode,
+		InstanceID: id,
 	}
 }
 
@@ -88,10 +90,11 @@ func NewOnDemandProcessDeleteQueueJob(nodeName string) OnDemandJob {
 }
 
 // NewOnDemandDeleteNodeJob returns a delete node job
-func NewOnDemandDeleteNodeJob(nodeName string) OnDemandJob {
+func NewOnDemandDeleteNodeJob(id, nodeName string) OnDemandJob {
 	return OnDemandJob{
-		Operation: OperationDeleteNode,
-		NodeName:  nodeName,
+		Operation:  OperationDeleteNode,
+		NodeName:   nodeName,
+		InstanceID: id,
 	}
 }
 

@@ -49,6 +49,10 @@ type manager struct {
 	lock sync.RWMutex
 	// dataStore is the in memory data store of all the managed/un-managed nodes in the cluster
 	dataStore map[string]node.Node
+	//FQDN to instanceId mapping
+	fqdnToInstanceID map[string]string
+	// InstanceId to FQDN mapping
+	instanceIDToFQDN map[string]string
 	// resourceManager provides the resource provider for all supported resources
 	resourceManager resource.ResourceManager
 	// wrapper around the clients for all APIs used by controller
@@ -94,9 +98,10 @@ const (
 )
 
 type AsyncOperationJob struct {
-	op       AsyncOperation
-	node     node.Node
-	nodeName string
+	op             AsyncOperation
+	node           node.Node
+	nodeName       string
+	nodeInstanceID string
 }
 
 const pausingHealthCheckDuration = 10 * time.Minute
@@ -114,6 +119,8 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 		conditions:        conditions,
 		controllerVersion: controllerVersion,
 		clusterName:       clusterName,
+		fqdnToInstanceID:  make(map[string]string),
+		instanceIDToFQDN:  make(map[string]string),
 	}
 
 	// add health check on subpath for node manager
@@ -159,8 +166,8 @@ func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
-
-	node, found = m.dataStore[nodeName]
+	id := m.fqdnToInstanceID[nodeName]
+	node, found = m.dataStore[id]
 	return
 }
 
@@ -178,11 +185,33 @@ func (m *manager) AddNode(nodeName string) error {
 	log := m.Log.WithValues("node name", k8sNode.Name, "request", "add")
 
 	var newNode node.Node
-	var nodeFound bool
 
-	_, nodeFound = m.dataStore[k8sNode.Name]
-	if nodeFound {
-		log.Info("node is already processed, not processing add event again")
+	instanceID := GetNodeInstanceID(k8sNode)
+	if instanceID == "" {
+		return errors.New("instanceID is empty")
+	}
+	if oldId, ok := m.fqdnToInstanceID[nodeName]; ok && oldId != "" && oldId != instanceID {
+		if oldNode, exists := m.dataStore[oldId]; exists {
+			if oldNode.IsManaged() {
+				m.worker.SubmitJob(AsyncOperationJob{
+					op:             Delete,
+					node:           oldNode,
+					nodeName:       nodeName,
+					nodeInstanceID: oldId,
+				})
+
+			}
+			delete(m.dataStore, oldId)
+			delete(m.instanceIDToFQDN, oldId)
+		}
+		delete(m.fqdnToInstanceID, nodeName)
+	}
+
+	m.fqdnToInstanceID[nodeName] = instanceID
+	m.instanceIDToFQDN[instanceID] = nodeName
+
+	if _, exists := m.dataStore[instanceID]; exists {
+		log.Info("instance already processed, skipping add", "instanceID", instanceID)
 		return nil
 	}
 
@@ -205,21 +234,22 @@ func (m *manager) AddNode(nodeName string) error {
 		if err != nil {
 			return err
 		}
-		m.dataStore[k8sNode.Name] = newNode
+		m.dataStore[instanceID] = newNode
 		log.Info("node added as a managed node")
 		op = Init
 	} else {
 		newNode = node.NewUnManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
 			GetNodeOS(k8sNode))
-		m.dataStore[k8sNode.Name] = newNode
+		m.dataStore[instanceID] = newNode
 		log.V(1).Info("node added as an un-managed node")
 		return nil
 	}
 
 	m.worker.SubmitJob(AsyncOperationJob{
-		op:       op,
-		node:     newNode,
-		nodeName: nodeName,
+		op:             op,
+		node:           newNode,
+		nodeName:       nodeName,
+		nodeInstanceID: instanceID,
 	})
 	return nil
 }
@@ -252,9 +282,29 @@ func (m *manager) UpdateNode(nodeName string) error {
 		return fmt.Errorf("failed to update node %s, doesn't exist in cache anymore", nodeName)
 	}
 
+	instanceID := GetNodeInstanceID(k8sNode)
+	if instanceID == "" {
+		return errors.New("instanceID is empty")
+	}
+	if oldId, ok := m.fqdnToInstanceID[nodeName]; ok && oldId != "" && oldId != instanceID {
+		if oldNode, exists := m.dataStore[oldId]; exists {
+			if oldNode.IsManaged() {
+				m.worker.SubmitJob(AsyncOperationJob{
+					op:             Delete,
+					node:           oldNode,
+					nodeName:       nodeName,
+					nodeInstanceID: oldId,
+				})
+
+			}
+			delete(m.dataStore, oldId)
+			delete(m.instanceIDToFQDN, oldId)
+		}
+		delete(m.fqdnToInstanceID, nodeName)
+	}
 	log := m.Log.WithValues("node name", nodeName, "request", "update")
 
-	cachedNode, found := m.dataStore[nodeName]
+	cachedNode, found := m.dataStore[instanceID]
 	if !found {
 		m.Log.Info("the node doesn't exist in cache anymore, it might have been deleted")
 		return nil
@@ -277,13 +327,13 @@ func (m *manager) UpdateNode(nodeName string) error {
 		if err != nil {
 			return err
 		}
-		m.dataStore[nodeName] = cachedNode
+		m.dataStore[instanceID] = cachedNode
 		op = Init
 	case ManagedToUnManaged:
 		log.Info("node was being managed earlier, will be added as un-managed node now")
 		// Change the node in cache, but for de initializing all resource providers
 		// pass the async job the older cached value instead
-		m.dataStore[nodeName] = node.NewUnManagedNode(m.Log, k8sNode.Name,
+		m.dataStore[instanceID] = node.NewUnManagedNode(m.Log, k8sNode.Name,
 			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode))
 		op = Delete
 	case StillManaged:
@@ -302,9 +352,10 @@ func (m *manager) UpdateNode(nodeName string) error {
 	}
 
 	m.worker.SubmitJob(AsyncOperationJob{
-		op:       op,
-		node:     cachedNode,
-		nodeName: nodeName,
+		op:             op,
+		node:           cachedNode,
+		nodeName:       nodeName,
+		nodeInstanceID: instanceID,
 	})
 	return nil
 }
@@ -334,13 +385,22 @@ func (m *manager) DeleteNode(nodeName string) error {
 
 	log := m.Log.WithValues("node name", nodeName, "request", "delete")
 
-	cachedNode, nodeFound := m.dataStore[nodeName]
+	instanceID, _ := m.fqdnToInstanceID[nodeName]
+	if instanceID == "" {
+		log.Info("node not found in the data store, skipping delete", "instanceID", instanceID)
+		return nil
+	}
+
+	cachedNode, nodeFound := m.dataStore[instanceID]
+	delete(m.fqdnToInstanceID, nodeName)
+
 	if !nodeFound {
 		log.Info("node not found in the data store, ignoring the event")
 		return nil
 	}
 
-	delete(m.dataStore, nodeName)
+	delete(m.dataStore, instanceID)
+	delete(m.instanceIDToFQDN, instanceID)
 
 	if !cachedNode.IsManaged() {
 		log.V(1).Info("un managed node removed from data store")
@@ -348,9 +408,10 @@ func (m *manager) DeleteNode(nodeName string) error {
 	}
 
 	m.worker.SubmitJob(AsyncOperationJob{
-		op:       Delete,
-		node:     cachedNode,
-		nodeName: nodeName,
+		op:             Delete,
+		node:           cachedNode,
+		nodeName:       nodeName,
+		nodeInstanceID: instanceID,
 	})
 
 	log.Info("node removed from data store")
@@ -423,7 +484,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		return ctrl.Result{}, nil
 	}
 
-	log := m.Log.WithValues("node", asyncJob.nodeName, "operation", asyncJob.op)
+	log := m.Log.WithValues("node", asyncJob.nodeName, "operation", asyncJob.op, "instanceID", asyncJob.nodeInstanceID)
 
 	var err error
 	switch asyncJob.op {
@@ -436,7 +497,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 				log.Info("node manager sets a pause on health check due to observing a EC2 error", "error", err.Error())
 			}
 			log.Error(err, "removing the node from cache as it failed to initialize")
-			m.removeNodeSafe(asyncJob.nodeName)
+			m.removeNodeSafe(asyncJob.nodeInstanceID)
 			// if initializing node failed, we want to make this visible although the manager will retry
 			// the trunk label will stay as false until retry succeed
 
@@ -561,11 +622,15 @@ func (m *manager) customNetworkEnabledInCNINode(node *v1.Node) (bool, error) {
 	return false, err
 }
 
-func (m *manager) removeNodeSafe(nodeName string) {
+func (m *manager) removeNodeSafe(nodeID string) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	delete(m.dataStore, nodeName)
+	delete(m.dataStore, nodeID)
+	if fqdn, ok := m.instanceIDToFQDN[nodeID]; ok {
+		delete(m.fqdnToInstanceID, fqdn)
+		delete(m.instanceIDToFQDN, nodeID)
+	}
 }
 
 func (m *manager) check() healthz.Checker {
