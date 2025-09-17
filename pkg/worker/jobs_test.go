@@ -27,6 +27,7 @@ var (
 	UID          = types.UID(podUid)
 	reqCount     = 2
 	nodeName     = "node-name"
+	nodeID       = "i-123456789"
 )
 
 // TestNewOnDemandCreateJob tests the fields of Create Job
@@ -48,10 +49,10 @@ func TestNewOnDemandDeletedJob(t *testing.T) {
 }
 
 func TestNewOnDemandReconcileJob(t *testing.T) {
-	onDemandJob := NewOnDemandReconcileNodeJob(nodeName)
+	onDemandJob := NewOnDemandReconcileNodeJob(nodeID)
 
 	assert.Equal(t, OperationReconcileNode, onDemandJob.Operation)
-	assert.Equal(t, nodeName, onDemandJob.NodeName)
+	assert.Equal(t, nodeID, onDemandJob.InstanceID)
 }
 
 func TestNewOnDemandProcessDeleteQueueJob(t *testing.T) {
