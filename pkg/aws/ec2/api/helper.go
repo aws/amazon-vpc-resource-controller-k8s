@@ -14,7 +14,6 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -209,7 +208,7 @@ func (h *ec2APIHelper) DeleteNetworkInterface(interfaceId *string) error {
 	}
 
 	err := retry.OnError(defaultBackOff, func(err error) bool { return true }, func() error {
-		_, err := h.ec2Wrapper.DeleteNetworkInterface(context.TODO(), deleteNetworkInterface)
+		_, err := h.ec2Wrapper.DeleteNetworkInterface(deleteNetworkInterface)
 		return err
 	})
 

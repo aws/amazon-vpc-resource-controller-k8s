@@ -130,7 +130,7 @@ var _ = Describe("Security Group Per Pod", func() {
 
 			By("creating the server pod")
 			serverPod, err = frameWork.PodManager.
-				CreateAndWaitTillPodIsRunning(ctx, serverPod, utils.ResourceOperationTimeout)
+				CreateAndWaitTillPodIsRunning(ctx, serverPod, utils.ResourceCreationTimeout)
 			Expect(err).ToNot(HaveOccurred())
 
 			for i := 0; i < testNodeCount; i++ {

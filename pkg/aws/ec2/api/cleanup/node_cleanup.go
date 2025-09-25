@@ -18,7 +18,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/go-logr/logr"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 // NodeTerminationCleanerto handle resource cleanup at node termination
@@ -51,7 +51,7 @@ func (n *NodeTerminationCleaner) UpdateCleanupMetrics(vpcrcAvailableCount *int, 
 	return
 }
 
-func NewNodeResourceCleaner(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) ResourceCleaner {
+func NewNodeResourceCleaner(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) ResourceCleaner {
 	cleaner := &NodeTerminationCleaner{
 		NodeID: nodeID,
 	}
@@ -59,7 +59,7 @@ func NewNodeResourceCleaner(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID s
 		EC2Wrapper: eC2Wrapper,
 		Manager:    cleaner,
 		VpcId:      vpcID,
-		Log:        log.WithName("eniCleaner").WithName("node"),
+		Log:        ctrl.Log.WithName("eniCleaner").WithName("node"),
 	}
 	return cleaner.ENICleaner
 }

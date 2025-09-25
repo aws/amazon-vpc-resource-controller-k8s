@@ -18,7 +18,6 @@
 package mock_api
 
 import (
-	context "context"
 	reflect "reflect"
 
 	ec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -50,240 +49,240 @@ func (m *MockEC2Wrapper) EXPECT() *MockEC2WrapperMockRecorder {
 }
 
 // AssignPrivateIPAddresses mocks base method.
-func (m *MockEC2Wrapper) AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
+func (m *MockEC2Wrapper) AssignPrivateIPAddresses(arg0 *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AssignPrivateIPAddresses", input)
+	ret := m.ctrl.Call(m, "AssignPrivateIPAddresses", arg0)
 	ret0, _ := ret[0].(*ec2.AssignPrivateIpAddressesOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // AssignPrivateIPAddresses indicates an expected call of AssignPrivateIPAddresses.
-func (mr *MockEC2WrapperMockRecorder) AssignPrivateIPAddresses(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) AssignPrivateIPAddresses(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignPrivateIPAddresses", reflect.TypeOf((*MockEC2Wrapper)(nil).AssignPrivateIPAddresses), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignPrivateIPAddresses", reflect.TypeOf((*MockEC2Wrapper)(nil).AssignPrivateIPAddresses), arg0)
 }
 
 // AssociateTrunkInterface mocks base method.
-func (m *MockEC2Wrapper) AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) AssociateTrunkInterface(arg0 *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AssociateTrunkInterface", input)
+	ret := m.ctrl.Call(m, "AssociateTrunkInterface", arg0)
 	ret0, _ := ret[0].(*ec2.AssociateTrunkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // AssociateTrunkInterface indicates an expected call of AssociateTrunkInterface.
-func (mr *MockEC2WrapperMockRecorder) AssociateTrunkInterface(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) AssociateTrunkInterface(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssociateTrunkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).AssociateTrunkInterface), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssociateTrunkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).AssociateTrunkInterface), arg0)
 }
 
 // AttachNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) AttachNetworkInterface(input *ec2.AttachNetworkInterfaceInput) (*ec2.AttachNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) AttachNetworkInterface(arg0 *ec2.AttachNetworkInterfaceInput) (*ec2.AttachNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AttachNetworkInterface", input)
+	ret := m.ctrl.Call(m, "AttachNetworkInterface", arg0)
 	ret0, _ := ret[0].(*ec2.AttachNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // AttachNetworkInterface indicates an expected call of AttachNetworkInterface.
-func (mr *MockEC2WrapperMockRecorder) AttachNetworkInterface(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) AttachNetworkInterface(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AttachNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).AttachNetworkInterface), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AttachNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).AttachNetworkInterface), arg0)
 }
 
 // CreateNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) CreateNetworkInterface(arg0 *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateNetworkInterface", input)
+	ret := m.ctrl.Call(m, "CreateNetworkInterface", arg0)
 	ret0, _ := ret[0].(*ec2.CreateNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateNetworkInterface indicates an expected call of CreateNetworkInterface.
-func (mr *MockEC2WrapperMockRecorder) CreateNetworkInterface(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) CreateNetworkInterface(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).CreateNetworkInterface), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).CreateNetworkInterface), arg0)
 }
 
 // CreateNetworkInterfacePermission mocks base method.
-func (m *MockEC2Wrapper) CreateNetworkInterfacePermission(input *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error) {
+func (m *MockEC2Wrapper) CreateNetworkInterfacePermission(arg0 *ec2.CreateNetworkInterfacePermissionInput) (*ec2.CreateNetworkInterfacePermissionOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateNetworkInterfacePermission", input)
+	ret := m.ctrl.Call(m, "CreateNetworkInterfacePermission", arg0)
 	ret0, _ := ret[0].(*ec2.CreateNetworkInterfacePermissionOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateNetworkInterfacePermission indicates an expected call of CreateNetworkInterfacePermission.
-func (mr *MockEC2WrapperMockRecorder) CreateNetworkInterfacePermission(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) CreateNetworkInterfacePermission(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateNetworkInterfacePermission", reflect.TypeOf((*MockEC2Wrapper)(nil).CreateNetworkInterfacePermission), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateNetworkInterfacePermission", reflect.TypeOf((*MockEC2Wrapper)(nil).CreateNetworkInterfacePermission), arg0)
 }
 
 // CreateTags mocks base method.
-func (m *MockEC2Wrapper) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
+func (m *MockEC2Wrapper) CreateTags(arg0 *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateTags", input)
+	ret := m.ctrl.Call(m, "CreateTags", arg0)
 	ret0, _ := ret[0].(*ec2.CreateTagsOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateTags indicates an expected call of CreateTags.
-func (mr *MockEC2WrapperMockRecorder) CreateTags(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) CreateTags(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTags", reflect.TypeOf((*MockEC2Wrapper)(nil).CreateTags), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTags", reflect.TypeOf((*MockEC2Wrapper)(nil).CreateTags), arg0)
 }
 
 // DeleteNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) DeleteNetworkInterface(ctx context.Context, input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) DeleteNetworkInterface(arg0 *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteNetworkInterface", ctx, input)
+	ret := m.ctrl.Call(m, "DeleteNetworkInterface", arg0)
 	ret0, _ := ret[0].(*ec2.DeleteNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DeleteNetworkInterface indicates an expected call of DeleteNetworkInterface.
-func (mr *MockEC2WrapperMockRecorder) DeleteNetworkInterface(ctx, input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) DeleteNetworkInterface(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).DeleteNetworkInterface), ctx, input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).DeleteNetworkInterface), arg0)
 }
 
 // DescribeInstances mocks base method.
-func (m *MockEC2Wrapper) DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
+func (m *MockEC2Wrapper) DescribeInstances(arg0 *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeInstances", input)
+	ret := m.ctrl.Call(m, "DescribeInstances", arg0)
 	ret0, _ := ret[0].(*ec2.DescribeInstancesOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DescribeInstances indicates an expected call of DescribeInstances.
-func (mr *MockEC2WrapperMockRecorder) DescribeInstances(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) DescribeInstances(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeInstances", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeInstances), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeInstances", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeInstances), arg0)
 }
 
 // DescribeNetworkInterfaces mocks base method.
-func (m *MockEC2Wrapper) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
+func (m *MockEC2Wrapper) DescribeNetworkInterfaces(arg0 *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeNetworkInterfaces", input)
+	ret := m.ctrl.Call(m, "DescribeNetworkInterfaces", arg0)
 	ret0, _ := ret[0].(*ec2.DescribeNetworkInterfacesOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DescribeNetworkInterfaces indicates an expected call of DescribeNetworkInterfaces.
-func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfaces(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfaces(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNetworkInterfaces", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeNetworkInterfaces), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNetworkInterfaces", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeNetworkInterfaces), arg0)
 }
 
-// DescribeNetworkInterfacesPages mocks base method.
-func (m *MockEC2Wrapper) DescribeNetworkInterfacesPages(ctx context.Context, input *ec2.DescribeNetworkInterfacesInput) ([]*types.NetworkInterface, error) {
+// DescribeNetworkInterfacesPagesWithRetry mocks base method.
+func (m *MockEC2Wrapper) DescribeNetworkInterfacesPagesWithRetry(arg0 *ec2.DescribeNetworkInterfacesInput) ([]*types.NetworkInterface, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeNetworkInterfacesPages", ctx, input)
+	ret := m.ctrl.Call(m, "DescribeNetworkInterfacesPagesWithRetry", arg0)
 	ret0, _ := ret[0].([]*types.NetworkInterface)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// DescribeNetworkInterfacesPages indicates an expected call of DescribeNetworkInterfacesPages.
-func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfacesPages(ctx, input interface{}) *gomock.Call {
+// DescribeNetworkInterfacesPagesWithRetry indicates an expected call of DescribeNetworkInterfacesPagesWithRetry.
+func (mr *MockEC2WrapperMockRecorder) DescribeNetworkInterfacesPagesWithRetry(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNetworkInterfacesPages", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeNetworkInterfacesPages), ctx, input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeNetworkInterfacesPagesWithRetry", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeNetworkInterfacesPagesWithRetry), arg0)
 }
 
 // DescribeSubnets mocks base method.
-func (m *MockEC2Wrapper) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
+func (m *MockEC2Wrapper) DescribeSubnets(arg0 *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeSubnets", input)
+	ret := m.ctrl.Call(m, "DescribeSubnets", arg0)
 	ret0, _ := ret[0].(*ec2.DescribeSubnetsOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DescribeSubnets indicates an expected call of DescribeSubnets.
-func (mr *MockEC2WrapperMockRecorder) DescribeSubnets(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) DescribeSubnets(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeSubnets", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeSubnets), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeSubnets", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeSubnets), arg0)
 }
 
 // DescribeTrunkInterfaceAssociations mocks base method.
-func (m *MockEC2Wrapper) DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error) {
+func (m *MockEC2Wrapper) DescribeTrunkInterfaceAssociations(arg0 *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DescribeTrunkInterfaceAssociations", input)
+	ret := m.ctrl.Call(m, "DescribeTrunkInterfaceAssociations", arg0)
 	ret0, _ := ret[0].(*ec2.DescribeTrunkInterfaceAssociationsOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DescribeTrunkInterfaceAssociations indicates an expected call of DescribeTrunkInterfaceAssociations.
-func (mr *MockEC2WrapperMockRecorder) DescribeTrunkInterfaceAssociations(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) DescribeTrunkInterfaceAssociations(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeTrunkInterfaceAssociations", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeTrunkInterfaceAssociations), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DescribeTrunkInterfaceAssociations", reflect.TypeOf((*MockEC2Wrapper)(nil).DescribeTrunkInterfaceAssociations), arg0)
 }
 
 // DetachNetworkInterface mocks base method.
-func (m *MockEC2Wrapper) DetachNetworkInterface(input *ec2.DetachNetworkInterfaceInput) (*ec2.DetachNetworkInterfaceOutput, error) {
+func (m *MockEC2Wrapper) DetachNetworkInterface(arg0 *ec2.DetachNetworkInterfaceInput) (*ec2.DetachNetworkInterfaceOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DetachNetworkInterface", input)
+	ret := m.ctrl.Call(m, "DetachNetworkInterface", arg0)
 	ret0, _ := ret[0].(*ec2.DetachNetworkInterfaceOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DetachNetworkInterface indicates an expected call of DetachNetworkInterface.
-func (mr *MockEC2WrapperMockRecorder) DetachNetworkInterface(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) DetachNetworkInterface(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetachNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).DetachNetworkInterface), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetachNetworkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).DetachNetworkInterface), arg0)
 }
 
 // DisassociateTrunkInterface mocks base method.
-func (m *MockEC2Wrapper) DisassociateTrunkInterface(input *ec2.DisassociateTrunkInterfaceInput) error {
+func (m *MockEC2Wrapper) DisassociateTrunkInterface(arg0 *ec2.DisassociateTrunkInterfaceInput) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DisassociateTrunkInterface", input)
+	ret := m.ctrl.Call(m, "DisassociateTrunkInterface", arg0)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DisassociateTrunkInterface indicates an expected call of DisassociateTrunkInterface.
-func (mr *MockEC2WrapperMockRecorder) DisassociateTrunkInterface(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) DisassociateTrunkInterface(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DisassociateTrunkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).DisassociateTrunkInterface), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DisassociateTrunkInterface", reflect.TypeOf((*MockEC2Wrapper)(nil).DisassociateTrunkInterface), arg0)
 }
 
 // ModifyNetworkInterfaceAttribute mocks base method.
-func (m *MockEC2Wrapper) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error) {
+func (m *MockEC2Wrapper) ModifyNetworkInterfaceAttribute(arg0 *ec2.ModifyNetworkInterfaceAttributeInput) (*ec2.ModifyNetworkInterfaceAttributeOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ModifyNetworkInterfaceAttribute", input)
+	ret := m.ctrl.Call(m, "ModifyNetworkInterfaceAttribute", arg0)
 	ret0, _ := ret[0].(*ec2.ModifyNetworkInterfaceAttributeOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ModifyNetworkInterfaceAttribute indicates an expected call of ModifyNetworkInterfaceAttribute.
-func (mr *MockEC2WrapperMockRecorder) ModifyNetworkInterfaceAttribute(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) ModifyNetworkInterfaceAttribute(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ModifyNetworkInterfaceAttribute", reflect.TypeOf((*MockEC2Wrapper)(nil).ModifyNetworkInterfaceAttribute), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ModifyNetworkInterfaceAttribute", reflect.TypeOf((*MockEC2Wrapper)(nil).ModifyNetworkInterfaceAttribute), arg0)
 }
 
 // UnassignPrivateIPAddresses mocks base method.
-func (m *MockEC2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error) {
+func (m *MockEC2Wrapper) UnassignPrivateIPAddresses(arg0 *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UnassignPrivateIPAddresses", input)
+	ret := m.ctrl.Call(m, "UnassignPrivateIPAddresses", arg0)
 	ret0, _ := ret[0].(*ec2.UnassignPrivateIpAddressesOutput)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UnassignPrivateIPAddresses indicates an expected call of UnassignPrivateIPAddresses.
-func (mr *MockEC2WrapperMockRecorder) UnassignPrivateIPAddresses(input interface{}) *gomock.Call {
+func (mr *MockEC2WrapperMockRecorder) UnassignPrivateIPAddresses(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnassignPrivateIPAddresses", reflect.TypeOf((*MockEC2Wrapper)(nil).UnassignPrivateIPAddresses), input)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnassignPrivateIPAddresses", reflect.TypeOf((*MockEC2Wrapper)(nil).UnassignPrivateIPAddresses), arg0)
 }

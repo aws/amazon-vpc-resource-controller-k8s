@@ -308,25 +308,3 @@ func (d *Manager) ReCreateSG(securityGroupName string, ctx context.Context) (str
 	}
 	return groupID, nil
 }
-
-func (d *Manager) DetachNetworkInterface(ctx context.Context, attachmentID string, force bool) error {
-	_, err := d.ec2Client.DetachNetworkInterface(ctx, &ec2.DetachNetworkInterfaceInput{
-		AttachmentId: aws.String(attachmentID),
-		Force:        aws.Bool(force),
-	})
-	return err
-}
-
-func (d *Manager) GetInstances(ctx context.Context, instanceIds []string) ([]ec2types.Instance, error) {
-	out, err := d.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: instanceIds,
-	})
-	if err != nil {
-		return nil, err
-	}
-	var instances []ec2types.Instance
-	for _, res := range out.Reservations {
-		instances = append(instances, res.Instances...)
-	}
-	return instances, nil
-}

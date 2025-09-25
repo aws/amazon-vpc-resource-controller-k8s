@@ -13,9 +13,7 @@
 
 package cleanup
 
-import "context"
-
 // ResourceCleaner interface should be implemented by components that need to delete leaked AWS resources
 type ResourceCleaner interface {
-	DeleteLeakedResources(ctx context.Context) error
+	DeleteLeakedResources() error
 }

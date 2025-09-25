@@ -25,8 +25,6 @@ import (
 type Manager interface {
 	DescribeAutoScalingGroup(autoScalingGroupName string) ([]autoscalingtypes.AutoScalingGroup, error)
 	UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int32) error
-	StartInstanceRefresh(asgName string) (string, error)
-	DescribeInstanceRefresh(asgName string, instanceRefreshId string) (autoscalingtypes.InstanceRefresh, error)
 }
 
 type defaultManager struct {
@@ -63,20 +61,4 @@ func (d defaultManager) UpdateAutoScalingGroup(asgName string, desiredSize, minS
 	}
 	_, err := d.AutoScalingAPI.UpdateAutoScalingGroup(context.TODO(), updateASGInput)
 	return err
-}
-
-func (d defaultManager) StartInstanceRefresh(asgName string) (string, error) {
-	in := &autoscaling.StartInstanceRefreshInput{
-		AutoScalingGroupName: aws.String(asgName),
-	}
-	out, err := d.AutoScalingAPI.StartInstanceRefresh(context.TODO(), in)
-	return *out.InstanceRefreshId, err
-}
-
-func (d defaultManager) DescribeInstanceRefresh(asgName, instanceRefreshId string) (autoscalingtypes.InstanceRefresh, error) {
-	out, err := d.AutoScalingAPI.DescribeInstanceRefreshes(context.TODO(), &autoscaling.DescribeInstanceRefreshesInput{
-		AutoScalingGroupName: aws.String(asgName),
-		InstanceRefreshIds:   []string{instanceRefreshId},
-	})
-	return out.InstanceRefreshes[0], err
 }
