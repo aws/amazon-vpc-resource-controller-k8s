@@ -186,3 +186,29 @@ func TestNodeReconciler_Reconcile_AddNode_Internal_Server_Error(t *testing.T) {
 	assert.Error(t, err, "We return error on internal server error to make sure it gets requeued by controller-runtime.")
 	assert.False(t, res.Requeue)
 }
+
+func TestNodeReconciler_Reconcile_SkipAutoComputeType(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	autoComputeNode := &corev1.Node{
+		ObjectMeta: v1.ObjectMeta{
+			Name: mockNodeName,
+			Labels: map[string]string{
+				computeTypeLabelKey: autoComputeTypeLabelValue,
+			},
+		},
+	}
+
+	mock := NewNodeMock(ctrl, autoComputeNode)
+
+	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	mock.Manager.EXPECT().AddNode(gomock.Any()).Times(0)
+	mock.Manager.EXPECT().UpdateNode(gomock.Any()).Times(0)
+	mock.Manager.EXPECT().GetNode(gomock.Any()).Times(0)
+	mock.Manager.EXPECT().CheckNodeForLeakedENIs(gomock.Any()).Times(0)
+
+	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
+	assert.NoError(t, err)
+	assert.Equal(t, res, reconcile.Result{})
+}
