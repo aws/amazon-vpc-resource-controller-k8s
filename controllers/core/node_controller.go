@@ -39,7 +39,9 @@ import (
 // one routines to help high rate churn and larger nodes groups restarting
 // when the controller has to be restarted for various reasons.
 const (
-	NodeTerminationFinalizer = "networking.k8s.aws/resource-cleanup"
+	NodeTerminationFinalizer  = "networking.k8s.aws/resource-cleanup"
+	computeTypeLabelKey       = "eks.amazonaws.com/compute-type"
+	autoComputeTypeLabelValue = "auto"
 )
 
 // NodeReconciler reconciles a Node object
@@ -89,7 +91,11 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(nodeErr)
 	}
-
+	computeKey, ok := node.Labels[computeTypeLabelKey]
+	if ok && computeKey == autoComputeTypeLabelValue {
+		logger.Info("node is auto compute type, skipping")
+		return ctrl.Result{}, nil
+	}
 	var err error
 
 	_, found := r.Manager.GetNode(req.Name)
