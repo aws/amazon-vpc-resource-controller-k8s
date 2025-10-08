@@ -22,12 +22,14 @@ import (
 
 	vpc_rc_config "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	"github.com/samber/lo"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/version"
 	smithymiddleware "github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -439,7 +441,7 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 
 	ec2Wrapper := &ec2Wrapper{log: log}
 
-	cfg, err := ec2Wrapper.getInstanceConfig()
+	cfg, err := ec2Wrapper.getInstanceConfig(region, lo.Must1(arn.Parse(roleARN)).AccountID)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +481,7 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 	return ec2Wrapper, nil
 }
 
-func (e *ec2Wrapper) getInstanceConfig() (*aws.Config, error) {
+func (e *ec2Wrapper) getInstanceConfig(regionStr, accountID string) (*aws.Config, error) {
 	// Create a new config
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithAPIOptions([]func(stack *smithymiddleware.Stack) error{
 		awsmiddleware.AddUserAgentKeyValue(AppName, version.GitVersion),
@@ -489,17 +491,27 @@ func (e *ec2Wrapper) getInstanceConfig() (*aws.Config, error) {
 	}
 
 	ec2Metadata := imds.NewFromConfig(cfg)
-	region, err := ec2Metadata.GetRegion(context.TODO(), &imds.GetRegionInput{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
+	if regionStr == "" {
+		region, err := ec2Metadata.GetRegion(context.TODO(), &imds.GetRegionInput{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
+		}
+		cfg.Region = region.Region
+	} else {
+		cfg.Region = regionStr
 	}
-	cfg.Region = region.Region
-	instanceIdentity, err := ec2Metadata.GetInstanceIdentityDocument(context.TODO(), &imds.GetInstanceIdentityDocumentInput{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get the instance identity document %v", err)
+
+	if accountID == "" {
+		instanceIdentity, err := ec2Metadata.GetInstanceIdentityDocument(context.TODO(), &imds.GetInstanceIdentityDocumentInput{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get the instance identity document %v", err)
+		}
+		// Set the Account ID
+		e.accountID = instanceIdentity.AccountID
+	} else {
+		e.accountID = accountID
 	}
-	// Set the Account ID
-	e.accountID = instanceIdentity.AccountID
+
 	return &cfg, nil
 }
 
