@@ -29,7 +29,6 @@ import (
 	crdcontroller "github.com/aws/amazon-vpc-resource-controller-k8s/controllers/crds"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	eniCleaner "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -427,7 +426,11 @@ func main() {
 			setupLog.Error(err, "unable to create introspect API")
 			os.Exit(1)
 		}
-
+		nodeCleanup, err := crdcontroller.SetupENICleanupController(mgr, ctrl.Log.WithName("controllers").WithName("NodeENICleaner"), vpcID, ec2Wrapper)
+		if err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "NodeENICleaner")
+			os.Exit(1)
+		}
 		finalizerManager := k8s.NewDefaultFinalizerManager(mgr.GetClient(), ctrl.Log.WithName("finalizer manager"))
 		if err = (crdcontroller.NewCNINodeReconciler(
 			mgr.GetClient(),
@@ -440,7 +443,7 @@ func main() {
 			vpcID,
 			finalizerManager,
 			maxNodeConcurrentReconciles,
-			cleanup.NewNodeResourceCleaner,
+			nodeCleanup,
 		).SetupWithManager(mgr, maxNodeConcurrentReconciles)); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "CNINode")
 			os.Exit(1)
