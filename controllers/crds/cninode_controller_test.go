@@ -14,7 +14,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
-	"golang.org/x/sync/semaphore"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -56,14 +55,7 @@ func NewCNINodeMock(ctrl *gomock.Controller, mockObjects ...client.Object) *CNIN
 	_ = v1alpha1.AddToScheme(scheme)
 	client := fakeClient.NewClientBuilder().WithScheme(scheme).WithObjects(mockObjects...).Build()
 	return &CNINodeMock{
-		Reconciler: CNINodeReconciler{
-			Client:      client,
-			scheme:      scheme,
-			log:         zap.New(),
-			clusterName: mockClusterName,
-			vpcId:       "vpc-000000000000",
-			deletePool:  semaphore.NewWeighted(10),
-		},
+		Reconciler: *NewCNINodeReconciler(client, scheme, context.Background(), zap.New(), nil, nil, mockClusterName, "vpc-000000000000", nil, 10, nil),
 	}
 }
 
@@ -210,6 +202,7 @@ func TestCNINodeReconcile(t *testing.T) {
 			if tt.prepare != nil {
 				tt.prepare(&f)
 			}
+			go mock.Reconciler.watchCleanupTasks()
 			res, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
 
 			cniNode := &v1alpha1.CNINode{}
