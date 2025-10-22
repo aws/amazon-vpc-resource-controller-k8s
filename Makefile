@@ -115,3 +115,8 @@ build-test-binaries:
 apply-dependencies:
 	bash ${MAKEFILE_PATH}/scripts/test/install-cert-manager.sh
 	kubectl set env daemonset aws-node -n kube-system ENABLE_POD_ENI=true
+
+generate-vpc-limits: ## Generate VPC limits from AWS EC2 API
+	@echo "Generating VPC limits from AWS EC2 API..."
+	go run hack/vpc-limits-gen/main.go --output pkg/aws/vpc/limits.go --region us-east-1
+	@echo "VPC limits file updated successfully"
