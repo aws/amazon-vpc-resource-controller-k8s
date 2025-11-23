@@ -27,7 +27,7 @@ ENI Trunking is a private feature even though the APIs are publicly accessible u
 
 Please follow the [guide](https://docs.aws.amazon.com/eks/latest/userguide/security-groups-for-pods.html) for enabling Security Group for Pods on your EKS Cluster. 
 
-Note: The SecurityGroupPolicy CRD only supports up to 5 security groups per custom resource. If you need more than 5 security groups for a pod, please consider to use more than one custom resources. For example, you can have two custom resources to associate up to 10 security groups to a pod. Please be aware when you are doing so: 
+Note:The SecurityGroupPolicy CRD allows you to specify any number of security group IDs. However, if the number of groups exceeds your current quota of security groups per network interface, the pod will fail to deploy. To avoid this, you must request a quota increase: 
 
 1, you need to request increasing the limit since the default limit is 5 security groups per interface and there is a hard limit of 16 currently.
 
