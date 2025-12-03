@@ -28,6 +28,7 @@ import (
 	sgpWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	"github.com/samber/lo"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -510,6 +511,101 @@ var _ = Describe("Branch ENI Pods", func() {
 				By("verifying the Pod is running with Branch ENI")
 				verify.VerifyNetworkingOfAllPodUsingENI(namespace, podLabelKey, podLabelValue,
 					[]string{securityGroupID1})
+			})
+		})
+	})
+
+	Describe("Test Network Connectivity on Delete and Recreation of Pod", func() {
+		Context("creating statefulset with network connectivity", func() {
+			var resourceMap map[v1.ResourceName]resource.Quantity
+			var statefulSet *appsv1.StatefulSet
+			var container v1.Container
+
+			BeforeEach(func() {
+				resourceMap = map[v1.ResourceName]resource.Quantity{
+					config.ResourceNamePodENI: resource.MustParse("1"),
+				}
+			})
+
+			JustBeforeEach(func() {
+				container = manifest.NewBusyBoxContainerBuilder().
+							Resources(v1.ResourceRequirements{
+								Limits:   resourceMap,
+								Requests: resourceMap,
+							}).
+							Command([]string{ "/bin/sh", "-c",
+									"while true; do if ping -c 1 google.com; then echo 'Successfully pinged google.com'; else echo 'Failed to ping google.com'; exit 1; fi; sleep 30; done",
+									}).
+							Name("network-test").
+							Image("busybox").							
+							Build()
+
+				statefulSet = manifest.NewDefaultStatefulSetBuilder().
+					Namespace(namespace).
+					Name("network-test").
+					PodLabel(podLabelKey, podLabelValue).
+					Container(container).
+					Build()
+			})
+
+			JustAfterEach(func() {
+				By("deleting the statefulset")
+				err = frameWork.K8sClient.Delete(ctx, statefulSet)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			Context("when statefulset is created with network connectivity requirements", func() {
+				It("should have all pods running with network access", func() {
+					By("creating security group policy")
+					sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+
+					By("creating statefulset")
+					err = frameWork.K8sClient.Create(ctx, statefulSet)
+					Expect(err).ToNot(HaveOccurred())
+
+					By("waiting for statefulset pods to be ready")
+					Eventually(func() bool {
+						err := frameWork.K8sClient.Get(ctx, client.ObjectKey{
+							Namespace: namespace,
+							Name:      statefulSet.Name,
+						}, statefulSet)
+						if err != nil {
+							return false
+						}
+						return statefulSet.Status.ReadyReplicas == *statefulSet.Spec.Replicas
+					}, 300*time.Second, 5*time.Second).Should(BeTrue())
+
+					By("verifying network connectivity of all pods")
+					verify.VerifyNetworkingOfAllPodUsingENI(namespace, podLabelKey, podLabelValue,
+						securityGroups)
+
+					By("force deleting one pod to verify recreation")
+					pods := &v1.PodList{}
+					err = frameWork.K8sClient.List(ctx, pods, client.InNamespace(namespace),
+						client.MatchingLabels(map[string]string{podLabelKey: podLabelValue}))
+					Expect(err).ToNot(HaveOccurred())
+					Expect(pods.Items).ToNot(BeEmpty())
+
+					// Force delete the first pod
+					err = frameWork.K8sClient.Delete(ctx, &pods.Items[0], client.GracePeriodSeconds(0))
+					Expect(err).ToNot(HaveOccurred())
+
+					By("waiting for pod to be recreated")
+					Eventually(func() bool {
+						err := frameWork.K8sClient.Get(ctx, client.ObjectKey{
+							Namespace: namespace,
+							Name:      statefulSet.Name,
+						}, statefulSet)
+						if err != nil {
+							return false
+						}
+						return statefulSet.Status.ReadyReplicas == *statefulSet.Spec.Replicas
+					}, 300*time.Second, 5*time.Second).Should(BeTrue())
+
+					By("verifying network connectivity after pod recreation")
+					verify.VerifyNetworkingOfAllPodUsingENI(namespace, podLabelKey, podLabelValue,
+						securityGroups)
+				})
 			})
 		})
 	})
