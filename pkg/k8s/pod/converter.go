@@ -54,6 +54,7 @@ func (c *PodConverter) ConvertList(originalList interface{}) (convertedList inte
 			Continue:        podList.Continue,
 			ResourceVersion: podList.ResourceVersion,
 		},
+		Items: make([]v1.Pod, 0, len(podList.Items)), // Pre-allocate with exact capacity
 	}
 	for _, pod := range podList.Items {
 		pod := pod // Fix gosec G601, so we can use &node
@@ -116,7 +117,25 @@ func (c *PodConverter) StripDownPod(pod *v1.Pod) *v1.Pod {
 // getVPCControllerAnnotations returns only the annotations that were marked by VPC
 // Resource controller
 func getVPCControllerAnnotations(annotations map[string]string) map[string]string {
-	strippedDownAnnotations := map[string]string{}
+	if len(annotations) == 0 {
+		return nil
+	}
+	
+	// Count VPC annotations first to pre-allocate with exact capacity
+	count := 0
+	for key := range annotations {
+		if strings.HasPrefix(key, config.VPCResourcePrefix) {
+			count++
+		}
+	}
+	
+	// Return nil if no VPC annotations found (saves allocation)
+	if count == 0 {
+		return nil
+	}
+	
+	// Pre-allocate map with exact capacity
+	strippedDownAnnotations := make(map[string]string, count)
 	for key, val := range annotations {
 		if strings.HasPrefix(key, config.VPCResourcePrefix) {
 			strippedDownAnnotations[key] = val
@@ -128,23 +147,46 @@ func getVPCControllerAnnotations(annotations map[string]string) map[string]strin
 // getContainersWithVPCLimits returns only the container limits for vpc controller
 // resources
 func getContainersWithVPCLimits(containers []v1.Container) []v1.Container {
-	var strippedContainers []v1.Container
+	if len(containers) == 0 {
+		return nil
+	}
+	
+	// Pre-allocate with capacity (worst case: all containers have VPC resources)
+	strippedContainers := make([]v1.Container, 0, len(containers))
+	
 	for _, container := range containers {
-		add := false
-		strippedContainer := v1.Container{
-			Resources: v1.ResourceRequirements{
-				Requests: v1.ResourceList{},
-			},
-		}
-		for limitKey, limitVal := range container.Resources.Requests {
+		// Count VPC resources first
+		vpcResourceCount := 0
+		for limitKey := range container.Resources.Requests {
 			if strings.HasPrefix(limitKey.String(), config.VPCResourcePrefix) {
-				strippedContainer.Resources.Requests[limitKey] = limitVal
-				add = true
+				vpcResourceCount++
 			}
 		}
-		if add {
-			strippedContainers = append(strippedContainers, strippedContainer)
+		
+		// Skip container if no VPC resources
+		if vpcResourceCount == 0 {
+			continue
 		}
+		
+		// Pre-allocate ResourceList with exact capacity
+		resourceList := make(v1.ResourceList, vpcResourceCount)
+		for limitKey, limitVal := range container.Resources.Requests {
+			if strings.HasPrefix(limitKey.String(), config.VPCResourcePrefix) {
+				resourceList[limitKey] = limitVal
+			}
+		}
+		
+		strippedContainers = append(strippedContainers, v1.Container{
+			Resources: v1.ResourceRequirements{
+				Requests: resourceList,
+			},
+		})
 	}
+	
+	// Return nil if no containers with VPC resources
+	if len(strippedContainers) == 0 {
+		return nil
+	}
+	
 	return strippedContainers
 }
