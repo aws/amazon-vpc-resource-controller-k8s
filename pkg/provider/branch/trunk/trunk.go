@@ -428,9 +428,18 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		}
 		// append the nodeName tag to add to branch ENIs
 		tags = append(tags, t.nodeIDTag...)
+
+		// Request IPv6 address for the branch ENI if the subnet has IPv6 enabled
+		var ipResourceCount *config.IPResourceCount
+		if t.instance.SubnetV6CidrBlock() != "" {
+			ipResourceCount = &config.IPResourceCount{
+				SecondaryIPv6Count: 1,
+			}
+		}
+
 		// Create Branch ENI
 		nwInterface, err = t.ec2ApiHelper.CreateNetworkInterface(&BranchEniDescription,
-			aws.String(t.instance.SubnetID()), securityGroups, tags, nil, nil)
+			aws.String(t.instance.SubnetID()), securityGroups, tags, ipResourceCount, nil)
 		if err != nil {
 			err = fmt.Errorf("creating network interface, %w", err)
 			t.freeVlanId(vlanID)

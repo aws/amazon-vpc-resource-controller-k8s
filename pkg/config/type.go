@@ -103,6 +103,8 @@ const (
 type IPResourceCount struct {
 	SecondaryIPv4Count int
 	IPv4PrefixCount    int
+	SecondaryIPv6Count int
+	IPv6PrefixCount    int
 }
 
 // Events metadata

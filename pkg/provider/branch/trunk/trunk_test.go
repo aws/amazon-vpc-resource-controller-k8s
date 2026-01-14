@@ -95,6 +95,11 @@ var (
 	SecurityGroup2 = "sg-0000000000000"
 	SecurityGroups = []string{SecurityGroup1, SecurityGroup2}
 
+	// IP Resource Count for IPv6
+	IPv6ResourceCount = &config.IPResourceCount{
+		SecondaryIPv6Count: 1,
+	}
+
 	// Branch Interface 1
 	Branch1Id          = "eni-00000000000000000"
 	MacAddr1           = "FF:FF:FF:FF:FF:FF"
@@ -839,13 +844,13 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(4)
 
 	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
-		append(vlan1Tag, trunkENI.nodeIDTag...), nil, nil).Return(BranchInterface1, nil)
+		append(vlan1Tag, trunkENI.nodeIDTag...), IPv6ResourceCount, nil).Return(BranchInterface1, nil)
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil)
 	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, append(vlan2Tag, trunkENI.nodeIDTag...),
-		nil, nil).Return(BranchInterface2, nil)
+		IPv6ResourceCount, nil).Return(BranchInterface2, nil)
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(mockAssociationOutput2, nil)
 
 	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
@@ -872,14 +877,14 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(4)
 	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(InstanceSecurityGroup)
 
 	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, InstanceSecurityGroup,
-		append(vlan1Tag, trunkENI.nodeIDTag...), nil, nil).Return(BranchInterface1, nil)
+		append(vlan1Tag, trunkENI.nodeIDTag...), IPv6ResourceCount, nil).Return(BranchInterface1, nil)
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil)
 	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, InstanceSecurityGroup,
-		append(vlan2Tag, trunkENI.nodeIDTag...), nil, nil).Return(BranchInterface2, nil)
+		append(vlan2Tag, trunkENI.nodeIDTag...), IPv6ResourceCount, nil).Return(BranchInterface2, nil)
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(mockAssociationOutput2, nil)
 
 	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, []string{}, 2)
@@ -906,14 +911,14 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(4)
 
 	gomock.InOrder(
 		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
-			append(vlan1Tag, trunkENI.nodeIDTag...), nil, nil).Return(BranchInterface1, nil),
+			append(vlan1Tag, trunkENI.nodeIDTag...), IPv6ResourceCount, nil).Return(BranchInterface1, nil),
 		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil),
 		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
-			append(vlan2Tag, trunkENI.nodeIDTag...), nil, nil).Return(BranchInterface2, nil),
+			append(vlan2Tag, trunkENI.nodeIDTag...), IPv6ResourceCount, nil).Return(BranchInterface2, nil),
 		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(nil, MockError),
 	)
 
@@ -934,19 +939,44 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(1)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(1)
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(3)
 
 	gomock.InOrder(
 		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, append(vlan1Tag, trunkENI.nodeIDTag...),
-			nil, nil).Return(BranchInterface1, nil),
+			IPv6ResourceCount, nil).Return(BranchInterface1, nil),
 		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil),
 		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, append(vlan2Tag, trunkENI.nodeIDTag...),
-			nil, nil).Return(nil, MockError),
+			IPv6ResourceCount, nil).Return(nil, MockError),
 	)
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
 	assert.Error(t, MockError, err)
 	assert.Equal(t, []*ENIDetails{EniDetails1}, trunkENI.deleteQueue)
+}
+
+// TestTrunkENI_CreateAndAssociateBranchENIs_NoIPv6Subnet tests that IPv6 is NOT requested when subnet has no IPv6 CIDR
+func TestTrunkENI_CreateAndAssociateBranchENIs_NoIPv6Subnet(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+
+	mockInstance.EXPECT().Type().Return(InstanceType)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(1)
+	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(1)
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return("").Times(2) // Empty string = no IPv6
+
+	// Expect nil for ipResourceCount when no IPv6 subnet
+	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		append(vlan1Tag, trunkENI.nodeIDTag...), nil, nil).Return(BranchInterface1, nil)
+	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil)
+
+	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(eniDetails))
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
 }
 
 func TestTrunkENI_Introspect(t *testing.T) {

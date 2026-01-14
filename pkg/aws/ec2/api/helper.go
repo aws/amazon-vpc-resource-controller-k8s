@@ -136,15 +136,27 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 	if ipResourceCount != nil {
 		secondaryPrivateIPCount := ipResourceCount.SecondaryIPv4Count
 		ipV4PrefixCount := ipResourceCount.IPv4PrefixCount
+		secondaryIPv6Count := ipResourceCount.SecondaryIPv6Count
+		ipV6PrefixCount := ipResourceCount.IPv6PrefixCount
 
 		if secondaryPrivateIPCount != 0 && ipV4PrefixCount != 0 {
 			return nil, fmt.Errorf("cannot specify both secondaryPrivateIPCount %v and ipV4PrefixCount %v", secondaryPrivateIPCount, ipV4PrefixCount)
+		}
+
+		if secondaryIPv6Count != 0 && ipV6PrefixCount != 0 {
+			return nil, fmt.Errorf("cannot specify both secondaryIPv6Count %v and ipV6PrefixCount %v", secondaryIPv6Count, ipV6PrefixCount)
 		}
 
 		if secondaryPrivateIPCount != 0 {
 			createInput.SecondaryPrivateIpAddressCount = aws.Int32(int32(secondaryPrivateIPCount))
 		} else if ipV4PrefixCount != 0 {
 			createInput.Ipv4PrefixCount = aws.Int32(int32(ipV4PrefixCount))
+		}
+
+		if secondaryIPv6Count != 0 {
+			createInput.Ipv6AddressCount = aws.Int32(int32(secondaryIPv6Count))
+		} else if ipV6PrefixCount != 0 {
+			createInput.Ipv6PrefixCount = aws.Int32(int32(ipV6PrefixCount))
 		}
 	}
 
