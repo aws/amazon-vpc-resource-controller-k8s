@@ -51,6 +51,13 @@ var (
 	ipPrefix1 = "192.168.1.0/28"
 	ipPrefix2 = "192.168.2.0/28"
 
+	// IPv6 addresses and prefixes
+	ipv6Address1 = "2600:1f13:fe8:f400::1"
+	ipv6Address2 = "2600:1f13:fe8:f400::2"
+
+	ipv6Prefix1 = "2600:1f13:fe8:f400::/64"
+	ipv6Prefix2 = "2600:1f13:fe8:f401::/64"
+
 	// branch to trunk association id
 	branchAssociationId = "association-00000000000000"
 	vlanId              = 0
@@ -1195,4 +1202,89 @@ func TestEc2APIHelper_GetBranchNetworkInterface(t *testing.T) {
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []*ec2types.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
+}
+
+// TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIPv6 tests network interface creation with IPv6 address count
+func TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIPv6(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	ipv6Count := int32(1)
+
+	createNetworkInterfaceInput.Ipv6AddressCount = &ipv6Count
+
+	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).
+		Return(createNetworkInterfaceOutput, nil)
+
+	count := &config.IPResourceCount{SecondaryIPv6Count: 1}
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, count, nil)
+
+	createNetworkInterfaceInput.Ipv6AddressCount = nil
+
+	assert.NoError(t, err)
+	assert.Equal(t, branchInterfaceId, *output.NetworkInterfaceId)
+}
+
+// TestEc2APIHelper_CreateNetworkInterface_WithIPv6PrefixCount tests network interface creation with IPv6 prefix count
+func TestEc2APIHelper_CreateNetworkInterface_WithIPv6PrefixCount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	ipv6PrefixCount := int32(1)
+
+	createNetworkInterfaceInput.Ipv6PrefixCount = &ipv6PrefixCount
+
+	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).
+		Return(createNetworkInterfaceOutput, nil)
+
+	count := &config.IPResourceCount{IPv6PrefixCount: 1}
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, count, nil)
+
+	createNetworkInterfaceInput.Ipv6PrefixCount = nil
+
+	assert.NoError(t, err)
+	assert.Equal(t, branchInterfaceId, *output.NetworkInterfaceId)
+}
+
+// TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIPv6AndIPv6Prefix_Error tests error when both IPv6 count and prefix are specified
+func TestEc2APIHelper_CreateNetworkInterface_WithSecondaryIPv6AndIPv6Prefix_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, _ := getMockWrapper(ctrl)
+
+	count := &config.IPResourceCount{SecondaryIPv6Count: 1, IPv6PrefixCount: 1}
+	_, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, count, nil)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot specify both secondaryIPv6Count")
+}
+
+// TestEc2APIHelper_CreateNetworkInterface_WithIPv6InDualStackSubnet tests IPv6 request in dual-stack subnet
+// This matches how branch ENIs work: AWS auto-assigns IPv4, we only request IPv6
+func TestEc2APIHelper_CreateNetworkInterface_WithIPv6InDualStackSubnet(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	ipv6Count := int32(1)
+
+	createNetworkInterfaceInput.Ipv6AddressCount = &ipv6Count
+
+	mockWrapper.EXPECT().CreateNetworkInterface(createNetworkInterfaceInput).
+		Return(createNetworkInterfaceOutput, nil)
+
+	// Only request IPv6 - AWS will auto-assign one primary private IPv4 address in dual-stack subnets
+	count := &config.IPResourceCount{SecondaryIPv6Count: 1}
+	output, err := ec2ApiHelper.CreateNetworkInterface(&eniDescription, &subnetId, securityGroups, tags, count, nil)
+
+	createNetworkInterfaceInput.Ipv6AddressCount = nil
+
+	assert.NoError(t, err)
+	assert.Equal(t, branchInterfaceId, *output.NetworkInterfaceId)
 }
