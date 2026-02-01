@@ -254,7 +254,7 @@ func getMockTrunk() trunkENI {
 }
 
 func TestNewTrunkENI(t *testing.T) {
-	trunkENI := NewTrunkENI(zap.New(), FakeInstance, nil)
+	trunkENI := NewTrunkENI(zap.New(), FakeInstance, nil, false)
 	assert.NotNil(t, trunkENI)
 }
 
@@ -947,6 +947,71 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
 	assert.Error(t, MockError, err)
 	assert.Equal(t, []*ENIDetails{EniDetails1}, trunkENI.deleteQueue)
+}
+
+// TestTrunkENI_CreateAndAssociateBranchENIs_DualStack tests that when dual-stack is enabled
+// and subnet has IPv6 CIDR, branch ENIs are created with IPv6 addresses
+func TestTrunkENI_CreateAndAssociateBranchENIs_DualStack(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	trunkENI.dualStackEnabled = true
+
+	mockInstance.EXPECT().Type().Return(InstanceType)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
+	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(4) // Called for check + result
+
+	// When dual-stack is enabled and subnet has IPv6, expect ipResourceCount with SecondaryIPv6Count=1
+	expectedIPResourceCount := &config.IPResourceCount{SecondaryIPv6Count: 1}
+
+	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		append(vlan1Tag, trunkENI.nodeIDTag...), expectedIPResourceCount, nil).Return(BranchInterface1, nil)
+	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil)
+	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, append(vlan2Tag, trunkENI.nodeIDTag...),
+		expectedIPResourceCount, nil).Return(BranchInterface2, nil)
+	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(mockAssociationOutput2, nil)
+
+	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
+	expectedENIDetails := []*ENIDetails{EniDetails1, EniDetails2}
+
+	assert.NoError(t, err)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+	assert.True(t, trunkENI.usedVlanIds[VlanId2])
+	assert.Equal(t, expectedENIDetails, eniDetails)
+}
+
+// TestTrunkENI_CreateAndAssociateBranchENIs_DualStackNoV6Subnet tests that when dual-stack is enabled
+// but subnet has no IPv6 CIDR, branch ENIs are created without IPv6 addresses
+func TestTrunkENI_CreateAndAssociateBranchENIs_DualStackNoV6Subnet(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	trunkENI.dualStackEnabled = true
+
+	mockInstance.EXPECT().Type().Return(InstanceType)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
+	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return("").Times(4) // No IPv6 on subnet
+
+	// When subnet has no IPv6, expect nil ipResourceCount even if dual-stack is enabled
+	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		append(vlan1Tag, trunkENI.nodeIDTag...), nil, nil).Return(BranchInterface1, nil)
+	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil)
+	mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups, append(vlan2Tag, trunkENI.nodeIDTag...),
+		nil, nil).Return(BranchInterface2, nil)
+	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(mockAssociationOutput2, nil)
+
+	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
+
+	assert.NoError(t, err)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+	assert.True(t, trunkENI.usedVlanIds[VlanId2])
+	assert.Len(t, eniDetails, 2)
 }
 
 func TestTrunkENI_Introspect(t *testing.T) {

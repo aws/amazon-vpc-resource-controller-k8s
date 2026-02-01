@@ -102,7 +102,7 @@ func NewResourceManager(ctx context.Context, resourceNames []string, wrapper api
 				config.ResourceNameIPAddress, resourceProvider, ctx)
 		} else if resourceName == config.ResourceNamePodENI {
 			resourceProvider = branch.NewBranchENIProvider(ctrl.Log.WithName("branch eni provider"),
-				wrapper, workers, resourceConfig, ctx)
+				wrapper, workers, resourceConfig, conditions, ctx)
 			healthCheckers[branchProviderHealthCheckSubpath] = resourceProvider.GetHealthChecker()
 			resourceHandler = handler.NewOnDemandHandler(ctrl.Log.WithName(resourceName),
 				resourceName, resourceProvider)
