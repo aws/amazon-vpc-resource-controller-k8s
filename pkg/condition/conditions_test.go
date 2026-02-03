@@ -269,3 +269,96 @@ func getAwsNodeDaemonSet(podENIEnabled string) *appsv1.DaemonSet {
 		},
 	}
 }
+
+func getAwsNodeDaemonSetWithDualStack(dualStackEnabled string) *appsv1.DaemonSet {
+	return &appsv1.DaemonSet{
+		Spec: appsv1.DaemonSetSpec{
+			Template: v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name: "aws-node",
+							Env: []v1.EnvVar{
+								{
+									Name:  "ENABLE_POD_ENI_DUAL_STACK",
+									Value: dualStackEnabled,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestCondition_IsPodENIDualStackEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		expected bool
+		mock     func(mock *mock_k8s.MockK8sWrapper)
+	}{
+		{
+			name:     "daemonset not found",
+			expected: false,
+			mock: func(mock *mock_k8s.MockK8sWrapper) {
+				mock.EXPECT().GetDaemonSet(config.VpcCNIDaemonSetName,
+					config.KubeSystemNamespace).Return(nil, notFoundErr)
+			},
+		},
+		{
+			name:     "daemonset returns error",
+			expected: false,
+			mock: func(mock *mock_k8s.MockK8sWrapper) {
+				mock.EXPECT().GetDaemonSet(config.VpcCNIDaemonSetName,
+					config.KubeSystemNamespace).Return(nil, otherErr)
+			},
+		},
+		{
+			name:     "daemonset with flag set to true",
+			expected: true,
+			mock: func(mock *mock_k8s.MockK8sWrapper) {
+				mock.EXPECT().GetDaemonSet(config.VpcCNIDaemonSetName,
+					config.KubeSystemNamespace).Return(getAwsNodeDaemonSetWithDualStack("true"), nil)
+			},
+		},
+		{
+			name:     "daemonset with flag set to false",
+			expected: false,
+			mock: func(mock *mock_k8s.MockK8sWrapper) {
+				mock.EXPECT().GetDaemonSet(config.VpcCNIDaemonSetName,
+					config.KubeSystemNamespace).Return(getAwsNodeDaemonSetWithDualStack("false"), nil)
+			},
+		},
+		{
+			name:     "daemonset with flag set to invalid value",
+			expected: false,
+			mock: func(mock *mock_k8s.MockK8sWrapper) {
+				mock.EXPECT().GetDaemonSet(config.VpcCNIDaemonSetName,
+					config.KubeSystemNamespace).Return(getAwsNodeDaemonSetWithDualStack("invalid"), nil)
+			},
+		},
+		{
+			name:     "daemonset without the flag",
+			expected: false,
+			mock: func(mock *mock_k8s.MockK8sWrapper) {
+				mock.EXPECT().GetDaemonSet(config.VpcCNIDaemonSetName,
+					config.KubeSystemNamespace).Return(getAwsNodeDaemonSet("true"), nil)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
+			conditions := NewControllerConditions(zap.New(), mockK8s, false)
+
+			test.mock(mockK8s)
+
+			assert.Equal(t, test.expected, conditions.IsPodENIDualStackEnabled())
+		})
+	}
+}

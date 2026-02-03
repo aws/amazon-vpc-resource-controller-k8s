@@ -85,6 +85,16 @@ rules:
 - apiGroups:
   - apps
   resourceNames:
+  - aws-node
+  resources:
+  - daemonsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resourceNames:
   - vpc-resource-controller
   resources:
   - deployments
