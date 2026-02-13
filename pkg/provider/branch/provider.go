@@ -365,6 +365,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
 	if err != nil {
 		if err == trunk.ErrCurrentlyAtMaxCapacity {
+			log.Info("Requeueing pod as trunk is at max capacity", "CoolDown", cooldown.GetCoolDown().GetCoolDownPeriod())
 			return ctrl.Result{RequeueAfter: cooldown.GetCoolDown().GetCoolDownPeriod(), Requeue: true}, nil
 		}
 		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
