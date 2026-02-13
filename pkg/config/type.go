@@ -99,10 +99,12 @@ const (
 	ResourceTypeIPv4Prefix  ResourceType = "IPv4Prefix"
 )
 
-// IPResourceCount contains the arguments for number of IPv4 resources to request
+// IPResourceCount contains the arguments for number of IP resources to request
 type IPResourceCount struct {
 	SecondaryIPv4Count int
 	IPv4PrefixCount    int
+	SecondaryIPv6Count int
+	IPv6PrefixCount    int
 }
 
 // Events metadata

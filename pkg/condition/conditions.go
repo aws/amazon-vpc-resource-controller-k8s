@@ -44,9 +44,8 @@ type Conditions interface {
 	// IsWindowsPrefixDelegationEnabled to process events only when Windows Prefix Delegation is enabled
 	IsWindowsPrefixDelegationEnabled() bool
 
-	// IsPodSGPEnabled to process events only when Security Group for Pods feature
-	// is enabled by the user
-	// IsPodSGPEnabled() bool We need to check if SGP is enabled via ConfigMap + Environment variables
+	// IsPodENIDualStackEnabled checks if dual-stack (IPv4+IPv6) is enabled for Pod ENIs
+	IsPodENIDualStackEnabled() bool
 
 	// IsOldVPCControllerDeploymentPresent returns true if the old controller deployment
 	// is still present on the cluster
@@ -203,6 +202,38 @@ func (c *condition) IsPodSGPEnabled() bool {
 		}
 	}
 	return isSGPEnabled
+}
+
+// IsPodENIDualStackEnabled checks if dual-stack (IPv4+IPv6) is enabled for Pod ENIs
+// by reading the ENABLE_POD_ENI_DUAL_STACK environment variable from the aws-node daemonset.
+func (c *condition) IsPodENIDualStackEnabled() bool {
+	daemonSet, err := c.K8sAPI.GetDaemonSet(config.VpcCNIDaemonSetName,
+		config.KubeSystemNamespace)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			c.log.Info("aws-node ds is not present")
+			return false
+		}
+		c.log.Error(err, "failed to get aws-node")
+		return false
+	}
+
+	var isDualStackEnabled bool
+	for _, container := range daemonSet.Spec.Template.Spec.Containers {
+		if container.Name == "aws-node" {
+			for _, env := range container.Env {
+				if env.Name == "ENABLE_POD_ENI_DUAL_STACK" {
+					isDualStackEnabled, err = strconv.ParseBool(env.Value)
+					if err != nil {
+						c.log.Error(err, "failed to parse ENABLE_POD_ENI_DUAL_STACK", "value", env.Value)
+						return false
+					}
+					break
+				}
+			}
+		}
+	}
+	return isDualStackEnabled
 }
 
 func (c *condition) GetPodDataStoreSyncStatus() bool {
