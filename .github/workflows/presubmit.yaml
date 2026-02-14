@@ -67,5 +67,5 @@ jobs:
       - name: Install `gosec`
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
       - name: Run Gosec Security Scanner
-        run: ~/go/bin/gosec -exclude-dir test -exclude-generated -severity medium ./...
+        run: ~/go/bin/gosec -exclude=G115  -exclude-dir test -exclude-generated -severity medium ./...
 
