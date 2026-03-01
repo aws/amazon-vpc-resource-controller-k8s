@@ -1,6 +1,6 @@
 ARG BASE_IMAGE
 ARG BUILD_IMAGE
-ARG GORUNNER_VERSION=public.ecr.aws/eks-distro/kubernetes/go-runner:v0.18.0-eks-1-34-latest
+ARG GORUNNER_VERSION=public.ecr.aws/eks-distro-build-tooling/go-runner:v0.18.0-go-1.25-latest.al2
 ARG ARCH
 # Build the controller binary
 FROM $BUILD_IMAGE AS builder
