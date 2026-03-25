@@ -8,19 +8,16 @@ import (
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	mock_cleanup "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
-	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/go-logr/logr"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
-	"golang.org/x/sync/semaphore"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	fakeClient "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -55,14 +52,17 @@ func NewCNINodeMock(ctrl *gomock.Controller, mockObjects ...client.Object) *CNIN
 	_ = corev1.AddToScheme(scheme)
 	_ = v1alpha1.AddToScheme(scheme)
 	client := fakeClient.NewClientBuilder().WithScheme(scheme).WithObjects(mockObjects...).Build()
+	cleanupQueue := &ENICleanup{
+		Events: make(chan event.GenericEvent, 2048),
+	}
 	return &CNINodeMock{
 		Reconciler: CNINodeReconciler{
-			Client:      client,
-			scheme:      scheme,
-			log:         zap.New(),
-			clusterName: mockClusterName,
-			vpcId:       "vpc-000000000000",
-			deletePool:  semaphore.NewWeighted(10),
+			Client:           client,
+			scheme:           scheme,
+			log:              zap.New(),
+			clusterName:      mockClusterName,
+			vpcId:            "vpc-000000000000",
+			nodeCleanupQueue: cleanupQueue,
 		},
 	}
 }
@@ -118,12 +118,7 @@ func TestCNINodeReconcile(t *testing.T) {
 					},
 				},
 			},
-			prepare: func(f *fields) {
-				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner {
-					return f.mockResourceCleaner
-				}
-				f.mockResourceCleaner.EXPECT().DeleteLeakedResources(gomock.Any()).Times(0)
-			},
+
 			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
 				assert.NoError(t, err)
 				assert.Equal(t, res, reconcile.Result{})
@@ -148,14 +143,6 @@ func TestCNINodeReconcile(t *testing.T) {
 						},
 					},
 				},
-			},
-			prepare: func(f *fields) {
-				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner {
-					assert.Equal(t, "i-0123456789abcdef0", nodeID)
-					return f.mockResourceCleaner
-				}
-				f.mockResourceCleaner.EXPECT().DeleteLeakedResources(gomock.Any()).Times(1).Return(nil)
-
 			},
 			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
 				assert.NoError(t, err)

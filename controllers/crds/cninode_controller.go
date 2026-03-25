@@ -19,13 +19,11 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/sync/semaphore"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
@@ -69,16 +68,15 @@ func prometheusRegister() {
 // CNINodeReconciler reconciles a CNINode object
 type CNINodeReconciler struct {
 	client.Client
-	scheme             *runtime.Scheme
-	context            context.Context
-	log                logr.Logger
-	eC2Wrapper         ec2API.EC2Wrapper
-	k8sAPI             k8s.K8sWrapper
-	clusterName        string
-	vpcId              string
-	finalizerManager   k8s.FinalizerManager
-	deletePool         *semaphore.Weighted
-	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner
+	scheme           *runtime.Scheme
+	context          context.Context
+	log              logr.Logger
+	eC2Wrapper       ec2API.EC2Wrapper
+	k8sAPI           k8s.K8sWrapper
+	clusterName      string
+	vpcId            string
+	finalizerManager k8s.FinalizerManager
+	nodeCleanupQueue *ENICleanup
 }
 
 func NewCNINodeReconciler(
@@ -92,20 +90,19 @@ func NewCNINodeReconciler(
 	vpcId string,
 	finalizerManager k8s.FinalizerManager,
 	maxConcurrentWorkers int,
-	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string, log logr.Logger) cleanup.ResourceCleaner,
+	nodeCleanupQueue *ENICleanup,
 ) *CNINodeReconciler {
 	return &CNINodeReconciler{
-		Client:             client,
-		scheme:             scheme,
-		context:            ctx,
-		log:                logger,
-		eC2Wrapper:         ec2Wrapper,
-		k8sAPI:             k8sWrapper,
-		clusterName:        clusterName,
-		vpcId:              vpcId,
-		finalizerManager:   finalizerManager,
-		deletePool:         semaphore.NewWeighted(int64(maxConcurrentWorkers)),
-		newResourceCleaner: newResourceCleaner,
+		Client:           client,
+		scheme:           scheme,
+		context:          ctx,
+		log:              logger,
+		eC2Wrapper:       ec2Wrapper,
+		k8sAPI:           k8sWrapper,
+		clusterName:      clusterName,
+		vpcId:            vpcId,
+		finalizerManager: finalizerManager,
+		nodeCleanupQueue: nodeCleanupQueue,
 	}
 }
 
@@ -156,19 +153,16 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				r.log.Info("running the finalizer routine on cniNode", "cniNode", cniNode.Name)
 				// run cleanup when node id is present
 				if nodeID, ok := cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey]; ok && nodeID != "" {
-					if !r.deletePool.TryAcquire(1) {
-						r.log.Info("d, will requeue request")
-						return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+					obj := &NodeCleanupObject{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      nodeID,
+							Namespace: "",
+						},
+						NodeID: nodeID,
 					}
-					go func(nodeID string) {
-						defer r.deletePool.Release(1)
-						childCtx, cancel := context.WithTimeout(ctx, config.NodeTerminationTimeout)
-						defer cancel()
-						if err := r.newResourceCleaner(nodeID, r.eC2Wrapper, r.vpcId, r.log).DeleteLeakedResources(childCtx); err != nil {
-							r.log.Error(err, "failed to cleanup resources during node termination")
-							ec2API.NodeTerminationENICleanupFailure.Inc()
-						}
-					}(nodeID)
+					r.nodeCleanupQueue.Events <- event.GenericEvent{
+						Object: obj,
+					}
 				}
 			}
 
