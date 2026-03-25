@@ -127,6 +127,8 @@ type trunkENI struct {
 	deleteQueue []*ENIDetails
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
 	nodeIDTag []ec2types.Tag
+	// dualStackEnabled indicates if dual-stack (IPv4+IPv6) is enabled for branch ENIs
+	dualStackEnabled bool
 }
 
 // PodENI is a json convertible structure that stores the Branch ENI details that can be
@@ -167,7 +169,7 @@ type IntrospectSummaryResponse struct {
 }
 
 // NewTrunkENI returns a new Trunk ENI interface.
-func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2APIHelper) TrunkENI {
+func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2APIHelper, dualStackEnabled bool) TrunkENI {
 	availVlans := make([]bool, MaxAllocatableVlanIds)
 	// VlanID 0 cannot be assigned.
 	availVlans[0] = true
@@ -178,6 +180,7 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 		ec2ApiHelper:      helper,
 		instance:          instance,
 		uidToBranchENIMap: make(map[string][]*ENIDetails),
+		dualStackEnabled:  dualStackEnabled,
 		nodeIDTag: []ec2types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -428,9 +431,18 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		}
 		// append the nodeName tag to add to branch ENIs
 		tags = append(tags, t.nodeIDTag...)
+
+		// Request IPv6 address if dual-stack is enabled and subnet has IPv6
+		var ipResourceCount *config.IPResourceCount
+		if t.dualStackEnabled && t.instance.SubnetV6CidrBlock() != "" {
+			ipResourceCount = &config.IPResourceCount{
+				SecondaryIPv6Count: 1,
+			}
+		}
+
 		// Create Branch ENI
 		nwInterface, err = t.ec2ApiHelper.CreateNetworkInterface(&BranchEniDescription,
-			aws.String(t.instance.SubnetID()), securityGroups, tags, nil, nil)
+			aws.String(t.instance.SubnetID()), securityGroups, tags, ipResourceCount, nil)
 		if err != nil {
 			err = fmt.Errorf("creating network interface, %w", err)
 			t.freeVlanId(vlanID)

@@ -28,6 +28,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
@@ -103,13 +104,15 @@ type branchENIProvider struct {
 	workerPool worker.Worker
 	// apiWrapper
 	apiWrapper api.Wrapper
+	// conditions provides access to feature flags
+	conditions condition.Conditions
 	ctx        context.Context
 	checker    healthz.Checker
 }
 
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
 func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
-	worker worker.Worker, _ config.ResourceConfig, ctx context.Context,
+	worker worker.Worker, _ config.ResourceConfig, conditions condition.Conditions, ctx context.Context,
 ) provider.ResourceProvider {
 	prometheusRegister()
 	trunk.PrometheusRegister()
@@ -118,6 +121,7 @@ func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
 		apiWrapper:    wrapper,
 		log:           logger,
 		workerPool:    worker,
+		conditions:    conditions,
 		trunkENICache: make(map[string]trunk.TrunkENI),
 		ctx:           ctx,
 	}
@@ -146,7 +150,8 @@ func timeSinceSeconds(start time.Time) float64 {
 func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 	log := b.log.WithValues("nodeName", nodeName)
-	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API)
+	dualStackEnabled := b.conditions.IsPodENIDualStackEnabled()
+	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API, dualStackEnabled)
 
 	// Initialize the Trunk ENI
 	start := time.Now()

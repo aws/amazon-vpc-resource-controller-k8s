@@ -88,6 +88,8 @@ func init() {
 // To Watch for old controller deployments, windows IPAM will not be enabled till the old controller
 // deployments are deleted by users
 // +kubebuilder:rbac:groups=apps,resources=deployments,namespace=kube-system,resourceNames=vpc-resource-controller,verbs=get;list;watch
+// To Watch for VPC CNI daemonset to read configuration (e.g., ENABLE_POD_ENI_DUAL_STACK)
+// +kubebuilder:rbac:groups=apps,resources=daemonsets,namespace=kube-system,resourceNames=aws-node,verbs=get;list;watch
 // +kubebuilder:rbac:groups=crd.k8s.amazonaws.com,resources=eniconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies,verbs=get;list;watch
 // +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=cninodes,verbs=get;list;watch;create;delete
