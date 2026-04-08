@@ -481,9 +481,12 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 
 func (e *ec2Wrapper) getInstanceConfig() (*aws.Config, error) {
 	// Create a new config
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithAPIOptions([]func(stack *smithymiddleware.Stack) error{
-		awsmiddleware.AddUserAgentKeyValue(AppName, version.GitVersion),
-	}))
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithHTTPClient(utils.NewAWSSDKHTTPClient()),
+		config.WithAPIOptions([]func(stack *smithymiddleware.Stack) error{
+			awsmiddleware.AddUserAgentKeyValue(AppName, version.GitVersion),
+		}),
+	)
 	if err != nil {
 		return &cfg, fmt.Errorf("failed to load AWS config: %w", err)
 	}
@@ -520,6 +523,7 @@ func (e *ec2Wrapper) getInstanceServiceClient(qps int, burst int, cfg aws.Config
 func (e *ec2Wrapper) getClientUsingAssumedRole(instanceRegion, roleARN, clusterName, region string, qps, burst int) (*ec2.Client, error) {
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion(instanceRegion),
+		config.WithHTTPClient(utils.NewAWSSDKHTTPClient()),
 		config.WithRetryer(func() aws.Retryer {
 			return retry.NewStandard(func(o *retry.StandardOptions) {
 				o.MaxAttempts = MaxRetries

@@ -140,3 +140,37 @@ func testHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Method Not Allowed", 405)
 	}
 }
+
+func TestNewAWSSDKHTTPClient_SetsTimeout(t *testing.T) {
+	client := NewAWSSDKHTTPClient()
+	if client.Timeout != defaultAWSSDKClientTimeout {
+		t.Fatalf("expected timeout %v, got %v", defaultAWSSDKClientTimeout, client.Timeout)
+	}
+}
+
+func TestNewRateLimitedClient_SetsTimeout(t *testing.T) {
+	// With qps=0, should return client with timeout (not http.DefaultClient)
+	cli, err := NewRateLimitedClient(0, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cli == http.DefaultClient {
+		t.Fatal("expected a new client, got http.DefaultClient")
+	}
+	if cli.Timeout != defaultAWSSDKClientTimeout {
+		t.Fatalf("expected timeout %v, got %v", defaultAWSSDKClientTimeout, cli.Timeout)
+	}
+
+	// With qps>0, timeout is on the transport, not the client
+	cli, err = NewRateLimitedClient(10, 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rt, ok := cli.Transport.(*rateLimitedRoundTripper)
+	if !ok {
+		t.Fatal("expected rateLimitedRoundTripper transport")
+	}
+	if rt.timeout != defaultAWSSDKClientTimeout {
+		t.Fatalf("expected transport timeout %v, got %v", defaultAWSSDKClientTimeout, rt.timeout)
+	}
+}
