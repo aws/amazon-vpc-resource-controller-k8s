@@ -121,6 +121,66 @@ func TestEc2Instance_LoadDetails(t *testing.T) {
 	assert.Equal(t, []bool{true, false, true}, ec2Instance.deviceIndexes)
 	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.CurrentInstanceSecurityGroups())
 	assert.Equal(t, primaryInterfaceID, ec2Instance.PrimaryNetworkInterfaceID())
+	// No connection tracking config set in test data
+	assert.Nil(t, ec2Instance.tcpEstablishedTimeout)
+	assert.Nil(t, ec2Instance.udpStreamTimeout)
+	assert.Nil(t, ec2Instance.udpTimeout)
+}
+
+// TestEc2Instance_LoadDetails_WithConnectionTracking tests that connection tracking config
+// from the primary ENI is loaded correctly
+func TestEc2Instance_LoadDetails_WithConnectionTracking(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+
+	tcpTimeout := int32(300)
+	udpStreamTimeout := int32(120)
+	udpTimeout := int32(30)
+
+	nwInterfacesWithConnTracking := &ec2types.Instance{
+		InstanceId:       &instanceID,
+		InstanceType:     instanceType,
+		SubnetId:         &subnetID,
+		PrivateIpAddress: &privateIPAddr,
+		NetworkInterfaces: []ec2types.InstanceNetworkInterface{
+			{
+				NetworkInterfaceId: &primaryInterfaceID,
+				PrivateIpAddress:   &privateIPAddr,
+				Groups: []ec2types.GroupIdentifier{
+					{GroupId: &securityGroup1},
+					{GroupId: &securityGroup2},
+				},
+				Attachment: &ec2types.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex0},
+				ConnectionTrackingConfiguration: &ec2types.ConnectionTrackingSpecificationResponse{
+					TcpEstablishedTimeout: &tcpTimeout,
+					UdpStreamTimeout:      &udpStreamTimeout,
+					UdpTimeout:            &udpTimeout,
+				},
+			},
+			{
+				PrivateIpAddress: aws.String("192.168.1.2"),
+				Groups:           []ec2types.GroupIdentifier{{GroupId: &securityGroup3}},
+				Attachment:       &ec2types.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex2},
+			},
+		},
+	}
+
+	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfacesWithConnTracking, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil)
+
+	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
+	assert.NoError(t, err)
+	assert.Equal(t, &tcpTimeout, ec2Instance.tcpEstablishedTimeout)
+	assert.Equal(t, &udpStreamTimeout, ec2Instance.udpStreamTimeout)
+	assert.Equal(t, &udpTimeout, ec2Instance.udpTimeout)
+
+	// Verify via the public getter too
+	gotTcp, gotUdpStream, gotUdp := ec2Instance.GetConnectionTrackingSpec()
+	assert.Equal(t, &tcpTimeout, gotTcp)
+	assert.Equal(t, &udpStreamTimeout, gotUdpStream)
+	assert.Equal(t, &udpTimeout, gotUdp)
 }
 
 // TestEc2Instance_LoadDetails_InstanceDetailsIsNull tests error is returned if the instance details
