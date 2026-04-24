@@ -60,6 +60,12 @@ type ec2Instance struct {
 	newCustomNetworkingSubnetID string
 	// newCustomNetworkingSecurityGroups is the security groups from the ENIConfig
 	newCustomNetworkingSecurityGroups []string
+
+	// connectionTracking* fields cache the primary ENI's connection tracking
+	// configuration, applied to branch ENIs created on this instance
+	tcpEstablishedTimeout *int32
+	udpStreamTimeout      *int32
+	udpTimeout            *int32
 }
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
@@ -81,6 +87,7 @@ type EC2Instance interface {
 	SetNewCustomNetworkingSpec(subnetID string, securityGroup []string)
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
+	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -159,6 +166,15 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 			// TODO: Group can change, should be refreshed each time we want to use this
 			for _, group := range nwInterface.Groups {
 				i.primaryENISecurityGroups = append(i.primaryENISecurityGroups, *group.GroupId)
+			}
+		}
+
+		// Get the connection tracking configuration from the primary ENI
+		if *index == 0 {
+			if nwInterface.ConnectionTrackingConfiguration != nil {
+				i.tcpEstablishedTimeout = nwInterface.ConnectionTrackingConfiguration.TcpEstablishedTimeout
+				i.udpStreamTimeout = nwInterface.ConnectionTrackingConfiguration.UdpStreamTimeout
+				i.udpTimeout = nwInterface.ConnectionTrackingConfiguration.UdpTimeout
 			}
 		}
 	}
@@ -318,4 +334,11 @@ func (i *ec2Instance) GetCustomNetworkingSpec() (subnetID string, securityGroup 
 	defer i.lock.RUnlock()
 
 	return i.newCustomNetworkingSubnetID, i.newCustomNetworkingSecurityGroups
+}
+
+func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, udp *int32) {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.tcpEstablishedTimeout, i.udpStreamTimeout, i.udpTimeout
 }

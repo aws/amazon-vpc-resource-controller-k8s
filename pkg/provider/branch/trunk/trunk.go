@@ -129,6 +129,28 @@ type trunkENI struct {
 	nodeIDTag []ec2types.Tag
 }
 
+// getConnectionTrackingSpec builds a ConnectionTrackingSpecificationRequest from the
+// primary ENI's cached settings. Returns nil if no settings are configured.
+func (t *trunkENI) getConnectionTrackingSpec() *ec2types.ConnectionTrackingSpecificationRequest {
+	instanceId := t.instance.InstanceID()
+	tcpEstablishedTimeout, udpStreamTimeout, udpTimeout := t.instance.GetConnectionTrackingSpec()
+
+	if tcpEstablishedTimeout != nil || udpStreamTimeout != nil || udpTimeout != nil {
+		t.log.V(1).Info("using connection tracking settings from primary ENI",
+			"instanceID", instanceId,
+			"tcpEstablishedTimeout", tcpEstablishedTimeout,
+			"udpStreamTimeout", udpStreamTimeout,
+			"udpTimeout", udpTimeout)
+		return &ec2types.ConnectionTrackingSpecificationRequest{
+			TcpEstablishedTimeout: tcpEstablishedTimeout,
+			UdpStreamTimeout:      udpStreamTimeout,
+			UdpTimeout:            udpTimeout,
+		}
+	}
+	t.log.V(1).Info("no connection tracking settings found on primary ENI", "instanceID", instanceId)
+	return nil
+}
+
 // PodENI is a json convertible structure that stores the Branch ENI details that can be
 // used by the CNI plugin or the component consuming the resource
 type ENIDetails struct {
@@ -239,7 +261,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		}
 
 		trunk, err := t.ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceID, aws.String(t.instance.SubnetID()),
-			t.instance.CurrentInstanceSecurityGroups(), t.nodeIDTag, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil)
+			t.instance.CurrentInstanceSecurityGroups(), t.nodeIDTag, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil, t.getConnectionTrackingSpec())
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("create_trunk_eni").Inc()
 			return err
@@ -401,6 +423,8 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		securityGroups = t.instance.CurrentInstanceSecurityGroups()
 	}
 
+	connectionTrackingSpec := t.getConnectionTrackingSpec()
+
 	var newENIs []*ENIDetails
 	var err error
 	var nwInterface *ec2types.NetworkInterface
@@ -430,7 +454,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		tags = append(tags, t.nodeIDTag...)
 		// Create Branch ENI
 		nwInterface, err = t.ec2ApiHelper.CreateNetworkInterface(&BranchEniDescription,
-			aws.String(t.instance.SubnetID()), securityGroups, tags, nil, nil)
+			aws.String(t.instance.SubnetID()), securityGroups, tags, nil, nil, connectionTrackingSpec)
 		if err != nil {
 			err = fmt.Errorf("creating network interface, %w", err)
 			t.freeVlanId(vlanID)
