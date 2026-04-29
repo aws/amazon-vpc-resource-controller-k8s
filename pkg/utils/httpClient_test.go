@@ -143,8 +143,8 @@ func testHandler(w http.ResponseWriter, req *http.Request) {
 
 func TestNewAWSSDKHTTPClient_SetsTimeout(t *testing.T) {
 	client := NewAWSSDKHTTPClient()
-	if client.Timeout != defaultAWSSDKClientTimeout {
-		t.Fatalf("expected timeout %v, got %v", defaultAWSSDKClientTimeout, client.Timeout)
+	if client.GetTimeout() != defaultAWSSDKClientTimeout {
+		t.Fatalf("expected timeout %v, got %v", defaultAWSSDKClientTimeout, client.GetTimeout())
 	}
 }
 
