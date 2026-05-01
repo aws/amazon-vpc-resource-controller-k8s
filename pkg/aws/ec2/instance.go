@@ -62,7 +62,8 @@ type ec2Instance struct {
 	newCustomNetworkingSecurityGroups []string
 
 	// connectionTracking* fields cache the primary ENI's connection tracking
-	// configuration, applied to branch ENIs created on this instance
+	// configuration, applied to ENIs created on this instance, including
+	// trunk and branch ENIs
 	tcpEstablishedTimeout *int32
 	udpStreamTimeout      *int32
 	udpTimeout            *int32
