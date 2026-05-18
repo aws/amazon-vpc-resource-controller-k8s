@@ -79,7 +79,7 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
 type EC2APIHelper interface {
 	AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string, vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error)
 	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []ec2types.Tag,
-		ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2types.NetworkInterface, error)
+		ipResourceCount *config.IPResourceCount, interfaceType *string, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest) (*ec2types.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2types.Subnet, error)
 	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error)
@@ -87,7 +87,7 @@ type EC2APIHelper interface {
 	DescribeNetworkInterfaces(nwInterfaceIds []string) ([]ec2types.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]ec2types.TrunkInterfaceAssociation, error)
 	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []ec2types.Tag, deviceIndex *int32,
-		description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*ec2types.NetworkInterface, error)
+		description *string, interfaceType *string, ipResourceCount *config.IPResourceCount, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest) (*ec2types.NetworkInterface, error)
 	AttachNetworkInterfaceToInstance(instanceId *string, nwInterfaceId *string, deviceIndex *int32) (*string, error)
 	SetDeleteOnTermination(attachmentId *string, eniId *string) error
 	DetachNetworkInterfaceFromInstance(attachmentId *string) error
@@ -101,7 +101,7 @@ type EC2APIHelper interface {
 
 // CreateNetworkInterface creates a new network interface
 func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []ec2types.Tag,
-	ipResourceCount *config.IPResourceCount, interfaceType *string,
+	ipResourceCount *config.IPResourceCount, interfaceType *string, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest,
 ) (*ec2types.NetworkInterface, error) {
 	eniDescription := CreateENIDescriptionPrefix + *description
 
@@ -127,10 +127,11 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 	}
 
 	createInput := &ec2.CreateNetworkInterfaceInput{
-		Description:       aws.String(eniDescription),
-		Groups:            ec2SecurityGroups,
-		SubnetId:          subnetId,
-		TagSpecifications: tagSpecifications,
+		Description:                     aws.String(eniDescription),
+		Groups:                          ec2SecurityGroups,
+		SubnetId:                        subnetId,
+		TagSpecifications:               tagSpecifications,
+		ConnectionTrackingSpecification: connectionTrackingSpec,
 	}
 
 	if ipResourceCount != nil {
@@ -318,9 +319,9 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 // CreateAndAttachNetworkInterface creates and attaches the network interface to the instance. The function will
 // wait till the interface is successfully attached
 func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string,
-	tags []ec2types.Tag, deviceIndex *int32, description *string, interfaceType *string, ipResourceCount *config.IPResourceCount,
+	tags []ec2types.Tag, deviceIndex *int32, description *string, interfaceType *string, ipResourceCount *config.IPResourceCount, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest,
 ) (*ec2types.NetworkInterface, error) {
-	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, ipResourceCount, interfaceType)
+	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, ipResourceCount, interfaceType, connectionTrackingSpec)
 	if err != nil {
 		return nil, fmt.Errorf("creating network interface, %w", err)
 	}
