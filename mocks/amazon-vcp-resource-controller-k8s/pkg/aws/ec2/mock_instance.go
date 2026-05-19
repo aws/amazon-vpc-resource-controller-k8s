@@ -73,6 +73,22 @@ func (mr *MockEC2InstanceMockRecorder) FreeDeviceIndex(arg0 interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FreeDeviceIndex", reflect.TypeOf((*MockEC2Instance)(nil).FreeDeviceIndex), arg0)
 }
 
+// GetConnectionTrackingSpec mocks base method.
+func (m *MockEC2Instance) GetConnectionTrackingSpec() (*int32, *int32, *int32) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetConnectionTrackingSpec")
+	ret0, _ := ret[0].(*int32)
+	ret1, _ := ret[1].(*int32)
+	ret2, _ := ret[2].(*int32)
+	return ret0, ret1, ret2
+}
+
+// GetConnectionTrackingSpec indicates an expected call of GetConnectionTrackingSpec.
+func (mr *MockEC2InstanceMockRecorder) GetConnectionTrackingSpec() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConnectionTrackingSpec", reflect.TypeOf((*MockEC2Instance)(nil).GetConnectionTrackingSpec))
+}
+
 // GetCustomNetworkingSpec mocks base method.
 func (m *MockEC2Instance) GetCustomNetworkingSpec() (string, []string) {
 	m.ctrl.T.Helper()

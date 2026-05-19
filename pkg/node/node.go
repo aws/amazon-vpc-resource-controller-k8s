@@ -93,7 +93,7 @@ func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os stri
 		managed: true,
 		log: log.WithName("node resource handler").
 			WithValues("node name", nodeName),
-		instance:               ec2.NewEC2Instance(nodeName, instanceID, os),
+		instance:               ec2.NewEC2Instance(nodeName, instanceID, os, log.WithName("ec2instance")),
 		k8sAPI:                 k8sAPI,
 		ec2API:                 ec2API,
 		reconciliationInterval: NodeInitialCleanupInterval,
@@ -109,7 +109,7 @@ func NewUnManagedNode(log logr.Logger, nodeName, instanceID, os string) Node {
 		managed: false,
 		log: log.WithName("node resource handler").
 			WithValues("node name", nodeName),
-		instance: ec2.NewEC2Instance(nodeName, instanceID, os),
+		instance: ec2.NewEC2Instance(nodeName, instanceID, os, log.WithName("ec2instance")),
 	}
 }
 
