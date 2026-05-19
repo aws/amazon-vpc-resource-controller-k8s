@@ -133,6 +133,25 @@ var _ = Describe("Branch ENI Pods", func() {
 			})
 		})
 
+		Context("when a branch ENI pod is created", func() {
+			It("should have connection tracking configuration matching the primary ENI", func() {
+				sgpWrapper.CreateSecurityGroupPolicy(frameWork.K8sClient, ctx, securityGroupPolicy)
+				pod = podWrapper.CreateAndWaitForPodToStart(frameWork.PodManager, ctx, pod)
+				verify.VerifyNetworkingOfPodUsingENI(*pod, securityGroups)
+
+				var podNode *v1.Node
+				for i := range nodeList.Items {
+					if nodeList.Items[i].Name == pod.Spec.NodeName {
+						podNode = &nodeList.Items[i]
+						break
+					}
+				}
+				Expect(podNode).NotTo(BeNil())
+				instanceID := frameWork.NodeManager.GetInstanceID(podNode)
+				verify.VerifyConnectionTrackingOfBranchENI(*pod, instanceID)
+			})
+		})
+
 		Context("when a pod in default namespace is created", func() {
 			BeforeEach(func() {
 				namespace = "default"

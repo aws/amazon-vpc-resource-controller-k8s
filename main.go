@@ -303,6 +303,7 @@ func main() {
 		instanceClientBurst, userClientQPS, userClientBurst, setupLog)
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
+		os.Exit(1)
 	}
 
 	k8sApi := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), ctx)

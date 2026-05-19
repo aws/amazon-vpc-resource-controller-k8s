@@ -47,6 +47,7 @@ func (v *PodVerification) verifyPodIPEqualsENIIP(pod v1.Pod) {
 	By("getting the branch ENI from the pod's annotation")
 	eniDetails, err := v.frameWork.PodManager.GetENIDetailsFromPodAnnotation(pod.Annotations)
 	Expect(err).NotTo(HaveOccurred())
+	Expect(eniDetails).NotTo(BeEmpty())
 
 	By(fmt.Sprintf("Verifying for ENI ID: %s ENI IP: %s Pod Name: %s/%s Pod's IP: %s",
 		eniDetails[0].ID, eniDetails[0].IPV4Addr, pod.Namespace, pod.Name, pod.Status.PodIP))
@@ -59,6 +60,7 @@ func (v *PodVerification) VerifyNetworkingOfPodUsingENI(pod v1.Pod, expectedSecu
 
 	eniDetails, err := v.frameWork.PodManager.GetENIDetailsFromPodAnnotation(pod.Annotations)
 	Expect(err).NotTo(HaveOccurred())
+	Expect(eniDetails).NotTo(BeEmpty())
 
 	By("getting the security group for the ENI from AWS EC2")
 	actualSG, err := v.frameWork.EC2Manager.GetENISecurityGroups(eniDetails[0].ID)
@@ -114,6 +116,7 @@ func (v *PodVerification) VerifyPodENIDeleted(pod v1.Pod) {
 
 	eniDetails, err := v.frameWork.PodManager.GetENIDetailsFromPodAnnotation(pod.Annotations)
 	Expect(err).NotTo(HaveOccurred())
+	Expect(eniDetails).NotTo(BeEmpty())
 
 	By("verifying the ENI is deleted")
 	_, err = v.frameWork.EC2Manager.GetENISecurityGroups(eniDetails[0].ID)
@@ -185,4 +188,30 @@ func (v *PodVerification) WindowsPodHaveResourceLimits(pod *v1.Pod, expected boo
 	} else {
 		Expect(found).To(BeFalse())
 	}
+}
+
+func (v *PodVerification) VerifyConnectionTrackingOfBranchENI(pod v1.Pod, instanceID string) {
+	By("getting the branch ENI from the pod's annotation")
+	eniDetails, err := v.frameWork.PodManager.GetENIDetailsFromPodAnnotation(pod.Annotations)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(eniDetails).NotTo(BeEmpty())
+
+	By("getting connection tracking configuration from the primary ENI")
+	primaryCT, err := v.frameWork.EC2Manager.GetPrimaryENIConnectionTrackingConfiguration(instanceID)
+	Expect(err).NotTo(HaveOccurred())
+
+	By("getting connection tracking configuration from the branch ENI")
+	branchCT, err := v.frameWork.EC2Manager.GetENIConnectionTrackingConfiguration(eniDetails[0].ID)
+	Expect(err).NotTo(HaveOccurred())
+
+	By(fmt.Sprintf("verifying connection tracking matches between primary and branch ENI %s", eniDetails[0].ID))
+	if primaryCT == nil {
+		// No custom settings on primary — branch should also have no custom settings
+		Expect(branchCT).To(BeNil())
+		return
+	}
+	Expect(branchCT).NotTo(BeNil())
+	Expect(branchCT.TcpEstablishedTimeout).To(Equal(primaryCT.TcpEstablishedTimeout))
+	Expect(branchCT.UdpStreamTimeout).To(Equal(primaryCT.UdpStreamTimeout))
+	Expect(branchCT.UdpTimeout).To(Equal(primaryCT.UdpTimeout))
 }

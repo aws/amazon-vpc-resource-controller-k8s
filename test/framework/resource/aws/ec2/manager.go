@@ -138,6 +138,9 @@ func (d *Manager) GetENISecurityGroups(eniID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(networkInterface.NetworkInterfaces) == 0 {
+		return nil, fmt.Errorf("no network interface found for ENI %s", eniID)
+	}
 
 	var securityGroups []string
 	for _, groupIdentifier := range networkInterface.NetworkInterfaces[0].Groups {
@@ -145,6 +148,41 @@ func (d *Manager) GetENISecurityGroups(eniID string) ([]string, error) {
 	}
 
 	return securityGroups, nil
+}
+
+func (d *Manager) GetENIConnectionTrackingConfiguration(eniID string) (*ec2types.ConnectionTrackingConfiguration, error) {
+	output, err := d.ec2Client.DescribeNetworkInterfaces(context.TODO(), &ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: []string{eniID},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(output.NetworkInterfaces) == 0 {
+		return nil, fmt.Errorf("no network interface found for ENI %s", eniID)
+	}
+	return output.NetworkInterfaces[0].ConnectionTrackingConfiguration, nil
+}
+
+func (d *Manager) GetPrimaryENIConnectionTrackingConfiguration(instanceID string) (*ec2types.ConnectionTrackingConfiguration, error) {
+	output, err := d.ec2Client.DescribeNetworkInterfaces(context.TODO(), &ec2.DescribeNetworkInterfacesInput{
+		Filters: []ec2types.Filter{
+			{
+				Name:   aws.String("attachment.instance-id"),
+				Values: []string{instanceID},
+			},
+			{
+				Name:   aws.String("attachment.device-index"),
+				Values: []string{"0"},
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(output.NetworkInterfaces) == 0 {
+		return nil, fmt.Errorf("no primary ENI found for instance %s", instanceID)
+	}
+	return output.NetworkInterfaces[0].ConnectionTrackingConfiguration, nil
 }
 
 func (d *Manager) GetSecurityGroupID(securityGroupName string) (string, error) {
