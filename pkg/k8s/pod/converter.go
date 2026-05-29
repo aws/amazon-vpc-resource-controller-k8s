@@ -58,7 +58,9 @@ func (c *PodConverter) ConvertList(originalList interface{}) (convertedList inte
 	for _, pod := range podList.Items {
 		pod := pod // Fix gosec G601, so we can use &node
 		strippedPod := c.StripDownPod(&pod)
-		strippedPodList.Items = append(strippedPodList.Items, *strippedPod)
+		if strippedPod != nil {
+			strippedPodList.Items = append(strippedPodList.Items, *strippedPod)
+		}
 	}
 	return &strippedPodList, nil
 }
@@ -92,18 +94,26 @@ func (c *PodConverter) Indexer(obj interface{}) (string, error) {
 }
 
 // StripDownPod removes all the extra details from pod that are not
-// required by the controller.
+// required by the controller. Returns nil for pods that have no VPC
+// resources, allowing the caller to skip caching them entirely.
 func (c *PodConverter) StripDownPod(pod *v1.Pod) *v1.Pod {
+	vpcAnnotations := getVPCControllerAnnotations(pod.Annotations)
+	vpcContainers := getContainersWithVPCLimits(pod.Spec.Containers)
+
+	if len(vpcAnnotations) == 0 && len(vpcContainers) == 0 {
+		return nil
+	}
+
 	return &v1.Pod{
 		ObjectMeta: metaV1.ObjectMeta{
 			Name:              pod.Name,
 			Namespace:         pod.Namespace,
 			UID:               pod.UID,
 			DeletionTimestamp: pod.DeletionTimestamp,
-			Annotations:       getVPCControllerAnnotations(pod.Annotations),
+			Annotations:       vpcAnnotations,
 		},
 		Spec: v1.PodSpec{
-			Containers:         getContainersWithVPCLimits(pod.Spec.Containers),
+			Containers:         vpcContainers,
 			ServiceAccountName: pod.Spec.ServiceAccountName,
 			NodeName:           pod.Spec.NodeName,
 		},
