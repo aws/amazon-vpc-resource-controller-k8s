@@ -102,6 +102,20 @@ func (mr *MockConditionsMockRecorder) IsWindowsPrefixDelegationEnabled() *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsWindowsPrefixDelegationEnabled", reflect.TypeOf((*MockConditions)(nil).IsWindowsPrefixDelegationEnabled))
 }
 
+// IsBranchENIPrefixDelegationEnabled mocks base method.
+func (m *MockConditions) IsBranchENIPrefixDelegationEnabled() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsBranchENIPrefixDelegationEnabled")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsBranchENIPrefixDelegationEnabled indicates an expected call of IsBranchENIPrefixDelegationEnabled.
+func (mr *MockConditionsMockRecorder) IsBranchENIPrefixDelegationEnabled() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsBranchENIPrefixDelegationEnabled", reflect.TypeOf((*MockConditions)(nil).IsBranchENIPrefixDelegationEnabled))
+}
+
 // SetPodDataStoreSyncStatus mocks base method.
 func (m *MockConditions) SetPodDataStoreSyncStatus(arg0 bool) {
 	m.ctrl.T.Helper()

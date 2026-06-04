@@ -28,6 +28,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
@@ -105,11 +106,13 @@ type branchENIProvider struct {
 	apiWrapper api.Wrapper
 	ctx        context.Context
 	checker    healthz.Checker
+	// conditions provides dynamic feature flag checks (reads from ConfigMap)
+	conditions condition.Conditions
 }
 
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
 func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
-	worker worker.Worker, _ config.ResourceConfig, ctx context.Context,
+	worker worker.Worker, _ config.ResourceConfig, ctx context.Context, conditions condition.Conditions,
 ) provider.ResourceProvider {
 	prometheusRegister()
 	trunk.PrometheusRegister()
@@ -120,6 +123,7 @@ func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
 		workerPool:    worker,
 		trunkENICache: make(map[string]trunk.TrunkENI),
 		ctx:           ctx,
+		conditions:    conditions,
 	}
 	provider.checker = provider.check()
 	return provider
@@ -146,7 +150,7 @@ func timeSinceSeconds(start time.Time) float64 {
 func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 	log := b.log.WithValues("nodeName", nodeName)
-	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API)
+	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API, b.conditions.IsBranchENIPrefixDelegationEnabled())
 
 	// Initialize the Trunk ENI
 	start := time.Now()
@@ -263,6 +267,11 @@ func (b *branchENIProvider) UpdateResourceCapacity(instance ec2.EC2Instance) err
 	instanceType := instance.Type()
 	capacity := vpc.Limits[instanceType].BranchInterface
 
+	if b.conditions.IsBranchENIPrefixDelegationEnabled() && capacity != 0 {
+		// Each branch ENI can hold 16 IPs from its /28 prefix
+		capacity = capacity * 16
+	}
+
 	if capacity != 0 {
 		err := b.apiWrapper.K8sAPI.AdvertiseCapacityIfNotSet(instanceName, config.ResourceNamePodENI, capacity)
 		if err != nil {
@@ -361,15 +370,30 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
 	}
 
-	// Get the list of branch ENIs that will be allocated to the pod object
-	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
-	if err != nil {
-		if err == trunk.ErrCurrentlyAtMaxCapacity {
-			return ctrl.Result{RequeueAfter: cooldown.GetCoolDown().GetCoolDownPeriod(), Requeue: true}, nil
+	var branchENIs []*trunk.ENIDetails
+
+	if b.conditions.IsBranchENIPrefixDelegationEnabled() {
+		eniDetail, allocErr := trunkENI.AllocateIPFromSharedENI(pod, securityGroups)
+		if allocErr != nil {
+			if allocErr == trunk.ErrCurrentlyAtMaxCapacity {
+				return ctrl.Result{RequeueAfter: cooldown.GetCoolDown().GetCoolDownPeriod(), Requeue: true}, nil
+			}
+			b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
+				fmt.Sprintf("failed to allocate prefix IP from branch ENI: %v", allocErr), v1.EventTypeWarning)
+			return ctrl.Result{}, allocErr
 		}
-		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
-			fmt.Sprintf("failed to allocate branch ENI to pod: %v", err), v1.EventTypeWarning)
-		return ctrl.Result{}, err
+		branchENIs = []*trunk.ENIDetails{eniDetail}
+	} else {
+		var createErr error
+		branchENIs, createErr = trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
+		if createErr != nil {
+			if createErr == trunk.ErrCurrentlyAtMaxCapacity {
+				return ctrl.Result{RequeueAfter: cooldown.GetCoolDown().GetCoolDownPeriod(), Requeue: true}, nil
+			}
+			b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
+				fmt.Sprintf("failed to allocate branch ENI to pod: %v", createErr), v1.EventTypeWarning)
+			return ctrl.Result{}, createErr
+		}
 	}
 
 	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENI, strconv.Itoa(resourceCount)).
@@ -377,7 +401,9 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 
 	jsonBytes, err := json.Marshal(branchENIs)
 	if err != nil {
-		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
+		if !b.conditions.IsBranchENIPrefixDelegationEnabled() {
+			trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
+		}
 		b.log.Info("pushed the ENIs to the delete queue as failed to unmarshal ENI details", "ENI/s", branchENIs)
 		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
 		return ctrl.Result{}, err
@@ -388,7 +414,9 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	err = b.apiWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, pod.UID,
 		config.ResourceNamePodENI, string(jsonBytes))
 	if err != nil {
-		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
+		if !b.conditions.IsBranchENIPrefixDelegationEnabled() {
+			trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
+		}
 		b.log.Info("pushed the ENIs to the delete queue as failed to annotate the pod", "ENI/s", branchENIs)
 		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchENIAnnotationFailed,
 			fmt.Sprintf("failed to annotate pod with branch ENI details: %v", err), v1.EventTypeWarning)
@@ -418,7 +446,11 @@ func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) 
 		return ctrl.Result{}, nil
 	}
 
-	trunkENI.PushBranchENIsToCoolDownQueue(UID)
+	if trunkENI.HasPrefixAllocation(UID) {
+		trunkENI.FreePrefixIP(UID)
+	} else {
+		trunkENI.PushBranchENIsToCoolDownQueue(UID)
+	}
 
 	return ctrl.Result{}, nil
 }

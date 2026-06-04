@@ -153,3 +153,44 @@ func (mr *MockTrunkENIMockRecorder) Reconcile(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reconcile", reflect.TypeOf((*MockTrunkENI)(nil).Reconcile), arg0)
 }
+
+// AllocateIPFromSharedENI mocks base method.
+func (m *MockTrunkENI) AllocateIPFromSharedENI(arg0 *v1.Pod, arg1 []string) (*trunk.ENIDetails, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AllocateIPFromSharedENI", arg0, arg1)
+	ret0, _ := ret[0].(*trunk.ENIDetails)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AllocateIPFromSharedENI indicates an expected call of AllocateIPFromSharedENI.
+func (mr *MockTrunkENIMockRecorder) AllocateIPFromSharedENI(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllocateIPFromSharedENI", reflect.TypeOf((*MockTrunkENI)(nil).AllocateIPFromSharedENI), arg0, arg1)
+}
+
+// FreePrefixIP mocks base method.
+func (m *MockTrunkENI) FreePrefixIP(arg0 string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "FreePrefixIP", arg0)
+}
+
+// FreePrefixIP indicates an expected call of FreePrefixIP.
+func (mr *MockTrunkENIMockRecorder) FreePrefixIP(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FreePrefixIP", reflect.TypeOf((*MockTrunkENI)(nil).FreePrefixIP), arg0)
+}
+
+// HasPrefixAllocation mocks base method.
+func (m *MockTrunkENI) HasPrefixAllocation(arg0 string) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasPrefixAllocation", arg0)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// HasPrefixAllocation indicates an expected call of HasPrefixAllocation.
+func (mr *MockTrunkENIMockRecorder) HasPrefixAllocation(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasPrefixAllocation", reflect.TypeOf((*MockTrunkENI)(nil).HasPrefixAllocation), arg0)
+}

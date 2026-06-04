@@ -70,11 +70,12 @@ const (
 )
 
 const (
-	LeaderElectionKey                = "cp-vpc-resource-controller"
-	LeaderElectionNamespace          = "kube-system"
-	VpcCniConfigMapName              = "amazon-vpc-cni"
-	EnableWindowsIPAMKey             = "enable-windows-ipam"
-	EnableWindowsPrefixDelegationKey = "enable-windows-prefix-delegation"
+	LeaderElectionKey                  = "cp-vpc-resource-controller"
+	LeaderElectionNamespace            = "kube-system"
+	VpcCniConfigMapName                = "amazon-vpc-cni"
+	EnableWindowsIPAMKey               = "enable-windows-ipam"
+	EnableWindowsPrefixDelegationKey   = "enable-windows-prefix-delegation"
+	EnableBranchENIPrefixDelegationKey = "enable-branch-eni-prefix-delegation"
 	// TODO: we will deprecate the confusing naming of Windows flags eventually
 	WarmPrefixTarget = "warm-prefix-target"
 	WarmIPTarget     = "warm-ip-target"

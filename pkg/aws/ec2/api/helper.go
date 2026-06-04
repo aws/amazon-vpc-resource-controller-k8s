@@ -603,6 +603,8 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*
 			nwInterfaces = append(nwInterfaces, &ec2types.NetworkInterface{
 				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
 				TagSet:             nwInterface.TagSet,
+				Groups:             nwInterface.Groups,
+				Ipv4Prefixes:       nwInterface.Ipv4Prefixes,
 			})
 		}
 

@@ -28,6 +28,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/samber/lo"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -54,6 +55,14 @@ var (
 
 var ErrCurrentlyAtMaxCapacity = fmt.Errorf("cannot create more branches at this point as used branches plus the " +
 	"delete queue is at max capacity")
+
+// prefixPodRef holds the mapping between a pod and its prefix-delegated IP on a shared ENI,
+// used during state recovery in InitTrunk.
+type prefixPodRef struct {
+	podUID     string
+	ip         string
+	eniDetails *ENIDetails
+}
 
 var (
 	trunkENIOperationsErrCount = prometheus.NewCounterVec(
@@ -105,6 +114,12 @@ type TrunkENI interface {
 	DeleteAllBranchENIs()
 	// Introspect returns the state of the Trunk ENI
 	Introspect() IntrospectResponse
+	// AllocateIPFromSharedENI allocates an IP from a shared branch ENI with prefix delegation
+	AllocateIPFromSharedENI(pod *v1.Pod, securityGroups []string) (*ENIDetails, error)
+	// FreePrefixIP releases a pod's prefix IP back to the shared ENI pool
+	FreePrefixIP(UID string)
+	// HasPrefixAllocation returns true if the given UID has a prefix-based allocation
+	HasPrefixAllocation(UID string) bool
 }
 
 // trunkENI is the first trunk network interface of an instance
@@ -127,6 +142,12 @@ type trunkENI struct {
 	deleteQueue []*ENIDetails
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
 	nodeIDTag []ec2types.Tag
+	// sgToBranchENIPool maps canonical SG key to shared branch ENIs with prefix delegation
+	sgToBranchENIPool map[string][]*BranchENIWithPrefix
+	// uidToPrefixAllocation maps pod UID to its prefix allocation (shared ENI + assigned IP)
+	uidToPrefixAllocation map[string]*PrefixAllocation
+	// prefixDelegationEnabled indicates whether branch ENI prefix delegation is active
+	prefixDelegationEnabled bool
 }
 
 // getConnectionTrackingSpec builds a ConnectionTrackingSpecificationRequest from the
@@ -165,6 +186,8 @@ type ENIDetails struct {
 	// SubnetCIDR is the CIDR block of the subnet
 	SubnetCIDR   string `json:"subnetCidr"`
 	SubnetV6CIDR string `json:"subnetV6Cidr"`
+	// PrefixCIDR is the /28 prefix attached to this branch ENI (set when prefix delegation is enabled)
+	PrefixCIDR string `json:"prefixCidr,omitempty"`
 	// deletionTimeStamp is the time when the pod was marked deleted.
 	deletionTimeStamp time.Time
 	// deleteRetryCount is the
@@ -188,17 +211,20 @@ type IntrospectSummaryResponse struct {
 }
 
 // NewTrunkENI returns a new Trunk ENI interface.
-func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2APIHelper) TrunkENI {
+func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2APIHelper, prefixDelegationEnabled bool) TrunkENI {
 	availVlans := make([]bool, MaxAllocatableVlanIds)
 	// VlanID 0 cannot be assigned.
 	availVlans[0] = true
 
 	return &trunkENI{
-		log:               logger,
-		usedVlanIds:       availVlans,
-		ec2ApiHelper:      helper,
-		instance:          instance,
-		uidToBranchENIMap: make(map[string][]*ENIDetails),
+		log:                     logger,
+		usedVlanIds:             availVlans,
+		ec2ApiHelper:            helper,
+		instance:                instance,
+		uidToBranchENIMap:       make(map[string][]*ENIDetails),
+		sgToBranchENIPool:       make(map[string][]*BranchENIWithPrefix),
+		uidToPrefixAllocation:   make(map[string]*PrefixAllocation),
+		prefixDelegationEnabled: prefixDelegationEnabled,
 		nodeIDTag: []ec2types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -319,6 +345,9 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		associatedBranchInterfaces[*branchInterface.NetworkInterfaceId] = branchInterface
 	}
 
+	// When prefix delegation is enabled, collect prefix-mode pods to rebuild the shared ENI pool.
+	prefixENIPods := make(map[string][]prefixPodRef)
+
 	// From the list of pods on the given node, and the branch ENIs from EC2 API call rebuild the internal cache
 	for _, pod := range podList {
 		pod := pod // Fix gosec G601, so we can use &node
@@ -326,6 +355,29 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		if len(eniListFromPod) == 0 {
 			continue
 		}
+
+		// Check if this pod is a prefix-delegated allocation (shared ENI mode)
+		if t.prefixDelegationEnabled && len(eniListFromPod) == 1 && eniListFromPod[0].PrefixCIDR != "" {
+			eni := eniListFromPod[0]
+			_, inEC2 := associatedBranchInterfaces[eni.ID]
+			_, alreadyClaimed := prefixENIPods[eni.ID]
+			if !inEC2 && !alreadyClaimed {
+				t.log.Error(fmt.Errorf("prefix eni allocated to pod not found in ec2"), "eni not found",
+					"eni", eni.ID, "pod", pod.Name)
+				trunkENIOperationsErrCount.WithLabelValues("get_branch_eni_from_ec2").Inc()
+				continue
+			}
+			t.markVlanAssigned(eni.VlanID)
+			prefixENIPods[eni.ID] = append(prefixENIPods[eni.ID], prefixPodRef{
+				podUID:     string(pod.UID),
+				ip:         eni.IPV4Addr,
+				eniDetails: eni,
+			})
+			// Remove from the unaccounted set — this ENI is claimed by prefix pods
+			delete(associatedBranchInterfaces, eni.ID)
+			continue
+		}
+
 		var branchENIs []*ENIDetails
 		for _, eni := range eniListFromPod {
 			_, isPresent := associatedBranchInterfaces[eni.ID]
@@ -341,6 +393,11 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 			delete(associatedBranchInterfaces, eni.ID)
 		}
 		t.uidToBranchENIMap[string(pod.UID)] = branchENIs
+	}
+
+	// Rebuild prefix delegation pools from collected pod references and EC2 state
+	if t.prefixDelegationEnabled && len(prefixENIPods) > 0 {
+		t.rebuildPrefixPools(prefixENIPods, branchInterfaces, log)
 	}
 
 	// Delete the branch ENI that don't belong to any pod.
@@ -370,6 +427,118 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	return nil
 }
 
+// rebuildPrefixPools reconstructs the in-memory prefix delegation state from pod annotations
+// and EC2 branch interface data after a controller restart.
+func (t *trunkENI) rebuildPrefixPools(prefixENIPods map[string][]prefixPodRef, branchInterfaces []*ec2types.NetworkInterface, log logr.Logger) {
+	// Index EC2 branch interfaces by ID for lookup
+	ec2ENIByID := make(map[string]*ec2types.NetworkInterface)
+	for _, iface := range branchInterfaces {
+		ec2ENIByID[*iface.NetworkInterfaceId] = iface
+	}
+
+	for eniID, podRefs := range prefixENIPods {
+		ec2Iface := ec2ENIByID[eniID]
+		if ec2Iface == nil {
+			log.Error(fmt.Errorf("branch interface not found in EC2 response"),
+				"skipping prefix pool rebuild for ENI", "eni", eniID)
+			continue
+		}
+
+		// Get VLAN ID from tags
+		vlanId, err := t.getVlanIdFromTag(ec2Iface.TagSet)
+		if err != nil {
+			log.Error(err, "failed to get vlan id for prefix ENI", "eni", eniID)
+			continue
+		}
+
+		// Get security groups from EC2 interface
+		var securityGroups []string
+		for _, group := range ec2Iface.Groups {
+			if group.GroupId != nil {
+				securityGroups = append(securityGroups, *group.GroupId)
+			}
+		}
+
+		// Collect all prefixes from EC2
+		var prefixCIDRs []string
+		var allIPs []string
+		for _, prefix := range ec2Iface.Ipv4Prefixes {
+			if prefix.Ipv4Prefix != nil {
+				prefixCIDR := *prefix.Ipv4Prefix
+				prefixCIDRs = append(prefixCIDRs, prefixCIDR)
+				ips, err := utils.DeconstructIPsFromPrefix(prefixCIDR)
+				if err != nil {
+					log.Error(err, "failed to deconstruct prefix during recovery", "prefix", prefixCIDR)
+					continue
+				}
+				allIPs = append(allIPs, ips...)
+			}
+		}
+
+		if len(prefixCIDRs) == 0 {
+			log.Error(fmt.Errorf("no prefixes found on ENI during recovery"),
+				"eni has no prefix data from EC2", "eni", eniID)
+			continue
+		}
+
+		// Use the first pod's annotation to fill in ENI metadata (MAC, subnet, association)
+		// that is not returned by the GetBranchNetworkInterface EC2 call.
+		firstDetails := podRefs[0].eniDetails
+
+		baseENIDetail := &ENIDetails{
+			ID:            eniID,
+			MACAdd:        firstDetails.MACAdd,
+			VlanID:        vlanId,
+			SubnetCIDR:    firstDetails.SubnetCIDR,
+			SubnetV6CIDR:  firstDetails.SubnetV6CIDR,
+			PrefixCIDR:    prefixCIDRs[0],
+			AssociationID: firstDetails.AssociationID,
+		}
+
+		// Build UsedIPs from the pod references, matching the format used in DeconstructIPsFromPrefix
+		usedIPs := make(map[string]string)
+		for _, ref := range podRefs {
+			usedIPs[ref.ip] = ref.podUID
+		}
+
+		// FreeIPs = allIPs minus usedIPs (compare bare IPs without CIDR suffix)
+		usedIPBare := make(map[string]struct{})
+		for ip := range usedIPs {
+			usedIPBare[stripCIDRSuffix(ip)] = struct{}{}
+		}
+		var freeIPs []string
+		for _, ip := range allIPs {
+			if _, used := usedIPBare[stripCIDRSuffix(ip)]; !used {
+				freeIPs = append(freeIPs, ip)
+			}
+		}
+
+		sharedENI := &BranchENIWithPrefix{
+			ENIDetail:      baseENIDetail,
+			SecurityGroups: securityGroups,
+			PrefixCIDRs:    prefixCIDRs,
+			AllIPs:         allIPs,
+			FreeIPs:        freeIPs,
+			UsedIPs:        usedIPs,
+		}
+
+		// Add to the SG pool
+		sgKey := CanonicalSGKey(securityGroups)
+		t.sgToBranchENIPool[sgKey] = append(t.sgToBranchENIPool[sgKey], sharedENI)
+
+		// Populate uidToPrefixAllocation for each pod
+		for _, ref := range podRefs {
+			t.uidToPrefixAllocation[ref.podUID] = &PrefixAllocation{
+				BranchENI:  sharedENI,
+				AssignedIP: ref.ip,
+			}
+		}
+
+		log.Info("rebuilt prefix pool for shared ENI", "eni", eniID,
+			"prefixes", prefixCIDRs, "usedIPs", len(usedIPs), "freeIPs", len(freeIPs))
+	}
+}
+
 // Reconcile reconciles the state from the API Server to the internal cache of EC2 Branch Interfaces, if the controller
 // missed some delete events the reconcile method will perform cleanup for the dangling interfaces
 func (t *trunkENI) Reconcile(pods []v1.Pod) bool {
@@ -396,6 +565,17 @@ func (t *trunkENI) Reconcile(pods []v1.Pod) bool {
 			}
 			delete(t.uidToBranchENIMap, uid)
 			t.log.Info("leaked eni pushed to delete queue, deleted non-existing pod", "pod uid", uid, "eni", branchENIs)
+		}
+	}
+
+	// Reconcile prefix allocations
+	for uid, alloc := range t.uidToPrefixAllocation {
+		if _, exists := currentPodSet[uid]; !exists {
+			leakedENIs += 1
+			alloc.BranchENI.ReleaseIP(uid)
+			delete(t.uidToPrefixAllocation, uid)
+			t.log.Info("leaked prefix IP released to cooldown", "pod uid", uid, "ip", alloc.AssignedIP,
+				"eni", alloc.BranchENI.ENIDetail.ID)
 		}
 	}
 
@@ -504,6 +684,276 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 	return newENIs, nil
 }
 
+// AllocateIPFromSharedENI allocates a prefix IP from a shared branch ENI, creating a new
+// branch ENI with a /28 prefix if no existing ENI with matching security groups has free IPs.
+func (t *trunkENI) AllocateIPFromSharedENI(pod *v1.Pod, securityGroups []string) (*ENIDetails, error) {
+	log := t.log.WithValues("request", "prefix-allocate", "pod namespace", pod.Namespace, "pod name", pod.Name)
+	podUID := string(pod.UID)
+
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if _, exists := t.uidToPrefixAllocation[podUID]; exists {
+		return nil, fmt.Errorf("prefix allocation already exists for pod UID %s", podUID)
+	}
+
+	if securityGroups == nil || len(securityGroups) == 0 {
+		securityGroups = t.instance.CurrentInstanceSecurityGroups()
+	}
+
+	sgKey := CanonicalSGKey(securityGroups)
+
+	// Try to find an existing shared ENI with free IPs
+	if pool, ok := t.sgToBranchENIPool[sgKey]; ok {
+		for _, sharedENI := range pool {
+			if sharedENI.HasFreeIPs() {
+				ip := sharedENI.AllocateIP(podUID)
+				t.uidToPrefixAllocation[podUID] = &PrefixAllocation{
+					BranchENI:  sharedENI,
+					AssignedIP: ip,
+				}
+				eniDetail := &ENIDetails{
+					ID:            sharedENI.ENIDetail.ID,
+					MACAdd:        sharedENI.ENIDetail.MACAdd,
+					IPV4Addr:      stripCIDRSuffix(ip),
+					IPV6Addr:      sharedENI.ENIDetail.IPV6Addr,
+					VlanID:        sharedENI.ENIDetail.VlanID,
+					SubnetCIDR:    sharedENI.ENIDetail.SubnetCIDR,
+					SubnetV6CIDR:  sharedENI.ENIDetail.SubnetV6CIDR,
+					PrefixCIDR:    sharedENI.ENIDetail.PrefixCIDR,
+					AssociationID: sharedENI.ENIDetail.AssociationID,
+				}
+				log.Info("allocated IP from existing shared ENI", "ip", ip, "eni", sharedENI.ENIDetail.ID)
+				return eniDetail, nil
+			}
+		}
+	}
+
+	// Try to expand an existing ENI by assigning an additional prefix
+	maxPrefixesPerENI := vpc.Limits[t.instance.Type()].IPv4PerInterface
+	if maxPrefixesPerENI < 1 {
+		maxPrefixesPerENI = 1
+	}
+	if pool, ok := t.sgToBranchENIPool[sgKey]; ok {
+		for _, sharedENI := range pool {
+			if sharedENI.PrefixCount() < maxPrefixesPerENI {
+				newPrefixes, err := t.ec2ApiHelper.AssignIPv4ResourcesAndWaitTillReady(
+					sharedENI.ENIDetail.ID, config.ResourceTypeIPv4Prefix, 1)
+				if err != nil {
+					log.Error(err, "failed to assign additional prefix to existing ENI",
+						"eni", sharedENI.ENIDetail.ID)
+					break
+				}
+				newIPs, err := utils.DeconstructIPsFromPrefix(newPrefixes[0])
+				if err != nil {
+					log.Error(err, "failed to deconstruct new prefix", "prefix", newPrefixes[0])
+					break
+				}
+				sharedENI.AddPrefix(newPrefixes[0], newIPs)
+
+				ip := sharedENI.AllocateIP(podUID)
+				t.uidToPrefixAllocation[podUID] = &PrefixAllocation{
+					BranchENI:  sharedENI,
+					AssignedIP: ip,
+				}
+				eniDetail := &ENIDetails{
+					ID:            sharedENI.ENIDetail.ID,
+					MACAdd:        sharedENI.ENIDetail.MACAdd,
+					IPV4Addr:      stripCIDRSuffix(ip),
+					IPV6Addr:      sharedENI.ENIDetail.IPV6Addr,
+					VlanID:        sharedENI.ENIDetail.VlanID,
+					SubnetCIDR:    sharedENI.ENIDetail.SubnetCIDR,
+					SubnetV6CIDR:  sharedENI.ENIDetail.SubnetV6CIDR,
+					PrefixCIDR:    sharedENI.ENIDetail.PrefixCIDR,
+					AssociationID: sharedENI.ENIDetail.AssociationID,
+				}
+				log.Info("allocated IP from expanded shared ENI", "ip", ip,
+					"eni", sharedENI.ENIDetail.ID, "new prefix", newPrefixes[0])
+				return eniDetail, nil
+			}
+		}
+	}
+
+	// No existing ENI can be expanded — create a new one with a prefix
+	if !t.canCreateMoreLocked() {
+		return nil, ErrCurrentlyAtMaxCapacity
+	}
+
+	connectionTrackingSpec := t.getConnectionTrackingSpec()
+
+	vlanID, err := t.assignVlanIdLocked()
+	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("assign_vlan_id").Inc()
+		return nil, fmt.Errorf("assigning vlan id, %w", err)
+	}
+
+	tags := []ec2types.Tag{
+		{
+			Key:   aws.String(config.VLandIDTag),
+			Value: aws.String(strconv.Itoa(vlanID)),
+		},
+		{
+			Key:   aws.String(config.TrunkENIIDTag),
+			Value: &t.trunkENIId,
+		},
+	}
+	tags = append(tags, t.nodeIDTag...)
+
+	ipResourceCount := &config.IPResourceCount{IPv4PrefixCount: 1}
+	nwInterface, err := t.ec2ApiHelper.CreateNetworkInterface(&BranchEniDescription,
+		aws.String(t.instance.SubnetID()), securityGroups, tags, ipResourceCount, nil, connectionTrackingSpec)
+	if err != nil {
+		t.freeVlanIdLocked(vlanID)
+		branchENIOperationsFailureCount.WithLabelValues("creating_branch_eni_failed").Inc()
+		return nil, fmt.Errorf("creating network interface with prefix, %w", err)
+	}
+	branchENIOperationsSuccessCount.WithLabelValues("created_branch_eni_succeeded").Inc()
+
+	// Extract prefix from response
+	if len(nwInterface.Ipv4Prefixes) == 0 {
+		t.freeVlanIdLocked(vlanID)
+		// Clean up the ENI we just created
+		_ = t.ec2ApiHelper.DeleteNetworkInterface(nwInterface.NetworkInterfaceId)
+		return nil, fmt.Errorf("no IPv4 prefix returned from CreateNetworkInterface")
+	}
+	prefixCIDR := *nwInterface.Ipv4Prefixes[0].Ipv4Prefix
+
+	// Associate branch to trunk
+	associationOutput, err := t.ec2ApiHelper.AssociateBranchToTrunk(&t.trunkENIId, nwInterface.NetworkInterfaceId, vlanID)
+	if err != nil {
+		t.freeVlanIdLocked(vlanID)
+		_ = t.ec2ApiHelper.DeleteNetworkInterface(nwInterface.NetworkInterfaceId)
+		trunkENIOperationsErrCount.WithLabelValues("associate_branch").Inc()
+		return nil, fmt.Errorf("associating branch to trunk, %w", err)
+	}
+
+	// Deconstruct prefix into individual IPs
+	allIPs, err := utils.DeconstructIPsFromPrefix(prefixCIDR)
+	if err != nil {
+		t.freeVlanIdLocked(vlanID)
+		_ = t.ec2ApiHelper.DeleteNetworkInterface(nwInterface.NetworkInterfaceId)
+		return nil, fmt.Errorf("deconstructing prefix %s, %w", prefixCIDR, err)
+	}
+
+	baseENIDetail := &ENIDetails{
+		ID:            *nwInterface.NetworkInterfaceId,
+		MACAdd:        *nwInterface.MacAddress,
+		VlanID:        vlanID,
+		SubnetCIDR:    t.instance.SubnetCidrBlock(),
+		SubnetV6CIDR:  t.instance.SubnetV6CidrBlock(),
+		PrefixCIDR:    prefixCIDR,
+		AssociationID: *associationOutput.InterfaceAssociation.AssociationId,
+	}
+
+	// Build the shared ENI pool entry
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail:      baseENIDetail,
+		SecurityGroups: securityGroups,
+		PrefixCIDRs:    []string{prefixCIDR},
+		AllIPs:         allIPs,
+		FreeIPs:        make([]string, len(allIPs)),
+		UsedIPs:        make(map[string]string),
+	}
+	copy(sharedENI.FreeIPs, allIPs)
+
+	// Allocate the first IP to the requesting pod
+	ip := sharedENI.AllocateIP(podUID)
+	t.uidToPrefixAllocation[podUID] = &PrefixAllocation{
+		BranchENI:  sharedENI,
+		AssignedIP: ip,
+	}
+
+	// Add to pool
+	t.sgToBranchENIPool[sgKey] = append(t.sgToBranchENIPool[sgKey], sharedENI)
+
+	eniDetail := &ENIDetails{
+		ID:            baseENIDetail.ID,
+		MACAdd:        baseENIDetail.MACAdd,
+		IPV4Addr:      stripCIDRSuffix(ip),
+		VlanID:        vlanID,
+		SubnetCIDR:    baseENIDetail.SubnetCIDR,
+		SubnetV6CIDR:  baseENIDetail.SubnetV6CIDR,
+		PrefixCIDR:    prefixCIDR,
+		AssociationID: baseENIDetail.AssociationID,
+	}
+
+	log.Info("created new shared branch ENI with prefix", "eni", baseENIDetail.ID,
+		"prefix", prefixCIDR, "assigned ip", ip)
+
+	return eniDetail, nil
+}
+
+// FreePrefixIP releases a pod's prefix IP back to the shared ENI's cooling queue.
+func (t *trunkENI) FreePrefixIP(UID string) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	alloc, exists := t.uidToPrefixAllocation[UID]
+	if !exists {
+		t.log.Info("no prefix allocation found for pod", "UID", UID)
+		return
+	}
+
+	alloc.BranchENI.ReleaseIP(UID)
+	delete(t.uidToPrefixAllocation, UID)
+
+	t.log.Info("released prefix IP to cooldown", "ip", alloc.AssignedIP, "eni", alloc.BranchENI.ENIDetail.ID, "UID", UID)
+}
+
+// HasPrefixAllocation returns true if the given UID has a prefix-based allocation.
+func (t *trunkENI) HasPrefixAllocation(UID string) bool {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+	_, exists := t.uidToPrefixAllocation[UID]
+	return exists
+}
+
+func stripCIDRSuffix(ip string) string {
+	if idx := strings.Index(ip, "/"); idx != -1 {
+		return ip[:idx]
+	}
+	return ip
+}
+
+// canCreateMoreLocked checks capacity without acquiring lock (caller must hold lock).
+func (t *trunkENI) canCreateMoreLocked() bool {
+	var usedBranches int
+	for _, branches := range t.uidToBranchENIMap {
+		usedBranches += len(branches)
+	}
+	// Count shared prefix ENIs
+	for _, pool := range t.sgToBranchENIPool {
+		usedBranches += len(pool)
+	}
+
+	if usedBranches+len(t.deleteQueue) < vpc.Limits[t.instance.Type()].BranchInterface {
+		return true
+	}
+	return false
+}
+
+// assignVlanIdLocked assigns a free vlan id (caller must hold lock).
+func (t *trunkENI) assignVlanIdLocked() (int, error) {
+	for index, used := range t.usedVlanIds {
+		if !used {
+			t.usedVlanIds[index] = true
+			return index, nil
+		}
+	}
+	return 0, fmt.Errorf("failed to find free vlan id in the available %d ids", len(t.usedVlanIds))
+}
+
+// freeVlanIdLocked frees a vlan id (caller must hold lock).
+func (t *trunkENI) freeVlanIdLocked(vlanId int) {
+	isUsed := t.usedVlanIds[vlanId]
+	if !isUsed {
+		trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id").Inc()
+		t.log.Error(fmt.Errorf("failed to free a unused vlan id"), "", "vlan id", vlanId)
+		return
+	}
+	t.usedVlanIds[vlanId] = false
+}
+
 // DeleteAllBranchENIs deletes all the branch ENIs associated with the trunk and all the ENIs present in the cool down
 // queue, this is the last API call to the the Trunk ENI before it is removed from cache
 func (t *trunkENI) DeleteAllBranchENIs() {
@@ -518,6 +968,18 @@ func (t *trunkENI) DeleteAllBranchENIs() {
 			}
 		}
 	}
+
+	// Delete all shared prefix branch ENIs
+	for _, pool := range t.sgToBranchENIPool {
+		for _, sharedENI := range pool {
+			err := t.deleteENI(sharedENI.ENIDetail)
+			if err != nil {
+				t.log.Error(err, "failed to delete shared prefix eni", "eni id", sharedENI.ENIDetail.ID)
+			}
+		}
+	}
+	t.sgToBranchENIPool = make(map[string][]*BranchENIWithPrefix)
+	t.uidToPrefixAllocation = make(map[string]*PrefixAllocation)
 
 	// Delete all the branch ENI present in the cool down queue
 	for _, eni := range t.deleteQueue {
@@ -555,6 +1017,11 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 }
 
 func (t *trunkENI) DeleteCooledDownENIs() {
+	// Process prefix IP cooldowns and drain fully-freed ENIs
+	if len(t.sgToBranchENIPool) > 0 {
+		t.processPrefixCoolDowns()
+	}
+
 	for eni, hasENI := t.popENIFromDeleteQueue(); hasENI; eni, hasENI = t.popENIFromDeleteQueue() {
 		if eni.deletionTimeStamp.IsZero() ||
 			time.Now().After(eni.deletionTimeStamp.Add(cooldown.GetCoolDown().GetCoolDownPeriod())) {
@@ -576,6 +1043,36 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 			// Since the current item is not cooled down so the items added after it would not be cooled down either
 			t.PushENIsToFrontOfDeleteQueue(nil, []*ENIDetails{eni})
 			return
+		}
+	}
+}
+
+// processPrefixCoolDowns processes IP-level cooldowns for shared prefix ENIs.
+// Fully drained ENIs are pushed to the ENI delete queue.
+func (t *trunkENI) processPrefixCoolDowns() {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	cooldownPeriod := cooldown.GetCoolDown().GetCoolDownPeriod()
+
+	for sgKey, pool := range t.sgToBranchENIPool {
+		var remaining []*BranchENIWithPrefix
+		for _, sharedENI := range pool {
+			fullyDrained := sharedENI.ProcessCoolDown(cooldownPeriod)
+			if fullyDrained {
+				// All IPs freed and cooled down — push the ENI itself to delete queue
+				sharedENI.ENIDetail.deletionTimeStamp = time.Now()
+				t.deleteQueue = append(t.deleteQueue, sharedENI.ENIDetail)
+				t.log.Info("shared prefix ENI fully drained, queued for deletion",
+					"eni", sharedENI.ENIDetail.ID, "prefixes", sharedENI.PrefixCIDRs)
+			} else {
+				remaining = append(remaining, sharedENI)
+			}
+		}
+		if len(remaining) == 0 {
+			delete(t.sgToBranchENIPool, sgKey)
+		} else {
+			t.sgToBranchENIPool[sgKey] = remaining
 		}
 	}
 }
@@ -752,6 +1249,9 @@ func (t *trunkENI) canCreateMore() bool {
 	var usedBranches int
 	for _, branches := range t.uidToBranchENIMap {
 		usedBranches += len(branches)
+	}
+	for _, pool := range t.sgToBranchENIPool {
+		usedBranches += len(pool)
 	}
 
 	if usedBranches+len(t.deleteQueue) < vpc.Limits[t.instance.Type()].BranchInterface {

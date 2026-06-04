@@ -44,6 +44,10 @@ type Conditions interface {
 	// IsWindowsPrefixDelegationEnabled to process events only when Windows Prefix Delegation is enabled
 	IsWindowsPrefixDelegationEnabled() bool
 
+	// IsBranchENIPrefixDelegationEnabled returns true when branch ENI prefix delegation
+	// is enabled, allowing multiple pods to share a branch ENI via prefix IPs
+	IsBranchENIPrefixDelegationEnabled() bool
+
 	// IsPodSGPEnabled to process events only when Security Group for Pods feature
 	// is enabled by the user
 	// IsPodSGPEnabled() bool We need to check if SGP is enabled via ConfigMap + Environment variables
@@ -151,6 +155,19 @@ func (c *condition) IsWindowsPrefixDelegationEnabled() bool {
 	}
 
 	conditionWindowsPrefixDelegationEnabled.Set(0)
+	return false
+}
+
+func (c *condition) IsBranchENIPrefixDelegationEnabled() bool {
+	vpcCniConfigMap, err := c.K8sAPI.GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace)
+	if err == nil && vpcCniConfigMap.Data != nil {
+		if val, ok := vpcCniConfigMap.Data[config.EnableBranchENIPrefixDelegationKey]; ok {
+			enabled, err := strconv.ParseBool(val)
+			if err == nil && enabled {
+				return true
+			}
+		}
+	}
 	return false
 }
 

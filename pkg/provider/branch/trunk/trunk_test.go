@@ -254,7 +254,7 @@ func getMockTrunk() trunkENI {
 }
 
 func TestNewTrunkENI(t *testing.T) {
-	trunkENI := NewTrunkENI(zap.New(), FakeInstance, nil)
+	trunkENI := NewTrunkENI(zap.New(), FakeInstance, nil, false)
 	assert.NotNil(t, trunkENI)
 }
 
@@ -1017,4 +1017,339 @@ func TestTrunkENI_getConnectionTrackingSpec_NilValues(t *testing.T) {
 
 	spec := trunkENI.getConnectionTrackingSpec()
 	assert.Nil(t, spec)
+}
+
+// Test data for prefix delegation recovery tests
+var (
+	PrefixBranchId = "eni-prefix-00000000001"
+	PrefixCIDR1    = "192.168.1.0/28"
+	PrefixVlanId   = 5
+	PrefixMac      = "AA:BB:CC:DD:EE:FF"
+	PrefixAssocID  = "trunk-assoc-prefix-001"
+	PrefixSG1      = "sg-prefix-001"
+	PrefixSG2      = "sg-prefix-002"
+	PrefixPodUID1  = "prefix-pod-uid-1"
+	PrefixPodUID2  = "prefix-pod-uid-2"
+	PrefixPodUID3  = "prefix-pod-uid-3"
+	PrefixPodIP1   = "192.168.1.1"
+	PrefixPodIP2   = "192.168.1.2"
+	PrefixPodIP3   = "192.168.1.3"
+
+	prefixVlanTag = []awsEc2Types.Tag{
+		{
+			Key:   aws.String(config.VLandIDTag),
+			Value: aws.String(strconv.Itoa(PrefixVlanId)),
+		},
+		{
+			Key:   aws.String(config.TrunkENIIDTag),
+			Value: &trunkId,
+		},
+	}
+)
+
+func makePrefixPod(uid, name, ip string) *v1.Pod {
+	annotation := fmt.Sprintf(
+		`[{"eniId":"%s","ifAddress":"%s","privateIp":"%s","ipv6Addr":"","vlanId":%d,"subnetCidr":"%s","subnetV6Cidr":"%s","prefixCidr":"%s","associationID":"%s"}]`,
+		PrefixBranchId, PrefixMac, ip, PrefixVlanId, SubnetCidrBlock, SubnetV6CidrBlock, PrefixCIDR1, PrefixAssocID,
+	)
+	return &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:         types.UID(uid),
+			Name:        name,
+			Namespace:   "default",
+			Annotations: map[string]string{config.ResourceNamePodENI: annotation},
+		},
+		Spec: v1.PodSpec{NodeName: NodeName},
+	}
+}
+
+func TestTrunkENI_InitTrunk_PrefixDelegation_RecoverSharedENI(t *testing.T) {
+	// Simulates controller restart with 3 pods sharing one prefix-delegated branch ENI.
+	// Verifies that InitTrunk rebuilds sgToBranchENIPool and uidToPrefixAllocation correctly.
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.prefixDelegationEnabled = true
+	trunkENI.sgToBranchENIPool = make(map[string][]*BranchENIWithPrefix)
+	trunkENI.uidToPrefixAllocation = make(map[string]*PrefixAllocation)
+
+	// Pods that share the same branch ENI via prefix delegation
+	pod1 := makePrefixPod(PrefixPodUID1, "pod1", PrefixPodIP1)
+	pod2 := makePrefixPod(PrefixPodUID2, "pod2", PrefixPodIP2)
+	pod3 := makePrefixPod(PrefixPodUID3, "pod3", PrefixPodIP3)
+
+	podList := []v1.Pod{*pod1, *pod2, *pod3}
+
+	// EC2 branch interface with security groups and prefix info
+	prefixBranchInterface := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: &PrefixBranchId,
+		TagSet:             prefixVlanTag,
+		Groups: []awsEc2Types.GroupIdentifier{
+			{GroupId: &PrefixSG1},
+			{GroupId: &PrefixSG2},
+		},
+		Ipv4Prefixes: []awsEc2Types.Ipv4PrefixSpecification{
+			{Ipv4Prefix: &PrefixCIDR1},
+		},
+	}
+
+	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
+	mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{prefixBranchInterface}, nil)
+
+	err := trunkENI.InitTrunk(FakeInstance, podList)
+	assert.NoError(t, err)
+
+	// Verify prefix pool was rebuilt
+	sgKey := CanonicalSGKey([]string{PrefixSG1, PrefixSG2})
+	pool, ok := trunkENI.sgToBranchENIPool[sgKey]
+	assert.True(t, ok, "prefix pool should exist for the SG key")
+	assert.Len(t, pool, 1)
+
+	sharedENI := pool[0]
+	assert.Equal(t, PrefixBranchId, sharedENI.ENIDetail.ID)
+	assert.Equal(t, PrefixMac, sharedENI.ENIDetail.MACAdd)
+	assert.Equal(t, PrefixVlanId, sharedENI.ENIDetail.VlanID)
+	assert.Equal(t, PrefixAssocID, sharedENI.ENIDetail.AssociationID)
+	assert.Equal(t, []string{PrefixCIDR1}, sharedENI.PrefixCIDRs)
+	assert.Len(t, sharedENI.UsedIPs, 3)
+	// /28 = 16 IPs total, 3 used = 13 free
+	assert.Len(t, sharedENI.FreeIPs, 13)
+	assert.Len(t, sharedENI.AllIPs, 16)
+
+	// Verify uidToPrefixAllocation was rebuilt for all 3 pods
+	for _, uid := range []string{PrefixPodUID1, PrefixPodUID2, PrefixPodUID3} {
+		alloc, exists := trunkENI.uidToPrefixAllocation[uid]
+		assert.True(t, exists, "allocation should exist for pod %s", uid)
+		assert.Equal(t, sharedENI, alloc.BranchENI)
+	}
+	assert.Equal(t, PrefixPodIP1, trunkENI.uidToPrefixAllocation[PrefixPodUID1].AssignedIP)
+	assert.Equal(t, PrefixPodIP2, trunkENI.uidToPrefixAllocation[PrefixPodUID2].AssignedIP)
+	assert.Equal(t, PrefixPodIP3, trunkENI.uidToPrefixAllocation[PrefixPodUID3].AssignedIP)
+
+	// Verify VLAN is marked as used
+	assert.True(t, trunkENI.usedVlanIds[PrefixVlanId])
+
+	// Verify nothing went to uidToBranchENIMap (prefix pods should NOT be in legacy map)
+	assert.Empty(t, trunkENI.uidToBranchENIMap)
+
+	// Verify nothing in delete queue
+	assert.Empty(t, trunkENI.deleteQueue)
+}
+
+func TestTrunkENI_InitTrunk_PrefixDelegation_DanglingSharedENI(t *testing.T) {
+	// Simulates restart where a shared prefix ENI exists in EC2 but no pods reference it.
+	// The ENI should be pushed to the delete queue.
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.prefixDelegationEnabled = true
+	trunkENI.sgToBranchENIPool = make(map[string][]*BranchENIWithPrefix)
+	trunkENI.uidToPrefixAllocation = make(map[string]*PrefixAllocation)
+
+	// No pods reference this ENI
+	podList := []v1.Pod{*MockPod2} // MockPod2 has no annotation
+
+	prefixBranchInterface := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: &PrefixBranchId,
+		TagSet:             prefixVlanTag,
+		Groups: []awsEc2Types.GroupIdentifier{
+			{GroupId: &PrefixSG1},
+		},
+		Ipv4Prefixes: []awsEc2Types.Ipv4PrefixSpecification{
+			{Ipv4Prefix: &PrefixCIDR1},
+		},
+	}
+
+	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
+	mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{prefixBranchInterface}, nil)
+
+	err := trunkENI.InitTrunk(FakeInstance, podList)
+	assert.NoError(t, err)
+
+	// No prefix pool should be created
+	assert.Empty(t, trunkENI.sgToBranchENIPool)
+	assert.Empty(t, trunkENI.uidToPrefixAllocation)
+
+	// ENI should be in delete queue
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, PrefixBranchId, trunkENI.deleteQueue[0].ID)
+	assert.Equal(t, PrefixVlanId, trunkENI.deleteQueue[0].VlanID)
+}
+
+func TestTrunkENI_InitTrunk_PrefixDelegation_MixedLegacyAndPrefix(t *testing.T) {
+	// Simulates restart with both legacy (exclusive) branch ENIs and shared prefix ENIs.
+	// Verifies both paths work correctly in parallel.
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.prefixDelegationEnabled = true
+	trunkENI.sgToBranchENIPool = make(map[string][]*BranchENIWithPrefix)
+	trunkENI.uidToPrefixAllocation = make(map[string]*PrefixAllocation)
+
+	// Legacy pod with exclusive branch ENI (no PrefixCIDR in annotation)
+	legacyPod := MockPod1 // Has Branch1Id and Branch2Id in annotation, no PrefixCIDR
+
+	// Prefix pod sharing a branch ENI
+	prefixPod := makePrefixPod(PrefixPodUID1, "prefix-pod", PrefixPodIP1)
+
+	podList := []v1.Pod{*legacyPod, *prefixPod}
+
+	prefixBranchInterface := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: &PrefixBranchId,
+		TagSet:             prefixVlanTag,
+		Groups: []awsEc2Types.GroupIdentifier{
+			{GroupId: &PrefixSG1},
+		},
+		Ipv4Prefixes: []awsEc2Types.Ipv4PrefixSpecification{
+			{Ipv4Prefix: &PrefixCIDR1},
+		},
+	}
+
+	// All branch ENIs: legacy (branch1, branch2) + prefix-delegated
+	allBranchInterfaces := []*awsEc2Types.NetworkInterface{
+		{
+			NetworkInterfaceId: &EniDetails1.ID,
+			TagSet:             vlan1Tag,
+		},
+		{
+			NetworkInterfaceId: &EniDetails2.ID,
+			TagSet:             vlan2Tag,
+		},
+		prefixBranchInterface,
+	}
+
+	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
+	mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(allBranchInterfaces, nil)
+
+	err := trunkENI.InitTrunk(FakeInstance, podList)
+	assert.NoError(t, err)
+
+	// Legacy pod should be in uidToBranchENIMap
+	legacyENIs, exists := trunkENI.uidToBranchENIMap[PodUID]
+	assert.True(t, exists)
+	assert.Len(t, legacyENIs, 2)
+
+	// Prefix pod should be in uidToPrefixAllocation
+	alloc, exists := trunkENI.uidToPrefixAllocation[PrefixPodUID1]
+	assert.True(t, exists)
+	assert.Equal(t, PrefixPodIP1, alloc.AssignedIP)
+
+	// Verify prefix pool exists
+	sgKey := CanonicalSGKey([]string{PrefixSG1})
+	pool, ok := trunkENI.sgToBranchENIPool[sgKey]
+	assert.True(t, ok)
+	assert.Len(t, pool, 1)
+	assert.Equal(t, PrefixBranchId, pool[0].ENIDetail.ID)
+
+	// VLANs for both legacy and prefix ENIs should be marked
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+	assert.True(t, trunkENI.usedVlanIds[VlanId2])
+	assert.True(t, trunkENI.usedVlanIds[PrefixVlanId])
+
+	// No delete queue entries
+	assert.Empty(t, trunkENI.deleteQueue)
+}
+
+func TestTrunkENI_Reconcile_PrefixDelegation_LeakedPods(t *testing.T) {
+	// After recovery, if a prefix-allocated pod is deleted, Reconcile should release its IP.
+	trunkENI := getMockTrunk()
+	trunkENI.prefixDelegationEnabled = true
+	trunkENI.sgToBranchENIPool = make(map[string][]*BranchENIWithPrefix)
+	trunkENI.uidToPrefixAllocation = make(map[string]*PrefixAllocation)
+
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail: &ENIDetails{ID: PrefixBranchId, VlanID: PrefixVlanId},
+		UsedIPs: map[string]string{
+			PrefixPodIP1: PrefixPodUID1,
+			PrefixPodIP2: PrefixPodUID2,
+		},
+		FreeIPs:     []string{"192.168.1.3/32"},
+		AllIPs:      []string{"192.168.1.1/32", "192.168.1.2/32", "192.168.1.3/32"},
+		PrefixCIDRs: []string{PrefixCIDR1},
+	}
+
+	trunkENI.uidToPrefixAllocation[PrefixPodUID1] = &PrefixAllocation{
+		BranchENI:  sharedENI,
+		AssignedIP: PrefixPodIP1,
+	}
+	trunkENI.uidToPrefixAllocation[PrefixPodUID2] = &PrefixAllocation{
+		BranchENI:  sharedENI,
+		AssignedIP: PrefixPodIP2,
+	}
+
+	// Pod1 no longer exists, pod2 still running
+	pod2 := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{UID: types.UID(PrefixPodUID2)},
+	}
+	podList := []v1.Pod{*pod2}
+
+	leaked := trunkENI.Reconcile(podList)
+	assert.True(t, leaked)
+
+	// Pod1 should be removed from allocation
+	_, exists := trunkENI.uidToPrefixAllocation[PrefixPodUID1]
+	assert.False(t, exists)
+
+	// Pod2 should still be allocated
+	_, exists = trunkENI.uidToPrefixAllocation[PrefixPodUID2]
+	assert.True(t, exists)
+
+	// Pod1's IP should have moved to cooling
+	assert.Len(t, sharedENI.CoolingIPs, 1)
+	assert.Equal(t, PrefixPodIP1, sharedENI.CoolingIPs[0].IP)
+
+	// Pod1's IP should no longer be in UsedIPs
+	_, inUse := sharedENI.UsedIPs[PrefixPodIP1]
+	assert.False(t, inUse)
+}
+
+func TestTrunkENI_InitTrunk_PrefixDelegation_ENINotInEC2(t *testing.T) {
+	// Pod annotation references a prefix ENI that no longer exists in EC2.
+	// The pod should be skipped (error logged) and nothing should crash.
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.prefixDelegationEnabled = true
+	trunkENI.sgToBranchENIPool = make(map[string][]*BranchENIWithPrefix)
+	trunkENI.uidToPrefixAllocation = make(map[string]*PrefixAllocation)
+
+	// Pod references an ENI that won't be in the EC2 response
+	prefixPod := makePrefixPod(PrefixPodUID1, "orphan-pod", PrefixPodIP1)
+	podList := []v1.Pod{*prefixPod}
+
+	// EC2 returns no branch interfaces
+	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
+	mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{}, nil)
+
+	err := trunkENI.InitTrunk(FakeInstance, podList)
+	assert.NoError(t, err)
+
+	// Nothing should be built
+	assert.Empty(t, trunkENI.sgToBranchENIPool)
+	assert.Empty(t, trunkENI.uidToPrefixAllocation)
+	assert.Empty(t, trunkENI.uidToBranchENIMap)
+	assert.Empty(t, trunkENI.deleteQueue)
 }
