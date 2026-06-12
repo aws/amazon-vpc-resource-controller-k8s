@@ -64,6 +64,21 @@ func (mr *MockEC2WrapperMockRecorder) AssignPrivateIPAddresses(input interface{}
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignPrivateIPAddresses", reflect.TypeOf((*MockEC2Wrapper)(nil).AssignPrivateIPAddresses), input)
 }
 
+// AssignIpv6Addresses mocks base method.
+func (m *MockEC2Wrapper) AssignIpv6Addresses(input *ec2.AssignIpv6AddressesInput) (*ec2.AssignIpv6AddressesOutput, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AssignIpv6Addresses", input)
+	ret0, _ := ret[0].(*ec2.AssignIpv6AddressesOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AssignIpv6Addresses indicates an expected call of AssignIpv6Addresses.
+func (mr *MockEC2WrapperMockRecorder) AssignIpv6Addresses(input interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignIpv6Addresses", reflect.TypeOf((*MockEC2Wrapper)(nil).AssignIpv6Addresses), input)
+}
+
 // AssociateTrunkInterface mocks base method.
 func (m *MockEC2Wrapper) AssociateTrunkInterface(input *ec2.AssociateTrunkInterfaceInput) (*ec2.AssociateTrunkInterfaceOutput, error) {
 	m.ctrl.T.Helper()

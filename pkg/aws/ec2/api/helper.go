@@ -96,6 +96,7 @@ type EC2APIHelper interface {
 	GetInstanceDetails(instanceId *string) (*ec2types.Instance, error)
 	AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error)
 	UnassignIPv4Resources(eniID string, resourceType config.ResourceType, resources []string) error
+	AssignIPv6PrefixAndWaitTillReady(eniID string, count int) ([]string, error)
 	DisassociateTrunkInterface(associationID *string) error
 }
 
@@ -146,6 +147,10 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 			createInput.SecondaryPrivateIpAddressCount = aws.Int32(int32(secondaryPrivateIPCount))
 		} else if ipV4PrefixCount != 0 {
 			createInput.Ipv4PrefixCount = aws.Int32(int32(ipV4PrefixCount))
+		}
+
+		if ipResourceCount.IPv6PrefixCount != 0 {
+			createInput.Ipv6PrefixCount = aws.Int32(int32(ipResourceCount.IPv6PrefixCount))
 		}
 	}
 
@@ -571,6 +576,58 @@ func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.R
 	return err
 }
 
+func (h *ec2APIHelper) AssignIPv6PrefixAndWaitTillReady(eniID string, count int) ([]string, error) {
+	count32, err := utils.IntToInt32(count)
+	if err != nil {
+		return nil, fmt.Errorf("invalid count: %v", err)
+	}
+
+	input := &ec2.AssignIpv6AddressesInput{
+		NetworkInterfaceId: &eniID,
+		Ipv6PrefixCount:    aws.Int32(count32),
+	}
+
+	output, err := h.ec2Wrapper.AssignIpv6Addresses(input)
+	if err != nil {
+		return nil, err
+	}
+
+	if output == nil || len(output.AssignedIpv6Prefixes) == 0 {
+		return nil, fmt.Errorf("failed to assign %d IPv6 prefix(es) to eni %s", count, eniID)
+	}
+
+	var assignedPrefixes []string
+	ErrPrefixNotReady := fmt.Errorf("IPv6 prefix not yet visible on ENI")
+
+	err = retry.OnError(waitForIPAttachment,
+		func(err error) bool { return err == ErrPrefixNotReady },
+		func() error {
+			interfaces, descErr := h.DescribeNetworkInterfaces([]string{eniID})
+			if descErr != nil {
+				return descErr
+			}
+			if len(interfaces) != 1 {
+				return fmt.Errorf("expected 1 interface, got %d", len(interfaces))
+			}
+			assignedPrefixes = nil
+			ipv6Prefixes := map[string]bool{}
+			for _, p := range interfaces[0].Ipv6Prefixes {
+				if p.Ipv6Prefix != nil {
+					ipv6Prefixes[*p.Ipv6Prefix] = true
+				}
+			}
+			for _, p := range output.AssignedIpv6Prefixes {
+				if _, ok := ipv6Prefixes[p]; !ok {
+					return ErrPrefixNotReady
+				}
+				assignedPrefixes = append(assignedPrefixes, p)
+			}
+			return nil
+		})
+
+	return assignedPrefixes, err
+}
+
 func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error) {
 	filters := []ec2types.Filter{
 		{
@@ -605,6 +662,7 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*
 				TagSet:             nwInterface.TagSet,
 				Groups:             nwInterface.Groups,
 				Ipv4Prefixes:       nwInterface.Ipv4Prefixes,
+				Ipv6Prefixes:       nwInterface.Ipv6Prefixes,
 			})
 		}
 

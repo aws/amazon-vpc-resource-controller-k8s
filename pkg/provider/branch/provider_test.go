@@ -122,6 +122,7 @@ type stubConditions struct{}
 func (s *stubConditions) IsWindowsIPAMEnabled() bool                { return false }
 func (s *stubConditions) IsWindowsPrefixDelegationEnabled() bool    { return false }
 func (s *stubConditions) IsBranchENIPrefixDelegationEnabled() bool  { return false }
+func (s *stubConditions) IsIPv6Cluster() bool                       { return false }
 func (s *stubConditions) IsOldVPCControllerDeploymentPresent() bool { return false }
 func (s *stubConditions) GetPodDataStoreSyncStatus() bool           { return false }
 func (s *stubConditions) SetPodDataStoreSyncStatus(_ bool)          {}
@@ -817,18 +818,43 @@ func TestBranchENIProvider_DeleteBranchUsedByPods_PrefixDelegation_ToggleOff(t *
 	assert.NoError(t, err)
 }
 
-func TestBranchENIProvider_UpdateResourceCapacity_PrefixDelegation(t *testing.T) {
+func TestBranchENIProvider_UpdateResourceCapacity_PrefixDelegationIPv4(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	provider, _, _, mockK8sAPI := getProviderAndMocks(ctrl)
 	mockConditions := mock_condition.NewMockConditions(ctrl)
 	mockConditions.EXPECT().IsBranchENIPrefixDelegationEnabled().Return(true).AnyTimes()
+	mockConditions.EXPECT().IsIPv6Cluster().Return(false).AnyTimes()
+
 	provider.conditions = mockConditions
 
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	instanceType := "c5.xlarge"
 	expectedCapacity := vpc.Limits[instanceType].BranchInterface * 16
+
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().Type().Return(instanceType)
+	mockK8sAPI.EXPECT().AdvertiseCapacityIfNotSet(NodeName, config.ResourceNamePodENI, expectedCapacity).Return(nil)
+
+	err := provider.UpdateResourceCapacity(mockInstance)
+	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_UpdateResourceCapacity_PrefixDelegationIPv6(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, _, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockConditions.EXPECT().IsBranchENIPrefixDelegationEnabled().Return(true).AnyTimes()
+	mockConditions.EXPECT().IsIPv6Cluster().Return(true).AnyTimes()
+
+	provider.conditions = mockConditions
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	instanceType := "c5.xlarge"
+	expectedCapacity := vpc.Limits[instanceType].BranchInterface * 64
 
 	mockInstance.EXPECT().Name().Return(NodeName)
 	mockInstance.EXPECT().Type().Return(instanceType)

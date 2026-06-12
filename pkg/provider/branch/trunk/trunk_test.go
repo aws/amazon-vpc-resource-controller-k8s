@@ -242,6 +242,7 @@ func getMockTrunk() trunkENI {
 	log := zap.New(zap.UseDevMode(true)).WithName("node manager")
 	return trunkENI{
 		log:               log,
+		instance:          FakeInstance,
 		usedVlanIds:       make([]bool, MaxAllocatableVlanIds),
 		uidToBranchENIMap: map[string][]*ENIDetails{},
 		nodeIDTag: []awsEc2Types.Tag{
@@ -254,7 +255,7 @@ func getMockTrunk() trunkENI {
 }
 
 func TestNewTrunkENI(t *testing.T) {
-	trunkENI := NewTrunkENI(zap.New(), FakeInstance, nil, false)
+	trunkENI := NewTrunkENI(zap.New(), FakeInstance, nil, false, false)
 	assert.NotNil(t, trunkENI)
 }
 
@@ -1352,4 +1353,98 @@ func TestTrunkENI_InitTrunk_PrefixDelegation_ENINotInEC2(t *testing.T) {
 	assert.Empty(t, trunkENI.uidToPrefixAllocation)
 	assert.Empty(t, trunkENI.uidToBranchENIMap)
 	assert.Empty(t, trunkENI.deleteQueue)
+}
+
+func TestTrunkENI_InitTrunk_PrefixDelegation_IPv6_Recovery(t *testing.T) {
+	// Simulates controller restart with 2 IPv6-only pods sharing one branch ENI.
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.prefixDelegationEnabled = true
+	trunkENI.sgToBranchENIPool = make(map[string][]*BranchENIWithPrefix)
+	trunkENI.uidToPrefixAllocation = make(map[string]*PrefixAllocation)
+
+	v6BranchId := "eni-v6-recover-001"
+	v6VlanId := 7
+	v6Mac := "DD:EE:FF:00:11:22"
+	v6AssocID := "trunk-assoc-v6-001"
+	v6Prefix := "2600:1f16:abc:def::/80"
+	v6SG := "sg-v6-001"
+
+	makeIPv6Pod := func(uid, name, ipv6 string) *v1.Pod {
+		annotation := fmt.Sprintf(
+			`[{"eniId":"%s","ifAddress":"%s","privateIp":"","ipv6Addr":"%s","vlanId":%d,"subnetCidr":"%s","subnetV6Cidr":"%s","ipv6PrefixCidr":"%s","associationID":"%s"}]`,
+			v6BranchId, v6Mac, ipv6, v6VlanId, SubnetCidrBlock, SubnetV6CidrBlock, v6Prefix, v6AssocID,
+		)
+		return &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				UID:         types.UID(uid),
+				Name:        name,
+				Namespace:   "default",
+				Annotations: map[string]string{config.ResourceNamePodENI: annotation},
+			},
+			Spec: v1.PodSpec{NodeName: NodeName},
+		}
+	}
+
+	pod1 := makeIPv6Pod("v6-uid-1", "v6-pod-1", "2600:1f16:abc:def:0:0:0:1")
+	pod2 := makeIPv6Pod("v6-uid-2", "v6-pod-2", "2600:1f16:abc:def:0:0:0:2")
+	podList := []v1.Pod{*pod1, *pod2}
+
+	v6VlanTag := []awsEc2Types.Tag{
+		{Key: aws.String(config.VLandIDTag), Value: aws.String(strconv.Itoa(v6VlanId))},
+		{Key: aws.String(config.TrunkENIIDTag), Value: &trunkId},
+	}
+
+	prefixBranchInterface := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: &v6BranchId,
+		TagSet:             v6VlanTag,
+		Groups:             []awsEc2Types.GroupIdentifier{{GroupId: &v6SG}},
+		Ipv6Prefixes:       []awsEc2Types.Ipv6PrefixSpecification{{Ipv6Prefix: &v6Prefix}},
+	}
+
+	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
+	mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{prefixBranchInterface}, nil)
+
+	err := trunkENI.InitTrunk(FakeInstance, podList)
+	assert.NoError(t, err)
+
+	// Verify prefix pool was rebuilt with IPv6
+	sgKey := CanonicalSGKey([]string{v6SG})
+	pool, ok := trunkENI.sgToBranchENIPool[sgKey]
+	assert.True(t, ok)
+	assert.Len(t, pool, 1)
+
+	sharedENI := pool[0]
+	assert.Equal(t, v6BranchId, sharedENI.ENIDetail.ID)
+	assert.Equal(t, v6Prefix, sharedENI.ENIDetail.IPv6PrefixCIDR)
+	assert.Empty(t, sharedENI.ENIDetail.PrefixCIDR)
+
+	// No IPv4 pool
+	assert.Empty(t, sharedENI.AllIPs)
+
+	// IPv6: 256 total from /80, 2 used = 254 free
+	assert.Len(t, sharedENI.AllIPv6s, 256)
+	assert.Len(t, sharedENI.UsedIPv6s, 2)
+	assert.Len(t, sharedENI.FreeIPv6s, 254)
+
+	// Verify allocations
+	alloc1 := trunkENI.uidToPrefixAllocation["v6-uid-1"]
+	assert.NotNil(t, alloc1)
+	assert.Equal(t, "", alloc1.AssignedIP)
+	assert.Equal(t, "2600:1f16:abc:def:0:0:0:1", alloc1.AssignedIPv6)
+
+	alloc2 := trunkENI.uidToPrefixAllocation["v6-uid-2"]
+	assert.NotNil(t, alloc2)
+	assert.Equal(t, "", alloc2.AssignedIP)
+	assert.Equal(t, "2600:1f16:abc:def:0:0:0:2", alloc2.AssignedIPv6)
+
+	// VLAN marked
+	assert.True(t, trunkENI.usedVlanIds[v6VlanId])
 }

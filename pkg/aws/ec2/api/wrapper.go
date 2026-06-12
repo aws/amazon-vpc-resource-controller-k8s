@@ -58,6 +58,7 @@ type EC2Wrapper interface {
 	DeleteNetworkInterface(ctx context.Context, input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error)
 	AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
 	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
+	AssignIpv6Addresses(input *ec2.AssignIpv6AddressesInput) (*ec2.AssignIpv6AddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error)
 	DescribeNetworkInterfacesPages(ctx context.Context, input *ec2.DescribeNetworkInterfacesInput) ([]*ec2types.NetworkInterface, error)
 	CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
@@ -439,7 +440,7 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 
 	ec2Wrapper := &ec2Wrapper{log: log}
 
-	cfg, err := ec2Wrapper.getInstanceConfig()
+	cfg, err := ec2Wrapper.getInstanceConfig(region)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +480,7 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 	return ec2Wrapper, nil
 }
 
-func (e *ec2Wrapper) getInstanceConfig() (*aws.Config, error) {
+func (e *ec2Wrapper) getInstanceConfig(regionOverride string) (*aws.Config, error) {
 	// Create a new config
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithHTTPClient(utils.NewAWSSDKHTTPClient()),
@@ -491,18 +492,30 @@ func (e *ec2Wrapper) getInstanceConfig() (*aws.Config, error) {
 		return &cfg, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	ec2Metadata := imds.NewFromConfig(cfg)
-	region, err := ec2Metadata.GetRegion(context.TODO(), &imds.GetRegionInput{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
+	if regionOverride != "" {
+		// Use the provided region directly (IRSA mode — IMDS may not be available)
+		cfg.Region = regionOverride
+		// Try to get account ID from STS instead of IMDS
+		stsClient := sts.NewFromConfig(cfg)
+		identity, err := stsClient.GetCallerIdentity(context.TODO(), &sts.GetCallerIdentityInput{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get caller identity from STS: %v", err)
+		}
+		e.accountID = *identity.Account
+	} else {
+		// Discover region and account from IMDS (running on EC2 instance)
+		ec2Metadata := imds.NewFromConfig(cfg)
+		region, err := ec2Metadata.GetRegion(context.TODO(), &imds.GetRegionInput{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
+		}
+		cfg.Region = region.Region
+		instanceIdentity, err := ec2Metadata.GetInstanceIdentityDocument(context.TODO(), &imds.GetInstanceIdentityDocumentInput{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get the instance identity document %v", err)
+		}
+		e.accountID = instanceIdentity.AccountID
 	}
-	cfg.Region = region.Region
-	instanceIdentity, err := ec2Metadata.GetInstanceIdentityDocument(context.TODO(), &imds.GetInstanceIdentityDocumentInput{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get the instance identity document %v", err)
-	}
-	// Set the Account ID
-	e.accountID = instanceIdentity.AccountID
 	return &cfg, nil
 }
 
@@ -801,6 +814,17 @@ func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddr
 	}
 
 	return unAssignPrivateIPAddressesOutput, err
+}
+
+func (e *ec2Wrapper) AssignIpv6Addresses(input *ec2.AssignIpv6AddressesInput) (*ec2.AssignIpv6AddressesOutput, error) {
+	start := time.Now()
+	output, err := e.userServiceClient.AssignIpv6Addresses(context.TODO(), input)
+	ec2APICallLatencies.WithLabelValues("assign_ipv6_addresses").Observe(timeSinceMs(start))
+	ec2APICallCnt.Inc()
+	if err != nil {
+		ec2APIErrCnt.Inc()
+	}
+	return output, err
 }
 
 func (e *ec2Wrapper) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {

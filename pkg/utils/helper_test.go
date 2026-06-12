@@ -515,6 +515,68 @@ func TestDeconstructIPsFromPrefix_InvalidPrefix(t *testing.T) {
 	}
 }
 
+func TestDeconstructIPv6sFromPrefix(t *testing.T) {
+	// Basic /80 prefix with maxCount=4
+	prefix := "2600:1f16:a:b::/80"
+	ips, err := DeconstructIPv6sFromPrefix(prefix, 4)
+	assert.NoError(t, err)
+	assert.Len(t, ips, 4)
+	assert.Equal(t, "2600:1f16:a:b:0:0:0:0/128", ips[0])
+	assert.Equal(t, "2600:1f16:a:b:0:0:0:1/128", ips[1])
+	assert.Equal(t, "2600:1f16:a:b:0:0:0:2/128", ips[2])
+	assert.Equal(t, "2600:1f16:a:b:0:0:0:3/128", ips[3])
+}
+
+func TestDeconstructIPv6sFromPrefix_256Addresses(t *testing.T) {
+	prefix := "2600:1f16:100:200::/80"
+	ips, err := DeconstructIPv6sFromPrefix(prefix, 256)
+	assert.NoError(t, err)
+	assert.Len(t, ips, 256)
+	assert.Equal(t, "2600:1f16:100:200:0:0:0:0/128", ips[0])
+	assert.Equal(t, "2600:1f16:100:200:0:0:0:ff/128", ips[255])
+}
+
+func TestDeconstructIPv6sFromPrefix_NonZeroBase(t *testing.T) {
+	prefix := "2600:1f16:a:b::10/80"
+	ips, err := DeconstructIPv6sFromPrefix(prefix, 3)
+	assert.NoError(t, err)
+	assert.Len(t, ips, 3)
+	assert.Equal(t, "2600:1f16:a:b:0:0:0:10/128", ips[0])
+	assert.Equal(t, "2600:1f16:a:b:0:0:0:11/128", ips[1])
+	assert.Equal(t, "2600:1f16:a:b:0:0:0:12/128", ips[2])
+}
+
+func TestDeconstructIPv6sFromPrefix_InvalidInputs(t *testing.T) {
+	// Missing slash
+	_, err := DeconstructIPv6sFromPrefix("2600:1f16:a:b::", 4)
+	assert.Error(t, err)
+
+	// Zero maxCount
+	_, err = DeconstructIPv6sFromPrefix("2600:1f16:a:b::/80", 0)
+	assert.Error(t, err)
+
+	// Invalid address
+	_, err = DeconstructIPv6sFromPrefix("not-an-ipv6/80", 4)
+	assert.Error(t, err)
+}
+
+func TestExpandIPv6(t *testing.T) {
+	// Full form
+	assert.Equal(t, "2600:1f16:0:0:0:0:0:0", expandIPv6("2600:1f16:0:0:0:0:0:0"))
+
+	// Double colon at end
+	assert.Equal(t, "2600:1f16:a:b:0:0:0:0", expandIPv6("2600:1f16:a:b::"))
+
+	// Double colon in middle
+	assert.Equal(t, "2600:0:0:0:0:0:0:1", expandIPv6("2600::1"))
+
+	// Just ::
+	assert.Equal(t, "0:0:0:0:0:0:0:0", expandIPv6("::"))
+
+	// Double colon with value after
+	assert.Equal(t, "fe80:0:0:0:0:0:0:1", expandIPv6("fe80::1"))
+}
+
 func TestIsNitroInstance(t *testing.T) {
 	instanceType := "a1.2xlarge"
 	isNitro, err := IsNitroInstance(instanceType)

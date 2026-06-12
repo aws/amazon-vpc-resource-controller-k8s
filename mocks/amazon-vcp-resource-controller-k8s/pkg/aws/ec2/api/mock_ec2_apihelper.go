@@ -64,6 +64,21 @@ func (mr *MockEC2APIHelperMockRecorder) AssignIPv4ResourcesAndWaitTillReady(arg0
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignIPv4ResourcesAndWaitTillReady", reflect.TypeOf((*MockEC2APIHelper)(nil).AssignIPv4ResourcesAndWaitTillReady), arg0, arg1, arg2)
 }
 
+// AssignIPv6PrefixAndWaitTillReady mocks base method.
+func (m *MockEC2APIHelper) AssignIPv6PrefixAndWaitTillReady(arg0 string, arg1 int) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AssignIPv6PrefixAndWaitTillReady", arg0, arg1)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AssignIPv6PrefixAndWaitTillReady indicates an expected call of AssignIPv6PrefixAndWaitTillReady.
+func (mr *MockEC2APIHelperMockRecorder) AssignIPv6PrefixAndWaitTillReady(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignIPv6PrefixAndWaitTillReady", reflect.TypeOf((*MockEC2APIHelper)(nil).AssignIPv6PrefixAndWaitTillReady), arg0, arg1)
+}
+
 // AssociateBranchToTrunk mocks base method.
 func (m *MockEC2APIHelper) AssociateBranchToTrunk(arg0, arg1 *string, arg2 int) (*ec2.AssociateTrunkInterfaceOutput, error) {
 	m.ctrl.T.Helper()

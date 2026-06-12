@@ -206,6 +206,96 @@ func DeconstructIPsFromPrefix(prefix string) ([]string, error) {
 	return deconstructedIPs, nil
 }
 
+// DeconstructIPv6sFromPrefix returns the first maxCount /128 addresses from an IPv6 prefix.
+// For example, "2600:1f16:a:b::/80" with maxCount=256 returns addresses from ::0 to ::ff.
+func DeconstructIPv6sFromPrefix(prefix string, maxCount int) ([]string, error) {
+	if maxCount <= 0 {
+		return nil, fmt.Errorf("maxCount must be positive, got %d", maxCount)
+	}
+
+	slashIdx := strings.Index(prefix, "/")
+	if slashIdx < 0 {
+		return nil, fmt.Errorf("invalid IPv6 prefix %s: missing /", prefix)
+	}
+
+	baseAddr := prefix[:slashIdx]
+	expanded := expandIPv6(baseAddr)
+	if expanded == "" {
+		return nil, fmt.Errorf("invalid IPv6 prefix %s", prefix)
+	}
+
+	// Parse the expanded address into 8 groups of 16-bit values
+	groups := strings.Split(expanded, ":")
+	if len(groups) != 8 {
+		return nil, fmt.Errorf("invalid IPv6 address %s: expected 8 groups, got %d", baseAddr, len(groups))
+	}
+
+	// Parse last group as the base offset
+	lastGroup, err := strconv.ParseUint(groups[7], 16, 16)
+	if err != nil {
+		return nil, fmt.Errorf("invalid IPv6 last group %s: %w", groups[7], err)
+	}
+
+	// Build the prefix (first 7 groups)
+	prefixStr := strings.Join(groups[:7], ":") + ":"
+
+	var result []string
+	for i := 0; i < maxCount; i++ {
+		addr := fmt.Sprintf("%s%x/128", prefixStr, lastGroup+uint64(i))
+		result = append(result, addr)
+	}
+	return result, nil
+}
+
+// expandIPv6 expands an IPv6 address with :: into full 8-group form.
+func expandIPv6(addr string) string {
+	if !strings.Contains(addr, "::") {
+		parts := strings.Split(addr, ":")
+		if len(parts) != 8 {
+			return ""
+		}
+		// Normalize each group to avoid empty strings
+		for i, p := range parts {
+			if p == "" {
+				parts[i] = "0"
+			}
+		}
+		return strings.Join(parts, ":")
+	}
+
+	halves := strings.SplitN(addr, "::", 2)
+	var left, right []string
+	if halves[0] != "" {
+		left = strings.Split(halves[0], ":")
+	}
+	if halves[1] != "" {
+		right = strings.Split(halves[1], ":")
+	}
+
+	missing := 8 - len(left) - len(right)
+	if missing < 0 {
+		return ""
+	}
+
+	full := make([]string, 0, 8)
+	for _, p := range left {
+		if p == "" {
+			p = "0"
+		}
+		full = append(full, p)
+	}
+	for i := 0; i < missing; i++ {
+		full = append(full, "0")
+	}
+	for _, p := range right {
+		if p == "" {
+			p = "0"
+		}
+		full = append(full, p)
+	}
+	return strings.Join(full, ":")
+}
+
 func IsNitroInstance(instanceType string) (bool, error) {
 	limits, found := vpc.Limits[instanceType]
 	if !found {

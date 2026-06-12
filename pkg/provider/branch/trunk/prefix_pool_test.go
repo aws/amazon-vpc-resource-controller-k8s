@@ -702,7 +702,7 @@ func TestAllocateIPFromSharedENI_ExhaustsAllIPs_AtMaxPrefixes(t *testing.T) {
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
 	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return([]string{"sg-1"}).AnyTimes()
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).AnyTimes()
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).AnyTimes()
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return("").AnyTimes()
 	mockInstance.EXPECT().InstanceID().Return(InstanceId).AnyTimes()
 	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil).AnyTimes()
 
@@ -806,4 +806,233 @@ func TestReconcile_MixedLegacyAndPrefixPods(t *testing.T) {
 	assert.True(t, exists)
 	_, exists = trunk.uidToPrefixAllocation["prefix-active"]
 	assert.True(t, exists)
+}
+
+// --- IPv6 Prefix Pool Tests ---
+
+func TestBranchENIWithPrefix_AllocateIPv6(t *testing.T) {
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail: &ENIDetails{ID: "eni-ipv6"},
+		FreeIPv6s: []string{"2600::1/128", "2600::2/128", "2600::3/128"},
+		UsedIPv6s: make(map[string]string),
+	}
+
+	ip := sharedENI.AllocateIPv6("pod-1")
+	assert.Equal(t, "2600::1/128", ip)
+	assert.Equal(t, "pod-1", sharedENI.UsedIPv6s["2600::1/128"])
+	assert.Len(t, sharedENI.FreeIPv6s, 2)
+
+	ip = sharedENI.AllocateIPv6("pod-2")
+	assert.Equal(t, "2600::2/128", ip)
+	assert.Len(t, sharedENI.FreeIPv6s, 1)
+}
+
+func TestBranchENIWithPrefix_AllocateIPv6_Empty(t *testing.T) {
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail: &ENIDetails{ID: "eni-ipv6"},
+		FreeIPv6s: []string{},
+		UsedIPv6s: make(map[string]string),
+	}
+
+	ip := sharedENI.AllocateIPv6("pod-1")
+	assert.Equal(t, "", ip)
+}
+
+func TestBranchENIWithPrefix_AllocateIPv6_NilMap(t *testing.T) {
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail: &ENIDetails{ID: "eni-ipv6"},
+		FreeIPv6s: []string{"2600::1/128"},
+	}
+
+	ip := sharedENI.AllocateIPv6("pod-1")
+	assert.Equal(t, "2600::1/128", ip)
+	assert.Equal(t, "pod-1", sharedENI.UsedIPv6s["2600::1/128"])
+}
+
+func TestBranchENIWithPrefix_ReleaseIPv6(t *testing.T) {
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail: &ENIDetails{ID: "eni-ipv6"},
+		UsedIPv6s: map[string]string{
+			"2600::1/128": "pod-1",
+			"2600::2/128": "pod-2",
+		},
+	}
+
+	released := sharedENI.ReleaseIPv6("pod-1")
+	assert.Equal(t, "2600::1/128", released)
+	assert.Len(t, sharedENI.UsedIPv6s, 1)
+	assert.Len(t, sharedENI.CoolingIPv6s, 1)
+	assert.Equal(t, "2600::1/128", sharedENI.CoolingIPv6s[0].IP)
+	assert.Equal(t, "pod-1", sharedENI.CoolingIPv6s[0].PodUID)
+}
+
+func TestBranchENIWithPrefix_ReleaseIPv6_NotFound(t *testing.T) {
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail: &ENIDetails{ID: "eni-ipv6"},
+		UsedIPv6s: map[string]string{"2600::1/128": "pod-1"},
+	}
+
+	released := sharedENI.ReleaseIPv6("pod-nonexistent")
+	assert.Equal(t, "", released)
+	assert.Len(t, sharedENI.UsedIPv6s, 1)
+}
+
+func TestBranchENIWithPrefix_HasFreeIPv6s(t *testing.T) {
+	sharedENI := &BranchENIWithPrefix{FreeIPv6s: []string{"2600::1/128"}}
+	assert.True(t, sharedENI.HasFreeIPv6s())
+
+	sharedENI.FreeIPv6s = nil
+	assert.False(t, sharedENI.HasFreeIPv6s())
+
+	sharedENI.FreeIPv6s = []string{}
+	assert.False(t, sharedENI.HasFreeIPv6s())
+}
+
+func TestBranchENIWithPrefix_AddIPv6Prefix(t *testing.T) {
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail: &ENIDetails{ID: "eni-ipv6"},
+	}
+
+	ips := []string{"2600::0/128", "2600::1/128", "2600::2/128"}
+	sharedENI.AddIPv6Prefix("2600::/80", ips)
+
+	assert.Equal(t, []string{"2600::/80"}, sharedENI.IPv6PrefixCIDRs)
+	assert.Equal(t, ips, sharedENI.AllIPv6s)
+	assert.Equal(t, ips, sharedENI.FreeIPv6s)
+	assert.Equal(t, 1, sharedENI.IPv6PrefixCount())
+}
+
+func TestBranchENIWithPrefix_ProcessCoolDown_IPv6(t *testing.T) {
+	now := time.Now()
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail: &ENIDetails{ID: "eni-ipv6"},
+		UsedIPs:   map[string]string{},
+		UsedIPv6s: map[string]string{},
+		CoolingIPv6s: []CoolingIP{
+			{IP: "2600::1/128", PodUID: "pod-1", DeletionTimestamp: now.Add(-2 * time.Minute)},
+			{IP: "2600::2/128", PodUID: "pod-2", DeletionTimestamp: now.Add(-10 * time.Second)},
+		},
+	}
+
+	drained := sharedENI.ProcessCoolDown(60 * time.Second)
+	// pod-1 should be cooled down (2 min > 60s), pod-2 should remain
+	assert.False(t, drained)
+	assert.Len(t, sharedENI.FreeIPv6s, 1)
+	assert.Equal(t, "2600::1/128", sharedENI.FreeIPv6s[0])
+	assert.Len(t, sharedENI.CoolingIPv6s, 1)
+	assert.Equal(t, "2600::2/128", sharedENI.CoolingIPv6s[0].IP)
+}
+
+func TestBranchENIWithPrefix_ProcessCoolDown_DualStack_FullyDrained(t *testing.T) {
+	now := time.Now()
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail: &ENIDetails{ID: "eni-dual"},
+		UsedIPs:   map[string]string{},
+		UsedIPv6s: map[string]string{},
+		CoolingIPs: []CoolingIP{
+			{IP: "10.0.0.1/32", PodUID: "pod-1", DeletionTimestamp: now.Add(-2 * time.Minute)},
+		},
+		CoolingIPv6s: []CoolingIP{
+			{IP: "2600::1/128", PodUID: "pod-1", DeletionTimestamp: now.Add(-2 * time.Minute)},
+		},
+	}
+
+	drained := sharedENI.ProcessCoolDown(60 * time.Second)
+	assert.True(t, drained)
+	assert.Len(t, sharedENI.FreeIPs, 1)
+	assert.Len(t, sharedENI.FreeIPv6s, 1)
+	assert.Empty(t, sharedENI.CoolingIPs)
+	assert.Empty(t, sharedENI.CoolingIPv6s)
+}
+
+func TestBranchENIWithPrefix_IsFullyDrained_DualStack(t *testing.T) {
+	// Not drained: IPv6 still in use
+	sharedENI := &BranchENIWithPrefix{
+		UsedIPs:   map[string]string{},
+		UsedIPv6s: map[string]string{"2600::1/128": "pod-1"},
+	}
+	assert.False(t, sharedENI.IsFullyDrained())
+
+	// Not drained: IPv6 cooling
+	sharedENI = &BranchENIWithPrefix{
+		UsedIPs:      map[string]string{},
+		UsedIPv6s:    map[string]string{},
+		CoolingIPv6s: []CoolingIP{{IP: "2600::1/128"}},
+	}
+	assert.False(t, sharedENI.IsFullyDrained())
+
+	// Fully drained
+	sharedENI = &BranchENIWithPrefix{
+		UsedIPs:   map[string]string{},
+		UsedIPv6s: map[string]string{},
+	}
+	assert.True(t, sharedENI.IsFullyDrained())
+}
+
+// --- IPv6 Allocation via AllocateIPFromSharedENI Tests ---
+
+func TestAllocateIPFromSharedENI_IPv6Only_ExistingENI(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunk, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunk.prefixDelegationEnabled = true
+	trunk.isIPv6 = true
+	trunk.sgToBranchENIPool = map[string][]*BranchENIWithPrefix{
+		"sg-1": {
+			{
+				ENIDetail: &ENIDetails{
+					ID: "eni-v6-1", MACAdd: "AA:BB:CC:DD:EE:FF",
+					VlanID: 3, SubnetCIDR: SubnetCidrBlock, SubnetV6CIDR: SubnetV6CidrBlock,
+					AssociationID: "assoc-v6", IPv6PrefixCIDR: "2600:1f16:a:b::/80",
+				},
+				SecurityGroups:  []string{"sg-1"},
+				IPv6PrefixCIDRs: []string{"2600:1f16:a:b::/80"},
+				AllIPv6s:        []string{"2600:1f16:a:b:0:0:0:0/128", "2600:1f16:a:b:0:0:0:1/128", "2600:1f16:a:b:0:0:0:2/128"},
+				FreeIPv6s:       []string{"2600:1f16:a:b:0:0:0:1/128", "2600:1f16:a:b:0:0:0:2/128"},
+				UsedIPv6s:       map[string]string{"2600:1f16:a:b:0:0:0:0/128": "existing-pod"},
+				UsedIPs:         map[string]string{},
+			},
+		},
+	}
+	trunk.uidToPrefixAllocation = make(map[string]*PrefixAllocation)
+
+	pod := &MockPod2
+	result, err := trunk.AllocateIPFromSharedENI(*pod, []string{"sg-1"})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "2600:1f16:a:b:0:0:0:1", result.IPV6Addr)
+	assert.Equal(t, "", result.IPV4Addr)
+	assert.Equal(t, "eni-v6-1", result.ID)
+	assert.Equal(t, "2600:1f16:a:b::/80", result.IPv6PrefixCIDR)
+
+	alloc, exists := trunk.uidToPrefixAllocation[PodUID2]
+	assert.True(t, exists)
+	assert.Equal(t, "2600:1f16:a:b:0:0:0:1/128", alloc.AssignedIPv6)
+	assert.Equal(t, "", alloc.AssignedIP)
+}
+
+func TestFreePrefixIP_IPv6Only(t *testing.T) {
+	trunk := getMockTrunk()
+	trunk.prefixDelegationEnabled = true
+	trunk.uidToPrefixAllocation = make(map[string]*PrefixAllocation)
+
+	sharedENI := &BranchENIWithPrefix{
+		ENIDetail: &ENIDetails{ID: "eni-v6"},
+		UsedIPs:   map[string]string{},
+		UsedIPv6s: map[string]string{"2600::5/128": "pod-v6"},
+	}
+	trunk.uidToPrefixAllocation["pod-v6"] = &PrefixAllocation{
+		BranchENI:    sharedENI,
+		AssignedIPv6: "2600::5/128",
+	}
+
+	trunk.FreePrefixIP("pod-v6")
+
+	_, exists := trunk.uidToPrefixAllocation["pod-v6"]
+	assert.False(t, exists)
+	assert.Empty(t, sharedENI.UsedIPv6s)
+	assert.Len(t, sharedENI.CoolingIPv6s, 1)
+	assert.Equal(t, "2600::5/128", sharedENI.CoolingIPv6s[0].IP)
 }

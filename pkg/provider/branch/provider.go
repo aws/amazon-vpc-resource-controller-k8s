@@ -150,7 +150,7 @@ func timeSinceSeconds(start time.Time) float64 {
 func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 	log := b.log.WithValues("nodeName", nodeName)
-	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API, b.conditions.IsBranchENIPrefixDelegationEnabled())
+	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API, b.conditions.IsBranchENIPrefixDelegationEnabled(), b.conditions.IsIPv6Cluster())
 
 	// Initialize the Trunk ENI
 	start := time.Now()
@@ -268,8 +268,11 @@ func (b *branchENIProvider) UpdateResourceCapacity(instance ec2.EC2Instance) err
 	capacity := vpc.Limits[instanceType].BranchInterface
 
 	if b.conditions.IsBranchENIPrefixDelegationEnabled() && capacity != 0 {
-		// Each branch ENI can hold 16 IPs from its /28 prefix
-		capacity = capacity * 16
+		if b.conditions.IsIPv6Cluster() {
+			capacity = capacity * 64
+		} else {
+			capacity = capacity * 16
+		}
 	}
 
 	if capacity != 0 {
