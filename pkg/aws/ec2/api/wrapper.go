@@ -440,7 +440,7 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 
 	ec2Wrapper := &ec2Wrapper{log: log}
 
-	cfg, err := ec2Wrapper.getInstanceConfig(region)
+	cfg, err := ec2Wrapper.getInstanceConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +480,7 @@ func NewEC2Wrapper(roleARN, clusterName, region string, instanceClientQPS, insta
 	return ec2Wrapper, nil
 }
 
-func (e *ec2Wrapper) getInstanceConfig(regionOverride string) (*aws.Config, error) {
+func (e *ec2Wrapper) getInstanceConfig() (*aws.Config, error) {
 	// Create a new config
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithHTTPClient(utils.NewAWSSDKHTTPClient()),
@@ -492,30 +492,18 @@ func (e *ec2Wrapper) getInstanceConfig(regionOverride string) (*aws.Config, erro
 		return &cfg, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	if regionOverride != "" {
-		// Use the provided region directly (IRSA mode — IMDS may not be available)
-		cfg.Region = regionOverride
-		// Try to get account ID from STS instead of IMDS
-		stsClient := sts.NewFromConfig(cfg)
-		identity, err := stsClient.GetCallerIdentity(context.TODO(), &sts.GetCallerIdentityInput{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to get caller identity from STS: %v", err)
-		}
-		e.accountID = *identity.Account
-	} else {
-		// Discover region and account from IMDS (running on EC2 instance)
-		ec2Metadata := imds.NewFromConfig(cfg)
-		region, err := ec2Metadata.GetRegion(context.TODO(), &imds.GetRegionInput{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
-		}
-		cfg.Region = region.Region
-		instanceIdentity, err := ec2Metadata.GetInstanceIdentityDocument(context.TODO(), &imds.GetInstanceIdentityDocumentInput{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to get the instance identity document %v", err)
-		}
-		e.accountID = instanceIdentity.AccountID
+	ec2Metadata := imds.NewFromConfig(cfg)
+	region, err := ec2Metadata.GetRegion(context.TODO(), &imds.GetRegionInput{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to find the region from ec2 metadata: %v", err)
 	}
+	cfg.Region = region.Region
+	instanceIdentity, err := ec2Metadata.GetInstanceIdentityDocument(context.TODO(), &imds.GetInstanceIdentityDocumentInput{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get the instance identity document %v", err)
+	}
+	// Set the Account ID
+	e.accountID = instanceIdentity.AccountID
 	return &cfg, nil
 }
 
