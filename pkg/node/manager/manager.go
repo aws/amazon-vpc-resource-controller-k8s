@@ -167,9 +167,12 @@ func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
 // AddNode adds the managed and un-managed nodes to the in memory data store, the
 // user of node can verify if the node is managed before performing any operations
 func (m *manager) AddNode(nodeName string) error {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
+	// All of the work below (K8s cache reads, the idempotent CNINode create, and
+	// node object construction) is performed WITHOUT holding the manager lock.
+	// None of it touches the shared dataStore, so multiple reconciler goroutines
+	// can run it in parallel. The manager lock is only taken for the final
+	// in-memory dataStore mutation + job submission, keeping the critical section
+	// tiny and relieving the inflow bottleneck during cache rebuilds.
 	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
 	if err != nil {
 		return fmt.Errorf("failed to add node %s, doesn't exist in cache anymore", nodeName)
@@ -177,11 +180,9 @@ func (m *manager) AddNode(nodeName string) error {
 
 	log := m.Log.WithValues("node name", k8sNode.Name, "request", "add")
 
-	var newNode node.Node
-	var nodeFound bool
-
-	_, nodeFound = m.dataStore[k8sNode.Name]
-	if nodeFound {
+	// Early out if the node is already processed. This avoids the CNINode create
+	// and management checks below. Uses the read lock only (via GetNode).
+	if _, found := m.GetNode(k8sNode.Name); found {
 		log.Info("node is already processed, not processing add event again")
 		return nil
 	}
@@ -196,32 +197,58 @@ func (m *manager) AddNode(nodeName string) error {
 		return err
 	}
 
-	var op AsyncOperation
-
+	var newNode node.Node
+	submit := false
+	// Preserve the original log verbosity: managed adds are logged at the default
+	// level (operationally useful), un-managed adds at V(1).
+	logVerbosity := 0
+	addedMsg := "node added as a managed node"
 	if shouldManage {
 		newNode = node.NewManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
 			GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
-		err := m.updateSubnetIfUsingENIConfig(newNode, k8sNode)
-		if err != nil {
+		if err := m.updateSubnetIfUsingENIConfig(newNode, k8sNode); err != nil {
 			return err
 		}
-		m.dataStore[k8sNode.Name] = newNode
-		log.Info("node added as a managed node")
-		op = Init
+		submit = true
 	} else {
 		newNode = node.NewUnManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
 			GetNodeOS(k8sNode))
-		m.dataStore[k8sNode.Name] = newNode
-		log.V(1).Info("node added as an un-managed node")
+		logVerbosity = 1
+		addedMsg = "node added as an un-managed node"
+	}
+
+	// Critical section: in-memory dataStore mutation + job submission only. The
+	// double-check (inside storeNodeIfAbsent) guards against a concurrent AddNode
+	// for the same node (first writer wins); the loser discards its computed node.
+	// CreateCNINode above is idempotent, so the duplicated work is harmless.
+	if !m.storeNodeIfAbsent(k8sNode.Name, newNode, submit) {
+		log.Info("node is already processed, not processing add event again")
 		return nil
 	}
 
-	m.worker.SubmitJob(AsyncOperationJob{
-		op:       op,
-		node:     newNode,
-		nodeName: nodeName,
-	})
+	log.V(logVerbosity).Info(addedMsg)
 	return nil
+}
+
+// storeNodeIfAbsent publishes newNode into the datastore under the manager lock,
+// submitting an Init job when submit is true. It returns false (changing nothing)
+// if the node was already added by a concurrent AddNode - first writer wins.
+func (m *manager) storeNodeIfAbsent(nodeName string, newNode node.Node, submit bool) bool {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	if _, found := m.dataStore[nodeName]; found {
+		return false
+	}
+	m.dataStore[nodeName] = newNode
+	if submit {
+		m.worker.SubmitJob(AsyncOperationJob{
+			op:       Init,
+			node:     newNode,
+			nodeName: nodeName,
+		})
+	}
+	return true
 }
 
 func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
@@ -244,69 +271,100 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 // and now is not required to be managed, it's resources are de-initialized. Finally,
 // if there is no toggling, the resources are updated
 func (m *manager) UpdateNode(nodeName string) error {
-	m.lock.Lock()
-	defer m.lock.Unlock()
+	log := m.Log.WithValues("node name", nodeName, "request", "update")
 
+	// Lock-free reads + decision. As in AddNode, these are safe outside the
+	// manager lock: K8s reads hit the informer cache, IsManaged() is effectively
+	// immutable per node object, and the custom-networking mutation in
+	// updateSubnetIfUsingENIConfig is guarded by the instance's own lock.
 	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
 	if err != nil {
 		return fmt.Errorf("failed to update node %s, doesn't exist in cache anymore", nodeName)
 	}
 
-	log := m.Log.WithValues("node name", nodeName, "request", "update")
-
-	cachedNode, found := m.dataStore[nodeName]
+	cachedNode, found := m.GetNode(nodeName)
 	if !found {
-		m.Log.Info("the node doesn't exist in cache anymore, it might have been deleted")
+		log.Info("the node doesn't exist in cache anymore, it might have been deleted")
 		return nil
 	}
 
-	var op AsyncOperation
 	status, err := m.GetNodeUpdateStatus(k8sNode, cachedNode)
-
 	if err != nil {
 		return err
 	}
 
+	// nodeToStore is the node to publish into the dataStore (nil => leave the
+	// existing entry untouched, e.g. StillManaged). nodeForJob is the node handed
+	// to the async worker; it differs from nodeToStore in the ManagedToUnManaged
+	// case, where the OLD managed node is needed to de-initialize its resources.
+	var nodeToStore node.Node
+	var nodeForJob node.Node
+	var op AsyncOperation
 	switch status {
 	case UnManagedToManaged:
 		log.Info("node was previously un-managed, will be added as managed node now")
-		cachedNode = node.NewManagedNode(m.Log, k8sNode.Name,
+		managed := node.NewManagedNode(m.Log, k8sNode.Name,
 			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
 		// Update the Subnet if the node has custom networking configured
-		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
-		if err != nil {
+		if err = m.updateSubnetIfUsingENIConfig(managed, k8sNode); err != nil {
 			return err
 		}
-		m.dataStore[nodeName] = cachedNode
-		op = Init
+		nodeToStore, nodeForJob, op = managed, managed, Init
 	case ManagedToUnManaged:
 		log.Info("node was being managed earlier, will be added as un-managed node now")
 		// Change the node in cache, but for de initializing all resource providers
 		// pass the async job the older cached value instead
-		m.dataStore[nodeName] = node.NewUnManagedNode(m.Log, k8sNode.Name,
+		nodeToStore = node.NewUnManagedNode(m.Log, k8sNode.Name,
 			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode))
-		op = Delete
+		nodeForJob, op = cachedNode, Delete
 	case StillManaged:
 		// We only need to update the Subnet for Managed Node. This subnet is required for creating
 		// Branch ENIs when user is using Custom Networking. In future, we should move this to
 		// UpdateResources for Trunk ENI Provider as this is resource specific
-		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
-		if err != nil {
+		if err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode); err != nil {
 			return err
 		}
-		op = Update
+		nodeForJob, op = cachedNode, Update
 	case StillUnManaged:
 		log.V(1).Info("node not managed, no operation required")
 		// No async operation required for un-managed nodes
 		return nil
 	}
 
+	// Critical section: in-memory mutation + job submission only, with
+	// compare-and-swap semantics (see applyNodeUpdateIfCurrent). If the node was
+	// deleted or replaced by a concurrent operation (e.g. configmap controller
+	// update, async worker cleanup) our decision is stale; skip and let the next
+	// reconcile reconverge.
+	if !m.applyNodeUpdateIfCurrent(nodeName, cachedNode, nodeToStore, nodeForJob, op) {
+		log.Info("node was deleted or changed concurrently, skipping stale update")
+		return nil
+	}
+	return nil
+}
+
+// applyNodeUpdateIfCurrent commits a node update under the manager lock using
+// compare-and-swap semantics: it applies only when the datastore still holds the
+// same node object (expected) the update decision was based on. It returns false
+// (changing nothing) if the node was deleted or replaced concurrently. nodeToStore
+// may be nil to leave the datastore entry untouched (e.g. StillManaged).
+func (m *manager) applyNodeUpdateIfCurrent(nodeName string, expected, nodeToStore, nodeForJob node.Node, op AsyncOperation) bool {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	current, ok := m.dataStore[nodeName]
+	if !ok || current != expected {
+		return false
+	}
+	if nodeToStore != nil {
+		m.dataStore[nodeName] = nodeToStore
+	}
 	m.worker.SubmitJob(AsyncOperationJob{
 		op:       op,
-		node:     cachedNode,
+		node:     nodeForJob,
 		nodeName: nodeName,
 	})
-	return nil
+	return true
 }
 
 func (m *manager) GetNodeUpdateStatus(k8sNode *v1.Node, cachedNode node.Node) (NodeUpdateStatus, error) {
