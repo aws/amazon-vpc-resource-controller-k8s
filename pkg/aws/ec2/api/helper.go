@@ -79,7 +79,7 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
 type EC2APIHelper interface {
 	AssociateBranchToTrunk(trunkInterfaceId *string, branchInterfaceId *string, vlanId int) (*ec2.AssociateTrunkInterfaceOutput, error)
 	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []ec2types.Tag,
-		ipResourceCount *config.IPResourceCount, interfaceType *string) (*ec2types.NetworkInterface, error)
+		ipResourceCount *config.IPResourceCount, interfaceType *string, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest) (*ec2types.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2types.Subnet, error)
 	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error)
@@ -87,7 +87,7 @@ type EC2APIHelper interface {
 	DescribeNetworkInterfaces(nwInterfaceIds []string) ([]ec2types.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]ec2types.TrunkInterfaceAssociation, error)
 	CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string, tags []ec2types.Tag, deviceIndex *int32,
-		description *string, interfaceType *string, ipResourceCount *config.IPResourceCount) (*ec2types.NetworkInterface, error)
+		description *string, interfaceType *string, ipResourceCount *config.IPResourceCount, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest) (*ec2types.NetworkInterface, error)
 	AttachNetworkInterfaceToInstance(instanceId *string, nwInterfaceId *string, deviceIndex *int32) (*string, error)
 	SetDeleteOnTermination(attachmentId *string, eniId *string) error
 	DetachNetworkInterfaceFromInstance(attachmentId *string) error
@@ -96,12 +96,13 @@ type EC2APIHelper interface {
 	GetInstanceDetails(instanceId *string) (*ec2types.Instance, error)
 	AssignIPv4ResourcesAndWaitTillReady(eniID string, resourceType config.ResourceType, count int) ([]string, error)
 	UnassignIPv4Resources(eniID string, resourceType config.ResourceType, resources []string) error
+	AssignIPv6PrefixAndWaitTillReady(eniID string, count int) ([]string, error)
 	DisassociateTrunkInterface(associationID *string) error
 }
 
 // CreateNetworkInterface creates a new network interface
 func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []ec2types.Tag,
-	ipResourceCount *config.IPResourceCount, interfaceType *string,
+	ipResourceCount *config.IPResourceCount, interfaceType *string, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest,
 ) (*ec2types.NetworkInterface, error) {
 	eniDescription := CreateENIDescriptionPrefix + *description
 
@@ -127,10 +128,11 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 	}
 
 	createInput := &ec2.CreateNetworkInterfaceInput{
-		Description:       aws.String(eniDescription),
-		Groups:            ec2SecurityGroups,
-		SubnetId:          subnetId,
-		TagSpecifications: tagSpecifications,
+		Description:                     aws.String(eniDescription),
+		Groups:                          ec2SecurityGroups,
+		SubnetId:                        subnetId,
+		TagSpecifications:               tagSpecifications,
+		ConnectionTrackingSpecification: connectionTrackingSpec,
 	}
 
 	if ipResourceCount != nil {
@@ -145,6 +147,10 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 			createInput.SecondaryPrivateIpAddressCount = aws.Int32(int32(secondaryPrivateIPCount))
 		} else if ipV4PrefixCount != 0 {
 			createInput.Ipv4PrefixCount = aws.Int32(int32(ipV4PrefixCount))
+		}
+
+		if ipResourceCount.IPv6PrefixCount != 0 {
+			createInput.Ipv6PrefixCount = aws.Int32(int32(ipResourceCount.IPv6PrefixCount))
 		}
 	}
 
@@ -318,9 +324,9 @@ func (h *ec2APIHelper) AssociateBranchToTrunk(trunkInterfaceId *string, branchIn
 // CreateAndAttachNetworkInterface creates and attaches the network interface to the instance. The function will
 // wait till the interface is successfully attached
 func (h *ec2APIHelper) CreateAndAttachNetworkInterface(instanceId *string, subnetId *string, securityGroups []string,
-	tags []ec2types.Tag, deviceIndex *int32, description *string, interfaceType *string, ipResourceCount *config.IPResourceCount,
+	tags []ec2types.Tag, deviceIndex *int32, description *string, interfaceType *string, ipResourceCount *config.IPResourceCount, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest,
 ) (*ec2types.NetworkInterface, error) {
-	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, ipResourceCount, interfaceType)
+	nwInterface, err := h.CreateNetworkInterface(description, subnetId, securityGroups, tags, ipResourceCount, interfaceType, connectionTrackingSpec)
 	if err != nil {
 		return nil, fmt.Errorf("creating network interface, %w", err)
 	}
@@ -570,6 +576,58 @@ func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.R
 	return err
 }
 
+func (h *ec2APIHelper) AssignIPv6PrefixAndWaitTillReady(eniID string, count int) ([]string, error) {
+	count32, err := utils.IntToInt32(count)
+	if err != nil {
+		return nil, fmt.Errorf("invalid count: %v", err)
+	}
+
+	input := &ec2.AssignIpv6AddressesInput{
+		NetworkInterfaceId: &eniID,
+		Ipv6PrefixCount:    aws.Int32(count32),
+	}
+
+	output, err := h.ec2Wrapper.AssignIpv6Addresses(input)
+	if err != nil {
+		return nil, err
+	}
+
+	if output == nil || len(output.AssignedIpv6Prefixes) == 0 {
+		return nil, fmt.Errorf("failed to assign %d IPv6 prefix(es) to eni %s", count, eniID)
+	}
+
+	var assignedPrefixes []string
+	ErrPrefixNotReady := fmt.Errorf("IPv6 prefix not yet visible on ENI")
+
+	err = retry.OnError(waitForIPAttachment,
+		func(err error) bool { return err == ErrPrefixNotReady },
+		func() error {
+			interfaces, descErr := h.DescribeNetworkInterfaces([]string{eniID})
+			if descErr != nil {
+				return descErr
+			}
+			if len(interfaces) != 1 {
+				return fmt.Errorf("expected 1 interface, got %d", len(interfaces))
+			}
+			assignedPrefixes = nil
+			ipv6Prefixes := map[string]bool{}
+			for _, p := range interfaces[0].Ipv6Prefixes {
+				if p.Ipv6Prefix != nil {
+					ipv6Prefixes[*p.Ipv6Prefix] = true
+				}
+			}
+			for _, p := range output.AssignedIpv6Prefixes {
+				if _, ok := ipv6Prefixes[p]; !ok {
+					return ErrPrefixNotReady
+				}
+				assignedPrefixes = append(assignedPrefixes, p)
+			}
+			return nil
+		})
+
+	return assignedPrefixes, err
+}
+
 func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error) {
 	filters := []ec2types.Filter{
 		{
@@ -602,6 +660,9 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*
 			nwInterfaces = append(nwInterfaces, &ec2types.NetworkInterface{
 				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
 				TagSet:             nwInterface.TagSet,
+				Groups:             nwInterface.Groups,
+				Ipv4Prefixes:       nwInterface.Ipv4Prefixes,
+				Ipv6Prefixes:       nwInterface.Ipv6Prefixes,
 			})
 		}
 

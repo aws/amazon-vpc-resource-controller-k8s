@@ -248,6 +248,25 @@ func TestCondition_GetPodDataStoreSyncStatus(t *testing.T) {
 	}
 }
 
+func TestCondition_IsBranchENIPrefixDelegationEnabled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockK8s := mock_k8s.NewMockK8sWrapper(ctrl)
+
+	enabledConfigMap := &v1.ConfigMap{Data: map[string]string{config.EnableBranchENIPrefixDelegationKey: "true"}}
+	mockK8s.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(enabledConfigMap, nil)
+
+	conditionsEnabled := NewControllerConditions(zap.New(), mockK8s, false)
+	assert.True(t, conditionsEnabled.IsBranchENIPrefixDelegationEnabled())
+
+	disabledConfigMap := &v1.ConfigMap{Data: map[string]string{config.EnableBranchENIPrefixDelegationKey: "false"}}
+	mockK8s.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(disabledConfigMap, nil)
+
+	conditionsDisabled := NewControllerConditions(zap.New(), mockK8s, false)
+	assert.False(t, conditionsDisabled.IsBranchENIPrefixDelegationEnabled())
+}
+
 func getAwsNodeDaemonSet(podENIEnabled string) *appsv1.DaemonSet {
 	return &appsv1.DaemonSet{
 		Spec: appsv1.DaemonSetSpec{

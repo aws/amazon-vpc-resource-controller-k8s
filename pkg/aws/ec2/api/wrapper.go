@@ -58,6 +58,7 @@ type EC2Wrapper interface {
 	DeleteNetworkInterface(ctx context.Context, input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error)
 	AssignPrivateIPAddresses(input *ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error)
 	UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddressesInput) (*ec2.UnassignPrivateIpAddressesOutput, error)
+	AssignIpv6Addresses(input *ec2.AssignIpv6AddressesInput) (*ec2.AssignIpv6AddressesOutput, error)
 	DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error)
 	DescribeNetworkInterfacesPages(ctx context.Context, input *ec2.DescribeNetworkInterfacesInput) ([]*ec2types.NetworkInterface, error)
 	CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
@@ -801,6 +802,17 @@ func (e *ec2Wrapper) UnassignPrivateIPAddresses(input *ec2.UnassignPrivateIpAddr
 	}
 
 	return unAssignPrivateIPAddressesOutput, err
+}
+
+func (e *ec2Wrapper) AssignIpv6Addresses(input *ec2.AssignIpv6AddressesInput) (*ec2.AssignIpv6AddressesOutput, error) {
+	start := time.Now()
+	output, err := e.userServiceClient.AssignIpv6Addresses(context.TODO(), input)
+	ec2APICallLatencies.WithLabelValues("assign_ipv6_addresses").Observe(timeSinceMs(start))
+	ec2APICallCnt.Inc()
+	if err != nil {
+		ec2APIErrCnt.Inc()
+	}
+	return output, err
 }
 
 func (e *ec2Wrapper) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {

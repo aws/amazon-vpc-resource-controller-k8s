@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_pod "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
 	mock_trunk "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk"
@@ -29,6 +30,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
@@ -86,6 +88,7 @@ func getProviderAndMocks(ctrl *gomock.Controller) (branchENIProvider, *mock_pod.
 		log:           log,
 		trunkENICache: make(map[string]trunk.TrunkENI),
 		ctx:           ctx,
+		conditions:    &stubConditions{},
 	}, mockPodAPI, mockSGPAPI, mockK8sAPI
 }
 
@@ -100,6 +103,7 @@ func getProviderAndMockK8sWrapper(ctrl *gomock.Controller) (branchENIProvider, *
 		},
 		log:           log,
 		trunkENICache: make(map[string]trunk.TrunkENI),
+		conditions:    &stubConditions{},
 	}, mockK8sWrapper
 }
 
@@ -108,14 +112,27 @@ func getProviderWithMockWorker(ctrl *gomock.Controller) (branchENIProvider, *moc
 	return branchENIProvider{
 		log:        zap.New(zap.UseDevMode(true)).WithName("branch provider"),
 		workerPool: mockWorker,
+		conditions: &stubConditions{},
 	}, mockWorker
 }
+
+// stubConditions is a minimal stub that returns false for all feature checks.
+type stubConditions struct{}
+
+func (s *stubConditions) IsWindowsIPAMEnabled() bool                { return false }
+func (s *stubConditions) IsWindowsPrefixDelegationEnabled() bool    { return false }
+func (s *stubConditions) IsBranchENIPrefixDelegationEnabled() bool  { return false }
+func (s *stubConditions) IsIPv6Cluster() bool                       { return false }
+func (s *stubConditions) IsOldVPCControllerDeploymentPresent() bool { return false }
+func (s *stubConditions) GetPodDataStoreSyncStatus() bool           { return false }
+func (s *stubConditions) SetPodDataStoreSyncStatus(_ bool)          {}
 
 func getProvider() branchENIProvider {
 	log := zap.New(zap.UseDevMode(true)).WithName("branch provider")
 	return branchENIProvider{
 		log:           log,
 		trunkENICache: make(map[string]trunk.TrunkENI),
+		conditions:    &stubConditions{},
 	}
 }
 
@@ -213,6 +230,7 @@ func TestBranchENIProvider_DeleteBranchUsedByPods(t *testing.T) {
 	provider.trunkENICache[NodeName] = fakeTrunk1
 	provider.trunkENICache[NodeName+"2"] = fakeTrunk2
 
+	fakeTrunk1.EXPECT().HasPrefixAllocation(PodUID1).Return(false)
 	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1)
 
 	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
@@ -234,6 +252,7 @@ func TestBranchENIProvider_DeleteBranchUsedByPods_PodNotFound(t *testing.T) {
 	provider.trunkENICache[NodeName] = fakeTrunk1
 	provider.trunkENICache[NodeName+"2"] = fakeTrunk2
 
+	fakeTrunk1.EXPECT().HasPrefixAllocation(PodUID1).Return(false)
 	fakeTrunk1.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1)
 
 	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
@@ -627,4 +646,241 @@ func TestUnSupportedNodeEvents_Windows(t *testing.T) {
 
 	supported := provider.IsInstanceSupported(mockInstance)
 	assert.False(t, supported)
+}
+
+// --- Prefix Delegation Provider Tests ---
+
+func TestBranchENIProvider_CreateAndAnnotateResources_PrefixDelegation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockConditions.EXPECT().IsBranchENIPrefixDelegationEnabled().Return(true).AnyTimes()
+	provider.conditions = mockConditions
+
+	resCount := 1
+	prefixENIDetail := &trunk.ENIDetails{ID: "eni-prefix-1", IPV4Addr: "10.0.0.1", PrefixCIDR: "10.0.0.0/28"}
+	expectedAnnotation, _ := json.Marshal([]*trunk.ENIDetails{prefixENIDetail})
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+	fakeTrunk.EXPECT().AllocateIPFromSharedENI(MockPod1, SecurityGroups).Return(prefixENIDetail, nil)
+	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1, config.ResourceNamePodENI,
+		string(expectedAnnotation)).Return(nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
+
+	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
+
+	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_CreateAndAnnotateResources_PrefixDelegation_AtCapacity(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// Initialize cooldown for the requeue delay
+	mockK8sForCooldown := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sForCooldown.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(
+		&v1.ConfigMap{Data: map[string]string{config.BranchENICooldownPeriodKey: "30"}}, nil)
+	cooldown.InitCoolDownPeriod(mockK8sForCooldown, zap.New())
+
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockConditions.EXPECT().IsBranchENIPrefixDelegationEnabled().Return(true).AnyTimes()
+	provider.conditions = mockConditions
+
+	resCount := 1
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+	fakeTrunk.EXPECT().AllocateIPFromSharedENI(MockPod1, SecurityGroups).Return(nil, trunk.ErrCurrentlyAtMaxCapacity)
+
+	result, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
+
+	assert.NoError(t, err)
+	assert.True(t, result.Requeue)
+}
+
+func TestBranchENIProvider_CreateAndAnnotateResources_PrefixDelegation_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockConditions.EXPECT().IsBranchENIPrefixDelegationEnabled().Return(true).AnyTimes()
+	provider.conditions = mockConditions
+
+	resCount := 1
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+	fakeTrunk.EXPECT().AllocateIPFromSharedENI(MockPod1, SecurityGroups).Return(nil, MockError)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchAllocationFailed, gomock.Any(), v1.EventTypeWarning)
+
+	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
+
+	assert.Error(t, err)
+}
+
+func TestBranchENIProvider_CreateAndAnnotateResources_PrefixDelegation_AnnotateError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockConditions.EXPECT().IsBranchENIPrefixDelegationEnabled().Return(true).AnyTimes()
+	provider.conditions = mockConditions
+
+	resCount := 1
+	prefixENIDetail := &trunk.ENIDetails{ID: "eni-prefix-1", IPV4Addr: "10.0.0.1"}
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+	fakeTrunk.EXPECT().AllocateIPFromSharedENI(MockPod1, SecurityGroups).Return(prefixENIDetail, nil)
+	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1, config.ResourceNamePodENI,
+		gomock.Any()).Return(MockError)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchENIAnnotationFailed, gomock.Any(), v1.EventTypeWarning)
+
+	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
+
+	assert.Error(t, err)
+}
+
+func TestBranchENIProvider_DeleteBranchUsedByPods_PrefixDelegation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	fakeTrunk.EXPECT().HasPrefixAllocation(PodUID1).Return(true)
+	fakeTrunk.EXPECT().FreePrefixIP(PodUID1)
+
+	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
+
+	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_DeleteBranchUsedByPods_PrefixDelegation_FallbackToLegacy(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	// Pod doesn't have prefix allocation — falls back to legacy cooldown queue
+	fakeTrunk.EXPECT().HasPrefixAllocation(PodUID1).Return(false)
+	fakeTrunk.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1)
+
+	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
+
+	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_DeleteBranchUsedByPods_PrefixDelegation_ToggleOff(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	// Pod was allocated via prefix delegation, but PD is now disabled.
+	// Cleanup should still use FreePrefixIP because the allocation exists.
+	fakeTrunk.EXPECT().HasPrefixAllocation(PodUID1).Return(true)
+	fakeTrunk.EXPECT().FreePrefixIP(PodUID1)
+
+	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
+
+	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_UpdateResourceCapacity_PrefixDelegationIPv4(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, _, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockConditions.EXPECT().IsBranchENIPrefixDelegationEnabled().Return(true).AnyTimes()
+	mockConditions.EXPECT().IsIPv6Cluster().Return(false).AnyTimes()
+
+	provider.conditions = mockConditions
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	instanceType := "c5.xlarge"
+	expectedCapacity := vpc.Limits[instanceType].BranchInterface * 16
+
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().Type().Return(instanceType)
+	mockK8sAPI.EXPECT().AdvertiseCapacityIfNotSet(NodeName, config.ResourceNamePodENI, expectedCapacity).Return(nil)
+
+	err := provider.UpdateResourceCapacity(mockInstance)
+	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_UpdateResourceCapacity_PrefixDelegationIPv6(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, _, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockConditions.EXPECT().IsBranchENIPrefixDelegationEnabled().Return(true).AnyTimes()
+	mockConditions.EXPECT().IsIPv6Cluster().Return(true).AnyTimes()
+
+	provider.conditions = mockConditions
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	instanceType := "c5.xlarge"
+	expectedCapacity := vpc.Limits[instanceType].BranchInterface * 64
+
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().Type().Return(instanceType)
+	mockK8sAPI.EXPECT().AdvertiseCapacityIfNotSet(NodeName, config.ResourceNamePodENI, expectedCapacity).Return(nil)
+
+	err := provider.UpdateResourceCapacity(mockInstance)
+	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_UpdateResourceCapacity_NoPrefixDelegation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, _, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockConditions := mock_condition.NewMockConditions(ctrl)
+	mockConditions.EXPECT().IsBranchENIPrefixDelegationEnabled().Return(false).AnyTimes()
+	provider.conditions = mockConditions
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	instanceType := "c5.xlarge"
+	expectedCapacity := vpc.Limits[instanceType].BranchInterface
+
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().Type().Return(instanceType)
+	mockK8sAPI.EXPECT().AdvertiseCapacityIfNotSet(NodeName, config.ResourceNamePodENI, expectedCapacity).Return(nil)
+
+	err := provider.UpdateResourceCapacity(mockInstance)
+	assert.NoError(t, err)
 }

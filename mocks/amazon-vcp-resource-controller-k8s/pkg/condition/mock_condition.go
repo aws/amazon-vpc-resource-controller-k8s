@@ -102,6 +102,34 @@ func (mr *MockConditionsMockRecorder) IsWindowsPrefixDelegationEnabled() *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsWindowsPrefixDelegationEnabled", reflect.TypeOf((*MockConditions)(nil).IsWindowsPrefixDelegationEnabled))
 }
 
+// IsBranchENIPrefixDelegationEnabled mocks base method.
+func (m *MockConditions) IsBranchENIPrefixDelegationEnabled() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsBranchENIPrefixDelegationEnabled")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsBranchENIPrefixDelegationEnabled indicates an expected call of IsBranchENIPrefixDelegationEnabled.
+func (mr *MockConditionsMockRecorder) IsBranchENIPrefixDelegationEnabled() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsBranchENIPrefixDelegationEnabled", reflect.TypeOf((*MockConditions)(nil).IsBranchENIPrefixDelegationEnabled))
+}
+
+// IsIPv6Cluster mocks base method.
+func (m *MockConditions) IsIPv6Cluster() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsIPv6Cluster")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsIPv6Cluster indicates an expected call of IsIPv6Cluster.
+func (mr *MockConditionsMockRecorder) IsIPv6Cluster() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsIPv6Cluster", reflect.TypeOf((*MockConditions)(nil).IsIPv6Cluster))
+}
+
 // SetPodDataStoreSyncStatus mocks base method.
 func (m *MockConditions) SetPodDataStoreSyncStatus(arg0 bool) {
 	m.ctrl.T.Helper()

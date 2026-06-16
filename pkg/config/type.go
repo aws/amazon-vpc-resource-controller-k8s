@@ -70,11 +70,12 @@ const (
 )
 
 const (
-	LeaderElectionKey                = "cp-vpc-resource-controller"
-	LeaderElectionNamespace          = "kube-system"
-	VpcCniConfigMapName              = "amazon-vpc-cni"
-	EnableWindowsIPAMKey             = "enable-windows-ipam"
-	EnableWindowsPrefixDelegationKey = "enable-windows-prefix-delegation"
+	LeaderElectionKey                  = "cp-vpc-resource-controller"
+	LeaderElectionNamespace            = "kube-system"
+	VpcCniConfigMapName                = "amazon-vpc-cni"
+	EnableWindowsIPAMKey               = "enable-windows-ipam"
+	EnableWindowsPrefixDelegationKey   = "enable-windows-prefix-delegation"
+	EnableBranchENIPrefixDelegationKey = "enable-branch-eni-prefix-delegation"
 	// TODO: we will deprecate the confusing naming of Windows flags eventually
 	WarmPrefixTarget = "warm-prefix-target"
 	WarmIPTarget     = "warm-ip-target"
@@ -97,12 +98,14 @@ type ResourceType string
 const (
 	ResourceTypeIPv4Address ResourceType = "IPv4Address"
 	ResourceTypeIPv4Prefix  ResourceType = "IPv4Prefix"
+	ResourceTypeIPv6Prefix  ResourceType = "IPv6Prefix"
 )
 
-// IPResourceCount contains the arguments for number of IPv4 resources to request
+// IPResourceCount contains the arguments for number of IP resources to request
 type IPResourceCount struct {
 	SecondaryIPv4Count int
 	IPv4PrefixCount    int
+	IPv6PrefixCount    int
 }
 
 // Events metadata

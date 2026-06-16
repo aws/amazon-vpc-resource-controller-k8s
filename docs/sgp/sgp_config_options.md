@@ -24,3 +24,5 @@ Events:
   ----    ------                          ----  ----                     -------
   Normal  BranchENICoolDownPeriodUpdated  18s   vpc-resource-controller  Branch ENI cool down period has been updated to 1m30s
 ```
+
+* **enable-branch-eni-prefix-delegation**: Allow for branch ENI sharing and prefix delegation to Branch ENIs. By default, each pod using SGPP will receive its own branch ENI. Setting this field to true will allow for the sharing of branch ENIs on a **best-effort basis** for pods that have the same `SecurityGrouPolicy` applied to them.

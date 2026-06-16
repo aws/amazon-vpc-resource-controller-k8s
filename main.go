@@ -88,6 +88,7 @@ func init() {
 // To Watch for old controller deployments, windows IPAM will not be enabled till the old controller
 // deployments are deleted by users
 // +kubebuilder:rbac:groups=apps,resources=deployments,namespace=kube-system,resourceNames=vpc-resource-controller,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=daemonsets,namespace=kube-system,resourceNames=aws-node,verbs=get;list;watch
 // +kubebuilder:rbac:groups=crd.k8s.amazonaws.com,resources=eniconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies,verbs=get;list;watch
 // +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=cninodes,verbs=get;list;watch;create;delete
@@ -303,6 +304,7 @@ func main() {
 		instanceClientBurst, userClientQPS, userClientBurst, setupLog)
 	if err != nil {
 		setupLog.Error(err, "unable to create ec2 wrapper")
+		os.Exit(1)
 	}
 
 	k8sApi := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), ctx)
