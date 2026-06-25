@@ -202,7 +202,7 @@ func Test_AddNode_CNINode_Existing(t *testing.T) {
 		node:     managedNode,
 	}
 
-	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil).Times(1)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil).Times(2)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(expectedJob)))
 	mock.MockK8sAPI.EXPECT().CreateCNINode(v1Node, mockClusterName).Return(nil).Times(0)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: v1Node.Name}).Return(&rcV1alpha1.CNINode{}, nil).Times(2)
@@ -225,7 +225,7 @@ func Test_AddNode_CNINode_Not_Existing(t *testing.T) {
 		node:     managedNode,
 	}
 
-	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil).Times(1)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil).Times(2)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(expectedJob)))
 	mock.MockK8sAPI.EXPECT().CreateCNINode(v1Node, mock.Manager.clusterName).Return(nil).Times(1)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: v1Node.Name}).Return(
@@ -247,7 +247,7 @@ func Test_AddNode_UnManaged(t *testing.T) {
 	nodeWithoutLabel := v1Node.DeepCopy()
 	nodeWithoutLabel.Labels = map[string]string{}
 
-	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithoutLabel, nil).Times(1)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithoutLabel, nil).Times(2)
 	mock.MockK8sAPI.EXPECT().CreateCNINode(nodeWithoutLabel, mock.Manager.clusterName).Return(nil).Times(1)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithoutLabel.Name}).Return(
 		&rcV1alpha1.CNINode{}, apierrors.NewNotFound(schema.GroupResource{Group: "vpcresources.k8s.aws", Resource: "1"}, "test")).
@@ -287,7 +287,7 @@ func Test_AddNode_CustomNetworking_CNINode(t *testing.T) {
 
 	nodeWithENIConfig := v1Node.DeepCopy()
 
-	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil).Times(2)
 	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil).Times(1)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
 	mock.MockK8sAPI.EXPECT().CreateCNINode(nodeWithENIConfig, mock.Manager.clusterName).Return(nil).Times(1)
@@ -364,7 +364,7 @@ func Test_AddNode_CustomNetworking_NodeLabel(t *testing.T) {
 	nodeWithENIConfig := v1Node.DeepCopy()
 	nodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
 
-	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil).Times(2)
 	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil).Times(1)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
 	mock.MockK8sAPI.EXPECT().CreateCNINode(nodeWithENIConfig, mock.Manager.clusterName).Return(nil).Times(1)
@@ -397,7 +397,7 @@ func Test_AddNode_CustomNetworking_Incorrect_ENIConfig(t *testing.T) {
 	nodeWithENIConfig := v1Node.DeepCopy()
 	nodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
 
-	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil).Times(2)
 	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig_empty_sg, nil)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
 	mock.MockK8sAPI.EXPECT().CreateCNINode(nodeWithENIConfig, mockClusterName).Return(nil).Times(1)

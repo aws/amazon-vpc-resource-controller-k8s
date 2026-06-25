@@ -217,6 +217,16 @@ func (m *manager) AddNode(nodeName string) error {
 		addedMsg = "node added as an un-managed node"
 	}
 
+	// Defense-in-depth against a node deleted while this lock-free AddNode is in
+	// flight. The node controller already serializes Add/Delete per node key, so
+	// this is belt-and-suspenders for any future caller that drives AddNode off a
+	// different controller. Cheap informer-cache read (no API call), done outside
+	// the lock so it doesn't widen the critical section.
+	if _, err := m.wrapper.K8sAPI.GetNode(k8sNode.Name); err != nil {
+		log.Info("node no longer exists in cache before publishing, skipping add", "error", err.Error())
+		return nil
+	}
+
 	// Critical section: in-memory dataStore mutation + job submission only. The
 	// double-check (inside storeNodeIfAbsent) guards against a concurrent AddNode
 	// for the same node (first writer wins); the loser discards its computed node.
@@ -234,13 +244,18 @@ func (m *manager) AddNode(nodeName string) error {
 // submitting an Init job when submit is true. It returns false (changing nothing)
 // if the node was already added by a concurrent AddNode - first writer wins.
 func (m *manager) storeNodeIfAbsent(nodeName string, newNode node.Node, submit bool) bool {
+	// Critical section kept to the found-check + map write only.
 	m.lock.Lock()
-	defer m.lock.Unlock()
-
 	if _, found := m.dataStore[nodeName]; found {
+		m.lock.Unlock()
 		return false
 	}
 	m.dataStore[nodeName] = newNode
+	m.lock.Unlock()
+
+	// SubmitJob is intentionally OUTSIDE the lock: only the winner (the goroutine
+	// that set the entry) reaches here, so the single-job-per-node guarantee still
+	// holds and the workqueue Add never runs under the manager lock.
 	if submit {
 		m.worker.SubmitJob(AsyncOperationJob{
 			op:       Init,
@@ -350,15 +365,19 @@ func (m *manager) UpdateNode(nodeName string) error {
 // may be nil to leave the datastore entry untouched (e.g. StillManaged).
 func (m *manager) applyNodeUpdateIfCurrent(nodeName string, expected, nodeToStore, nodeForJob node.Node, op AsyncOperation) bool {
 	m.lock.Lock()
-	defer m.lock.Unlock()
 
 	current, ok := m.dataStore[nodeName]
 	if !ok || current != expected {
+		m.lock.Unlock()
 		return false
 	}
 	if nodeToStore != nil {
 		m.dataStore[nodeName] = nodeToStore
 	}
+	m.lock.Unlock()
+
+	// SubmitJob OUTSIDE the lock (only the CAS winner reaches here), keeping the
+	// critical section to the in-memory map check + write.
 	m.worker.SubmitJob(AsyncOperationJob{
 		op:       op,
 		node:     nodeForJob,
