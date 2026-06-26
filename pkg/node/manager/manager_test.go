@@ -670,13 +670,14 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+	mock := NewMock(ctrl, map[string]node.Node{})
 
 	job := AsyncOperationJob{
 		node:     mock.MockNode,
 		nodeName: nodeName,
 		op:       Init,
 	}
+	mock.Manager.dataStore[nodeName] = mock.MockNode
 
 	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{})
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
@@ -691,13 +692,14 @@ func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+	mock := NewMock(ctrl, map[string]node.Node{})
 
 	job := AsyncOperationJob{
 		node:     mock.MockNode,
 		nodeName: nodeName,
 		op:       Init,
 	}
+	mock.Manager.dataStore[nodeName] = mock.MockNode
 
 	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{
 		Err: errors.New("RequestLimitExceeded: Request limit exceeded.\n\tstatus code: 503, request id: 123-123-123-123-123"),
