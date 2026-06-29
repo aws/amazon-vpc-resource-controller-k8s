@@ -158,9 +158,9 @@ func main() {
 		"Enable the feature flag for Windows prefix delegation")
 	flag.StringVar(&region, "aws-region", "", "The aws region of the k8s cluster")
 	flag.StringVar(&vpcID, "vpc-id", "", "The VPC ID where EKS cluster is deployed")
-	flag.IntVar(&nodeWorkerCount, "node-mgr-workers", 10, "The number of node workers")
-	flag.IntVar(&userClientQPS, "user-client-qps", 12, "The user client QPS rate")
-	flag.IntVar(&userClientBurst, "user-client-burst", 18, "The user client burst limit")
+	flag.IntVar(&nodeWorkerCount, "node-mgr-workers", 20, "The number of node workers")
+	flag.IntVar(&userClientQPS, "user-client-qps", 24, "The user client QPS rate")
+	flag.IntVar(&userClientBurst, "user-client-burst", 36, "The user client burst limit")
 	flag.IntVar(&instanceClientQPS, "instance-client-qps", 12, "The instance client QPS rate")
 	flag.IntVar(&instanceClientBurst, "instance-client-burst", 18, "The instance client burst limit")
 	// API Server QPS & burst
