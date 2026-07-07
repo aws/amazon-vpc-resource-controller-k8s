@@ -48,6 +48,7 @@ jobs:
       - uses: actions/setup-go@v6.1.0
         with:
           go-version-file: go.mod
+          check-latest: true
           cache-dependency-path: "**/go.sum"
       - name: Install `govulncheck`
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -63,6 +64,7 @@ jobs:
       - uses: actions/setup-go@v6.1.0
         with:
           go-version-file: go.mod
+          check-latest: true
           cache-dependency-path: "**/go.sum"
       - name: Install `gosec`
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest

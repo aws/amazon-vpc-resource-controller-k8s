@@ -126,10 +126,15 @@ func (b *Builder) Complete(reconciler Reconciler) (healthz.Checker, error) {
 		Process: func(obj interface{}, _ bool) error {
 			// from oldest to newest
 			for _, d := range obj.(cache.Deltas) {
-				// Strip down the pod object and keep only the required details
+				// Convert the raw object to its stripped-down form. The converter
+				// may return nil to indicate the object is irrelevant (e.g., a pod
+				// without VPC resources) and should not be stored or reconciled.
 				convertedObj, err := b.converter.ConvertObject(d.Object)
 				if err != nil {
 					return err
+				}
+				if convertedObj == nil {
+					continue
 				}
 				switch d.Type {
 				case cache.Sync, cache.Added, cache.Updated:
