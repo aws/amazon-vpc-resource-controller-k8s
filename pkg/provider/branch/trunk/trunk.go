@@ -36,6 +36,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
@@ -258,9 +259,29 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 			log.Error(err, "failed to find free device index")
 			return err
 		}
+
 		// Trunk ENI doesn't need to have security group timeout as applied on primary ENI or branch ENIs as it is not a endpoint used in connection
-		trunk, err := t.ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceID, aws.String(t.instance.SubnetID()),
-			t.instance.CurrentInstanceSecurityGroups(), t.nodeIDTag, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil, nil)
+		var trunk *ec2types.NetworkInterface
+		backoff := wait.Backoff{
+			Duration: 5 * time.Second,
+			Factor:   2,
+			Jitter:   0.1,
+			Steps:    5,
+			Cap:      2 * time.Minute,
+		}
+		err = wait.ExponentialBackoff(backoff, func() (bool, error) {
+			var createErr error
+			trunk, createErr = t.ec2ApiHelper.CreateAndAttachNetworkInterface(&instanceID, aws.String(t.instance.SubnetID()),
+				t.instance.CurrentInstanceSecurityGroups(), t.nodeIDTag, &freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil, nil)
+			if createErr == nil {
+				return true, nil
+			}
+			if isIPExhaustionError(createErr) {
+				log.Info("trunk ENI creation failed due to IP exhaustion, retrying", "error", createErr.Error())
+				return false, nil // retry
+			}
+			return false, createErr // non-retryable, stop
+		})
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("create_trunk_eni").Inc()
 			return err
@@ -780,4 +801,11 @@ func (t *trunkENI) Introspect() IntrospectResponse {
 		response.DeleteQueue = append(response.DeleteQueue, *eni)
 	}
 	return response
+}
+
+// isIPExhaustionError returns true if the error is due to insufficient IPs in subnet
+func isIPExhaustionError(err error) bool {
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "InsufficientFreeAddressesInSubnet") ||
+		strings.Contains(errMsg, "InsufficientCidrBlocks")
 }
