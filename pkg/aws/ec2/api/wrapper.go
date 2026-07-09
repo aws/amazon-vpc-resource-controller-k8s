@@ -373,6 +373,19 @@ var (
 		},
 	)
 
+	// trunkENIAttachWaitLatency measures the time in seconds spent polling for a network interface
+	// attachment to reach the attached state (the describe-until-attached loop, up to a 5-minute cap),
+	// which no single EC2 API-call metric can capture. Unlike aws_nw_call_latency (kept in ms), this new
+	// latency is in seconds to match the other scale-out instrumentation.
+	trunkENIAttachWaitLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "trunk_eni_attach_wait_latency",
+			Help:       "Time in seconds spent polling for a network interface attachment to reach the attached state",
+			Objectives: map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0},
+		},
+		[]string{"operation"},
+	)
+
 	prometheusRegistered = false
 )
 
@@ -419,6 +432,7 @@ func prometheusRegister() {
 			ec2DescribeNetworkInterfacesPagesAPICallCnt,
 			ec2DescribeNetworkInterfacesPagesAPIErrCnt,
 			NodeTerminationENICleanupFailure,
+			trunkENIAttachWaitLatency,
 		)
 
 		prometheusRegistered = true

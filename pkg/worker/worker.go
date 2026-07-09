@@ -16,6 +16,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -29,6 +30,36 @@ import (
 // Prometheus metrics
 var (
 	prometheusRegistered = false
+
+	// summaryObjectives mirrors the objectives map used by branch_provider_operation_latency
+	// (pkg/provider/branch/provider.go) so all controller latency summaries share the same quantiles.
+	summaryObjectives = map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0}
+
+	workerQueueDepth = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "worker_queue_depth",
+			Help: "The current number of jobs in the worker queue",
+		},
+		[]string{"resource_name"},
+	)
+
+	workerQueueWaitLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "worker_queue_wait_latency",
+			Help:       "Time in seconds a job waits in the worker queue from enqueue to worker pickup",
+			Objectives: summaryObjectives,
+		},
+		[]string{"resource_name"},
+	)
+
+	workerJobProcessLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "worker_job_process_latency",
+			Help:       "Worker-side job processing time in seconds",
+			Objectives: summaryObjectives,
+		},
+		[]string{"resource_name"},
+	)
 
 	jobsSubmittedCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -89,6 +120,11 @@ type worker struct {
 	Log logr.Logger
 	// queue is the k8s rate limiting queue to store the submitted jobs
 	queue workqueue.RateLimitingInterface
+	// enqueueTimes records, per queued job, the time it was submitted so the queue-wait latency can be
+	// observed at pickup. It is kept as a sidecar map rather than wrapping the queued item so that queue
+	// item identity (and therefore dedup/rate-limiter keying) is unchanged. Guarded by enqueueTimesLock.
+	enqueueTimes     map[interface{}]time.Time
+	enqueueTimesLock sync.Mutex
 }
 
 // NewDefaultWorkerPool returns a new worker pool for a give resource type with the given configuration
@@ -104,6 +140,7 @@ func NewDefaultWorkerPool(resourceName string, workerCount int, maxRequeue int,
 		Log:             logger,
 		queue:           workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		ctx:             ctx,
+		enqueueTimes:    make(map[interface{}]time.Time),
 	}
 }
 
@@ -114,7 +151,10 @@ func prometheusRegister() {
 			jobsSubmittedCount,
 			jobsCompletedCount,
 			jobsFailedCount,
-			jobsNotFoundCount)
+			jobsNotFoundCount,
+			workerQueueDepth,
+			workerQueueWaitLatency,
+			workerJobProcessLatency)
 
 		prometheusRegistered = true
 	}
@@ -132,14 +172,37 @@ func (w *worker) SubmitJob(job interface{}) {
 		w.Log.V(1).Info("For informational / health check purpose only to check worker queue availability", "WorkerQueueLen", queueLen)
 		return
 	}
+	w.recordEnqueueTime(job)
 	w.queue.Add(job)
 	jobsSubmittedCount.WithLabelValues(w.resourceName).Inc()
+	workerQueueDepth.WithLabelValues(w.resourceName).Set(float64(w.queue.Len()))
 }
 
 // SubmitJobAfter submits the job to the work queue after the given time period
 func (w *worker) SubmitJobAfter(job interface{}, submitAfter time.Duration) {
+	w.recordEnqueueTime(job)
 	w.queue.AddAfter(job, submitAfter)
 	jobsSubmittedCount.WithLabelValues(w.resourceName).Inc()
+	workerQueueDepth.WithLabelValues(w.resourceName).Set(float64(w.queue.Len()))
+}
+
+// recordEnqueueTime stamps the current time against a job so the queue-wait latency can be measured when
+// the job is later picked up. Metrics-only: it does not affect queue item identity or ordering.
+func (w *worker) recordEnqueueTime(job interface{}) {
+	w.enqueueTimesLock.Lock()
+	defer w.enqueueTimesLock.Unlock()
+	w.enqueueTimes[job] = time.Now()
+}
+
+// popEnqueueTime returns and clears the recorded enqueue time for a job, if one was recorded.
+func (w *worker) popEnqueueTime(job interface{}) (time.Time, bool) {
+	w.enqueueTimesLock.Lock()
+	defer w.enqueueTimesLock.Unlock()
+	t, ok := w.enqueueTimes[job]
+	if ok {
+		delete(w.enqueueTimes, job)
+	}
+	return t, ok
 }
 
 // runWorker runs a worker that listens on new item on the worker queue
@@ -155,11 +218,21 @@ func (w *worker) processNextItem() (cont bool) {
 		return
 	}
 	defer w.queue.Done(job)
+	// A job has been dequeued, reflect the reduced depth for this pool.
+	workerQueueDepth.WithLabelValues(w.resourceName).Set(float64(w.queue.Len()))
+	// Observe how long the job waited between enqueue and pickup, if the enqueue time was recorded.
+	if enqueuedAt, ok := w.popEnqueueTime(job); ok {
+		workerQueueWaitLatency.WithLabelValues(w.resourceName).Observe(time.Since(enqueuedAt).Seconds())
+	}
 	log := w.Log.WithValues("job", job)
 
 	cont = true
 
-	if result, err := w.workerFunc(job); err != nil {
+	processStart := time.Now()
+	result, err := w.workerFunc(job)
+	workerJobProcessLatency.WithLabelValues(w.resourceName).Observe(time.Since(processStart).Seconds())
+
+	if err != nil {
 		if w.queue.NumRequeues(job) >= w.maxRetriesOnErr {
 			log.Error(err, "exceeded maximum retries", "max retries", w.maxRetriesOnErr)
 			w.queue.Forget(job)

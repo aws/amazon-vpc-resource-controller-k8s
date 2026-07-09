@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -31,22 +30,87 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	asyncWorker "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
 )
 
+// Prometheus metrics
+var (
+	prometheusRegistered = false
+
+	// summaryObjectives mirrors the objectives map used by branch_provider_operation_latency
+	// (pkg/provider/branch/provider.go) so all controller latency summaries share the same quantiles.
+	summaryObjectives = map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0}
+
+	// nodeManagerLockWaitLatency measures the time spent blocked waiting to acquire the node manager's
+	// global RWMutex, labeled by the operation performing the acquisition.
+	nodeManagerLockWaitLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "node_manager_lock_wait_latency",
+			Help:       "Time in seconds spent waiting to acquire the node manager lock",
+			Objectives: summaryObjectives,
+		},
+		[]string{"operation"},
+	)
+
+	// nodeManagerLockHoldLatency measures how long the node manager's global RWMutex is held,
+	// labeled by operation.
+	nodeManagerLockHoldLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "node_manager_lock_hold_latency",
+			Help:       "Time in seconds the node manager lock is held",
+			Objectives: summaryObjectives,
+		},
+		[]string{"operation"},
+	)
+
+	// nodeOnboardingLatency measures the end-to-end time from when a node's Init job is submitted until
+	// the node becomes ready (or fails to initialize), labeled by result.
+	nodeOnboardingLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "node_onboarding_latency",
+			Help:       "Time in seconds from node Init job submission to the node becoming ready",
+			Objectives: summaryObjectives,
+		},
+		[]string{"result"},
+	)
+)
+
+const (
+	lockOpAdd    = "add"
+	lockOpUpdate = "update"
+	lockOpDelete = "delete"
+	lockOpGet    = "get"
+)
+
+// prometheusRegister registers the node manager prometheus metrics.
+func prometheusRegister() {
+	if !prometheusRegistered {
+		metrics.Registry.MustRegister(
+			nodeManagerLockWaitLatency,
+			nodeManagerLockHoldLatency,
+			nodeOnboardingLatency)
+
+		prometheusRegistered = true
+	}
+}
+
 type manager struct {
 	// Log is the logger for node manager
 	Log logr.Logger
-	// lock to prevent multiple routines to write/update to data store concurrently
-	lock sync.RWMutex
+	// lock to prevent multiple routines to write/update to data store concurrently.
+	// Type is a build-tag alias (rwmutex.go / rwmutex_deadlock.go): plain sync.RWMutex
+	// in normal builds, go-deadlock's instrumented RWMutex under `-tags deadlock`.
+	lock rwMutex
 	// dataStore is the in memory data store of all the managed/un-managed nodes in the cluster
 	dataStore map[string]node.Node
 	// resourceManager provides the resource provider for all supported resources
@@ -97,6 +161,9 @@ type AsyncOperationJob struct {
 	op       AsyncOperation
 	node     node.Node
 	nodeName string
+	// submittedAt records when an Init job was submitted so node_onboarding_latency can be measured
+	// when the node becomes ready in performAsyncOperation. Zero for non-Init jobs.
+	submittedAt time.Time
 }
 
 const pausingHealthCheckDuration = 10 * time.Minute
@@ -104,6 +171,8 @@ const pausingHealthCheckDuration = 10 * time.Minute
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
 	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+
+	prometheusRegister()
 
 	manager := &manager{
 		resourceManager:   resourceManager,
@@ -157,8 +226,14 @@ func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 
 // GetNode returns the node from in memory data store
 func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
+	waitStart := time.Now()
 	m.lock.RLock()
-	defer m.lock.RUnlock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpGet).Observe(time.Since(waitStart).Seconds())
+	holdStart := time.Now()
+	defer func() {
+		m.lock.RUnlock()
+		nodeManagerLockHoldLatency.WithLabelValues(lockOpGet).Observe(time.Since(holdStart).Seconds())
+	}()
 
 	node, found = m.dataStore[nodeName]
 	return
@@ -245,22 +320,28 @@ func (m *manager) AddNode(nodeName string) error {
 // if the node was already added by a concurrent AddNode - first writer wins.
 func (m *manager) storeNodeIfAbsent(nodeName string, newNode node.Node, submit bool) bool {
 	// Critical section kept to the found-check + map write only.
+	waitStart := time.Now()
 	m.lock.Lock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpAdd).Observe(time.Since(waitStart).Seconds())
+	holdStart := time.Now()
 	if _, found := m.dataStore[nodeName]; found {
 		m.lock.Unlock()
+		nodeManagerLockHoldLatency.WithLabelValues(lockOpAdd).Observe(time.Since(holdStart).Seconds())
 		return false
 	}
 	m.dataStore[nodeName] = newNode
 	m.lock.Unlock()
+	nodeManagerLockHoldLatency.WithLabelValues(lockOpAdd).Observe(time.Since(holdStart).Seconds())
 
 	// SubmitJob is intentionally OUTSIDE the lock: only the winner (the goroutine
 	// that set the entry) reaches here, so the single-job-per-node guarantee still
 	// holds and the workqueue Add never runs under the manager lock.
 	if submit {
 		m.worker.SubmitJob(AsyncOperationJob{
-			op:       Init,
-			node:     newNode,
-			nodeName: nodeName,
+			op:          Init,
+			node:        newNode,
+			nodeName:    nodeName,
+			submittedAt: time.Now(),
 		})
 	}
 	return true
@@ -364,24 +445,30 @@ func (m *manager) UpdateNode(nodeName string) error {
 // (changing nothing) if the node was deleted or replaced concurrently. nodeToStore
 // may be nil to leave the datastore entry untouched (e.g. StillManaged).
 func (m *manager) applyNodeUpdateIfCurrent(nodeName string, expected, nodeToStore, nodeForJob node.Node, op AsyncOperation) bool {
+	waitStart := time.Now()
 	m.lock.Lock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpUpdate).Observe(time.Since(waitStart).Seconds())
+	holdStart := time.Now()
 
 	current, ok := m.dataStore[nodeName]
 	if !ok || current != expected {
 		m.lock.Unlock()
+		nodeManagerLockHoldLatency.WithLabelValues(lockOpUpdate).Observe(time.Since(holdStart).Seconds())
 		return false
 	}
 	if nodeToStore != nil {
 		m.dataStore[nodeName] = nodeToStore
 	}
 	m.lock.Unlock()
+	nodeManagerLockHoldLatency.WithLabelValues(lockOpUpdate).Observe(time.Since(holdStart).Seconds())
 
 	// SubmitJob OUTSIDE the lock (only the CAS winner reaches here), keeping the
 	// critical section to the in-memory map check + write.
 	m.worker.SubmitJob(AsyncOperationJob{
-		op:       op,
-		node:     nodeForJob,
-		nodeName: nodeName,
+		op:          op,
+		node:        nodeForJob,
+		nodeName:    nodeName,
+		submittedAt: time.Now(),
 	})
 	return true
 }
@@ -406,8 +493,14 @@ func (m *manager) GetNodeUpdateStatus(k8sNode *v1.Node, cachedNode node.Node) (N
 
 // DeleteNode deletes the nodes from the cache and cleans up the resources used by all the resource providers
 func (m *manager) DeleteNode(nodeName string) error {
+	waitStart := time.Now()
 	m.lock.Lock()
-	defer m.lock.Unlock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpDelete).Observe(time.Since(waitStart).Seconds())
+	holdStart := time.Now()
+	defer func() {
+		m.lock.Unlock()
+		nodeManagerLockHoldLatency.WithLabelValues(lockOpDelete).Observe(time.Since(holdStart).Seconds())
+	}()
 
 	log := m.Log.WithValues("node name", nodeName, "request", "delete")
 
@@ -425,9 +518,10 @@ func (m *manager) DeleteNode(nodeName string) error {
 	}
 
 	m.worker.SubmitJob(AsyncOperationJob{
-		op:       Delete,
-		node:     cachedNode,
-		nodeName: nodeName,
+		op:          Delete,
+		node:        cachedNode,
+		nodeName:    nodeName,
+		submittedAt: time.Now(),
 	})
 
 	log.Info("node removed from data store")
@@ -508,6 +602,10 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		utils.SendNodeEventWithNodeName(m.wrapper.K8sAPI, asyncJob.nodeName, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", m.controllerVersion), v1.EventTypeNormal, m.Log)
 		err = asyncJob.node.InitResources(m.resourceManager)
 		if err != nil {
+			// Observe node onboarding latency for the failed init before removing the node.
+			if !asyncJob.submittedAt.IsZero() {
+				nodeOnboardingLatency.WithLabelValues("error").Observe(time.Since(asyncJob.submittedAt).Seconds())
+			}
 			if pauseHealthCheckOnError(err) && !m.SkipHealthCheck() {
 				m.setStopHealthCheck()
 				log.Info("node manager sets a pause on health check due to observing a EC2 error", "error", err.Error())
@@ -519,6 +617,11 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 
 			// Node will be retried for init on next event
 			return ctrl.Result{}, nil
+		}
+
+		// InitResources succeeded and the node is now ready; observe the onboarding latency.
+		if !asyncJob.submittedAt.IsZero() {
+			nodeOnboardingLatency.WithLabelValues("success").Observe(time.Since(asyncJob.submittedAt).Seconds())
 		}
 
 		// If there's no error, we need to update the node so the capacity is advertised
