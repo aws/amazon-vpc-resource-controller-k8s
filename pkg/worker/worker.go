@@ -246,11 +246,19 @@ func (w *worker) processNextItem() (cont bool) {
 			return
 		}
 		log.Error(err, "re-queuing job", "retry count", w.queue.NumRequeues(job))
+		// Re-stamp the enqueue time (it was popped at pickup) so the requeued job gets a fresh
+		// queue-wait measurement, and refresh the depth gauge to reflect the re-added job.
+		w.recordEnqueueTime(job)
 		w.queue.AddRateLimited(job)
+		workerQueueDepth.WithLabelValues(w.resourceName).Set(float64(w.queue.Len()))
 		return
 	} else if result.Requeue {
 		log.V(1).Info("timed retry", "retry after", result.RequeueAfter)
+		// Re-stamp the enqueue time (it was popped at pickup) so the requeued job gets a fresh
+		// queue-wait measurement, and refresh the depth gauge to reflect the re-added job.
+		w.recordEnqueueTime(job)
 		w.queue.AddAfter(job, result.RequeueAfter)
+		workerQueueDepth.WithLabelValues(w.resourceName).Set(float64(w.queue.Len()))
 		return
 	}
 

@@ -35,7 +35,7 @@ import (
 
 // Prometheus metrics
 var (
-	prometheusRegistered = false
+	prometheusRegisterOnce sync.Once
 
 	// nodeInitStageLatency measures the latency in seconds of the serial segments of a single node Init
 	// job (loading instance details, then initializing each resource provider), labeled by stage.
@@ -59,10 +59,9 @@ const (
 
 // prometheusRegister registers the node prometheus metrics.
 func prometheusRegister() {
-	if !prometheusRegistered {
+	prometheusRegisterOnce.Do(func() {
 		metrics.Registry.MustRegister(nodeInitStageLatency)
-		prometheusRegistered = true
-	}
+	})
 }
 
 // initStageForResource maps a resource provider's resource name to the node Init stage label used for

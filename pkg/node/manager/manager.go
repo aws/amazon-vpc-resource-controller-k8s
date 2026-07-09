@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -45,7 +46,7 @@ import (
 
 // Prometheus metrics
 var (
-	prometheusRegistered = false
+	prometheusRegisterOnce sync.Once
 
 	// summaryObjectives mirrors the objectives map used by branch_provider_operation_latency
 	// (pkg/provider/branch/provider.go) so all controller latency summaries share the same quantiles.
@@ -94,14 +95,12 @@ const (
 
 // prometheusRegister registers the node manager prometheus metrics.
 func prometheusRegister() {
-	if !prometheusRegistered {
+	prometheusRegisterOnce.Do(func() {
 		metrics.Registry.MustRegister(
 			nodeManagerLockWaitLatency,
 			nodeManagerLockHoldLatency,
 			nodeOnboardingLatency)
-
-		prometheusRegistered = true
-	}
+	})
 }
 
 type manager struct {
@@ -464,11 +463,12 @@ func (m *manager) applyNodeUpdateIfCurrent(nodeName string, expected, nodeToStor
 
 	// SubmitJob OUTSIDE the lock (only the CAS winner reaches here), keeping the
 	// critical section to the in-memory map check + write.
+	// submittedAt is intentionally not stamped here: node_onboarding_latency is
+	// Init-only, and AsyncOperationJob.submittedAt is documented "Zero for non-Init jobs".
 	m.worker.SubmitJob(AsyncOperationJob{
-		op:          op,
-		node:        nodeForJob,
-		nodeName:    nodeName,
-		submittedAt: time.Now(),
+		op:       op,
+		node:     nodeForJob,
+		nodeName: nodeName,
 	})
 	return true
 }
@@ -517,11 +517,12 @@ func (m *manager) DeleteNode(nodeName string) error {
 		return nil
 	}
 
+	// submittedAt is intentionally not stamped here: node_onboarding_latency is
+	// Init-only, and AsyncOperationJob.submittedAt is documented "Zero for non-Init jobs".
 	m.worker.SubmitJob(AsyncOperationJob{
-		op:          Delete,
-		node:        cachedNode,
-		nodeName:    nodeName,
-		submittedAt: time.Now(),
+		op:       Delete,
+		node:     cachedNode,
+		nodeName: nodeName,
 	})
 
 	log.Info("node removed from data store")
