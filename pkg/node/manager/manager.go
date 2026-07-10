@@ -31,22 +31,85 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	asyncWorker "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
 )
 
+// Prometheus metrics
+var (
+	prometheusRegisterOnce sync.Once
+
+	// summaryObjectives mirrors the objectives map used by branch_provider_operation_latency
+	// (pkg/provider/branch/provider.go) so all controller latency summaries share the same quantiles.
+	summaryObjectives = map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0}
+
+	// nodeManagerLockWaitLatency measures the time spent blocked waiting to acquire the node manager's
+	// global RWMutex, labeled by the operation performing the acquisition.
+	nodeManagerLockWaitLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "node_manager_lock_wait_latency",
+			Help:       "Time in seconds spent waiting to acquire the node manager lock",
+			Objectives: summaryObjectives,
+		},
+		[]string{"operation"},
+	)
+
+	// nodeManagerLockHoldLatency measures how long the node manager's global RWMutex is held,
+	// labeled by operation.
+	nodeManagerLockHoldLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "node_manager_lock_hold_latency",
+			Help:       "Time in seconds the node manager lock is held",
+			Objectives: summaryObjectives,
+		},
+		[]string{"operation"},
+	)
+
+	// nodeOnboardingLatency measures the end-to-end time from when a node's Init job is submitted until
+	// the node becomes ready (or fails to initialize), labeled by result.
+	nodeOnboardingLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "node_onboarding_latency",
+			Help:       "Time in seconds from node Init job submission to the node becoming ready",
+			Objectives: summaryObjectives,
+		},
+		[]string{"result"},
+	)
+)
+
+const (
+	lockOpAdd    = "add"
+	lockOpUpdate = "update"
+	lockOpDelete = "delete"
+	lockOpGet    = "get"
+)
+
+// prometheusRegister registers the node manager prometheus metrics.
+func prometheusRegister() {
+	prometheusRegisterOnce.Do(func() {
+		metrics.Registry.MustRegister(
+			nodeManagerLockWaitLatency,
+			nodeManagerLockHoldLatency,
+			nodeOnboardingLatency)
+	})
+}
+
 type manager struct {
 	// Log is the logger for node manager
 	Log logr.Logger
-	// lock to prevent multiple routines to write/update to data store concurrently
-	lock sync.RWMutex
+	// lock to prevent multiple routines to write/update to data store concurrently.
+	// Type is a build-tag alias (rwmutex.go / rwmutex_deadlock.go): plain sync.RWMutex
+	// in normal builds, go-deadlock's instrumented RWMutex under `-tags deadlock`.
+	lock rwMutex
 	// dataStore is the in memory data store of all the managed/un-managed nodes in the cluster
 	dataStore map[string]node.Node
 	// resourceManager provides the resource provider for all supported resources
@@ -97,6 +160,9 @@ type AsyncOperationJob struct {
 	op       AsyncOperation
 	node     node.Node
 	nodeName string
+	// submittedAt records when an Init job was submitted so node_onboarding_latency can be measured
+	// when the node becomes ready in performAsyncOperation. Zero for non-Init jobs.
+	submittedAt time.Time
 }
 
 const pausingHealthCheckDuration = 10 * time.Minute
@@ -104,6 +170,8 @@ const pausingHealthCheckDuration = 10 * time.Minute
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
 	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+
+	prometheusRegister()
 
 	manager := &manager{
 		resourceManager:   resourceManager,
@@ -157,8 +225,14 @@ func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 
 // GetNode returns the node from in memory data store
 func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
+	waitStart := time.Now()
 	m.lock.RLock()
-	defer m.lock.RUnlock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpGet).Observe(time.Since(waitStart).Seconds())
+	holdStart := time.Now()
+	defer func() {
+		m.lock.RUnlock()
+		nodeManagerLockHoldLatency.WithLabelValues(lockOpGet).Observe(time.Since(holdStart).Seconds())
+	}()
 
 	node, found = m.dataStore[nodeName]
 	return
@@ -167,9 +241,12 @@ func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
 // AddNode adds the managed and un-managed nodes to the in memory data store, the
 // user of node can verify if the node is managed before performing any operations
 func (m *manager) AddNode(nodeName string) error {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
+	// All of the work below (K8s cache reads, the idempotent CNINode create, and
+	// node object construction) is performed WITHOUT holding the manager lock.
+	// None of it touches the shared dataStore, so multiple reconciler goroutines
+	// can run it in parallel. The manager lock is only taken for the final
+	// in-memory dataStore mutation + job submission, keeping the critical section
+	// tiny and relieving the inflow bottleneck during cache rebuilds.
 	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
 	if err != nil {
 		return fmt.Errorf("failed to add node %s, doesn't exist in cache anymore", nodeName)
@@ -177,11 +254,9 @@ func (m *manager) AddNode(nodeName string) error {
 
 	log := m.Log.WithValues("node name", k8sNode.Name, "request", "add")
 
-	var newNode node.Node
-	var nodeFound bool
-
-	_, nodeFound = m.dataStore[k8sNode.Name]
-	if nodeFound {
+	// Early out if the node is already processed. This avoids the CNINode create
+	// and management checks below. Uses the read lock only (via GetNode).
+	if _, found := m.GetNode(k8sNode.Name); found {
 		log.Info("node is already processed, not processing add event again")
 		return nil
 	}
@@ -196,32 +271,79 @@ func (m *manager) AddNode(nodeName string) error {
 		return err
 	}
 
-	var op AsyncOperation
-
+	var newNode node.Node
+	submit := false
+	// Preserve the original log verbosity: managed adds are logged at the default
+	// level (operationally useful), un-managed adds at V(1).
+	logVerbosity := 0
+	addedMsg := "node added as a managed node"
 	if shouldManage {
 		newNode = node.NewManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
 			GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
-		err := m.updateSubnetIfUsingENIConfig(newNode, k8sNode)
-		if err != nil {
+		if err := m.updateSubnetIfUsingENIConfig(newNode, k8sNode); err != nil {
 			return err
 		}
-		m.dataStore[k8sNode.Name] = newNode
-		log.Info("node added as a managed node")
-		op = Init
+		submit = true
 	} else {
 		newNode = node.NewUnManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
 			GetNodeOS(k8sNode))
-		m.dataStore[k8sNode.Name] = newNode
-		log.V(1).Info("node added as an un-managed node")
+		logVerbosity = 1
+		addedMsg = "node added as an un-managed node"
+	}
+
+	// Defense-in-depth against a node deleted while this lock-free AddNode is in
+	// flight. The node controller already serializes Add/Delete per node key, so
+	// this is belt-and-suspenders for any future caller that drives AddNode off a
+	// different controller. Cheap informer-cache read (no API call), done outside
+	// the lock so it doesn't widen the critical section.
+	if _, err := m.wrapper.K8sAPI.GetNode(k8sNode.Name); err != nil {
+		log.Info("node no longer exists in cache before publishing, skipping add", "error", err.Error())
 		return nil
 	}
 
-	m.worker.SubmitJob(AsyncOperationJob{
-		op:       op,
-		node:     newNode,
-		nodeName: nodeName,
-	})
+	// Critical section: in-memory dataStore mutation + job submission only. The
+	// double-check (inside storeNodeIfAbsent) guards against a concurrent AddNode
+	// for the same node (first writer wins); the loser discards its computed node.
+	// CreateCNINode above is idempotent, so the duplicated work is harmless.
+	if !m.storeNodeIfAbsent(k8sNode.Name, newNode, submit) {
+		log.Info("node is already processed, not processing add event again")
+		return nil
+	}
+
+	log.V(logVerbosity).Info(addedMsg)
 	return nil
+}
+
+// storeNodeIfAbsent publishes newNode into the datastore under the manager lock,
+// submitting an Init job when submit is true. It returns false (changing nothing)
+// if the node was already added by a concurrent AddNode - first writer wins.
+func (m *manager) storeNodeIfAbsent(nodeName string, newNode node.Node, submit bool) bool {
+	// Critical section kept to the found-check + map write only.
+	waitStart := time.Now()
+	m.lock.Lock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpAdd).Observe(time.Since(waitStart).Seconds())
+	holdStart := time.Now()
+	if _, found := m.dataStore[nodeName]; found {
+		m.lock.Unlock()
+		nodeManagerLockHoldLatency.WithLabelValues(lockOpAdd).Observe(time.Since(holdStart).Seconds())
+		return false
+	}
+	m.dataStore[nodeName] = newNode
+	m.lock.Unlock()
+	nodeManagerLockHoldLatency.WithLabelValues(lockOpAdd).Observe(time.Since(holdStart).Seconds())
+
+	// SubmitJob is intentionally OUTSIDE the lock: only the winner (the goroutine
+	// that set the entry) reaches here, so the single-job-per-node guarantee still
+	// holds and the workqueue Add never runs under the manager lock.
+	if submit {
+		m.worker.SubmitJob(AsyncOperationJob{
+			op:          Init,
+			node:        newNode,
+			nodeName:    nodeName,
+			submittedAt: time.Now(),
+		})
+	}
+	return true
 }
 
 func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
@@ -244,69 +366,117 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 // and now is not required to be managed, it's resources are de-initialized. Finally,
 // if there is no toggling, the resources are updated
 func (m *manager) UpdateNode(nodeName string) error {
-	m.lock.Lock()
-	defer m.lock.Unlock()
+	log := m.Log.WithValues("node name", nodeName, "request", "update")
 
+	// Lock-free reads + decision. As in AddNode, these are safe outside the
+	// manager lock: K8s reads hit the informer cache, IsManaged() is effectively
+	// immutable per node object, and the custom-networking mutation in
+	// updateSubnetIfUsingENIConfig is guarded by the instance's own lock.
 	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
 	if err != nil {
 		return fmt.Errorf("failed to update node %s, doesn't exist in cache anymore", nodeName)
 	}
 
-	log := m.Log.WithValues("node name", nodeName, "request", "update")
-
-	cachedNode, found := m.dataStore[nodeName]
+	cachedNode, found := m.GetNode(nodeName)
 	if !found {
-		m.Log.Info("the node doesn't exist in cache anymore, it might have been deleted")
+		log.Info("the node doesn't exist in cache anymore, it might have been deleted")
 		return nil
 	}
 
-	var op AsyncOperation
 	status, err := m.GetNodeUpdateStatus(k8sNode, cachedNode)
-
 	if err != nil {
 		return err
 	}
 
+	// nodeToStore is the node to publish into the dataStore (nil => leave the
+	// existing entry untouched, e.g. StillManaged). nodeForJob is the node handed
+	// to the async worker; it differs from nodeToStore in the ManagedToUnManaged
+	// case, where the OLD managed node is needed to de-initialize its resources.
+	var nodeToStore node.Node
+	var nodeForJob node.Node
+	var op AsyncOperation
 	switch status {
 	case UnManagedToManaged:
 		log.Info("node was previously un-managed, will be added as managed node now")
-		cachedNode = node.NewManagedNode(m.Log, k8sNode.Name,
+		managed := node.NewManagedNode(m.Log, k8sNode.Name,
 			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
 		// Update the Subnet if the node has custom networking configured
-		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
-		if err != nil {
+		if err = m.updateSubnetIfUsingENIConfig(managed, k8sNode); err != nil {
 			return err
 		}
-		m.dataStore[nodeName] = cachedNode
-		op = Init
+		nodeToStore, nodeForJob, op = managed, managed, Init
 	case ManagedToUnManaged:
 		log.Info("node was being managed earlier, will be added as un-managed node now")
 		// Change the node in cache, but for de initializing all resource providers
 		// pass the async job the older cached value instead
-		m.dataStore[nodeName] = node.NewUnManagedNode(m.Log, k8sNode.Name,
+		nodeToStore = node.NewUnManagedNode(m.Log, k8sNode.Name,
 			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode))
-		op = Delete
+		nodeForJob, op = cachedNode, Delete
 	case StillManaged:
 		// We only need to update the Subnet for Managed Node. This subnet is required for creating
 		// Branch ENIs when user is using Custom Networking. In future, we should move this to
 		// UpdateResources for Trunk ENI Provider as this is resource specific
-		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
-		if err != nil {
+		if err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode); err != nil {
 			return err
 		}
-		op = Update
+		nodeForJob, op = cachedNode, Update
 	case StillUnManaged:
 		log.V(1).Info("node not managed, no operation required")
 		// No async operation required for un-managed nodes
 		return nil
 	}
 
-	m.worker.SubmitJob(AsyncOperationJob{
-		op:       op,
-		node:     cachedNode,
-		nodeName: nodeName,
-	})
+	// Critical section: in-memory mutation + job submission only, with
+	// compare-and-swap semantics (see applyNodeUpdateIfCurrent). If the node was
+	// deleted or replaced by a concurrent operation (e.g. configmap controller
+	// update, async worker cleanup) our decision is stale; skip and let the next
+	// reconcile reconverge.
+	if !m.applyNodeUpdateIfCurrent(nodeName, cachedNode, nodeToStore, nodeForJob, op) {
+		log.Info("node was deleted or changed concurrently, skipping stale update")
+		return nil
+	}
 	return nil
+}
+
+// applyNodeUpdateIfCurrent commits a node update under the manager lock using
+// compare-and-swap semantics: it applies only when the datastore still holds the
+// same node object (expected) the update decision was based on. It returns false
+// (changing nothing) if the node was deleted or replaced concurrently. nodeToStore
+// may be nil to leave the datastore entry untouched (e.g. StillManaged).
+func (m *manager) applyNodeUpdateIfCurrent(nodeName string, expected, nodeToStore, nodeForJob node.Node, op AsyncOperation) bool {
+	waitStart := time.Now()
+	m.lock.Lock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpUpdate).Observe(time.Since(waitStart).Seconds())
+	holdStart := time.Now()
+
+	current, ok := m.dataStore[nodeName]
+	if !ok || current != expected {
+		m.lock.Unlock()
+		nodeManagerLockHoldLatency.WithLabelValues(lockOpUpdate).Observe(time.Since(holdStart).Seconds())
+		return false
+	}
+	if nodeToStore != nil {
+		m.dataStore[nodeName] = nodeToStore
+	}
+	m.lock.Unlock()
+	nodeManagerLockHoldLatency.WithLabelValues(lockOpUpdate).Observe(time.Since(holdStart).Seconds())
+
+	// SubmitJob OUTSIDE the lock (only the CAS winner reaches here), keeping the
+	// critical section to the in-memory map check + write.
+	job := AsyncOperationJob{
+		op:       op,
+		node:     nodeForJob,
+		nodeName: nodeName,
+	}
+	// An UnManagedToManaged update submits a real Init job (a node crossing into
+	// managed state runs the same InitResources onboarding as AddNode), so stamp
+	// submittedAt to keep node_onboarding_latency covering every Init path. Non-Init
+	// ops (Update/Delete) keep the zero value, matching AsyncOperationJob's invariant.
+	if op == Init {
+		job.submittedAt = time.Now()
+	}
+	m.worker.SubmitJob(job)
+	return true
 }
 
 func (m *manager) GetNodeUpdateStatus(k8sNode *v1.Node, cachedNode node.Node) (NodeUpdateStatus, error) {
@@ -329,8 +499,14 @@ func (m *manager) GetNodeUpdateStatus(k8sNode *v1.Node, cachedNode node.Node) (N
 
 // DeleteNode deletes the nodes from the cache and cleans up the resources used by all the resource providers
 func (m *manager) DeleteNode(nodeName string) error {
+	waitStart := time.Now()
 	m.lock.Lock()
-	defer m.lock.Unlock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpDelete).Observe(time.Since(waitStart).Seconds())
+	holdStart := time.Now()
+	defer func() {
+		m.lock.Unlock()
+		nodeManagerLockHoldLatency.WithLabelValues(lockOpDelete).Observe(time.Since(holdStart).Seconds())
+	}()
 
 	log := m.Log.WithValues("node name", nodeName, "request", "delete")
 
@@ -347,6 +523,8 @@ func (m *manager) DeleteNode(nodeName string) error {
 		return nil
 	}
 
+	// submittedAt is intentionally not stamped here: node_onboarding_latency is
+	// Init-only, and AsyncOperationJob.submittedAt is documented "Zero for non-Init jobs".
 	m.worker.SubmitJob(AsyncOperationJob{
 		op:       Delete,
 		node:     cachedNode,
@@ -431,17 +609,26 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		utils.SendNodeEventWithNodeName(m.wrapper.K8sAPI, asyncJob.nodeName, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", m.controllerVersion), v1.EventTypeNormal, m.Log)
 		err = asyncJob.node.InitResources(m.resourceManager)
 		if err != nil {
+			// Observe node onboarding latency for the failed init before removing the node.
+			if !asyncJob.submittedAt.IsZero() {
+				nodeOnboardingLatency.WithLabelValues("error").Observe(time.Since(asyncJob.submittedAt).Seconds())
+			}
 			if pauseHealthCheckOnError(err) && !m.SkipHealthCheck() {
 				m.setStopHealthCheck()
 				log.Info("node manager sets a pause on health check due to observing a EC2 error", "error", err.Error())
 			}
 			log.Error(err, "removing the node from cache as it failed to initialize")
-			m.removeNodeSafe(asyncJob.nodeName)
+			m.removeNodeSafe(asyncJob.nodeName, asyncJob.node)
 			// if initializing node failed, we want to make this visible although the manager will retry
 			// the trunk label will stay as false until retry succeed
 
 			// Node will be retried for init on next event
 			return ctrl.Result{}, nil
+		}
+
+		// InitResources succeeded and the node is now ready; observe the onboarding latency.
+		if !asyncJob.submittedAt.IsZero() {
+			nodeOnboardingLatency.WithLabelValues("success").Observe(time.Since(asyncJob.submittedAt).Seconds())
 		}
 
 		// If there's no error, we need to update the node so the capacity is advertised
@@ -561,11 +748,16 @@ func (m *manager) customNetworkEnabledInCNINode(node *v1.Node) (bool, error) {
 	return false, err
 }
 
-func (m *manager) removeNodeSafe(nodeName string) {
+// removeNodeSafe deletes the node from the datastore only if it still holds the
+// same node object the failed Init was operating on (compare-and-swap), so a
+// concurrent delete + re-add that replaced the entry is not clobbered.
+func (m *manager) removeNodeSafe(nodeName string, expected node.Node) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	delete(m.dataStore, nodeName)
+	if current, ok := m.dataStore[nodeName]; ok && current == expected {
+		delete(m.dataStore, nodeName)
+	}
 }
 
 func (m *manager) check() healthz.Checker {

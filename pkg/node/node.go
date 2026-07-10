@@ -21,6 +21,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
@@ -28,7 +29,55 @@ import (
 	v1 "k8s.io/api/core/v1"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
+
+// Prometheus metrics
+var (
+	prometheusRegisterOnce sync.Once
+
+	// nodeInitStageLatency measures the latency in seconds of the serial segments of a single node Init
+	// job (loading instance details, then initializing each resource provider), labeled by stage.
+	nodeInitStageLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name: "node_init_stage_latency",
+			Help: "Latency in seconds of the serial stages of a node Init job",
+			// Mirrors the objectives used by branch_provider_operation_latency
+			// (pkg/provider/branch/provider.go) so all controller latency summaries share quantiles.
+			Objectives: map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0},
+		},
+		[]string{"stage"},
+	)
+)
+
+const (
+	stageLoadDetails = "load_details"
+	stageInitTrunk   = "init_trunk"
+	stageInitIPv4    = "init_ipv4"
+)
+
+// prometheusRegister registers the node prometheus metrics.
+func prometheusRegister() {
+	prometheusRegisterOnce.Do(func() {
+		metrics.Registry.MustRegister(nodeInitStageLatency)
+	})
+}
+
+// initStageForResource maps a resource provider's resource name to the node Init stage label used for
+// node_init_stage_latency. Branch (pod-eni) is the trunk stage; the IPv4 and IPv4-prefix providers are
+// the ipv4 stage. Any other resource name falls back to using the resource name itself as the stage
+// label rather than crashing.
+func initStageForResource(resourceName string) string {
+	switch resourceName {
+	case config.ResourceNamePodENI:
+		return stageInitTrunk
+	case config.ResourceNameIPAddress, config.ResourceNameIPAddressFromPrefix:
+		return stageInitIPv4
+	default:
+		return resourceName
+	}
+}
 
 type node struct {
 	// lock to perform serial operations on a node
@@ -89,6 +138,7 @@ type Node interface {
 
 // NewManagedNode returns node managed by the controller
 func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
+	prometheusRegister()
 	return &node{
 		managed: true,
 		log: log.WithName("node resource handler").
@@ -152,7 +202,9 @@ func (n *node) UpdateResources(resourceManager resource.ResourceManager) error {
 func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
+	loadDetailsStart := time.Now()
 	err := n.instance.LoadDetails(n.ec2API)
+	nodeInitStageLatency.WithLabelValues(stageLoadDetails).Observe(time.Since(loadDetailsStart).Seconds())
 	if err != nil {
 		if errors.Is(err, utils.ErrNotFound) {
 			// Send a node event for users' visibility
@@ -167,10 +219,12 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 
 	var initializedProviders []provider.ResourceProvider
 	var errInit error
-	for _, resourceProvider := range resourceManager.GetResourceProviders() {
+	for resourceName, resourceProvider := range resourceManager.GetResourceProviders() {
 		// Check if the instance is supported and then initialize the provider
 		if resourceProvider.IsInstanceSupported(n.instance) {
+			initStart := time.Now()
 			errInit = resourceProvider.InitResource(n.instance)
+			nodeInitStageLatency.WithLabelValues(initStageForResource(resourceName)).Observe(time.Since(initStart).Seconds())
 			if errInit != nil {
 				break
 			}

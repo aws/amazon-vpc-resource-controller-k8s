@@ -1,6 +1,6 @@
 module github.com/aws/amazon-vpc-resource-controller-k8s
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/aws/amazon-vpc-cni-k8s v1.19.4
@@ -22,6 +22,7 @@ require (
 	github.com/prometheus/client_golang v1.22.0
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.62.0
+	github.com/sasha-s/go-deadlock v0.3.9
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/time v0.11.0
@@ -46,6 +47,7 @@ require (
 	github.com/google/gnostic-models v0.6.9 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
+	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect

@@ -410,6 +410,14 @@ func (h *ec2APIHelper) WaitForNetworkInterfaceStatusChange(networkInterfaceId *s
 	ErrRetryAttachmentStatusCheck := fmt.Errorf("interface not in desired status yet %s, interface id %s",
 		desiredStatus, *networkInterfaceId)
 
+	// Observe the total time spent in the describe-until-status-change polling loop. This captures the
+	// up-to-5-minute attach wait that individual EC2 API-call metrics cannot see. Labeled by the desired
+	// status so the attach wait can be distinguished from the detach wait.
+	waitStart := time.Now()
+	defer func() {
+		trunkENIAttachWaitLatency.WithLabelValues(desiredStatus).Observe(time.Since(waitStart).Seconds())
+	}()
+
 	err := retry.OnError(waitForENIAttachment,
 		func(err error) bool {
 			return err == ErrRetryAttachmentStatusCheck
