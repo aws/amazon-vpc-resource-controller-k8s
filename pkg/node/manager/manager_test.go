@@ -590,6 +590,76 @@ func Test_UpdateNode_UnManagedToManaged_WithENIConfig_CNINode(t *testing.T) {
 	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
+// Test_SubmittedAt_StampedForInitJobsOnly verifies node_onboarding_latency
+// coverage: an UnManagedToManaged transition submits a real Init job and must
+// stamp submittedAt (the observe sites are guarded by !submittedAt.IsZero()),
+// while non-Init ops (Update/Delete) keep the zero value per
+// AsyncOperationJob's documented invariant.
+func Test_SubmittedAt_StampedForInitJobsOnly(t *testing.T) {
+	t.Run("UnManagedToManaged Init job is stamped", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mock := NewMock(ctrl, map[string]node.Node{v1Node.Name: unManagedNode})
+
+		var captured AsyncOperationJob
+		mock.MockK8sAPI.EXPECT().GetNode(v1Node.Name).Return(v1Node, nil)
+		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: v1Node.Name}).Return(&rcV1alpha1.CNINode{
+			Spec: rcV1alpha1.CNINodeSpec{
+				Features: []rcV1alpha1.Feature{},
+			},
+		}, nil).Times(1)
+		mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Do(func(job interface{}) {
+			captured = job.(AsyncOperationJob)
+		})
+
+		err := mock.Manager.UpdateNode(v1Node.Name)
+		assert.NoError(t, err)
+		assert.Equal(t, Init, captured.op)
+		assert.False(t, captured.submittedAt.IsZero(), "Init job must stamp submittedAt so node_onboarding_latency is observed")
+	})
+
+	t.Run("Update job is not stamped", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+
+		var captured AsyncOperationJob
+		mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
+		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: v1Node.Name}).Return(&rcV1alpha1.CNINode{
+			Spec: rcV1alpha1.CNINodeSpec{
+				Features: []rcV1alpha1.Feature{},
+			},
+		}, nil).Times(1)
+		mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Do(func(job interface{}) {
+			captured = job.(AsyncOperationJob)
+		})
+
+		err := mock.Manager.UpdateNode(nodeName)
+		assert.NoError(t, err)
+		assert.Equal(t, Update, captured.op)
+		assert.True(t, captured.submittedAt.IsZero(), "non-Init Update job must keep submittedAt zero")
+	})
+
+	t.Run("Delete job is not stamped", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mock := NewMock(ctrl, map[string]node.Node{v1Node.Name: managedNode})
+
+		var captured AsyncOperationJob
+		mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Do(func(job interface{}) {
+			captured = job.(AsyncOperationJob)
+		})
+
+		err := mock.Manager.DeleteNode(v1Node.Name)
+		assert.NoError(t, err)
+		assert.Equal(t, Delete, captured.op)
+		assert.True(t, captured.submittedAt.IsZero(), "non-Init Delete job must keep submittedAt zero")
+	})
+}
+
 func Test_DeleteNode_Managed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

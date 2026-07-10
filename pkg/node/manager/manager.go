@@ -463,13 +463,19 @@ func (m *manager) applyNodeUpdateIfCurrent(nodeName string, expected, nodeToStor
 
 	// SubmitJob OUTSIDE the lock (only the CAS winner reaches here), keeping the
 	// critical section to the in-memory map check + write.
-	// submittedAt is intentionally not stamped here: node_onboarding_latency is
-	// Init-only, and AsyncOperationJob.submittedAt is documented "Zero for non-Init jobs".
-	m.worker.SubmitJob(AsyncOperationJob{
+	job := AsyncOperationJob{
 		op:       op,
 		node:     nodeForJob,
 		nodeName: nodeName,
-	})
+	}
+	// An UnManagedToManaged update submits a real Init job (a node crossing into
+	// managed state runs the same InitResources onboarding as AddNode), so stamp
+	// submittedAt to keep node_onboarding_latency covering every Init path. Non-Init
+	// ops (Update/Delete) keep the zero value, matching AsyncOperationJob's invariant.
+	if op == Init {
+		job.submittedAt = time.Now()
+	}
+	m.worker.SubmitJob(job)
 	return true
 }
 
