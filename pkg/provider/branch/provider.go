@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/google/uuid"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
@@ -41,6 +42,8 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -50,8 +53,26 @@ const (
 	operationCreateBranchENI   = "create_branch_eni"
 	operationAnnotateBranchENI = "annotate_branch_eni"
 	operationInitTrunk         = "init_trunk"
+	operationReconcileBranch   = "reconcile_unassigned_branch_enis"
 	resourceCountLabel         = "resource_count"
 	operationLabel             = "branch_provider_operation"
+	resultLabel                = "result"
+	reasonLabel                = "reason"
+	pathLabel                  = "path"
+
+	trunkInitPathEC2           = "ec2"
+	trunkInitPathCNINodeStatus = "cninode_status"
+	resultSuccess              = "success"
+	resultError                = "error"
+	resultHit                  = "hit"
+	resultMiss                 = "miss"
+
+	// self-heal result label values for cniNodeStatusSelfHealCount.
+	selfHealResultUpToDate    = "up_to_date"   // status already populated with the current snapshot, nothing to do
+	selfHealResultPatched     = "patched"      // status was empty/stale and successfully re-persisted
+	selfHealResultError       = "error"        // failed to read the CNINode or patch its status
+	selfHealResultNotReady    = "not_ready"    // node not ready / trunk not initialized yet, skipped
+	selfHealResultTrunkAbsent = "trunk_absent" // no trunk in cache for the node, skipped
 
 	ReasonSecurityGroupRequested    = "SecurityGroupRequested"
 	ReasonResourceAllocated         = "ResourceAllocated"
@@ -77,6 +98,39 @@ var (
 			Objectives: map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0},
 		},
 		[]string{operationLabel, resourceCountLabel},
+	)
+
+	cniNodeStatusFastPathCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cninode_status_fast_path_total",
+			Help: "The number of attempts to initialize trunk cache from CNINode status",
+		},
+		[]string{resultLabel, reasonLabel},
+	)
+
+	trunkCacheRebuildLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "trunk_cache_rebuild_latency",
+			Help:       "Trunk cache rebuild latency in seconds by initialization path",
+			Objectives: map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0},
+		},
+		[]string{pathLabel, resultLabel},
+	)
+
+	cniNodeStatusBackgroundReconcileCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cninode_status_background_reconcile_total",
+			Help: "The number of background EC2 reconciles after CNINode status fast path initialization",
+		},
+		[]string{resultLabel},
+	)
+
+	cniNodeStatusSelfHealCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cninode_status_self_heal_total",
+			Help: "The number of periodic self-heal patches that attempted to repopulate an empty or stale CNINode status snapshot",
+		},
+		[]string{resultLabel},
 	)
 
 	deleteQueueRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
@@ -130,7 +184,11 @@ func prometheusRegister() {
 	if !prometheusRegistered {
 		metrics.Registry.MustRegister(
 			branchProviderOperationsErrCount,
-			branchProviderOperationLatency)
+			branchProviderOperationLatency,
+			cniNodeStatusFastPathCount,
+			trunkCacheRebuildLatency,
+			cniNodeStatusBackgroundReconcileCount,
+			cniNodeStatusSelfHealCount)
 
 		prometheusRegistered = true
 	}
@@ -157,38 +215,21 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	if err := trunkENI.InitTrunk(instance, podList); err != nil {
-		// If it's an AWS Error, get the exit code without the error message to avoid
-		// broadcasting multiple different messaged events
-
-		var apiErr smithy.APIError
-
-		if errors.As(err, &apiErr) {
-
-			node, errGetNode := b.apiWrapper.K8sAPI.GetNode(instance.Name())
-			if errGetNode != nil {
-				return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, err)
-			}
-			eventMessage := fmt.Sprintf("Failed to create trunk interface: "+
-				"Error Code: %s", apiErr.ErrorCode())
-			if apiErr.ErrorCode() == "UnauthorizedOperation" {
-				// Append resolution to the event message for users for common error
-				eventMessage = fmt.Sprintf("%s: %s", eventMessage,
-					"Please verify the cluster IAM role has AmazonEKSVPCResourceController policy")
-			}
-			b.apiWrapper.K8sAPI.BroadcastEvent(node, ReasonTrunkENICreationFailed, eventMessage, v1.EventTypeWarning)
-		}
-
-		utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkFailedInitializationReason, "The node failed initializing trunk interface", v1.EventTypeNormal, b.log)
-		branchProviderOperationsErrCount.WithLabelValues("init").Inc()
-		return fmt.Errorf("initializing trunk, %w", err)
+	initializedFromStatus, err := b.initTrunk(instance, trunkENI, podList, log)
+	if err != nil {
+		return b.handleInitTrunkFailure(instance, nodeName, err)
 	}
+
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceSeconds(start))
 
 	// Add the Trunk ENI to cache if it does not already exist
 	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil && err != ErrTrunkExistInCache {
 		branchProviderOperationsErrCount.WithLabelValues("add_trunk_to_cache").Inc()
 		return err
+	}
+
+	if initializedFromStatus {
+		b.SubmitAsyncJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(nodeName))
 	}
 
 	// TODO: For efficiency submit the process delete queue job only when the delete queue has items.
@@ -201,6 +242,93 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkInitiatedReason, "The node has trunk interface initialized successfully", v1.EventTypeNormal, b.log)
 
 	return nil
+}
+
+func (b *branchENIProvider) initTrunk(
+	instance ec2.EC2Instance,
+	trunkENI trunk.TrunkENI,
+	podList []v1.Pod,
+	log logr.Logger,
+) (bool, error) {
+	if instance.LoadedFromCNINodeStatus() {
+		statusStart := time.Now()
+		cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: instance.Name()})
+		if err == nil {
+			err = trunkENI.InitTrunkFromStatus(cniNode.Status.TrunkENI, podList)
+			if err == nil {
+				cniNodeStatusFastPathCount.WithLabelValues(resultHit, "status_valid").Inc()
+				trunkCacheRebuildLatency.WithLabelValues(trunkInitPathCNINodeStatus, resultSuccess).
+					Observe(timeSinceSeconds(statusStart))
+				return true, nil
+			}
+			cniNodeStatusFastPathCount.WithLabelValues(resultMiss, "trunk_status_invalid").Inc()
+			trunkCacheRebuildLatency.WithLabelValues(trunkInitPathCNINodeStatus, resultError).
+				Observe(timeSinceSeconds(statusStart))
+			log.Error(err, "failed to initialize trunk from CNINode status, falling back to EC2")
+		} else {
+			cniNodeStatusFastPathCount.WithLabelValues(resultMiss, "get_cninode_error").Inc()
+			trunkCacheRebuildLatency.WithLabelValues(trunkInitPathCNINodeStatus, resultError).
+				Observe(timeSinceSeconds(statusStart))
+			log.Error(err, "failed to read CNINode status, falling back to EC2")
+		}
+
+		if err := instance.LoadDetails(b.apiWrapper.EC2API); err != nil {
+			branchProviderOperationsErrCount.WithLabelValues("load_instance_details_fallback").Inc()
+			return false, fmt.Errorf("loading instance details after CNINode status fallback: %w", err)
+		}
+	}
+
+	ec2Start := time.Now()
+	if err := trunkENI.InitTrunk(instance, podList); err != nil {
+		trunkCacheRebuildLatency.WithLabelValues(trunkInitPathEC2, resultError).Observe(timeSinceSeconds(ec2Start))
+		return false, err
+	}
+	trunkCacheRebuildLatency.WithLabelValues(trunkInitPathEC2, resultSuccess).Observe(timeSinceSeconds(ec2Start))
+	b.persistCNINodeStatus(instance.Name(), instance, trunkENI, log)
+	return false, nil
+}
+
+func (b *branchENIProvider) persistCNINodeStatus(
+	nodeName string,
+	instance ec2.EC2Instance,
+	trunkENI trunk.TrunkENI,
+	log logr.Logger,
+) {
+	status := rcv1alpha1.CNINodeStatus{
+		SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
+		LastUpdated:     metav1.Now(),
+		Instance:        instance.CNINodeStatus(),
+		TrunkENI:        trunkENI.CNINodeStatus(),
+	}
+	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(nodeName, status); err != nil {
+		branchProviderOperationsErrCount.WithLabelValues("update_cninode_status").Inc()
+		log.Error(err, "failed to update CNINode status snapshot")
+	}
+}
+
+func (b *branchENIProvider) handleInitTrunkFailure(instance ec2.EC2Instance, nodeName string, err error) error {
+	// If it's an AWS Error, get the exit code without the error message to avoid
+	// broadcasting multiple different messaged events
+	var apiErr smithy.APIError
+
+	if errors.As(err, &apiErr) {
+		node, errGetNode := b.apiWrapper.K8sAPI.GetNode(instance.Name())
+		if errGetNode != nil {
+			return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, err)
+		}
+		eventMessage := fmt.Sprintf("Failed to create trunk interface: "+
+			"Error Code: %s", apiErr.ErrorCode())
+		if apiErr.ErrorCode() == "UnauthorizedOperation" {
+			// Append resolution to the event message for users for common error
+			eventMessage = fmt.Sprintf("%s: %s", eventMessage,
+				"Please verify the cluster IAM role has AmazonEKSVPCResourceController policy")
+		}
+		b.apiWrapper.K8sAPI.BroadcastEvent(node, ReasonTrunkENICreationFailed, eventMessage, v1.EventTypeWarning)
+	}
+
+	utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkFailedInitializationReason, "The node failed initializing trunk interface", v1.EventTypeNormal, b.log)
+	branchProviderOperationsErrCount.WithLabelValues("init").Inc()
+	return fmt.Errorf("initializing trunk, %w", err)
 }
 
 // DeInitResources adds a an asynchronous delete job to the worker which will execute after a certain period.
@@ -235,6 +363,8 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 		return b.DeleteBranchUsedByPods(onDemandJob.NodeName, onDemandJob.UID)
 	case worker.OperationProcessDeleteQueue:
 		return b.ProcessDeleteQueue(onDemandJob.NodeName)
+	case worker.OperationReconcileUnassignedBranchENIs:
+		return b.ReconcileUnassignedBranchENIs(onDemandJob.NodeName)
 	case worker.OperationDeleteNode:
 		return b.DeleteNode(onDemandJob.NodeName)
 	}
@@ -298,6 +428,81 @@ func (b *branchENIProvider) ReconcileNode(nodeName string) bool {
 	return foundLeakedENI
 }
 
+// ReconcileCNINodeStatus is the periodic self-heal for the CNINode status snapshot. When a node's
+// trunk is initialized in memory but its CNINode status is empty or stale, the inline persist during
+// onboarding either never ran or lost the create/delete-recreate race, leaving hydrate unable to skip
+// EC2 on the next re-init. This rebuilds the status snapshot from the cached (in-memory) trunk and
+// re-persists it. It only ever PATCHes an existing CNINode via UpdateCNINodeStatus; it never creates
+// one (creation belongs to AddNode and the CNINode controller's delete-recreate logic). It is
+// event-driven and cheap: it makes zero EC2 calls and returns quickly. The caller is responsible for
+// only invoking this once the node is ready.
+func (b *branchENIProvider) ReconcileCNINodeStatus(nodeName string) {
+	log := b.log.WithValues("node", nodeName)
+
+	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
+	if !isPresent {
+		// Trunk not initialized in memory yet; nothing to persist.
+		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultTrunkAbsent).Inc()
+		return
+	}
+
+	desired := rcv1alpha1.CNINodeStatus{
+		SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
+		Instance:        trunkENI.InstanceStatus(),
+		TrunkENI:        trunkENI.CNINodeStatus(),
+	}
+	// A trunk still missing its ID is not usable for hydrate; skip until it is set.
+	if desired.TrunkENI.ID == "" {
+		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultNotReady).Inc()
+		return
+	}
+
+	cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
+	if err != nil {
+		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultError).Inc()
+		log.V(1).Info("self-heal skipped: could not read CNINode", "error", err)
+		return
+	}
+
+	if cniNodeStatusUpToDate(cniNode.Status, desired) {
+		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultUpToDate).Inc()
+		return
+	}
+
+	desired.LastUpdated = metav1.Now()
+	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(nodeName, desired); err != nil {
+		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultError).Inc()
+		branchProviderOperationsErrCount.WithLabelValues("self_heal_cninode_status").Inc()
+		log.V(1).Info("self-heal failed to patch CNINode status, will retry next reconcile", "error", err)
+		return
+	}
+	cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultPatched).Inc()
+	log.Info("self-healed CNINode status snapshot")
+}
+
+// cniNodeStatusUpToDate reports whether the persisted status already reflects the desired snapshot
+// for the purposes of hydrate. It intentionally ignores LastUpdated (a timestamp that would always
+// differ) and compares the fields hydrate actually validates: snapshot version, trunk identity, and
+// the instance identity/subnet/security groups.
+func cniNodeStatusUpToDate(persisted, desired rcv1alpha1.CNINodeStatus) bool {
+	if persisted.SnapshotVersion != desired.SnapshotVersion {
+		return false
+	}
+	if persisted.TrunkENI.ID != desired.TrunkENI.ID ||
+		persisted.TrunkENI.SubnetID != desired.TrunkENI.SubnetID {
+		return false
+	}
+	pi, di := persisted.Instance, desired.Instance
+	if pi.InstanceID != di.InstanceID ||
+		pi.InstanceType != di.InstanceType ||
+		pi.InstanceSubnetID != di.InstanceSubnetID ||
+		pi.CurrentSubnetID != di.CurrentSubnetID ||
+		pi.PrimaryNetworkInterfaceID != di.PrimaryNetworkInterfaceID {
+		return false
+	}
+	return true
+}
+
 // ProcessDeleteQueue removes cooled down ENIs associated with a trunk for a given node
 func (b *branchENIProvider) ProcessDeleteQueue(nodeName string) (ctrl.Result, error) {
 	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
@@ -308,6 +513,28 @@ func (b *branchENIProvider) ProcessDeleteQueue(nodeName string) (ctrl.Result, er
 	}
 	trunkENI.DeleteCooledDownENIs()
 	return deleteQueueRequeueRequest, nil
+}
+
+func (b *branchENIProvider) ReconcileUnassignedBranchENIs(nodeName string) (ctrl.Result, error) {
+	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
+	log := b.log.WithValues("node", nodeName, "operation", operationReconcileBranch)
+	if !isPresent {
+		log.Info("stopping background branch ENI reconcile job")
+		return ctrl.Result{}, nil
+	}
+
+	foundUnassignedBranchENI, err := trunkENI.ReconcileUnassignedBranchENIs()
+	if err != nil {
+		cniNodeStatusBackgroundReconcileCount.WithLabelValues(resultError).Inc()
+		branchProviderOperationsErrCount.WithLabelValues(operationReconcileBranch).Inc()
+		return ctrl.Result{}, err
+	}
+
+	cniNodeStatusBackgroundReconcileCount.WithLabelValues(resultSuccess).Inc()
+	if foundUnassignedBranchENI {
+		b.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
+	}
+	return ctrl.Result{}, nil
 }
 
 // CreateAndAnnotateResources creates resource for the pod, the function can run concurrently for different pods without

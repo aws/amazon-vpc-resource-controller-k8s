@@ -20,6 +20,8 @@ type Operations string
 
 const (
 	OperationProcessDeleteQueue Operations = "ProcessDeleteQueue"
+	// OperationReconcileUnassignedBranchENIs discovers branch ENIs not owned by pods after a fast trunk cache rebuild.
+	OperationReconcileUnassignedBranchENIs Operations = "ReconcileUnassignedBranchENIs"
 	// OperationReconcileNode represents a reconcile operation that reclaims dangling network interfaces using local cache
 	OperationReconcileNode Operations = "ReconcileNode"
 	// OperationCreate represents pods that are in created state
@@ -83,6 +85,14 @@ func NewOnDemandReconcileNodeJob(nodeName string) OnDemandJob {
 func NewOnDemandProcessDeleteQueueJob(nodeName string) OnDemandJob {
 	return OnDemandJob{
 		Operation: OperationProcessDeleteQueue,
+		NodeName:  nodeName,
+	}
+}
+
+// NewOnDemandReconcileUnassignedBranchENIsJob returns a job that discovers EC2 branch ENIs missing pod ownership.
+func NewOnDemandReconcileUnassignedBranchENIsJob(nodeName string) OnDemandJob {
+	return OnDemandJob{
+		Operation: OperationReconcileUnassignedBranchENIs,
 		NodeName:  nodeName,
 	}
 }

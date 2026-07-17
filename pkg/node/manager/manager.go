@@ -124,6 +124,14 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 	return manager, worker.StartWorkerPool(manager.performAsyncOperation)
 }
 
+// cniNodeStatusReconciler is optionally implemented by a resource provider (the branch/trunk
+// provider) to periodically self-heal the CNINode status snapshot. Kept out of the core
+// ResourceProvider interface so the IPv4/prefix providers, which have no trunk state to persist,
+// need not implement it.
+type cniNodeStatusReconciler interface {
+	ReconcileCNINodeStatus(nodeName string)
+}
+
 func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 	cachedNode, found := m.GetNode(nodeName)
 	if !found || !cachedNode.IsManaged() {
@@ -135,6 +143,15 @@ func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 	if time.Now().After(cachedNode.GetNextReconciliationTime()) {
 		go func() {
 			if resourceProvider, found := m.resourceManager.GetResourceProvider(config.ResourceNamePodENI); found {
+				// Self-heal the CNINode status snapshot on the same jittered cadence. Only attempt
+				// it once the node is ready (its in-memory trunk is initialized); the reconciler
+				// only PATCHes an existing CNINode and makes no EC2 calls, so it converges the
+				// snapshot regardless of cold-start timing and survives a controller restart
+				// (re-init rebuilds the in-memory trunk via AddNode, then this repopulates status).
+				if healer, ok := resourceProvider.(cniNodeStatusReconciler); ok && cachedNode.IsReady() {
+					healer.ReconcileCNINodeStatus(nodeName)
+				}
+
 				foundLeakedENI := resourceProvider.ReconcileNode(nodeName)
 				if foundLeakedENI {
 					cachedNode.SetReconciliationInterval(node.NodeInitialCleanupInterval)

@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
@@ -27,6 +28,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -125,6 +127,83 @@ func TestNode_InitResources(t *testing.T) {
 	assert.True(t, mock.NodeWithMock.IsReady())
 }
 
+func TestNode_InitResources_CNINodeStatusHydrated(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 1)
+	mock.NodeWithMock.k8sAPI = mock.MockK8sAPI
+	status := rcv1alpha1.CNINodeStatus{
+		SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
+	}
+
+	mock.MockInstance.EXPECT().Name().Return(nodeName)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{
+		Status: status,
+	}, nil)
+	mock.MockInstance.EXPECT().HydrateFromCNINodeStatus(status).Return(true, "hit")
+	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
+	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
+	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+
+	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
+
+	assert.NoError(t, err)
+	assert.True(t, mock.NodeWithMock.IsReady())
+}
+
+// TestNode_InitResources_ProofMetric_Hydrated verifies the proof metric increments the "hydrated"
+// result (EC2 LoadDetails skipped) when the instance hydrates from the CNINode status snapshot.
+func TestNode_InitResources_ProofMetric_Hydrated(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	before := testutil.ToFloat64(nodeReinitEC2Skipped.WithLabelValues(reinitResultHydrated))
+
+	mock := NewMock(ctrl, 1)
+	mock.NodeWithMock.k8sAPI = mock.MockK8sAPI
+	status := rcv1alpha1.CNINodeStatus{SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion}
+
+	mock.MockInstance.EXPECT().Name().Return(nodeName)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{
+		Status: status,
+	}, nil)
+	mock.MockInstance.EXPECT().HydrateFromCNINodeStatus(status).Return(true, "hit")
+	// LoadDetails must NOT be called on the hydrated path.
+	mock.MockInstance.EXPECT().LoadDetails(gomock.Any()).Times(0)
+	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
+	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
+	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+
+	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
+	assert.NoError(t, err)
+
+	after := testutil.ToFloat64(nodeReinitEC2Skipped.WithLabelValues(reinitResultHydrated))
+	assert.Equal(t, before+1, after)
+}
+
+// TestNode_InitResources_ProofMetric_EC2Fallback verifies the proof metric increments the
+// "ec2_fallback" result when hydrate misses and LoadDetails runs.
+func TestNode_InitResources_ProofMetric_EC2Fallback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	before := testutil.ToFloat64(nodeReinitEC2Skipped.WithLabelValues(reinitResultEC2Fallback))
+
+	mock := NewMock(ctrl, 1)
+	// k8sAPI nil -> tryHydrate returns false -> fallback path.
+	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
+	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
+	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+
+	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
+	assert.NoError(t, err)
+
+	after := testutil.ToFloat64(nodeReinitEC2Skipped.WithLabelValues(reinitResultEC2Fallback))
+	assert.Equal(t, before+1, after)
+}
+
 func TestNode_InitResources_InstanceNotTrunkSupported(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -156,7 +235,8 @@ func TestNode_InitResources_InstanceNotListed(t *testing.T) {
 	msg := "The instance type dummy.large is not supported yet by the vpc resource controller"
 
 	mock.MockInstance.EXPECT().Type().Return(testInstanceType).Times(1)
-	mock.MockInstance.EXPECT().Name().Return(nodeName).Times(1)
+	mock.MockInstance.EXPECT().Name().Return(nodeName).Times(2)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{}, mockError)
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
 	mock.MockK8sAPI.EXPECT().BroadcastEvent(node, "Unsupported", msg, v1.EventTypeWarning).Times(1)
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s, error: %w", testInstanceType, utils.ErrNotFound))

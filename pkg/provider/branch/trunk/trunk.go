@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
@@ -93,6 +94,16 @@ var (
 type TrunkENI interface {
 	// InitTrunk initializes trunk interface
 	InitTrunk(instance ec2.EC2Instance, pods []v1.Pod) error
+	// InitTrunkFromStatus initializes trunk cache from CNINode status and pod annotations.
+	InitTrunkFromStatus(status rcv1alpha1.TrunkENIStatus, pods []v1.Pod) error
+	// ReconcileUnassignedBranchENIs discovers branch ENIs missing pod annotations and pushes them to the delete queue.
+	ReconcileUnassignedBranchENIs() (bool, error)
+	// CNINodeStatus returns a snapshot of trunk ENI state persisted in CNINode status.
+	CNINodeStatus() rcv1alpha1.TrunkENIStatus
+	// InstanceStatus returns a snapshot of the underlying instance state persisted in CNINode
+	// status. It lets the periodic self-heal rebuild the full CNINode status snapshot from the
+	// cached trunk (which already holds the instance) without a separate instance reference.
+	InstanceStatus() rcv1alpha1.InstanceStatus
 	// CreateAndAssociateBranchENIs creates and associate branch interface/s to trunk interface
 	CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int) ([]*ENIDetails, error)
 	// PushBranchENIsToCoolDownQueue pushes the branch interface belonging to the pod to the cool down queue
@@ -219,6 +230,93 @@ func PrometheusRegister() {
 	}
 }
 
+func (t *trunkENI) InitTrunkFromStatus(status rcv1alpha1.TrunkENIStatus, podList []v1.Pod) error {
+	if status.ID == "" {
+		return fmt.Errorf("missing trunk ENI ID in CNINode status")
+	}
+	if status.SubnetID != "" && status.SubnetID != t.instance.SubnetID() {
+		return fmt.Errorf("trunk subnet %s from CNINode status does not match instance subnet %s",
+			status.SubnetID, t.instance.SubnetID())
+	}
+
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.trunkENIId = status.ID
+	t.uidToBranchENIMap = make(map[string][]*ENIDetails)
+	t.deleteQueue = nil
+
+	for _, pod := range podList {
+		pod := pod
+		eniListFromPod := t.getBranchInterfacesUsedByPod(&pod)
+		if len(eniListFromPod) == 0 {
+			continue
+		}
+
+		for _, eni := range eniListFromPod {
+			if err := t.markVlanAssignedLocked(eni.VlanID); err != nil {
+				return fmt.Errorf("invalid VLAN ID in pod annotation for pod %s/%s: %w",
+					pod.Namespace, pod.Name, err)
+			}
+		}
+		t.uidToBranchENIMap[string(pod.UID)] = eniListFromPod
+	}
+
+	t.log.V(1).Info("successfully initialized trunk cache from CNINode status",
+		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
+	return nil
+}
+
+func (t *trunkENI) ReconcileUnassignedBranchENIs() (bool, error) {
+	t.lock.RLock()
+	trunkENIID := t.trunkENIId
+	assignedBranchENIs := make(map[string]struct{})
+	for _, branchENIs := range t.uidToBranchENIMap {
+		for _, eni := range branchENIs {
+			assignedBranchENIs[eni.ID] = struct{}{}
+		}
+	}
+	t.lock.RUnlock()
+
+	if trunkENIID == "" {
+		return false, fmt.Errorf("missing trunk ENI ID")
+	}
+
+	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&trunkENIID, aws.String(t.instance.SubnetID()))
+	if err != nil {
+		return false, err
+	}
+
+	unassignedBranchInterfaces := make(map[string]*ec2types.NetworkInterface)
+	for _, branchInterface := range branchInterfaces {
+		if branchInterface.NetworkInterfaceId == nil {
+			continue
+		}
+		branchENIID := *branchInterface.NetworkInterfaceId
+		if _, assigned := assignedBranchENIs[branchENIID]; assigned {
+			continue
+		}
+		unassignedBranchInterfaces[branchENIID] = branchInterface
+	}
+
+	return t.pushUnassignedBranchInterfacesToDeleteQueue(unassignedBranchInterfaces), nil
+}
+
+func (t *trunkENI) CNINodeStatus() rcv1alpha1.TrunkENIStatus {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return rcv1alpha1.TrunkENIStatus{
+		ID:             t.trunkENIId,
+		SubnetID:       t.instance.SubnetID(),
+		SecurityGroups: slices.Clone(t.instance.CurrentInstanceSecurityGroups()),
+	}
+}
+
+func (t *trunkENI) InstanceStatus() rcv1alpha1.InstanceStatus {
+	return t.instance.CNINodeStatus()
+}
+
 // InitTrunk initializes the trunk network interface and all it's associated branch network interfaces by making calls
 // to EC2 API
 func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
@@ -343,26 +441,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		t.uidToBranchENIMap[string(pod.UID)] = branchENIs
 	}
 
-	// Delete the branch ENI that don't belong to any pod.
-	for _, branchInterface := range associatedBranchInterfaces {
-		t.log.Info("pushing eni to delete queue as no pod owns it", "eni",
-			*branchInterface.NetworkInterfaceId)
-
-		vlanId, err := t.getVlanIdFromTag(branchInterface.TagSet)
-		if err != nil {
-			trunkENIOperationsErrCount.WithLabelValues("get_vlan_from_tag").Inc()
-			log.Error(err, "failed to find vlan id", "interface", *branchInterface.NetworkInterfaceId)
-			continue
-		}
-
-		// Even thought the ENI is going to be deleted still mark Vlan ID assigned as ENI will sit in cool down queue for a while
-		t.markVlanAssigned(vlanId)
-		t.pushENIToDeleteQueue(&ENIDetails{
-			ID:                *branchInterface.NetworkInterfaceId,
-			VlanID:            vlanId,
-			deletionTimeStamp: time.Now(),
-		})
-	}
+	t.pushUnassignedBranchInterfacesToDeleteQueue(associatedBranchInterfaces)
 
 	log.V(1).Info("successfully initialized trunk with all associated branch interfaces",
 		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
@@ -622,6 +701,34 @@ func (t *trunkENI) pushENIToDeleteQueue(eni *ENIDetails) {
 	t.deleteQueue = append(t.deleteQueue, eni)
 }
 
+func (t *trunkENI) pushUnassignedBranchInterfacesToDeleteQueue(branchInterfaces map[string]*ec2types.NetworkInterface) bool {
+	foundUnassignedBranchENI := false
+	for _, branchInterface := range branchInterfaces {
+		if branchInterface.NetworkInterfaceId == nil {
+			continue
+		}
+		branchENIID := *branchInterface.NetworkInterfaceId
+		t.log.Info("pushing eni to delete queue as no pod owns it", "eni", branchENIID)
+
+		vlanId, err := t.getVlanIdFromTag(branchInterface.TagSet)
+		if err != nil {
+			trunkENIOperationsErrCount.WithLabelValues("get_vlan_from_tag").Inc()
+			t.log.Error(err, "failed to find vlan id", "interface", branchENIID)
+			continue
+		}
+
+		// Even though the ENI is going to be deleted, keep the VLAN reserved while it sits in the cool down queue.
+		t.markVlanAssigned(vlanId)
+		t.pushENIToDeleteQueue(&ENIDetails{
+			ID:                branchENIID,
+			VlanID:            vlanId,
+			deletionTimeStamp: time.Now(),
+		})
+		foundUnassignedBranchENI = true
+	}
+	return foundUnassignedBranchENI
+}
+
 // pushENIsToFrontOfDeleteQueue pushes the ENI list to the front of the delete queue
 func (t *trunkENI) PushENIsToFrontOfDeleteQueue(pod *v1.Pod, eniList []*ENIDetails) {
 	t.lock.Lock()
@@ -693,7 +800,18 @@ func (t *trunkENI) markVlanAssigned(vlanId int) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	if err := t.markVlanAssignedLocked(vlanId); err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("mark_invalid_vlan_id").Inc()
+		t.log.Error(err, "failed to mark vlan id assigned", "vlan id", vlanId)
+	}
+}
+
+func (t *trunkENI) markVlanAssignedLocked(vlanId int) error {
+	if vlanId < 0 || vlanId >= len(t.usedVlanIds) {
+		return fmt.Errorf("vlan id %d is outside allocatable range [0,%d)", vlanId, len(t.usedVlanIds))
+	}
 	t.usedVlanIds[vlanId] = true
+	return nil
 }
 
 // freeVlanId frees a vlan ID currently used by a network interface

@@ -60,6 +60,14 @@ rules:
 - apiGroups:
   - vpcresources.k8s.aws
   resources:
+  - cninodes/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - vpcresources.k8s.aws
+  resources:
   - securitygrouppolicies
   verbs:
   - get

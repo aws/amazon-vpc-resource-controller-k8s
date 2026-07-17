@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_pod "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
@@ -554,6 +555,51 @@ func TestBranchENIProvider_ProcessDeleteQueue(t *testing.T) {
 	assert.Equal(t, deleteQueueRequeueRequest, result)
 }
 
+func TestBranchENIProvider_ReconcileUnassignedBranchENIs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockWorker := getProviderWithMockWorker(ctrl)
+	provider.trunkENICache = make(map[string]trunk.TrunkENI)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	fakeTrunk.EXPECT().ReconcileUnassignedBranchENIs().Return(true, nil)
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+
+	result, err := provider.ReconcileUnassignedBranchENIs(NodeName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, k8sCtrl.Result{}, result)
+}
+
+func TestBranchENIProvider_InitTrunkFromCNINodeStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, _, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	status := rcv1alpha1.CNINodeStatus{
+		TrunkENI: rcv1alpha1.TrunkENIStatus{
+			ID:       "eni-trunk",
+			SubnetID: "subnet-1",
+		},
+	}
+
+	mockInstance.EXPECT().LoadedFromCNINodeStatus().Return(true)
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).Return(&rcv1alpha1.CNINode{
+		Status: status,
+	}, nil)
+	fakeTrunk.EXPECT().InitTrunkFromStatus(status.TrunkENI, []v1.Pod{*MockPod1}).Return(nil)
+
+	initializedFromStatus, err := provider.initTrunk(mockInstance, fakeTrunk, []v1.Pod{*MockPod1}, provider.log)
+
+	assert.NoError(t, err)
+	assert.True(t, initializedFromStatus)
+}
+
 func TestBranchENIProvider_Introspect(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -627,4 +673,128 @@ func TestUnSupportedNodeEvents_Windows(t *testing.T) {
 
 	supported := provider.IsInstanceSupported(mockInstance)
 	assert.False(t, supported)
+}
+
+// healSnapshot is a fully-populated snapshot the self-heal reconstructs from the cached trunk.
+func healSnapshot() (rcv1alpha1.TrunkENIStatus, rcv1alpha1.InstanceStatus) {
+	trunkStatus := rcv1alpha1.TrunkENIStatus{ID: "eni-trunk-1", SubnetID: "subnet-1"}
+	instanceStatus := rcv1alpha1.InstanceStatus{
+		InstanceID:                "i-123",
+		InstanceType:              "m5.large",
+		InstanceSubnetID:          "subnet-1",
+		CurrentSubnetID:           "subnet-1",
+		PrimaryNetworkInterfaceID: "eni-primary-1",
+	}
+	return trunkStatus, instanceStatus
+}
+
+// TestBranchENIProvider_ReconcileCNINodeStatus_TrunkAbsent verifies the self-heal is a no-op when no
+// trunk is cached for the node (nothing to persist).
+func TestBranchENIProvider_ReconcileCNINodeStatus_TrunkAbsent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	// No GetCNINode / UpdateCNINodeStatus should be called.
+	mockK8s.EXPECT().GetCNINode(gomock.Any()).Times(0)
+	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any(), gomock.Any()).Times(0)
+
+	provider.ReconcileCNINodeStatus(NodeName)
+}
+
+// TestBranchENIProvider_ReconcileCNINodeStatus_EmptyStatusPatched verifies that when the trunk is
+// cached but the CNINode status is empty, the self-heal rebuilds and patches it (no EC2 calls).
+func TestBranchENIProvider_ReconcileCNINodeStatus_EmptyStatusPatched(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	trunkStatus, instanceStatus := healSnapshot()
+	fakeTrunk.EXPECT().CNINodeStatus().Return(trunkStatus).AnyTimes()
+	fakeTrunk.EXPECT().InstanceStatus().Return(instanceStatus).AnyTimes()
+
+	// CNINode exists but its status is empty -> patch expected.
+	mockK8s.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).
+		Return(&rcv1alpha1.CNINode{ObjectMeta: metav1.ObjectMeta{Name: NodeName}}, nil).Times(1)
+	mockK8s.EXPECT().UpdateCNINodeStatus(NodeName, gomock.Any()).DoAndReturn(
+		func(_ string, status rcv1alpha1.CNINodeStatus) error {
+			assert.Equal(t, rcv1alpha1.CNINodeStatusSnapshotVersion, status.SnapshotVersion)
+			assert.Equal(t, "eni-trunk-1", status.TrunkENI.ID)
+			assert.Equal(t, "i-123", status.Instance.InstanceID)
+			return nil
+		}).Times(1)
+
+	provider.ReconcileCNINodeStatus(NodeName)
+}
+
+// TestBranchENIProvider_ReconcileCNINodeStatus_UpToDateSkipsPatch verifies that when the persisted
+// status already matches the desired snapshot the self-heal does not re-patch.
+func TestBranchENIProvider_ReconcileCNINodeStatus_UpToDateSkipsPatch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	trunkStatus, instanceStatus := healSnapshot()
+	fakeTrunk.EXPECT().CNINodeStatus().Return(trunkStatus).AnyTimes()
+	fakeTrunk.EXPECT().InstanceStatus().Return(instanceStatus).AnyTimes()
+
+	existing := &rcv1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{Name: NodeName},
+		Status: rcv1alpha1.CNINodeStatus{
+			SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
+			TrunkENI:        trunkStatus,
+			Instance:        instanceStatus,
+		},
+	}
+	mockK8s.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).Return(existing, nil).Times(1)
+	// Already up to date -> no patch.
+	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any(), gomock.Any()).Times(0)
+
+	provider.ReconcileCNINodeStatus(NodeName)
+}
+
+// TestBranchENIProvider_ReconcileCNINodeStatus_TrunkIDEmptySkips verifies that a cached trunk that
+// has no ID yet is skipped (an ID-less snapshot cannot drive hydrate).
+func TestBranchENIProvider_ReconcileCNINodeStatus_TrunkIDEmptySkips(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	fakeTrunk.EXPECT().CNINodeStatus().Return(rcv1alpha1.TrunkENIStatus{}).AnyTimes()
+	fakeTrunk.EXPECT().InstanceStatus().Return(rcv1alpha1.InstanceStatus{}).AnyTimes()
+
+	// Trunk ID empty -> neither read nor patch.
+	mockK8s.EXPECT().GetCNINode(gomock.Any()).Times(0)
+	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any(), gomock.Any()).Times(0)
+
+	provider.ReconcileCNINodeStatus(NodeName)
+}
+
+// TestBranchENIProvider_ReconcileCNINodeStatus_GetError verifies that a read error is swallowed
+// (best-effort) and no patch is attempted, leaving the next reconcile to retry.
+func TestBranchENIProvider_ReconcileCNINodeStatus_GetError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	trunkStatus, instanceStatus := healSnapshot()
+	fakeTrunk.EXPECT().CNINodeStatus().Return(trunkStatus).AnyTimes()
+	fakeTrunk.EXPECT().InstanceStatus().Return(instanceStatus).AnyTimes()
+
+	mockK8s.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).Return(nil, MockError).Times(1)
+	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any(), gomock.Any()).Times(0)
+
+	provider.ReconcileCNINodeStatus(NodeName)
 }

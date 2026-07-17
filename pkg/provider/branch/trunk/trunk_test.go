@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
@@ -667,6 +668,49 @@ func TestTrunkENI_Reconcile_NoStateChange(t *testing.T) {
 	_, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 	assert.Zero(t, trunkENI.deleteQueue)
 	assert.True(t, isPresent)
+}
+
+func TestTrunkENI_InitTrunkFromStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+
+	err := trunkENI.InitTrunkFromStatus(rcv1alpha1.TrunkENIStatus{
+		ID:       trunkId,
+		SubnetID: SubnetId,
+	}, []v1.Pod{*MockPod1, *MockPod2})
+
+	assert.NoError(t, err)
+	assert.Equal(t, trunkId, trunkENI.trunkENIId)
+	branchENIs, isPresent := trunkENI.uidToBranchENIMap[PodUID]
+	assert.True(t, isPresent)
+	assert.Equal(t, Branch1Id, branchENIs[0].ID)
+	assert.Equal(t, Branch2Id, branchENIs[1].ID)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+	assert.True(t, trunkENI.usedVlanIds[VlanId2])
+	assert.Empty(t, trunkENI.deleteQueue)
+}
+
+func TestTrunkENI_ReconcileUnassignedBranchENIs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails1}
+
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	ec2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil)
+
+	found, err := trunkENI.ReconcileUnassignedBranchENIs()
+
+	assert.NoError(t, err)
+	assert.True(t, found)
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, Branch2Id, trunkENI.deleteQueue[0].ID)
+	assert.True(t, trunkENI.usedVlanIds[VlanId2])
 }
 
 func TestTrunkENI_InitTrunk(t *testing.T) {

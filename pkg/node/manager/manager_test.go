@@ -25,6 +25,7 @@ import (
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
+	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
 	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
 	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
@@ -717,6 +718,91 @@ func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 	assert.True(t, mock.Manager.SkipHealthCheck())
 	assert.True(t, time.Since(mock.Manager.stopHealthCheckAt) > time.Second*2 && time.Since(mock.Manager.stopHealthCheckAt) < time.Second*3)
+}
+
+// selfHealFakeProvider wraps the mock resource provider and additionally implements
+// cniNodeStatusReconciler so CheckNodeForLeakedENIs will invoke the self-heal path. It records
+// whether ReconcileCNINodeStatus was called via a buffered channel.
+type selfHealFakeProvider struct {
+	*mock_provider.MockResourceProvider
+	healed chan string
+}
+
+func (p *selfHealFakeProvider) ReconcileCNINodeStatus(nodeName string) {
+	p.healed <- nodeName
+}
+
+// selfHealFakeNode is a minimal node.Node used to control IsReady() and the reconciliation timing
+// without running full onboarding.
+type selfHealFakeNode struct {
+	node.Node
+	ready       bool
+	nextReconTs time.Time
+	reconInt    time.Duration
+}
+
+func (n *selfHealFakeNode) IsReady() bool                         { return n.ready }
+func (n *selfHealFakeNode) IsManaged() bool                       { return true }
+func (n *selfHealFakeNode) GetNextReconciliationTime() time.Time  { return n.nextReconTs }
+func (n *selfHealFakeNode) SetNextReconciliationTime(t time.Time) { n.nextReconTs = t }
+func (n *selfHealFakeNode) GetReconciliationInterval() time.Duration {
+	if n.reconInt == 0 {
+		return node.NodeInitialCleanupInterval
+	}
+	return n.reconInt
+}
+func (n *selfHealFakeNode) SetReconciliationInterval(d time.Duration) { n.reconInt = d }
+
+// Test_CheckNodeForLeakedENIs_SelfHeal_WhenReady verifies the periodic reconcile invokes the CNINode
+// status self-heal when the node is ready.
+func Test_CheckNodeForLeakedENIs_SelfHeal_WhenReady(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	fakeNode := &selfHealFakeNode{ready: true, nextReconTs: time.Now().Add(-time.Minute)}
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: fakeNode})
+
+	provider := &selfHealFakeProvider{
+		MockResourceProvider: mock_provider.NewMockResourceProvider(ctrl),
+		healed:               make(chan string, 1),
+	}
+	provider.MockResourceProvider.EXPECT().ReconcileNode(nodeName).Return(false).Times(1)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNamePodENI).Return(provider, true).Times(1)
+
+	mock.Manager.CheckNodeForLeakedENIs(nodeName)
+
+	select {
+	case got := <-provider.healed:
+		assert.Equal(t, nodeName, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected ReconcileCNINodeStatus to be called for a ready node")
+	}
+}
+
+// Test_CheckNodeForLeakedENIs_SelfHeal_SkippedWhenNotReady verifies the self-heal is NOT invoked when
+// the node is not yet ready (its in-memory trunk is not initialized).
+func Test_CheckNodeForLeakedENIs_SelfHeal_SkippedWhenNotReady(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	fakeNode := &selfHealFakeNode{ready: false, nextReconTs: time.Now().Add(-time.Minute)}
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: fakeNode})
+
+	provider := &selfHealFakeProvider{
+		MockResourceProvider: mock_provider.NewMockResourceProvider(ctrl),
+		healed:               make(chan string, 1),
+	}
+	provider.MockResourceProvider.EXPECT().ReconcileNode(nodeName).Return(false).Times(1)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNamePodENI).Return(provider, true).Times(1)
+
+	mock.Manager.CheckNodeForLeakedENIs(nodeName)
+
+	select {
+	case <-provider.healed:
+		t.Fatal("did not expect ReconcileCNINodeStatus for a not-ready node")
+	case <-time.After(500 * time.Millisecond):
+		// expected: no self-heal call
+	}
 }
 
 // Test_isPodENICapacitySet test if the pod-eni capacity then true is returned

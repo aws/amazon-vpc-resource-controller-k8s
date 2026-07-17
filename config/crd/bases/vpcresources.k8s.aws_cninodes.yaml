@@ -61,23 +61,6 @@ spec:
                       type: string
                   type: object
                 type: array
-              managedBy:
-                description: |-
-                  ManagedBy identifies the controller that owns this CNINode and its
-                  status. Empty is equivalent to "vpc-resource-controller" for backward
-                  compatibility with objects created before this field existed.
-                  Controllers must ignore CNINodes managed by another controller.
-                  Immutable once set: a node can never legitimately change between
-                  compute types, so a managedBy flip is always a bug or tampering.
-                  Setting it on an existing object that has never had a value remains
-                  allowed (adoption of pre-existing objects).
-                enum:
-                - vpc-resource-controller
-                - eks-auto-mode
-                type: string
-                x-kubernetes-validations:
-                - message: managedBy is immutable once set
-                  rule: self == oldSelf
               tags:
                 additionalProperties:
                   type: string
@@ -85,103 +68,79 @@ spec:
                   provisioned by the vpc-resource-controller and VPC-CNI
                 type: object
             type: object
-            x-kubernetes-validations:
-            - message: managedBy cannot be removed once set
-              rule: '!has(oldSelf.managedBy) || has(self.managedBy)'
           status:
             description: CNINodeStatus defines the managed VPC resources.
             properties:
-              trunkInterface:
+              instance:
                 description: |-
-                  TrunkInterface describes the trunk network interface attached to the
-                  node and the branch interfaces associated with it, persisted by the
-                  managing controller (see spec.managedBy) for visibility and recovery.
+                  InstanceStatus stores the EC2 instance fields needed to reinitialize
+                  resource providers without synchronously describing the instance on restart.
                 properties:
-                  branches:
-                    description: |-
-                      Branches are the branch ENIs associated with this trunk ENI.
-                      Listed as a map keyed by id so distinct field managers can own
-                      individual entries under Server-Side Apply without conflicting.
+                  connectionTracking:
+                    description: ConnectionTrackingStatus stores primary ENI connection
+                      tracking settings.
+                    properties:
+                      tcpEstablishedTimeout:
+                        format: int32
+                        type: integer
+                      udpStreamTimeout:
+                        format: int32
+                        type: integer
+                      udpTimeout:
+                        format: int32
+                        type: integer
+                    type: object
+                  currentInstanceSecurityGroups:
                     items:
-                      description: BranchInterface describes a branch ENI associated
-                        with a trunk ENI.
-                      properties:
-                        associationID:
-                          description: AssociationID is the id of the association
-                            between the branch and trunk ENI.
-                          type: string
-                        id:
-                          description: ID is the EC2 network interface id of the branch
-                            ENI.
-                          minLength: 1
-                          type: string
-                        ipv4CIDRs:
-                          description: |-
-                            IPv4CIDRs are the IPv4 addresses or prefixes assigned to the branch ENI,
-                            in CIDR notation (a single address is expressed as a /32).
-                          items:
-                            type: string
-                          type: array
-                          x-kubernetes-list-type: atomic
-                        ipv6CIDRs:
-                          description: |-
-                            IPv6CIDRs are the IPv6 addresses or prefixes assigned to the branch ENI,
-                            in CIDR notation (a single address is expressed as a /128).
-                          items:
-                            type: string
-                          type: array
-                          x-kubernetes-list-type: atomic
-                        macAddress:
-                          description: MacAddress is the MAC address of the branch
-                            ENI.
-                          type: string
-                        securityGroups:
-                          description: SecurityGroups are the security group ids attached
-                            to the branch ENI.
-                          items:
-                            type: string
-                          type: array
-                          x-kubernetes-list-type: atomic
-                        subnetCIDR:
-                          description: SubnetCIDR is the IPv4 CIDR block of the subnet
-                            the branch ENI belongs to.
-                          type: string
-                        subnetV6CIDR:
-                          description: SubnetV6CIDR is the IPv6 CIDR block of the
-                            subnet the branch ENI belongs to.
-                          type: string
-                        vlanID:
-                          description: VlanID is the vlan id of the trunk-to-branch
-                            association.
-                          format: int32
-                          type: integer
-                      required:
-                      - id
-                      - vlanID
-                      type: object
+                      type: string
                     type: array
-                    x-kubernetes-list-map-keys:
-                    - id
-                    x-kubernetes-list-type: map
-                  deviceIndex:
-                    description: DeviceIndex is the attachment device index of the
-                      trunk ENI on the instance.
-                    format: int32
-                    type: integer
+                  currentSubnetCIDRBlock:
+                    type: string
+                  currentSubnetID:
+                    type: string
+                  currentSubnetV6CIDRBlock:
+                    type: string
+                  instanceID:
+                    type: string
+                  instanceSubnetCIDRBlock:
+                    type: string
+                  instanceSubnetID:
+                    type: string
+                  instanceSubnetV6CIDRBlock:
+                    type: string
+                  instanceType:
+                    type: string
+                  primaryNetworkInterfaceID:
+                    type: string
+                  primaryNetworkInterfaceSecurityGroups:
+                    items:
+                      type: string
+                    type: array
+                  subnetMask:
+                    type: string
+                  subnetV6Mask:
+                    type: string
+                type: object
+              lastUpdated:
+                format: date-time
+                type: string
+              snapshotVersion:
+                type: string
+              trunkENI:
+                description: TrunkENIStatus stores the trunk ENI fields needed to
+                  rebuild the in-memory trunk cache.
+                properties:
                   id:
-                    description: ID is the EC2 network interface id of the trunk ENI.
-                    minLength: 1
                     type: string
-                  macAddress:
-                    description: MacAddress is the MAC address of the trunk ENI.
+                  securityGroups:
+                    items:
+                      type: string
+                    type: array
+                  subnetID:
                     type: string
-                required:
-                - id
                 type: object
             type: object
         type: object
-    selectableFields:
-    - jsonPath: .spec.managedBy
     served: true
     storage: true
     subresources:

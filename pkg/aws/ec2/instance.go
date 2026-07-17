@@ -15,9 +15,11 @@ package ec2
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
@@ -71,6 +73,8 @@ type ec2Instance struct {
 	tcpEstablishedTimeout *int32
 	udpStreamTimeout      *int32
 	udpTimeout            *int32
+
+	loadedFromCNINodeStatus bool
 }
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
@@ -93,6 +97,9 @@ type EC2Instance interface {
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
+	HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) (bool, string)
+	CNINodeStatus() rcv1alpha1.InstanceStatus
+	LoadedFromCNINodeStatus() bool
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -109,6 +116,7 @@ func NewEC2Instance(nodeName string, instanceID string, os string, log logr.Logg
 func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	i.lock.Lock()
 	defer i.lock.Unlock()
+	i.loadedFromCNINodeStatus = false
 
 	instance, err := ec2APIHelper.GetInstanceDetails(&i.instanceID)
 	if err != nil {
@@ -352,4 +360,130 @@ func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, ud
 	defer i.lock.RUnlock()
 
 	return i.tcpEstablishedTimeout, i.udpStreamTimeout, i.udpTimeout
+}
+
+func (i *ec2Instance) HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) (bool, string) {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	if status.SnapshotVersion != rcv1alpha1.CNINodeStatusSnapshotVersion {
+		return false, "snapshot_version_mismatch"
+	}
+	if status.TrunkENI.ID == "" {
+		return false, "missing_trunk_eni"
+	}
+
+	instanceStatus := status.Instance
+	if instanceStatus.InstanceID != i.instanceID {
+		return false, "instance_id_mismatch"
+	}
+	if instanceStatus.InstanceType == "" {
+		return false, "missing_instance_type"
+	}
+	if instanceStatus.InstanceSubnetID == "" || instanceStatus.InstanceSubnetCIDRBlock == "" {
+		return false, "missing_instance_subnet"
+	}
+	if instanceStatus.CurrentSubnetID == "" || instanceStatus.CurrentSubnetCIDRBlock == "" {
+		return false, "missing_current_subnet"
+	}
+	if instanceStatus.PrimaryNetworkInterfaceID == "" {
+		return false, "missing_primary_eni"
+	}
+	if len(instanceStatus.PrimaryNetworkInterfaceSecurityGroups) == 0 ||
+		len(instanceStatus.CurrentInstanceSecurityGroups) == 0 {
+		return false, "missing_security_groups"
+	}
+	if status.TrunkENI.SubnetID != "" && status.TrunkENI.SubnetID != instanceStatus.CurrentSubnetID {
+		return false, "trunk_subnet_mismatch"
+	}
+
+	if i.newCustomNetworkingSubnetID != "" {
+		if instanceStatus.CurrentSubnetID != i.newCustomNetworkingSubnetID {
+			return false, "custom_networking_subnet_mismatch"
+		}
+		if len(i.newCustomNetworkingSecurityGroups) > 0 &&
+			!sameStringSet(instanceStatus.CurrentInstanceSecurityGroups, i.newCustomNetworkingSecurityGroups) {
+			return false, "custom_networking_security_group_mismatch"
+		}
+	} else if instanceStatus.CurrentSubnetID != instanceStatus.InstanceSubnetID ||
+		!sameStringSet(instanceStatus.CurrentInstanceSecurityGroups, instanceStatus.PrimaryNetworkInterfaceSecurityGroups) {
+		return false, "instance_networking_mismatch"
+	}
+
+	i.instanceType = instanceStatus.InstanceType
+	i.instanceSubnetID = instanceStatus.InstanceSubnetID
+	i.instanceSubnetCidrBlock = instanceStatus.InstanceSubnetCIDRBlock
+	i.instanceSubnetV6CidrBlock = instanceStatus.InstanceSubnetV6CIDRBlock
+	i.currentSubnetID = instanceStatus.CurrentSubnetID
+	i.currentSubnetCIDRBlock = instanceStatus.CurrentSubnetCIDRBlock
+	i.currentSubnetV6CIDRBlock = instanceStatus.CurrentSubnetV6CIDRBlock
+	i.currentInstanceSecurityGroups = slices.Clone(instanceStatus.CurrentInstanceSecurityGroups)
+	i.subnetMask = instanceStatus.SubnetMask
+	i.subnetV6Mask = instanceStatus.SubnetV6Mask
+	i.primaryENIID = instanceStatus.PrimaryNetworkInterfaceID
+	i.primaryENISecurityGroups = slices.Clone(instanceStatus.PrimaryNetworkInterfaceSecurityGroups)
+
+	i.tcpEstablishedTimeout = nil
+	i.udpStreamTimeout = nil
+	i.udpTimeout = nil
+	if instanceStatus.ConnectionTracking != nil {
+		i.tcpEstablishedTimeout = cloneInt32Ptr(instanceStatus.ConnectionTracking.TCPEstablishedTimeout)
+		i.udpStreamTimeout = cloneInt32Ptr(instanceStatus.ConnectionTracking.UDPStreamTimeout)
+		i.udpTimeout = cloneInt32Ptr(instanceStatus.ConnectionTracking.UDPTimeout)
+	}
+
+	i.loadedFromCNINodeStatus = true
+	return true, "hit"
+}
+
+func (i *ec2Instance) CNINodeStatus() rcv1alpha1.InstanceStatus {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return rcv1alpha1.InstanceStatus{
+		InstanceID:                            i.instanceID,
+		InstanceType:                          i.instanceType,
+		InstanceSubnetID:                      i.instanceSubnetID,
+		InstanceSubnetCIDRBlock:               i.instanceSubnetCidrBlock,
+		InstanceSubnetV6CIDRBlock:             i.instanceSubnetV6CidrBlock,
+		CurrentSubnetID:                       i.currentSubnetID,
+		CurrentSubnetCIDRBlock:                i.currentSubnetCIDRBlock,
+		CurrentSubnetV6CIDRBlock:              i.currentSubnetV6CIDRBlock,
+		CurrentInstanceSecurityGroups:         slices.Clone(i.currentInstanceSecurityGroups),
+		SubnetMask:                            i.subnetMask,
+		SubnetV6Mask:                          i.subnetV6Mask,
+		PrimaryNetworkInterfaceID:             i.primaryENIID,
+		PrimaryNetworkInterfaceSecurityGroups: slices.Clone(i.primaryENISecurityGroups),
+		ConnectionTracking: &rcv1alpha1.ConnectionTrackingStatus{
+			TCPEstablishedTimeout: cloneInt32Ptr(i.tcpEstablishedTimeout),
+			UDPStreamTimeout:      cloneInt32Ptr(i.udpStreamTimeout),
+			UDPTimeout:            cloneInt32Ptr(i.udpTimeout),
+		},
+	}
+}
+
+func (i *ec2Instance) LoadedFromCNINodeStatus() bool {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.loadedFromCNINodeStatus
+}
+
+func sameStringSet(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	a = slices.Clone(a)
+	b = slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
+}
+
+func cloneInt32Ptr(ptr *int32) *int32 {
+	if ptr == nil {
+		return nil
+	}
+	val := *ptr
+	return &val
 }
