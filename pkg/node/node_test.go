@@ -28,7 +28,9 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -159,6 +161,7 @@ func TestNode_InitResources_ProofMetric_Hydrated(t *testing.T) {
 	defer ctrl.Finish()
 
 	before := testutil.ToFloat64(nodeReinitEC2Skipped.WithLabelValues(reinitResultHydrated))
+	beforeLatencyCount := summarySampleCount(t, nodeInitStageLatency.WithLabelValues(stageLoadDetails))
 
 	mock := NewMock(ctrl, 1)
 	mock.NodeWithMock.k8sAPI = mock.MockK8sAPI
@@ -180,6 +183,21 @@ func TestNode_InitResources_ProofMetric_Hydrated(t *testing.T) {
 
 	after := testutil.ToFloat64(nodeReinitEC2Skipped.WithLabelValues(reinitResultHydrated))
 	assert.Equal(t, before+1, after)
+
+	// The hydrated fast path must still record a load-details datapoint (a 0s
+	// observation) so the summary proves LoadDetails was skipped instead of
+	// carrying no samples at all.
+	afterLatencyCount := summarySampleCount(t, nodeInitStageLatency.WithLabelValues(stageLoadDetails))
+	assert.Equal(t, beforeLatencyCount+1, afterLatencyCount)
+}
+
+// summarySampleCount returns the number of observations recorded on a summary metric child.
+func summarySampleCount(t *testing.T, observer prometheus.Observer) uint64 {
+	metric, ok := observer.(prometheus.Metric)
+	assert.True(t, ok, "observer must implement prometheus.Metric")
+	var dtoMetric dto.Metric
+	assert.NoError(t, metric.Write(&dtoMetric))
+	return dtoMetric.GetSummary().GetSampleCount()
 }
 
 // TestNode_InitResources_ProofMetric_EC2Fallback verifies the proof metric increments the

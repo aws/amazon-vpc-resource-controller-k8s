@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -482,8 +483,13 @@ func (b *branchENIProvider) ReconcileCNINodeStatus(nodeName string) {
 
 // cniNodeStatusUpToDate reports whether the persisted status already reflects the desired snapshot
 // for the purposes of hydrate. It intentionally ignores LastUpdated (a timestamp that would always
-// differ) and compares the fields hydrate actually validates: snapshot version, trunk identity, and
-// the instance identity/subnet/security groups.
+// differ) and otherwise compares exactly the fields that HydrateFromCNINodeStatus
+// (pkg/aws/ec2/instance.go) reads back into the in-memory instance: snapshot version, trunk identity
+// (ID + subnet), and the full instance identity, subnet (v4/v6 CIDR + masks), both security-group
+// sets, and connection-tracking settings. Compare and validate must stay in lockstep so a stale or
+// partial snapshot (e.g. missing security groups) is treated as out-of-date and re-patched, rather
+// than skipped only to fail hydrate on the next re-init. Security groups are compared as sets to
+// mirror hydrate's order-independent sameStringSet semantics and avoid needless re-patch churn.
 func cniNodeStatusUpToDate(persisted, desired rcv1alpha1.CNINodeStatus) bool {
 	if persisted.SnapshotVersion != desired.SnapshotVersion {
 		return false
@@ -496,11 +502,74 @@ func cniNodeStatusUpToDate(persisted, desired rcv1alpha1.CNINodeStatus) bool {
 	if pi.InstanceID != di.InstanceID ||
 		pi.InstanceType != di.InstanceType ||
 		pi.InstanceSubnetID != di.InstanceSubnetID ||
+		pi.InstanceSubnetCIDRBlock != di.InstanceSubnetCIDRBlock ||
+		pi.InstanceSubnetV6CIDRBlock != di.InstanceSubnetV6CIDRBlock ||
 		pi.CurrentSubnetID != di.CurrentSubnetID ||
+		pi.CurrentSubnetCIDRBlock != di.CurrentSubnetCIDRBlock ||
+		pi.CurrentSubnetV6CIDRBlock != di.CurrentSubnetV6CIDRBlock ||
+		pi.SubnetMask != di.SubnetMask ||
+		pi.SubnetV6Mask != di.SubnetV6Mask ||
 		pi.PrimaryNetworkInterfaceID != di.PrimaryNetworkInterfaceID {
 		return false
 	}
+	if !sameStringSet(pi.CurrentInstanceSecurityGroups, di.CurrentInstanceSecurityGroups) ||
+		!sameStringSet(pi.PrimaryNetworkInterfaceSecurityGroups, di.PrimaryNetworkInterfaceSecurityGroups) {
+		return false
+	}
+	if !sameConnectionTracking(pi.ConnectionTracking, di.ConnectionTracking) {
+		return false
+	}
 	return true
+}
+
+// sameStringSet reports whether two string slices contain the same elements, ignoring order and
+// duplicates-position. Mirrors ec2.sameStringSet so self-heal comparison and hydrate validation
+// treat security-group ordering identically.
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	a = slices.Clone(a)
+	b = slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
+}
+
+// sameConnectionTracking reports whether two connection-tracking snapshots are equivalent, treating
+// a nil struct as equivalent to one with all-nil timeout pointers (both mean "no override recorded").
+func sameConnectionTracking(a, b *rcv1alpha1.ConnectionTrackingStatus) bool {
+	return sameInt32Ptr(connTrackTCP(a), connTrackTCP(b)) &&
+		sameInt32Ptr(connTrackUDPStream(a), connTrackUDPStream(b)) &&
+		sameInt32Ptr(connTrackUDP(a), connTrackUDP(b))
+}
+
+func connTrackTCP(c *rcv1alpha1.ConnectionTrackingStatus) *int32 {
+	if c == nil {
+		return nil
+	}
+	return c.TCPEstablishedTimeout
+}
+
+func connTrackUDPStream(c *rcv1alpha1.ConnectionTrackingStatus) *int32 {
+	if c == nil {
+		return nil
+	}
+	return c.UDPStreamTimeout
+}
+
+func connTrackUDP(c *rcv1alpha1.ConnectionTrackingStatus) *int32 {
+	if c == nil {
+		return nil
+	}
+	return c.UDPTimeout
+}
+
+func sameInt32Ptr(a, b *int32) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // ProcessDeleteQueue removes cooled down ENIs associated with a trunk for a given node

@@ -717,8 +717,21 @@ func (t *trunkENI) pushUnassignedBranchInterfacesToDeleteQueue(branchInterfaces 
 			continue
 		}
 
-		// Even though the ENI is going to be deleted, keep the VLAN reserved while it sits in the cool down queue.
-		t.markVlanAssigned(vlanId)
+		// The VLAN ID is parsed from an ENI tag, so it may be out of range (corrupt
+		// or unexpectedly formatted tag). markVlanAssigned logs-and-continues on an
+		// invalid ID, but if we still enqueue the ENI with that ID, deleteENI later
+		// calls freeVlanId(vlanId) which indexes usedVlanIds and would panic on an
+		// out-of-bounds index. Fall back to the reserved VLAN ID 0 (never freed by
+		// deleteENI) so deletion still proceeds without panicking.
+		if vlanId < 0 || vlanId >= MaxAllocatableVlanIds {
+			trunkENIOperationsErrCount.WithLabelValues("invalid_vlan_id_on_delete").Inc()
+			t.log.Error(fmt.Errorf("vlan id %d is outside allocatable range [0,%d)", vlanId, MaxAllocatableVlanIds),
+				"using reserved vlan id 0 for delete queue", "interface", branchENIID)
+			vlanId = 0
+		} else {
+			// Even though the ENI is going to be deleted, keep the VLAN reserved while it sits in the cool down queue.
+			t.markVlanAssigned(vlanId)
+		}
 		t.pushENIToDeleteQueue(&ENIDetails{
 			ID:                branchENIID,
 			VlanID:            vlanId,

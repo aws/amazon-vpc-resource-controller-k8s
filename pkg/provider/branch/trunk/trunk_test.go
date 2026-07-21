@@ -713,6 +713,46 @@ func TestTrunkENI_ReconcileUnassignedBranchENIs(t *testing.T) {
 	assert.True(t, trunkENI.usedVlanIds[VlanId2])
 }
 
+// TestTrunkENI_pushUnassignedBranchInterfacesToDeleteQueue_InvalidVlanId verifies that an ENI whose
+// VLAN tag is out of the allocatable range is still enqueued for deletion, but with the reserved
+// VLAN ID 0 so the later deleteENI -> freeVlanId call does not index out of bounds and panic.
+func TestTrunkENI_pushUnassignedBranchInterfacesToDeleteQueue_InvalidVlanId(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+
+	outOfRangeVlan := MaxAllocatableVlanIds + 5
+	invalidVlanTag := []awsEc2Types.Tag{{
+		Key:   aws.String(config.VLandIDTag),
+		Value: aws.String(strconv.Itoa(outOfRangeVlan)),
+	}}
+	interfaces := map[string]*awsEc2Types.NetworkInterface{
+		Branch2Id: {
+			InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+			NetworkInterfaceId: &Branch2Id,
+			TagSet:             invalidVlanTag,
+		},
+	}
+
+	found := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(interfaces)
+
+	assert.True(t, found)
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, Branch2Id, trunkENI.deleteQueue[0].ID)
+	// Out-of-range VLAN must be replaced with the reserved sentinel 0 so deleteENI skips freeVlanId.
+	assert.Equal(t, 0, trunkENI.deleteQueue[0].VlanID)
+	// The out-of-range index must never have been marked as used.
+	assert.Equal(t, MaxAllocatableVlanIds, len(trunkENI.usedVlanIds))
+
+	// deleteENI on the queued ENI must not panic even though the tag was invalid: with VlanID 0 it
+	// skips freeVlanId entirely (freeVlanId with an out-of-range index would have panicked).
+	ec2APIHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
+	assert.NotPanics(t, func() {
+		_ = trunkENI.deleteENI(trunkENI.deleteQueue[0])
+	})
+}
+
 func TestTrunkENI_InitTrunk(t *testing.T) {
 	type args struct {
 		instance ec2.EC2Instance

@@ -798,3 +798,97 @@ func TestBranchENIProvider_ReconcileCNINodeStatus_GetError(t *testing.T) {
 
 	provider.ReconcileCNINodeStatus(NodeName)
 }
+
+// fullHealSnapshot returns a fully-populated snapshot that mirrors every field
+// HydrateFromCNINodeStatus validates/consumes, so cniNodeStatusUpToDate can be exercised on the
+// same field set that hydrate reads back.
+func fullHealSnapshot() rcv1alpha1.CNINodeStatus {
+	tcp := int32(60)
+	udpStream := int32(120)
+	udp := int32(30)
+	return rcv1alpha1.CNINodeStatus{
+		SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
+		TrunkENI:        rcv1alpha1.TrunkENIStatus{ID: "eni-trunk-1", SubnetID: "subnet-1"},
+		Instance: rcv1alpha1.InstanceStatus{
+			InstanceID:                            "i-123",
+			InstanceType:                          "m5.large",
+			InstanceSubnetID:                      "subnet-1",
+			InstanceSubnetCIDRBlock:               "10.0.0.0/24",
+			InstanceSubnetV6CIDRBlock:             "2600:1f13::/64",
+			CurrentSubnetID:                       "subnet-1",
+			CurrentSubnetCIDRBlock:                "10.0.0.0/24",
+			CurrentSubnetV6CIDRBlock:              "2600:1f13::/64",
+			CurrentInstanceSecurityGroups:         []string{"sg-a", "sg-b"},
+			SubnetMask:                            "24",
+			SubnetV6Mask:                          "64",
+			PrimaryNetworkInterfaceID:             "eni-primary-1",
+			PrimaryNetworkInterfaceSecurityGroups: []string{"sg-a", "sg-b"},
+			ConnectionTracking: &rcv1alpha1.ConnectionTrackingStatus{
+				TCPEstablishedTimeout: &tcp,
+				UDPStreamTimeout:      &udpStream,
+				UDPTimeout:            &udp,
+			},
+		},
+	}
+}
+
+// TestCNINodeStatusUpToDate verifies that the self-heal comparison covers exactly the fields that
+// HydrateFromCNINodeStatus validates - including the security-group sets and identity/subnet fields
+// that a previous version ignored - so a stale/partial snapshot is treated as out-of-date and gets
+// re-patched instead of being wrongly skipped.
+func TestCNINodeStatusUpToDate(t *testing.T) {
+	base := fullHealSnapshot()
+
+	// Identical snapshots are up to date.
+	assert.True(t, cniNodeStatusUpToDate(base, base))
+
+	// Security groups compared as sets: different order is still up to date.
+	reordered := fullHealSnapshot()
+	reordered.Instance.CurrentInstanceSecurityGroups = []string{"sg-b", "sg-a"}
+	reordered.Instance.PrimaryNetworkInterfaceSecurityGroups = []string{"sg-b", "sg-a"}
+	assert.True(t, cniNodeStatusUpToDate(base, reordered))
+
+	// Each of these mutations to the persisted snapshot must make it out-of-date, proving the field
+	// is actually compared (regression guard for the fields hydrate reads).
+	mutations := map[string]func(s *rcv1alpha1.CNINodeStatus){
+		"snapshot version":            func(s *rcv1alpha1.CNINodeStatus) { s.SnapshotVersion = "v0" },
+		"trunk id":                    func(s *rcv1alpha1.CNINodeStatus) { s.TrunkENI.ID = "eni-other" },
+		"trunk subnet":                func(s *rcv1alpha1.CNINodeStatus) { s.TrunkENI.SubnetID = "subnet-other" },
+		"instance id":                 func(s *rcv1alpha1.CNINodeStatus) { s.Instance.InstanceID = "i-other" },
+		"instance type":               func(s *rcv1alpha1.CNINodeStatus) { s.Instance.InstanceType = "m5.xlarge" },
+		"instance subnet id":          func(s *rcv1alpha1.CNINodeStatus) { s.Instance.InstanceSubnetID = "subnet-other" },
+		"instance subnet cidr":        func(s *rcv1alpha1.CNINodeStatus) { s.Instance.InstanceSubnetCIDRBlock = "10.1.0.0/24" },
+		"instance subnet v6 cidr":     func(s *rcv1alpha1.CNINodeStatus) { s.Instance.InstanceSubnetV6CIDRBlock = "2600:1f14::/64" },
+		"current subnet id":           func(s *rcv1alpha1.CNINodeStatus) { s.Instance.CurrentSubnetID = "subnet-other" },
+		"current subnet cidr":         func(s *rcv1alpha1.CNINodeStatus) { s.Instance.CurrentSubnetCIDRBlock = "10.1.0.0/24" },
+		"current subnet v6 cidr":      func(s *rcv1alpha1.CNINodeStatus) { s.Instance.CurrentSubnetV6CIDRBlock = "2600:1f14::/64" },
+		"subnet mask":                 func(s *rcv1alpha1.CNINodeStatus) { s.Instance.SubnetMask = "16" },
+		"subnet v6 mask":              func(s *rcv1alpha1.CNINodeStatus) { s.Instance.SubnetV6Mask = "56" },
+		"primary eni id":              func(s *rcv1alpha1.CNINodeStatus) { s.Instance.PrimaryNetworkInterfaceID = "eni-other" },
+		"current sg set changed":      func(s *rcv1alpha1.CNINodeStatus) { s.Instance.CurrentInstanceSecurityGroups = []string{"sg-a"} },
+		"current sg emptied":          func(s *rcv1alpha1.CNINodeStatus) { s.Instance.CurrentInstanceSecurityGroups = nil },
+		"primary sg set changed":      func(s *rcv1alpha1.CNINodeStatus) { s.Instance.PrimaryNetworkInterfaceSecurityGroups = []string{"sg-c"} },
+		"primary sg emptied":          func(s *rcv1alpha1.CNINodeStatus) { s.Instance.PrimaryNetworkInterfaceSecurityGroups = nil },
+		"connection tracking cleared": func(s *rcv1alpha1.CNINodeStatus) { s.Instance.ConnectionTracking = nil },
+		"connection tracking changed": func(s *rcv1alpha1.CNINodeStatus) {
+			v := int32(999)
+			s.Instance.ConnectionTracking.TCPEstablishedTimeout = &v
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			persisted := fullHealSnapshot()
+			mutate(&persisted)
+			assert.False(t, cniNodeStatusUpToDate(persisted, base),
+				"mutation %q should make the snapshot out of date", name)
+		})
+	}
+
+	// A nil connection-tracking struct is equivalent to one with all-nil timeouts (both mean "no
+	// override recorded"), so it must not trigger a needless re-patch.
+	noConnTrackDesired := fullHealSnapshot()
+	noConnTrackDesired.Instance.ConnectionTracking = nil
+	noConnTrackPersisted := fullHealSnapshot()
+	noConnTrackPersisted.Instance.ConnectionTracking = &rcv1alpha1.ConnectionTrackingStatus{}
+	assert.True(t, cniNodeStatusUpToDate(noConnTrackPersisted, noConnTrackDesired))
+}

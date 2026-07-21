@@ -340,6 +340,10 @@ func (k *k8sWrapper) UpdateCNINodeStatus(nodeName string, status rcv1alpha1.CNIN
 
 		newCNINode := cniNode.DeepCopy()
 		newCNINode.Status = status
-		return k.cacheClient.Status().Patch(k.context, newCNINode, client.MergeFrom(cniNode))
+		// Use an optimistic lock (keyed on resourceVersion) so a concurrent status
+		// write reliably surfaces as a Conflict and is retried against a freshly
+		// re-read object above, instead of silently clobbering the other writer.
+		// The retry is bounded by cniNodeStatusUpdateBackoff, so this cannot churn.
+		return k.cacheClient.Status().Patch(k.context, newCNINode, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{}))
 	})
 }

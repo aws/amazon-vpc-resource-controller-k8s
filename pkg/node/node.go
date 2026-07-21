@@ -211,7 +211,10 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	// back to LoadDetails (cold-start / first-init path) when hydration fails.
 	if n.tryHydrateInstanceFromCNINodeStatus() {
 		// Hydrated from CNINode status: LoadDetails (EC2 DescribeInstances) is skipped.
+		// Record a 0 observation for the load-details stage so the summary has a real
+		// datapoint proving LoadDetails was skipped, rather than no samples at all.
 		nodeReinitEC2Skipped.WithLabelValues(reinitResultHydrated).Inc()
+		nodeInitStageLatency.WithLabelValues(stageLoadDetails).Observe(0)
 	} else {
 		// Fell back to the EC2 cold-start path: LoadDetails runs.
 		nodeReinitEC2Skipped.WithLabelValues(reinitResultEC2Fallback).Inc()
