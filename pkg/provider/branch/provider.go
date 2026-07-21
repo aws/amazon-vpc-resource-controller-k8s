@@ -315,7 +315,7 @@ func (b *branchENIProvider) handleInitTrunkFailure(instance ec2.EC2Instance, nod
 	if errors.As(err, &apiErr) {
 		node, errGetNode := b.apiWrapper.K8sAPI.GetNode(instance.Name())
 		if errGetNode != nil {
-			return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, err)
+			return fmt.Errorf("failed to get node for event advertisement: %v: %v", errGetNode, err)
 		}
 		eventMessage := fmt.Sprintf("Failed to create trunk interface: "+
 			"Error Code: %s", apiErr.ErrorCode())
