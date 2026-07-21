@@ -88,6 +88,32 @@ var (
 		[]string{"operation"},
 	)
 
+	// branchENIOrphanReclaimedCount counts orphan branch ENIs DISCOVERED by the orphan reclaim sweep -
+	// branch ENIs attached to the trunk in EC2 but owned by no pod in the in-memory ledger, pushed to
+	// the cooldown delete queue by ReconcileUnassignedBranchENIs. It makes the real orphan RATE
+	// observable in Grafana (previously only a log line). Orphans arise only from rare EC2 API
+	// failures, so a sustained non-zero rate here is a signal worth alerting on.
+	branchENIOrphanReclaimedCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_eni_orphan_reclaimed_total",
+			Help: "The number of orphan branch ENIs (attached to the trunk but owned by no pod) discovered and pushed to the delete queue by the orphan reclaim sweep",
+		},
+		[]string{"attribute"},
+	)
+
+	// branchENIDeleteForgottenCount counts branch ENIs abandoned from the delete queue after exhausting
+	// MaxDeleteRetries ("forgetting eni as max retries exceeded"). This is a class-2 PRODUCER of orphans:
+	// a forgotten ENI stays attached in EC2 with no pod owner and is exactly what a later orphan reclaim
+	// sweep rediscovers. Pairing this with branch_eni_orphan_reclaimed_total makes both the production
+	// and the reclaim of orphans observable.
+	branchENIDeleteForgottenCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_eni_delete_forgotten_total",
+			Help: "The number of branch ENIs forgotten (dropped from the delete queue) after exceeding the maximum delete retries",
+		},
+		[]string{"attribute"},
+	)
+
 	prometheusRegistered = false
 )
 
@@ -225,6 +251,8 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(unreconciledTrunkENICount)
 		metrics.Registry.MustRegister(branchENIOperationsSuccessCount)
 		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
+		metrics.Registry.MustRegister(branchENIOrphanReclaimedCount)
+		metrics.Registry.MustRegister(branchENIDeleteForgottenCount)
 
 		prometheusRegistered = true
 	}
@@ -617,6 +645,10 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 				eni.deleteRetryCount++
 				if eni.deleteRetryCount >= MaxDeleteRetries {
 					t.log.Error(err, "forgetting eni as max retries exceeded", "eni", eni)
+					// This forgotten ENI stays attached in EC2 with no pod owner: it is a class-2
+					// orphan PRODUCER that a later orphan reclaim sweep will rediscover. Count it so
+					// orphan production is observable alongside branch_eni_orphan_reclaimed_total.
+					branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded").Inc()
 					// TODO: free vlan id?
 					continue
 				}
@@ -709,6 +741,9 @@ func (t *trunkENI) pushUnassignedBranchInterfacesToDeleteQueue(branchInterfaces 
 		}
 		branchENIID := *branchInterface.NetworkInterfaceId
 		t.log.Info("pushing eni to delete queue as no pod owns it", "eni", branchENIID)
+		// An attached branch ENI owned by no pod in the ledger is an orphan. Count each discovery so
+		// the real orphan rate is observable in Grafana (previously only the log line above existed).
+		branchENIOrphanReclaimedCount.WithLabelValues("discovered").Inc()
 
 		vlanId, err := t.getVlanIdFromTag(branchInterface.TagSet)
 		if err != nil {

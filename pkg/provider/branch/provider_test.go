@@ -496,8 +496,10 @@ func TestBranchENIProvider_ReconcileNode_NoLeak(t *testing.T) {
 	mockPodAPI.EXPECT().ListPods(NodeName).Return(list, nil)
 
 	fakeTrunk1.EXPECT().Reconcile(list.Items).Return(false)
-	// The per-node timer also triggers the EC2 orphan branch-ENI reclaim once the trunk is hydrated.
-	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(NodeName))
+	// The fast reconcile must NOT trigger the EC2 orphan branch-ENI reclaim: that now runs on the
+	// independent slow sweep timer (SubmitReconcileUnassignedBranchENIsJob), not every reconcile
+	// cycle. Leaving no SubmitJob expectation asserts it is not submitted here (gomock fails on any
+	// unexpected call).
 
 	result := provider.ReconcileNode(NodeName)
 	assert.False(t, result)
@@ -520,18 +522,16 @@ func TestBranchENIProvider_ReconcileNode_Leak(t *testing.T) {
 	mockPodAPI.EXPECT().ListPods(NodeName).Return(list, nil)
 
 	fakeTrunk1.EXPECT().Reconcile(list.Items).Return(true)
-	// The per-node timer also triggers the EC2 orphan branch-ENI reclaim once the trunk is hydrated.
-	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(NodeName))
+	// The fast reconcile must NOT trigger the EC2 orphan branch-ENI reclaim even when a leak is found:
+	// that reclaim runs on the independent slow sweep timer, not on this cadence. No SubmitJob
+	// expectation asserts it is not submitted here.
 
 	result := provider.ReconcileNode(NodeName)
 	assert.True(t, result)
 }
 
-// TestBranchENIProvider_ReconcileNode_TrunkENIDeleted tests that the reconcile job is removed once trunk eni is removed from
-// the cache. When the trunk is absent from cache the EC2 orphan reclaim must NOT be triggered: the
-// in-memory ledger is not yet built, so every attached branch ENI would be mis-classified as an orphan
-// and queued for deletion (dropping running pods' network). The fake worker asserts SubmitJob is never
-// called by leaving no expectation on it (gomock fails on any unexpected call).
+// TestBranchENIProvider_ReconcileNode_TrunkENIDeleted tests that the reconcile job requeues the node
+// asap once the trunk eni is removed from the cache.
 func TestBranchENIProvider_ReconcileNode_TrunkENIDeleted(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -541,6 +541,22 @@ func TestBranchENIProvider_ReconcileNode_TrunkENIDeleted(t *testing.T) {
 
 	result := provider.ReconcileNode(NodeName)
 	assert.True(t, result)
+}
+
+// TestBranchENIProvider_SubmitReconcileUnassignedBranchENIsJob verifies that the slow-timer entry point
+// used by the node manager submits exactly the EC2 orphan branch-ENI reclaim job. This is the
+// independent sweep path, distinct from the fast ReconcileNode reconcile.
+func TestBranchENIProvider_SubmitReconcileUnassignedBranchENIsJob(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	provider.workerPool = mockWorker
+
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(NodeName))
+
+	provider.SubmitReconcileUnassignedBranchENIsJob(NodeName)
 }
 
 // TestBranchENIProvider_ProcessDeleteQueue_TrunkENIDeleted tests that the requeue job is removed once the trunk eni

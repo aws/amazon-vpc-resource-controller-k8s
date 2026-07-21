@@ -62,6 +62,20 @@ func (mr *MockNodeMockRecorder) DeleteResources(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteResources", reflect.TypeOf((*MockNode)(nil).DeleteResources), arg0)
 }
 
+// GetNextEC2SweepTime mocks base method.
+func (m *MockNode) GetNextEC2SweepTime() time.Time {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNextEC2SweepTime")
+	ret0, _ := ret[0].(time.Time)
+	return ret0
+}
+
+// GetNextEC2SweepTime indicates an expected call of GetNextEC2SweepTime.
+func (mr *MockNodeMockRecorder) GetNextEC2SweepTime() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNextEC2SweepTime", reflect.TypeOf((*MockNode)(nil).GetNextEC2SweepTime))
+}
+
 // GetNextReconciliationTime mocks base method.
 func (m *MockNode) GetNextReconciliationTime() time.Time {
 	m.ctrl.T.Helper()
@@ -172,6 +186,18 @@ func (m *MockNode) IsReady() bool {
 func (mr *MockNodeMockRecorder) IsReady() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsReady", reflect.TypeOf((*MockNode)(nil).IsReady))
+}
+
+// SetNextEC2SweepTime mocks base method.
+func (m *MockNode) SetNextEC2SweepTime(arg0 time.Time) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetNextEC2SweepTime", arg0)
+}
+
+// SetNextEC2SweepTime indicates an expected call of SetNextEC2SweepTime.
+func (mr *MockNodeMockRecorder) SetNextEC2SweepTime(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetNextEC2SweepTime", reflect.TypeOf((*MockNode)(nil).SetNextEC2SweepTime), arg0)
 }
 
 // SetNextReconciliationTime mocks base method.

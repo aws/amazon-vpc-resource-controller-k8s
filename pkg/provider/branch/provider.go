@@ -427,16 +427,23 @@ func (b *branchENIProvider) ReconcileNode(nodeName string) bool {
 	}
 	foundLeakedENI := trunkENI.Reconcile(podList.Items)
 
-	// Also reclaim orphan branch ENIs (attached to the trunk in EC2 but owned by no pod in the
-	// in-memory ledger). This is the EC2 DescribeNetworkInterfaces path that used to run on re-init;
-	// it lives here now so the flood is spread over each node's jittered reconcile timer instead of
-	// firing per node on every controller restart. It is only safe once the trunk is hydrated: the
-	// getTrunkFromCache guard above already returned early when the trunk is absent, so the ledger is
-	// built and an attached ENI absent from it is genuinely an orphan (never a mis-classified in-use
-	// ENI). Submitted as an async job so it reuses the existing delete-queue + VLAN-reserve safety net.
-	b.SubmitAsyncJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(nodeName))
+	// NOTE: The EC2 orphan branch-ENI reclaim (ReconcileUnassignedBranchENIs) is intentionally NOT
+	// submitted here. It issues a DescribeNetworkInterfaces per node, so running it on this fast
+	// (1-15min) reconcile cadence is massively over-provisioned - orphans arise only from rare EC2 API
+	// failures. It now runs on its own independent, low-frequency, jittered timer owned by the node
+	// manager, which calls SubmitReconcileUnassignedBranchENIsJob on the slow cadence. The zero-EC2
+	// Reconcile above stays on the fast cadence because it is free.
 
 	return foundLeakedENI
+}
+
+// SubmitReconcileUnassignedBranchENIsJob submits the EC2 orphan branch-ENI reclaim as an async job.
+// It is invoked by the node manager on the independent, low-frequency orphan sweep timer (separate
+// from the fast per-node reconcile). Submitting as an async job reuses the existing delete-queue +
+// VLAN-reserve safety net, and the job handler (ReconcileUnassignedBranchENIs) guards on
+// trunk-in-cache so an un-hydrated ledger never mis-classifies attached ENIs as orphans.
+func (b *branchENIProvider) SubmitReconcileUnassignedBranchENIsJob(nodeName string) {
+	b.SubmitAsyncJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(nodeName))
 }
 
 // ReconcileCNINodeStatus is the periodic self-heal for the CNINode status snapshot. When a node's

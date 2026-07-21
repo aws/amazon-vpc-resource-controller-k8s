@@ -124,6 +124,7 @@ func main() {
 	var maxPodConcurrentReconciles int
 	var maxNodeConcurrentReconciles int
 	var disableController bool
+	var branchENIOrphanSweepInterval time.Duration
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to.")
@@ -171,6 +172,9 @@ func main() {
 	flag.IntVar(&maxPodConcurrentReconciles, "max-pod-reconcile", 20, "The maximum number of concurrent reconciles for pod controller")
 	flag.IntVar(&maxNodeConcurrentReconciles, "max-node-reconcile", 10, "The maximum number of concurrent reconciles for node controller")
 	flag.BoolVar(&disableController, "disable-controller", false, "A flag to disable the controller.")
+	flag.DurationVar(&branchENIOrphanSweepInterval, "branch-eni-orphan-sweep-interval", time.Hour,
+		"The base cadence of the independent, low-frequency EC2 orphan branch-ENI reclaim sweep per node. "+
+			"This is separate from the fast per-node reconcile; jitter is applied per node to avoid a synchronized describe flood.")
 
 	flag.Parse()
 
@@ -364,7 +368,7 @@ func main() {
 		nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
 			nodeWorkerCount, 1, ctrl.Log.WithName("node async workers"), ctx)
 		nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager,
-			apiWrapper, nodeManagerWorkers, controllerConditions, clusterName, version.GitVersion, healthzHandler)
+			apiWrapper, nodeManagerWorkers, controllerConditions, clusterName, version.GitVersion, branchENIOrphanSweepInterval, healthzHandler)
 
 		if err != nil {
 			ctrl.Log.Error(err, "failed to init node manager")

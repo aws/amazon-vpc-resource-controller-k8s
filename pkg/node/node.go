@@ -102,6 +102,12 @@ type node struct {
 	nextReconciliationTime time.Time
 	// reconciliation interval between cleanups
 	reconciliationInterval time.Duration
+	// nextEC2SweepTime is the earliest time the EC2 orphan branch-ENI reclaim
+	// (ReconcileUnassignedBranchENIs) may run for this node. It is an independent, low-frequency
+	// timer, separate from nextReconciliationTime: the zero-EC2 Reconcile runs on the fast
+	// reconciliation cadence, while the expensive DescribeNetworkInterfaces sweep runs on this
+	// slower, jittered cadence owned by the node manager.
+	nextEC2SweepTime time.Time
 }
 
 const (
@@ -137,6 +143,9 @@ type Node interface {
 	SetNextReconciliationTime(time time.Time)
 	GetReconciliationInterval() time.Duration
 	SetReconciliationInterval(time time.Duration)
+
+	GetNextEC2SweepTime() time.Time
+	SetNextEC2SweepTime(time time.Time)
 }
 
 // NewManagedNode returns node managed by the controller
@@ -381,4 +390,18 @@ func (n *node) SetReconciliationInterval(time time.Duration) {
 	defer n.lock.Unlock()
 
 	n.reconciliationInterval = time
+}
+
+func (n *node) GetNextEC2SweepTime() time.Time {
+	n.lock.RLock()
+	defer n.lock.RUnlock()
+
+	return n.nextEC2SweepTime
+}
+
+func (n *node) SetNextEC2SweepTime(time time.Time) {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+
+	n.nextEC2SweepTime = time
 }

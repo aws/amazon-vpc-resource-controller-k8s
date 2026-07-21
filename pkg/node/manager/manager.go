@@ -59,6 +59,11 @@ type manager struct {
 	controllerVersion string
 	stopHealthCheckAt time.Time
 	clusterName       string
+	// orphanSweepInterval is the base cadence of the independent, low-frequency EC2 orphan
+	// branch-ENI reclaim (ReconcileUnassignedBranchENIs). It is separate from the fast per-node
+	// reconciliation cadence: the zero-EC2 Reconcile runs on the fast timer, while the expensive
+	// DescribeNetworkInterfaces sweep runs on this slower timer. Sourced from a controller input flag.
+	orphanSweepInterval time.Duration
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -101,19 +106,32 @@ type AsyncOperationJob struct {
 
 const pausingHealthCheckDuration = 10 * time.Minute
 
+// DefaultBranchENIOrphanSweepInterval is the fallback base cadence for the EC2 orphan branch-ENI
+// reclaim sweep when a non-positive interval is supplied. It matches the flag default in main.go.
+const DefaultBranchENIOrphanSweepInterval = time.Hour
+
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
-	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, orphanSweepInterval time.Duration, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+
+	// Guard against a mis-configured (zero or negative) interval so a slow sweep is always scheduled;
+	// fall back to the safe default rather than degenerating into an every-cycle EC2 describe.
+	if orphanSweepInterval <= 0 {
+		logger.Info("branch ENI orphan sweep interval is non-positive, using default",
+			"configured", orphanSweepInterval, "default", DefaultBranchENIOrphanSweepInterval)
+		orphanSweepInterval = DefaultBranchENIOrphanSweepInterval
+	}
 
 	manager := &manager{
-		resourceManager:   resourceManager,
-		Log:               logger,
-		dataStore:         make(map[string]node.Node),
-		wrapper:           wrapper,
-		worker:            worker,
-		conditions:        conditions,
-		controllerVersion: controllerVersion,
-		clusterName:       clusterName,
+		resourceManager:     resourceManager,
+		Log:                 logger,
+		dataStore:           make(map[string]node.Node),
+		wrapper:             wrapper,
+		worker:              worker,
+		conditions:          conditions,
+		controllerVersion:   controllerVersion,
+		clusterName:         clusterName,
+		orphanSweepInterval: orphanSweepInterval,
 	}
 
 	// add health check on subpath for node manager
@@ -132,6 +150,20 @@ type cniNodeStatusReconciler interface {
 	ReconcileCNINodeStatus(nodeName string)
 }
 
+// orphanBranchENIReclaimer is optionally implemented by the branch/trunk provider to submit the
+// independent, low-frequency EC2 orphan branch-ENI reclaim. Kept out of the core ResourceProvider
+// interface for the same reason as cniNodeStatusReconciler: the IPv4/prefix providers have no trunk.
+type orphanBranchENIReclaimer interface {
+	SubmitReconcileUnassignedBranchENIsJob(nodeName string)
+}
+
+// jitteredOrphanSweepInterval returns the base orphan sweep interval with jitter applied so the fleet
+// does not issue DescribeNetworkInterfaces in a synchronized thundering herd. wait.Jitter adds a
+// random duration in [0, factor*interval), so factor 1.0 yields a value in [interval, 2*interval).
+func (m *manager) jitteredOrphanSweepInterval() time.Duration {
+	return wait.Jitter(m.orphanSweepInterval, 1.0)
+}
+
 func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 	cachedNode, found := m.GetNode(nodeName)
 	if !found || !cachedNode.IsManaged() {
@@ -139,37 +171,71 @@ func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 		return
 	}
 
-	// Only start a goroutine when need to
-	if time.Now().After(cachedNode.GetNextReconciliationTime()) {
-		go func() {
-			if resourceProvider, found := m.resourceManager.GetResourceProvider(config.ResourceNamePodENI); found {
-				// Self-heal the CNINode status snapshot on the same jittered cadence. Only attempt
-				// it once the node is ready (its in-memory trunk is initialized); the reconciler
-				// only PATCHes an existing CNINode and makes no EC2 calls, so it converges the
-				// snapshot regardless of cold-start timing and survives a controller restart
-				// (re-init rebuilds the in-memory trunk via AddNode, then this repopulates status).
-				if healer, ok := resourceProvider.(cniNodeStatusReconciler); ok && cachedNode.IsReady() {
-					healer.ReconcileCNINodeStatus(nodeName)
-				}
+	now := time.Now()
 
-				foundLeakedENI := resourceProvider.ReconcileNode(nodeName)
-				if foundLeakedENI {
-					cachedNode.SetReconciliationInterval(node.NodeInitialCleanupInterval)
-				} else {
-					interval := wait.Jitter(cachedNode.GetReconciliationInterval(), 5)
-					if interval > node.MaxNodeReconciliationInterval {
-						interval = node.MaxNodeReconciliationInterval
-					}
-					cachedNode.SetReconciliationInterval(interval)
-				}
-				cachedNode.SetNextReconciliationTime(time.Now().Add(cachedNode.GetReconciliationInterval()))
-				m.Log.Info("reconciled node to cleanup leaked branch ENIs", "NodeName", nodeName, "NextInterval", cachedNode.GetReconciliationInterval(), "NextReconciliationTime", cachedNode.GetNextReconciliationTime())
-			} else {
-				// no SGP provider enabled
-				return
-			}
-		}()
+	// Arm the independent EC2 orphan sweep timer on first sight so the fleet's first sweeps are
+	// spread across the jittered interval rather than all firing at startup - the very describe
+	// flood this timer exists to prevent. Orphans arise only from rare EC2 API failures, so
+	// deferring the first sweep by up to one interval is safe.
+	if cachedNode.GetNextEC2SweepTime().IsZero() {
+		cachedNode.SetNextEC2SweepTime(now.Add(m.jitteredOrphanSweepInterval()))
 	}
+
+	reconcileDue := now.After(cachedNode.GetNextReconciliationTime())
+	sweepDue := now.After(cachedNode.GetNextEC2SweepTime())
+
+	// Only start a goroutine when need to
+	if !reconcileDue && !sweepDue {
+		return
+	}
+
+	go func() {
+		resourceProvider, found := m.resourceManager.GetResourceProvider(config.ResourceNamePodENI)
+		if !found {
+			// no SGP provider enabled
+			return
+		}
+
+		if reconcileDue {
+			// Self-heal the CNINode status snapshot on the same jittered cadence. Only attempt
+			// it once the node is ready (its in-memory trunk is initialized); the reconciler
+			// only PATCHes an existing CNINode and makes no EC2 calls, so it converges the
+			// snapshot regardless of cold-start timing and survives a controller restart
+			// (re-init rebuilds the in-memory trunk via AddNode, then this repopulates status).
+			if healer, ok := resourceProvider.(cniNodeStatusReconciler); ok && cachedNode.IsReady() {
+				healer.ReconcileCNINodeStatus(nodeName)
+			}
+
+			// Fast, zero-EC2 reconcile against the in-memory ledger. This is free and stays on the
+			// 1-15min jittered cadence.
+			foundLeakedENI := resourceProvider.ReconcileNode(nodeName)
+			if foundLeakedENI {
+				cachedNode.SetReconciliationInterval(node.NodeInitialCleanupInterval)
+			} else {
+				interval := wait.Jitter(cachedNode.GetReconciliationInterval(), 5)
+				if interval > node.MaxNodeReconciliationInterval {
+					interval = node.MaxNodeReconciliationInterval
+				}
+				cachedNode.SetReconciliationInterval(interval)
+			}
+			cachedNode.SetNextReconciliationTime(time.Now().Add(cachedNode.GetReconciliationInterval()))
+			m.Log.Info("reconciled node to cleanup leaked branch ENIs", "NodeName", nodeName, "NextInterval", cachedNode.GetReconciliationInterval(), "NextReconciliationTime", cachedNode.GetNextReconciliationTime())
+		}
+
+		if sweepDue {
+			// Independent, low-frequency EC2 orphan branch-ENI reclaim (DescribeNetworkInterfaces).
+			// Only submit once the node is ready (its in-memory trunk ledger is hydrated); an empty
+			// ledger would mis-classify every attached ENI as an orphan and queue live pods' ENIs for
+			// deletion. The submitted job's handler independently guards on trunk-in-cache as well.
+			if reclaimer, ok := resourceProvider.(orphanBranchENIReclaimer); ok && cachedNode.IsReady() {
+				reclaimer.SubmitReconcileUnassignedBranchENIsJob(nodeName)
+				m.Log.Info("submitted EC2 orphan branch-ENI reclaim sweep", "NodeName", nodeName)
+			}
+			// Reschedule the next sweep with fresh jitter regardless of readiness so a not-yet-ready
+			// node does not busy-poll this branch on every reconcile event.
+			cachedNode.SetNextEC2SweepTime(time.Now().Add(m.jitteredOrphanSweepInterval()))
+		}
+	}()
 }
 
 // GetNode returns the node from in memory data store

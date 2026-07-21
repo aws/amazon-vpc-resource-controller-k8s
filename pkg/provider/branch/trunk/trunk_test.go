@@ -33,6 +33,7 @@ import (
 	awsEc2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsEc2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -624,6 +625,36 @@ func TestTrunkENI_DeleteCooledDownENIs_DeleteFailed(t *testing.T) {
 	assert.Zero(t, len(trunkENI.deleteQueue))
 }
 
+// TestTrunkENI_DeleteCooledDownENIs_ForgottenMetric verifies that when an ENI exhausts MaxDeleteRetries
+// and is forgotten (dropped from the delete queue while still attached in EC2), the class-2 orphan
+// PRODUCER metric branch_eni_delete_forgotten_total is incremented so orphan production is observable.
+func TestTrunkENI_DeleteCooledDownENIs_ForgottenMetric(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	EniDetails1.deletionTimeStamp = time.Now().Add(-time.Second * 61)
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, EniDetails1)
+
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("60"), nil)
+	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
+
+	// Every delete attempt fails, so the ENI is retried MaxDeleteRetries times and then forgotten.
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil).Times(MaxDeleteRetries)
+	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(MockError).Times(MaxDeleteRetries)
+
+	before := testutil.ToFloat64(branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded"))
+
+	// A single call retries the ENI in-loop until MaxDeleteRetries is exhausted and it is forgotten.
+	trunkENI.DeleteCooledDownENIs()
+
+	after := testutil.ToFloat64(branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded"))
+	assert.Equal(t, float64(1), after-before, "expected one forgotten branch ENI to be counted")
+	assert.Zero(t, len(trunkENI.deleteQueue))
+}
+
 // TestTrunkENI_PushBranchENIsToCoolDownQueue tests that ENIs are pushed to the delete queue if the pod is being deleted
 func TestTrunkENI_PushBranchENIsToCoolDownQueue(t *testing.T) {
 	trunkENI := getMockTrunk()
@@ -704,6 +735,9 @@ func TestTrunkENI_ReconcileUnassignedBranchENIs(t *testing.T) {
 	mockInstance.EXPECT().SubnetID().Return(SubnetId)
 	ec2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil)
 
+	// The orphan-discovery metric must increment once per orphan branch ENI found (here: Branch2).
+	before := testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))
+
 	found, err := trunkENI.ReconcileUnassignedBranchENIs()
 
 	assert.NoError(t, err)
@@ -711,6 +745,9 @@ func TestTrunkENI_ReconcileUnassignedBranchENIs(t *testing.T) {
 	assert.Len(t, trunkENI.deleteQueue, 1)
 	assert.Equal(t, Branch2Id, trunkENI.deleteQueue[0].ID)
 	assert.True(t, trunkENI.usedVlanIds[VlanId2])
+
+	after := testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))
+	assert.Equal(t, float64(1), after-before, "expected one orphan branch ENI discovery to be counted")
 }
 
 // TestTrunkENI_pushUnassignedBranchInterfacesToDeleteQueue_InvalidVlanId verifies that an ENI whose
