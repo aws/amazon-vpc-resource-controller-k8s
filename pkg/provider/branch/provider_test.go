@@ -31,6 +31,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/golang/mock/gomock"
@@ -485,6 +486,8 @@ func TestBranchENIProvider_ReconcileNode_NoLeak(t *testing.T) {
 	defer ctrl.Finish()
 
 	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	provider.workerPool = mockWorker
 
 	fakeTrunk1 := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk1
@@ -493,6 +496,8 @@ func TestBranchENIProvider_ReconcileNode_NoLeak(t *testing.T) {
 	mockPodAPI.EXPECT().ListPods(NodeName).Return(list, nil)
 
 	fakeTrunk1.EXPECT().Reconcile(list.Items).Return(false)
+	// The per-node timer also triggers the EC2 orphan branch-ENI reclaim once the trunk is hydrated.
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(NodeName))
 
 	result := provider.ReconcileNode(NodeName)
 	assert.False(t, result)
@@ -505,6 +510,8 @@ func TestBranchENIProvider_ReconcileNode_Leak(t *testing.T) {
 	defer ctrl.Finish()
 
 	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	provider.workerPool = mockWorker
 
 	fakeTrunk1 := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk1
@@ -513,15 +520,24 @@ func TestBranchENIProvider_ReconcileNode_Leak(t *testing.T) {
 	mockPodAPI.EXPECT().ListPods(NodeName).Return(list, nil)
 
 	fakeTrunk1.EXPECT().Reconcile(list.Items).Return(true)
+	// The per-node timer also triggers the EC2 orphan branch-ENI reclaim once the trunk is hydrated.
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(NodeName))
 
 	result := provider.ReconcileNode(NodeName)
 	assert.True(t, result)
 }
 
 // TestBranchENIProvider_ReconcileNode_TrunkENIDeleted tests that the reconcile job is removed once trunk eni is removed from
-// the cache
+// the cache. When the trunk is absent from cache the EC2 orphan reclaim must NOT be triggered: the
+// in-memory ledger is not yet built, so every attached branch ENI would be mis-classified as an orphan
+// and queued for deletion (dropping running pods' network). The fake worker asserts SubmitJob is never
+// called by leaving no expectation on it (gomock fails on any unexpected call).
 func TestBranchENIProvider_ReconcileNode_TrunkENIDeleted(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
 	provider := getProvider()
+	provider.workerPool = mock_worker.NewMockWorker(ctrl)
 
 	result := provider.ReconcileNode(NodeName)
 	assert.True(t, result)
@@ -598,6 +614,47 @@ func TestBranchENIProvider_InitTrunkFromCNINodeStatus(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, initializedFromStatus)
+}
+
+// TestBranchENIProvider_InitResource_HydrateHit_NoOrphanReclaim verifies that a re-init that hydrates
+// the trunk from CNINode status does NOT submit the EC2 orphan branch-ENI reclaim job. That reclaim now
+// runs only on the per-node reconcile timer (ReconcileNode), so re-init issues no DescribeNetworkInterfaces.
+// The MockWorker only expects the periodic ProcessDeleteQueue job; gomock fails the test if the reclaim
+// job (or any other job) is submitted.
+func TestBranchENIProvider_InitResource_HydrateHit_NoOrphanReclaim(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	provider.workerPool = mockWorker
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
+	mockInstance.EXPECT().InstanceID().Return("i-1234567890").AnyTimes()
+	mockInstance.EXPECT().SubnetID().Return("subnet-1").AnyTimes()
+	mockInstance.EXPECT().LoadedFromCNINodeStatus().Return(true)
+
+	status := rcv1alpha1.CNINodeStatus{
+		TrunkENI: rcv1alpha1.TrunkENIStatus{
+			ID:       "eni-trunk",
+			SubnetID: "subnet-1",
+		},
+	}
+	// Pod without a pod-eni annotation so InitTrunkFromStatus builds an empty ledger without extra work.
+	pod := *MockPod1
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return([]v1.Pod{pod}, nil)
+	mockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).Return(&rcv1alpha1.CNINode{Status: status}, nil)
+
+	// Only the periodic delete-queue job is expected. No ReconcileUnassignedBranchENIs job on re-init.
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+
+	// Node event on successful init.
+	mockK8sAPI.EXPECT().GetNode(NodeName).Return(&v1.Node{}, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(gomock.Any(), utils.NodeTrunkInitiatedReason, gomock.Any(), v1.EventTypeNormal)
+
+	err := provider.InitResource(mockInstance)
+	assert.NoError(t, err)
 }
 
 func TestBranchENIProvider_Introspect(t *testing.T) {

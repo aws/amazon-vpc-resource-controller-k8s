@@ -216,8 +216,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	initializedFromStatus, err := b.initTrunk(instance, trunkENI, podList, log)
-	if err != nil {
+	if _, err := b.initTrunk(instance, trunkENI, podList, log); err != nil {
 		return b.handleInitTrunkFailure(instance, nodeName, err)
 	}
 
@@ -229,9 +228,10 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	if initializedFromStatus {
-		b.SubmitAsyncJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(nodeName))
-	}
+	// The orphan branch-ENI reclaim (ReconcileUnassignedBranchENIs) is intentionally NOT triggered
+	// here. It issues an EC2 DescribeNetworkInterfaces per node, so triggering it on re-init produced a
+	// describe flood at fleet scale on every controller restart. It now runs on the existing per-node
+	// reconcile timer instead (see ReconcileNode), keeping re-init free of EC2 orphan-reclaim calls.
 
 	// TODO: For efficiency submit the process delete queue job only when the delete queue has items.
 	// Submit periodic jobs for the given node name
@@ -426,6 +426,16 @@ func (b *branchENIProvider) ReconcileNode(nodeName string) bool {
 		return true
 	}
 	foundLeakedENI := trunkENI.Reconcile(podList.Items)
+
+	// Also reclaim orphan branch ENIs (attached to the trunk in EC2 but owned by no pod in the
+	// in-memory ledger). This is the EC2 DescribeNetworkInterfaces path that used to run on re-init;
+	// it lives here now so the flood is spread over each node's jittered reconcile timer instead of
+	// firing per node on every controller restart. It is only safe once the trunk is hydrated: the
+	// getTrunkFromCache guard above already returned early when the trunk is absent, so the ledger is
+	// built and an attached ENI absent from it is genuinely an orphan (never a mis-classified in-use
+	// ENI). Submitted as an async job so it reuses the existing delete-queue + VLAN-reserve safety net.
+	b.SubmitAsyncJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(nodeName))
+
 	return foundLeakedENI
 }
 
