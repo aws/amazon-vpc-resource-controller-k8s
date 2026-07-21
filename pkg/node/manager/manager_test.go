@@ -16,6 +16,7 @@ package manager
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -740,9 +741,11 @@ func (p *selfHealFakeProvider) SubmitReconcileUnassignedBranchENIsJob(nodeName s
 }
 
 // selfHealFakeNode is a minimal node.Node used to control IsReady() and the reconciliation timing
-// without running full onboarding.
+// without running full onboarding. Fields are guarded by mu, mirroring the real node's lock
+// discipline, so the background goroutine spawned by CheckNodeForLeakedENIs does not race the test.
 type selfHealFakeNode struct {
 	node.Node
+	mu          sync.Mutex
 	ready       bool
 	nextReconTs time.Time
 	reconInt    time.Duration
@@ -751,19 +754,45 @@ type selfHealFakeNode struct {
 	nextSweepTs time.Time
 }
 
-func (n *selfHealFakeNode) IsReady() bool                         { return n.ready }
-func (n *selfHealFakeNode) IsManaged() bool                       { return true }
-func (n *selfHealFakeNode) GetNextReconciliationTime() time.Time  { return n.nextReconTs }
-func (n *selfHealFakeNode) SetNextReconciliationTime(t time.Time) { n.nextReconTs = t }
+func (n *selfHealFakeNode) IsReady() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.ready
+}
+func (n *selfHealFakeNode) IsManaged() bool { return true }
+func (n *selfHealFakeNode) GetNextReconciliationTime() time.Time {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.nextReconTs
+}
+func (n *selfHealFakeNode) SetNextReconciliationTime(t time.Time) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.nextReconTs = t
+}
 func (n *selfHealFakeNode) GetReconciliationInterval() time.Duration {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	if n.reconInt == 0 {
 		return node.NodeInitialCleanupInterval
 	}
 	return n.reconInt
 }
-func (n *selfHealFakeNode) SetReconciliationInterval(d time.Duration) { n.reconInt = d }
-func (n *selfHealFakeNode) GetNextEC2SweepTime() time.Time            { return n.nextSweepTs }
-func (n *selfHealFakeNode) SetNextEC2SweepTime(t time.Time)           { n.nextSweepTs = t }
+func (n *selfHealFakeNode) SetReconciliationInterval(d time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.reconInt = d
+}
+func (n *selfHealFakeNode) GetNextEC2SweepTime() time.Time {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.nextSweepTs
+}
+func (n *selfHealFakeNode) SetNextEC2SweepTime(t time.Time) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.nextSweepTs = t
+}
 
 // Test_CheckNodeForLeakedENIs_SelfHeal_WhenReady verifies the periodic reconcile invokes the CNINode
 // status self-heal when the node is ready.
@@ -857,7 +886,10 @@ func Test_CheckNodeForLeakedENIs_EC2Sweep_WhenDueAndReady(t *testing.T) {
 	}
 
 	// The sweep timer must be rescheduled into the future so the next reconcile event does not sweep again.
-	assert.True(t, fakeNode.GetNextEC2SweepTime().After(time.Now()), "expected the sweep timer to be rescheduled into the future")
+	// SetNextEC2SweepTime runs after the channel send inside the goroutine, so poll briefly.
+	assert.Eventually(t, func() bool {
+		return fakeNode.GetNextEC2SweepTime().After(time.Now())
+	}, 2*time.Second, 10*time.Millisecond, "expected the sweep timer to be rescheduled into the future")
 }
 
 // Test_CheckNodeForLeakedENIs_EC2Sweep_SkippedWhenNotReady verifies the EC2 orphan sweep is NOT
