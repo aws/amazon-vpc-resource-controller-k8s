@@ -386,6 +386,17 @@ func (i *ec2Instance) HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) 
 	if instanceStatus.CurrentSubnetID == "" || instanceStatus.CurrentSubnetCIDRBlock == "" {
 		return false, "missing_current_subnet"
 	}
+	// SubnetMask is derived from the subnet CIDR on the EC2 path and is consumed downstream
+	// (e.g. the IPv4 ENI provider builds pod CIDRs as "<ip>/" + instance.SubnetMask()). A
+	// snapshot that carries a CIDR but an empty mask is incomplete/pruned; treat it as a miss
+	// so we fall back to EC2 rather than hydrating an instance that would produce malformed CIDRs.
+	if instanceStatus.SubnetMask == "" {
+		return false, "missing_subnet_mask"
+	}
+	// If a v6 CIDR is present, the corresponding v6 mask must be too (same downstream consumption).
+	if instanceStatus.InstanceSubnetV6CIDRBlock != "" && instanceStatus.SubnetV6Mask == "" {
+		return false, "missing_subnet_v6_mask"
+	}
 	if instanceStatus.PrimaryNetworkInterfaceID == "" {
 		return false, "missing_primary_eni"
 	}

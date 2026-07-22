@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
@@ -423,4 +424,54 @@ func TestEc2Instance_LoadDetails_InvalidCustomNetworkingConfiguration(t *testing
 	// Expect the primary network interface security groups when ENIConfig SG is missing
 	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.currentInstanceSecurityGroups)
 	assert.Equal(t, customNWSubnetCidr, ec2Instance.currentSubnetCIDRBlock)
+}
+
+// validHydrateStatus builds a CNINodeStatus snapshot that should hydrate successfully for the
+// instance returned by getMockInstance (instanceID/nodeName). Used as the baseline that individual
+// sub-tests then break to assert specific cache-miss reasons.
+func validHydrateStatus() rcv1alpha1.CNINodeStatus {
+	return rcv1alpha1.CNINodeStatus{
+		SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
+		Instance: rcv1alpha1.InstanceStatus{
+			InstanceID:                            instanceID,
+			InstanceType:                          string(instanceType),
+			InstanceSubnetID:                      subnetID,
+			InstanceSubnetCIDRBlock:               subnetCidrBlock,
+			CurrentSubnetID:                       subnetID,
+			CurrentSubnetCIDRBlock:                subnetCidrBlock,
+			SubnetMask:                            "16",
+			PrimaryNetworkInterfaceID:             "eni-primary",
+			PrimaryNetworkInterfaceSecurityGroups: []string{securityGroup1},
+			CurrentInstanceSecurityGroups:         []string{securityGroup1},
+		},
+		TrunkENI: rcv1alpha1.TrunkENIStatus{ID: "eni-trunk", SubnetID: subnetID},
+	}
+}
+
+func TestEc2Instance_HydrateFromCNINodeStatus_MissingSubnetMask(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// Baseline: a fully-populated snapshot hydrates successfully.
+	inst, _ := getMockInstance(ctrl)
+	ok, reason := inst.HydrateFromCNINodeStatus(validHydrateStatus())
+	assert.True(t, ok, "valid snapshot should hydrate; got reason %q", reason)
+
+	// Empty SubnetMask (incomplete/pruned snapshot) must be treated as a cache-miss, not a hit,
+	// so we do not hydrate an instance that would later build malformed pod CIDRs ("<ip>/").
+	inst2, _ := getMockInstance(ctrl)
+	s := validHydrateStatus()
+	s.Instance.SubnetMask = ""
+	ok, reason = inst2.HydrateFromCNINodeStatus(s)
+	assert.False(t, ok)
+	assert.Equal(t, "missing_subnet_mask", reason)
+
+	// A v6 CIDR present without its v6 mask must also miss.
+	inst3, _ := getMockInstance(ctrl)
+	s = validHydrateStatus()
+	s.Instance.InstanceSubnetV6CIDRBlock = "2600:1f13::/64"
+	s.Instance.SubnetV6Mask = ""
+	ok, reason = inst3.HydrateFromCNINodeStatus(s)
+	assert.False(t, ok)
+	assert.Equal(t, "missing_subnet_v6_mask", reason)
 }
