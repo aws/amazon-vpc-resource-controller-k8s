@@ -280,7 +280,10 @@ func (n *node) tryHydrateInstanceFromCNINodeStatus() bool {
 		return false
 	}
 
-	cniNode, err := n.k8sAPI.GetCNINode(types.NamespacedName{Name: n.instance.Name()})
+	// Read from the API server (non-cached): on controller restart / leader change the informer
+	// cache can lag, and a spurious miss here would force the EC2 LoadDetails fallback, defeating
+	// the zero-EC2 re-init goal.
+	cniNode, err := n.k8sAPI.GetCNINodeFromAPIServer(types.NamespacedName{Name: n.instance.Name()})
 	if err != nil {
 		n.log.V(1).Info("could not get CNINode status snapshot, falling back to EC2 instance details",
 			"error", err)

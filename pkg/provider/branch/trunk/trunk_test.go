@@ -790,6 +790,42 @@ func TestTrunkENI_pushUnassignedBranchInterfacesToDeleteQueue_InvalidVlanId(t *t
 	})
 }
 
+// TestTrunkENI_pushUnassignedBranchInterfacesToDeleteQueue_MissingVlanTag verifies that a discovered
+// orphan branch ENI whose VLAN tag is missing/unparseable (getVlanIdFromTag returns an error) is
+// STILL enqueued for deletion with the reserved VLAN ID 0, rather than skipped. Skipping would leak a
+// real orphan in EC2 indefinitely and make the orphan-discovered metric lie about "pushed to delete
+// queue".
+func TestTrunkENI_pushUnassignedBranchInterfacesToDeleteQueue_MissingVlanTag(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+
+	// No VLAN tag at all -> getVlanIdFromTag returns an error.
+	interfaces := map[string]*awsEc2Types.NetworkInterface{
+		Branch2Id: {
+			InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+			NetworkInterfaceId: &Branch2Id,
+			TagSet:             []awsEc2Types.Tag{},
+		},
+	}
+
+	found := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(interfaces)
+
+	// The orphan must be enqueued (not skipped) so it actually gets deleted.
+	assert.True(t, found)
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, Branch2Id, trunkENI.deleteQueue[0].ID)
+	// Missing/invalid tag must fall back to the reserved sentinel 0 so deleteENI skips freeVlanId.
+	assert.Equal(t, 0, trunkENI.deleteQueue[0].VlanID)
+
+	// deleteENI on the queued ENI must not panic even though the tag was missing.
+	ec2APIHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
+	assert.NotPanics(t, func() {
+		_ = trunkENI.deleteENI(trunkENI.deleteQueue[0])
+	})
+}
+
 func TestTrunkENI_InitTrunk(t *testing.T) {
 	type args struct {
 		instance ec2.EC2Instance

@@ -253,7 +253,9 @@ func (b *branchENIProvider) initTrunk(
 ) (bool, error) {
 	if instance.LoadedFromCNINodeStatus() {
 		statusStart := time.Now()
-		cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: instance.Name()})
+		// Non-cached API server read: a lagging informer cache on restart / leader change would
+		// spuriously miss here and force the EC2 fallback, defeating the zero-EC2 re-init goal.
+		cniNode, err := b.apiWrapper.K8sAPI.GetCNINodeFromAPIServer(types.NamespacedName{Name: instance.Name()})
 		if err == nil {
 			err = trunkENI.InitTrunkFromStatus(cniNode.Status.TrunkENI, podList)
 			if err == nil {

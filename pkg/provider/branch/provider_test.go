@@ -621,7 +621,7 @@ func TestBranchENIProvider_InitTrunkFromCNINodeStatus(t *testing.T) {
 
 	mockInstance.EXPECT().LoadedFromCNINodeStatus().Return(true)
 	mockInstance.EXPECT().Name().Return(NodeName)
-	mockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).Return(&rcv1alpha1.CNINode{
+	mockK8sAPI.EXPECT().GetCNINodeFromAPIServer(types.NamespacedName{Name: NodeName}).Return(&rcv1alpha1.CNINode{
 		Status: status,
 	}, nil)
 	fakeTrunk.EXPECT().InitTrunkFromStatus(status.TrunkENI, []v1.Pod{*MockPod1}).Return(nil)
@@ -660,7 +660,7 @@ func TestBranchENIProvider_InitResource_HydrateHit_NoOrphanReclaim(t *testing.T)
 	// Pod without a pod-eni annotation so InitTrunkFromStatus builds an empty ledger without extra work.
 	pod := *MockPod1
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return([]v1.Pod{pod}, nil)
-	mockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).Return(&rcv1alpha1.CNINode{Status: status}, nil)
+	mockK8sAPI.EXPECT().GetCNINodeFromAPIServer(types.NamespacedName{Name: NodeName}).Return(&rcv1alpha1.CNINode{Status: status}, nil)
 
 	// Only the periodic delete-queue job is expected. No ReconcileUnassignedBranchENIs job on re-init.
 	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))

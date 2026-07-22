@@ -745,20 +745,22 @@ func (t *trunkENI) pushUnassignedBranchInterfacesToDeleteQueue(branchInterfaces 
 		// the real orphan rate is observable in Grafana (previously only the log line above existed).
 		branchENIOrphanReclaimedCount.WithLabelValues("discovered").Inc()
 
+		// The VLAN ID is parsed from an ENI tag, so it may be missing/unparseable
+		// (getVlanIdFromTag error) or out of range (corrupt or unexpectedly formatted
+		// tag). In either case we must still enqueue the discovered orphan for deletion -
+		// returning early here would leave a real orphan attached in EC2 indefinitely and
+		// make the metric above (already incremented) inconsistent with "pushed to delete
+		// queue". markVlanAssigned logs-and-continues on an invalid ID, but if we enqueue
+		// the ENI with an out-of-range ID, deleteENI later calls freeVlanId(vlanId) which
+		// indexes usedVlanIds and would panic on an out-of-bounds index. So fall back to
+		// the reserved VLAN ID 0 (never freed by deleteENI) whenever the tag is missing or
+		// invalid, so deletion still proceeds without panicking.
 		vlanId, err := t.getVlanIdFromTag(branchInterface.TagSet)
 		if err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("get_vlan_from_tag").Inc()
-			t.log.Error(err, "failed to find vlan id", "interface", branchENIID)
-			continue
-		}
-
-		// The VLAN ID is parsed from an ENI tag, so it may be out of range (corrupt
-		// or unexpectedly formatted tag). markVlanAssigned logs-and-continues on an
-		// invalid ID, but if we still enqueue the ENI with that ID, deleteENI later
-		// calls freeVlanId(vlanId) which indexes usedVlanIds and would panic on an
-		// out-of-bounds index. Fall back to the reserved VLAN ID 0 (never freed by
-		// deleteENI) so deletion still proceeds without panicking.
-		if vlanId < 0 || vlanId >= MaxAllocatableVlanIds {
+			t.log.Error(err, "failed to find vlan id; using reserved vlan id 0 for delete queue", "interface", branchENIID)
+			vlanId = 0
+		} else if vlanId < 0 || vlanId >= MaxAllocatableVlanIds {
 			trunkENIOperationsErrCount.WithLabelValues("invalid_vlan_id_on_delete").Inc()
 			t.log.Error(fmt.Errorf("vlan id %d is outside allocatable range [0,%d)", vlanId, MaxAllocatableVlanIds),
 				"using reserved vlan id 0 for delete queue", "interface", branchENIID)

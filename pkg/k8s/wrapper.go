@@ -99,6 +99,11 @@ type K8sWrapper interface {
 	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error)
 	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
 	GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error)
+	// GetCNINodeFromAPIServer reads a CNINode directly from the API server (non-cached).
+	// The re-init hydrate fast path must use this because on controller restart / leader
+	// change the informer cache can lag the API server, causing a spurious cache-miss that
+	// forces the EC2 LoadDetails fallback and defeats the zero-EC2 re-init goal.
+	GetCNINodeFromAPIServer(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error)
 	CreateCNINode(node *v1.Node, clusterName string) error
 	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
 	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
@@ -258,6 +263,22 @@ func (k *k8sWrapper) ListEvents(ops []client.ListOption) (*eventsv1.EventList, e
 func (k *k8sWrapper) GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error) {
 	cninode := &rcv1alpha1.CNINode{}
 	if err := k.cacheClient.Get(k.context, namespacedName, cninode); err != nil {
+		return cninode, err
+	}
+	return cninode, nil
+}
+
+// GetCNINodeFromAPIServer reads a CNINode directly from the API server via the non-cached
+// apiReader (falling back to the cache client only if no apiReader was wired). Used by the
+// re-init hydrate fast path so a lagging informer cache on restart / leader change does not
+// spuriously miss and force the EC2 LoadDetails fallback.
+func (k *k8sWrapper) GetCNINodeFromAPIServer(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error) {
+	reader := client.Reader(k.cacheClient)
+	if k.apiReader != nil {
+		reader = k.apiReader
+	}
+	cninode := &rcv1alpha1.CNINode{}
+	if err := reader.Get(k.context, namespacedName, cninode); err != nil {
 		return cninode, err
 	}
 	return cninode, nil

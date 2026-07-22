@@ -140,7 +140,7 @@ func TestNode_InitResources_CNINodeStatusHydrated(t *testing.T) {
 	}
 
 	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{
+	mock.MockK8sAPI.EXPECT().GetCNINodeFromAPIServer(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{
 		Status: status,
 	}, nil)
 	mock.MockInstance.EXPECT().HydrateFromCNINodeStatus(status).Return(true, "hit")
@@ -168,7 +168,7 @@ func TestNode_InitResources_ProofMetric_Hydrated(t *testing.T) {
 	status := rcv1alpha1.CNINodeStatus{SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion}
 
 	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{
+	mock.MockK8sAPI.EXPECT().GetCNINodeFromAPIServer(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{
 		Status: status,
 	}, nil)
 	mock.MockInstance.EXPECT().HydrateFromCNINodeStatus(status).Return(true, "hit")
@@ -254,7 +254,7 @@ func TestNode_InitResources_InstanceNotListed(t *testing.T) {
 
 	mock.MockInstance.EXPECT().Type().Return(testInstanceType).Times(1)
 	mock.MockInstance.EXPECT().Name().Return(nodeName).Times(2)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{}, mockError)
+	mock.MockK8sAPI.EXPECT().GetCNINodeFromAPIServer(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{}, mockError)
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
 	mock.MockK8sAPI.EXPECT().BroadcastEvent(node, "Unsupported", msg, v1.EventTypeWarning).Times(1)
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s, error: %w", testInstanceType, utils.ErrNotFound))

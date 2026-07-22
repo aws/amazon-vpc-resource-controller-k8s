@@ -125,6 +125,21 @@ func (mr *MockK8sWrapperMockRecorder) GetCNINode(arg0 interface{}) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCNINode", reflect.TypeOf((*MockK8sWrapper)(nil).GetCNINode), arg0)
 }
 
+// GetCNINodeFromAPIServer mocks base method.
+func (m *MockK8sWrapper) GetCNINodeFromAPIServer(arg0 types.NamespacedName) (*v1alpha10.CNINode, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCNINodeFromAPIServer", arg0)
+	ret0, _ := ret[0].(*v1alpha10.CNINode)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetCNINodeFromAPIServer indicates an expected call of GetCNINodeFromAPIServer.
+func (mr *MockK8sWrapperMockRecorder) GetCNINodeFromAPIServer(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCNINodeFromAPIServer", reflect.TypeOf((*MockK8sWrapper)(nil).GetCNINodeFromAPIServer), arg0)
+}
+
 // GetConfigMap mocks base method.
 func (m *MockK8sWrapper) GetConfigMap(arg0, arg1 string) (*v10.ConfigMap, error) {
 	m.ctrl.T.Helper()
