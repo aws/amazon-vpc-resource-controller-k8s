@@ -120,6 +120,15 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Skip CNINodes owned by another controller (e.g. EKS Auto Mode). The owning
+	// controller is responsible for the object's tags, finalizers, status, and
+	// resource cleanup; adding our finalizer here would block deletion since our
+	// finalizer routine never runs for these objects.
+	if cniNode.Spec.ManagedBy != "" && cniNode.Spec.ManagedBy != v1alpha1.ManagedByVPCResourceController {
+		r.log.V(1).Info("skipping CNINode managed by another controller", "cniNode", cniNode.Name, "managedBy", cniNode.Spec.ManagedBy)
+		return ctrl.Result{}, nil
+	}
+
 	nodeFound := true
 	node := &v1.Node{}
 	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {

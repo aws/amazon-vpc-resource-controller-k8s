@@ -61,6 +61,16 @@ spec:
                       type: string
                   type: object
                 type: array
+              managedBy:
+                description: |-
+                  ManagedBy identifies the controller that owns this CNINode and its
+                  status. Empty is equivalent to "vpc-resource-controller" for backward
+                  compatibility with objects created before this field existed.
+                  Controllers must ignore CNINodes managed by another controller.
+                enum:
+                - vpc-resource-controller
+                - eks-auto-mode
+                type: string
               tags:
                 additionalProperties:
                   type: string
@@ -70,8 +80,97 @@ spec:
             type: object
           status:
             description: CNINodeStatus defines the managed VPC resources.
+            properties:
+              trunkInterface:
+                description: |-
+                  TrunkInterface describes the trunk network interface attached to the
+                  node and the branch interfaces associated with it, persisted by the
+                  managing controller (see spec.managedBy) for visibility and recovery.
+                properties:
+                  branches:
+                    description: |-
+                      Branches are the branch ENIs associated with this trunk ENI.
+                      Listed as a map keyed by id so distinct field managers can own
+                      individual entries under Server-Side Apply without conflicting.
+                    items:
+                      description: BranchInterface describes a branch ENI associated
+                        with a trunk ENI.
+                      properties:
+                        associationID:
+                          description: AssociationID is the id of the association
+                            between the branch and trunk ENI.
+                          type: string
+                        id:
+                          description: ID is the EC2 network interface id of the branch
+                            ENI.
+                          minLength: 1
+                          type: string
+                        ipv4CIDRs:
+                          description: |-
+                            IPv4CIDRs are the IPv4 addresses or prefixes assigned to the branch ENI,
+                            in CIDR notation (a single address is expressed as a /32).
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        ipv6CIDRs:
+                          description: |-
+                            IPv6CIDRs are the IPv6 addresses or prefixes assigned to the branch ENI,
+                            in CIDR notation (a single address is expressed as a /128).
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        macAddress:
+                          description: MacAddress is the MAC address of the branch
+                            ENI.
+                          type: string
+                        securityGroups:
+                          description: SecurityGroups are the security group ids attached
+                            to the branch ENI.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        subnetCIDR:
+                          description: SubnetCIDR is the IPv4 CIDR block of the subnet
+                            the branch ENI belongs to.
+                          type: string
+                        subnetV6CIDR:
+                          description: SubnetV6CIDR is the IPv6 CIDR block of the
+                            subnet the branch ENI belongs to.
+                          type: string
+                        vlanID:
+                          description: VlanID is the vlan id of the trunk-to-branch
+                            association.
+                          format: int32
+                          type: integer
+                      required:
+                      - id
+                      - vlanID
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - id
+                    x-kubernetes-list-type: map
+                  deviceIndex:
+                    description: DeviceIndex is the attachment device index of the
+                      trunk ENI on the instance.
+                    format: int32
+                    type: integer
+                  id:
+                    description: ID is the EC2 network interface id of the trunk ENI.
+                    minLength: 1
+                    type: string
+                  macAddress:
+                    description: MacAddress is the MAC address of the trunk ENI.
+                    type: string
+                required:
+                - id
+                type: object
             type: object
         type: object
     served: true
     storage: true
-    subresources: {}
+    subresources:
+      status: {}
