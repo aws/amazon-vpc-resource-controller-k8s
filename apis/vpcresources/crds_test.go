@@ -25,17 +25,13 @@ import (
 // with the fields downstream installers depend on.
 func TestCRDsUnmarshal(t *testing.T) {
 	require.Len(t, CRDs, 2)
+	assert.Equal(t, "cninodes.vpcresources.k8s.aws", CNINodeCRD.Name)
+	assert.Equal(t, "securitygrouppolicies.vpcresources.k8s.aws", SecurityGroupPolicyCRD.Name)
+	assert.Contains(t, CRDs, CNINodeCRD)
+	assert.Contains(t, CRDs, SecurityGroupPolicyCRD)
 
-	byName := map[string]int{}
-	for i, crd := range CRDs {
-		byName[crd.Name] = i
-	}
-	require.Contains(t, byName, "cninodes.vpcresources.k8s.aws")
-	require.Contains(t, byName, "securitygrouppolicies.vpcresources.k8s.aws")
-
-	cniNode := CRDs[byName["cninodes.vpcresources.k8s.aws"]]
-	require.Len(t, cniNode.Spec.Versions, 1)
-	version := cniNode.Spec.Versions[0]
+	require.Len(t, CNINodeCRD.Spec.Versions, 1)
+	version := CNINodeCRD.Spec.Versions[0]
 
 	// Fields downstream controllers check to decide whether the installed CRD
 	// needs upgrading to this module's schema.
