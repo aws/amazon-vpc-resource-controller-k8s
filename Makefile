@@ -34,6 +34,7 @@ verify:
 	go fmt ./...
 	controller-gen crd rbac:roleName=controller-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 	controller-gen object:headerFile="scripts/templates/boilerplate.go.txt" paths="./..."
+	cp config/crd/bases/vpcresources.k8s.aws_cninodes.yaml config/crd/bases/vpcresources.k8s.aws_securitygrouppolicies.yaml apis/vpcresources/crds/
 	@git diff --quiet ||\
 	{ echo "New file modification detected in the Git working tree. Please check in before commit."; git --no-pager diff --name-only | uniq | awk '{print "  - " $$0}'; \
 	if [ "${CI}" = true ]; then\
