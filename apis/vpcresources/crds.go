@@ -33,11 +33,20 @@ var CNINodeCRDBytes []byte
 //go:embed crds/vpcresources.k8s.aws_securitygrouppolicies.yaml
 var SecurityGroupPolicyCRDBytes []byte
 
-// CRDs is the list of CustomResourceDefinitions of the vpcresources.k8s.aws
-// group, unmarshalled from the embedded controller-gen output.
+// CNINodeCRD and SecurityGroupPolicyCRD are exposed individually so a
+// consumer can install or upgrade exactly the CRD it manages: a component
+// that owns CNINode objects has no business applying the SecurityGroupPolicy
+// schema, and vice versa.
+var (
+	CNINodeCRD             = mustUnmarshalCRD(CNINodeCRDBytes)
+	SecurityGroupPolicyCRD = mustUnmarshalCRD(SecurityGroupPolicyCRDBytes)
+)
+
+// CRDs is the complete list of CustomResourceDefinitions of the
+// vpcresources.k8s.aws group, for consumers that install everything.
 var CRDs = []*apiextensionsv1.CustomResourceDefinition{
-	mustUnmarshalCRD(CNINodeCRDBytes),
-	mustUnmarshalCRD(SecurityGroupPolicyCRDBytes),
+	CNINodeCRD,
+	SecurityGroupPolicyCRD,
 }
 
 func mustUnmarshalCRD(data []byte) *apiextensionsv1.CustomResourceDefinition {
