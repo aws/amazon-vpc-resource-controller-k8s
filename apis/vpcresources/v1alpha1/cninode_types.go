@@ -126,6 +126,7 @@ type BranchInterface struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:selectablefield:JSONPath=`.spec.managedBy`
 // +kubebuilder:printcolumn:name="Features",type=string,JSONPath=`.spec.features`,description="The features delegated to VPC resource controller"
 // +kubebuilder:resource:shortName=cnd,scope=Cluster
 
