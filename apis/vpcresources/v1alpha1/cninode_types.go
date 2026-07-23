@@ -47,6 +47,7 @@ const (
 
 // Important: Run "make" to regenerate code after modifying this file
 // CNINodeSpec defines the desired state of CNINode
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.managedBy) || has(self.managedBy)",message="managedBy cannot be removed once set"
 type CNINodeSpec struct {
 	Features []Feature `json:"features,omitempty"`
 	// Additional tag key/value added to all network interfaces provisioned by the vpc-resource-controller and VPC-CNI
@@ -55,8 +56,13 @@ type CNINodeSpec struct {
 	// status. Empty is equivalent to "vpc-resource-controller" for backward
 	// compatibility with objects created before this field existed.
 	// Controllers must ignore CNINodes managed by another controller.
+	// Immutable once set: a node can never legitimately change between
+	// compute types, so a managedBy flip is always a bug or tampering.
+	// Setting it on an existing object that has never had a value remains
+	// allowed (adoption of pre-existing objects).
 	// +optional
 	// +kubebuilder:validation:Enum=vpc-resource-controller;eks-auto-mode
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="managedBy is immutable once set"
 	ManagedBy CNINodeManager `json:"managedBy,omitempty"`
 }
 

@@ -67,10 +67,17 @@ spec:
                   status. Empty is equivalent to "vpc-resource-controller" for backward
                   compatibility with objects created before this field existed.
                   Controllers must ignore CNINodes managed by another controller.
+                  Immutable once set: a node can never legitimately change between
+                  compute types, so a managedBy flip is always a bug or tampering.
+                  Setting it on an existing object that has never had a value remains
+                  allowed (adoption of pre-existing objects).
                 enum:
                 - vpc-resource-controller
                 - eks-auto-mode
                 type: string
+                x-kubernetes-validations:
+                - message: managedBy is immutable once set
+                  rule: self == oldSelf
               tags:
                 additionalProperties:
                   type: string
@@ -78,6 +85,9 @@ spec:
                   provisioned by the vpc-resource-controller and VPC-CNI
                 type: object
             type: object
+            x-kubernetes-validations:
+            - message: managedBy cannot be removed once set
+              rule: '!has(oldSelf.managedBy) || has(self.managedBy)'
           status:
             description: CNINodeStatus defines the managed VPC resources.
             properties:
