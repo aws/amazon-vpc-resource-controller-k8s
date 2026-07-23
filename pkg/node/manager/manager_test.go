@@ -148,11 +148,10 @@ func NewMock(ctrl *gomock.Controller, existingDataStore map[string]node.Node) Mo
 				K8sAPI: mockK8sWrapper,
 				EC2API: mockEC2APIHelper,
 			},
-			worker:              mockAsyncWorker,
-			resourceManager:     mockResourceManager,
-			conditions:          mockConditions,
-			clusterName:         mockClusterName,
-			orphanSweepInterval: DefaultBranchENIOrphanSweepInterval,
+			worker:          mockAsyncWorker,
+			resourceManager: mockResourceManager,
+			conditions:      mockConditions,
+			clusterName:     mockClusterName,
 		},
 		MockK8sAPI:          mockK8sWrapper,
 		MockEC2API:          mockEC2APIHelper,
@@ -171,7 +170,7 @@ func Test_GetNewManager(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(nil)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, mockClusterName, "v1.3.1", DefaultBranchENIOrphanSweepInterval, healthzHandler)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, mockClusterName, "v1.3.1", healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.NoError(t, err)
@@ -185,7 +184,7 @@ func Test_GetNewManager_Error(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(mockError)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, mockClusterName, "v1.3.1", DefaultBranchENIOrphanSweepInterval, healthzHandler)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, mockClusterName, "v1.3.1", healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.Error(t, err, mockError)

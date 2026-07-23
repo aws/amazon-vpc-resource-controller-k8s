@@ -59,11 +59,6 @@ type manager struct {
 	controllerVersion string
 	stopHealthCheckAt time.Time
 	clusterName       string
-	// orphanSweepInterval is the base cadence of the independent, low-frequency EC2 orphan
-	// branch-ENI reclaim (ReconcileUnassignedBranchENIs). It is separate from the fast per-node
-	// reconciliation cadence: the zero-EC2 Reconcile runs on the fast timer, while the expensive
-	// DescribeNetworkInterfaces sweep runs on this slower timer. Sourced from a controller input flag.
-	orphanSweepInterval time.Duration
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -106,32 +101,26 @@ type AsyncOperationJob struct {
 
 const pausingHealthCheckDuration = 10 * time.Minute
 
-// DefaultBranchENIOrphanSweepInterval is the fallback base cadence for the EC2 orphan branch-ENI
-// reclaim sweep when a non-positive interval is supplied. It matches the flag default in main.go.
+// DefaultBranchENIOrphanSweepInterval is the base cadence of the independent, low-frequency EC2
+// orphan branch-ENI reclaim sweep (ReconcileUnassignedBranchENIs). It is deliberately not
+// configurable: the lazy branch-ledger verification gate on the allocation path owns correctness
+// after a hydrate-based re-init, so this sweep is pure housekeeping for rare orphans and one jittered
+// hour is a safe fleet-wide cadence (jitter is applied per node, see jitteredOrphanSweepInterval).
 const DefaultBranchENIOrphanSweepInterval = time.Hour
 
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
-	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, orphanSweepInterval time.Duration, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
-
-	// Guard against a mis-configured (zero or negative) interval so a slow sweep is always scheduled;
-	// fall back to the safe default rather than degenerating into an every-cycle EC2 describe.
-	if orphanSweepInterval <= 0 {
-		logger.Info("branch ENI orphan sweep interval is non-positive, using default",
-			"configured", orphanSweepInterval, "default", DefaultBranchENIOrphanSweepInterval)
-		orphanSweepInterval = DefaultBranchENIOrphanSweepInterval
-	}
+	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
 
 	manager := &manager{
-		resourceManager:     resourceManager,
-		Log:                 logger,
-		dataStore:           make(map[string]node.Node),
-		wrapper:             wrapper,
-		worker:              worker,
-		conditions:          conditions,
-		controllerVersion:   controllerVersion,
-		clusterName:         clusterName,
-		orphanSweepInterval: orphanSweepInterval,
+		resourceManager:   resourceManager,
+		Log:               logger,
+		dataStore:         make(map[string]node.Node),
+		wrapper:           wrapper,
+		worker:            worker,
+		conditions:        conditions,
+		controllerVersion: controllerVersion,
+		clusterName:       clusterName,
 	}
 
 	// add health check on subpath for node manager
@@ -161,7 +150,7 @@ type orphanBranchENIReclaimer interface {
 // does not issue DescribeNetworkInterfaces in a synchronized thundering herd. wait.Jitter adds a
 // random duration in [0, factor*interval), so factor 1.0 yields a value in [interval, 2*interval).
 func (m *manager) jitteredOrphanSweepInterval() time.Duration {
-	return wait.Jitter(m.orphanSweepInterval, 1.0)
+	return wait.Jitter(DefaultBranchENIOrphanSweepInterval, 1.0)
 }
 
 func (m *manager) CheckNodeForLeakedENIs(nodeName string) {

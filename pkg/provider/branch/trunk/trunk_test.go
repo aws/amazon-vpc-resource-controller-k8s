@@ -230,6 +230,9 @@ func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *m
 	trunkENI.usedVlanIds[0] = true
 	trunkENI.ec2ApiHelper = mockHelper
 	trunkENI.instance = mockInstance
+	// Hand-built trunks mimic the EC2 init path, whose ledger is verified. Gate tests
+	// (TestTrunkENI_VerifyBranchLedger_*) construct their own trunk with this left false.
+	trunkENI.branchLedgerVerified = true
 
 	// Clean up
 	EniDetails1.deletionTimeStamp = time.Time{}
@@ -1174,4 +1177,293 @@ func TestTrunkENI_getConnectionTrackingSpec_NilValues(t *testing.T) {
 
 	spec := trunkENI.getConnectionTrackingSpec()
 	assert.Nil(t, spec)
+}
+
+// getMockHydratedTrunk returns a trunk initialized through the hydrate path
+// (InitTrunkFromStatus with MockPod1 owning VlanId1 and VlanId2), whose branch ledger is
+// therefore NOT yet verified against EC2.
+func getMockHydratedTrunk(t *testing.T, ctrl *gomock.Controller) (*trunkENI, *mock_api.MockEC2APIHelper, *mock_ec2.MockEC2Instance) {
+	mockHelper := mock_api.NewMockEC2APIHelper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+
+	trunkENI := getMockTrunk()
+	trunkENI.usedVlanIds[0] = true
+	trunkENI.ec2ApiHelper = mockHelper
+	trunkENI.instance = mockInstance
+
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+	err := trunkENI.InitTrunkFromStatus(rcv1alpha1.TrunkENIStatus{ID: trunkId, SubnetID: SubnetId},
+		[]v1.Pod{*MockPod1})
+	assert.NoError(t, err)
+	assert.False(t, trunkENI.branchLedgerVerified,
+		"hydrate path must leave the branch ledger unverified")
+
+	return &trunkENI, mockHelper, mockInstance
+}
+
+// expectAllocationInstanceCalls registers the instance expectations CreateAndAssociateBranchENIs
+// makes besides SubnetID (which the caller registers).
+func expectAllocationInstanceCalls(mockInstance *mock_ec2.MockEC2Instance) {
+	mockInstance.EXPECT().Type().Return(InstanceType).AnyTimes()
+	mockInstance.EXPECT().InstanceID().Return(InstanceId).AnyTimes()
+	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).AnyTimes()
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).AnyTimes()
+	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil).AnyTimes()
+}
+
+// TestTrunkENI_VerifyBranchLedger_HydratedTrunkAvoidsVlanCollision is the core VLAN-reuse-race
+// regression test: a hydrated trunk defers the EC2 describe until the first allocation, and the
+// gate discovers an orphan branch ENI holding the lowest free VLAN, so the new pod's allocation
+// must receive a DIFFERENT VLAN and the orphan must be enqueued for deletion.
+func TestTrunkENI_VerifyBranchLedger_HydratedTrunkAvoidsVlanCollision(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	// MockPod1 owns VLANs 1 and 2, VLAN 0 is reserved: without the gate the next allocation
+	// would take VLAN 3. Seed EC2 with an orphan (no owning pod) holding exactly that VLAN.
+	orphanVlan := 3
+	orphanId := "eni-orphan-lowest-free-vlan"
+	orphan := &awsEc2Types.NetworkInterface{
+		InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+		NetworkInterfaceId: &orphanId,
+		TagSet: []awsEc2Types.Tag{{
+			Key:   aws.String(config.VLandIDTag),
+			Value: aws.String(strconv.Itoa(orphanVlan)),
+		}, trunkIDTag},
+	}
+	attached := append(append([]*awsEc2Types.NetworkInterface{}, branchInterfaces...), orphan)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(attached, nil).Times(1)
+
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+	assert.Len(t, eniDetails, 1)
+
+	// The allocated VLAN must NOT collide with the orphan's VLAN still occupied in EC2.
+	assert.NotEqual(t, orphanVlan, eniDetails[0].VlanID,
+		"allocation on a hydrated trunk must not reuse a VLAN occupied by an orphan in EC2")
+	assert.True(t, trunkENI.usedVlanIds[orphanVlan], "the orphan's VLAN must be marked used")
+	assert.True(t, trunkENI.branchLedgerVerified)
+
+	// The orphan (and only the orphan - Branch1/Branch2 are pod-owned) is enqueued for deletion.
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, orphanId, trunkENI.deleteQueue[0].ID)
+	assert.Equal(t, orphanVlan, trunkENI.deleteQueue[0].VlanID)
+}
+
+// TestTrunkENI_VerifyBranchLedger_EC2PathSkipsGate verifies a trunk initialized through the EC2
+// path never runs the gate describe: InitTrunk itself lists branch ENIs once, and the subsequent
+// allocation performs no further GetBranchNetworkInterface call (gomock would fail on an
+// unexpected second call).
+func TestTrunkENI_VerifyBranchLedger_EC2PathSkipsGate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockHelper := mock_api.NewMockEC2APIHelper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+
+	trunkENI := getMockTrunk()
+	trunkENI.usedVlanIds[0] = true
+	trunkENI.ec2ApiHelper = mockHelper
+	trunkENI.instance = mockInstance
+
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+	mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{}).AnyTimes()
+	expectAllocationInstanceCalls(mockInstance)
+
+	// EC2 init path: exactly ONE describe, owned by InitTrunk.
+	mockHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
+	mockHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil).Times(1)
+
+	err := trunkENI.InitTrunk(mockInstance, []v1.Pod{*MockPod1})
+	assert.NoError(t, err)
+	assert.True(t, trunkENI.branchLedgerVerified, "EC2 init path must mark the ledger verified")
+
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	// No GetBranchNetworkInterface expectation remains: the allocation must not describe again.
+	_, err = trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+}
+
+// TestTrunkENI_VerifyBranchLedger_DescribeErrorFailsAllocationThenRetries verifies that a failed
+// gate describe fails the allocation without marking the ledger verified, and the next allocation
+// retries the describe and succeeds.
+func TestTrunkENI_VerifyBranchLedger_DescribeErrorFailsAllocationThenRetries(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	gomock.InOrder(
+		mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, MockError),
+		mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil),
+	)
+
+	// First allocation: describe fails -> allocation fails, no VLAN assigned, ledger unverified.
+	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.Error(t, err)
+	assert.False(t, trunkENI.branchLedgerVerified,
+		"a failed verification must leave the ledger unverified")
+	assert.Empty(t, trunkENI.deleteQueue, "a failed allocation before any VLAN assignment enqueues nothing")
+
+	// Second allocation: describe retried and succeeds -> allocation proceeds.
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+	assert.Len(t, eniDetails, 1)
+	assert.True(t, trunkENI.branchLedgerVerified)
+}
+
+// TestTrunkENI_VerifyBranchLedger_RunsExactlyOnce verifies the gate describes EC2 only on the
+// first allocation: a second allocation on the (now verified) ledger makes no describe call.
+func TestTrunkENI_VerifyBranchLedger_RunsExactlyOnce(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	// Exactly one describe across both allocations.
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil).Times(1)
+
+	newBranchId1, newBranchId2 := "eni-new-branch-1", "eni-new-branch-2"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	first := mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId1, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).After(first).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId2, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, gomock.Any(), gomock.Any()).
+		Return(mockAssociationOutput1, nil).Times(2)
+
+	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+
+	otherPod := MockPod2.DeepCopy()
+	otherPod.UID = "uid-3"
+	_, err = trunkENI.CreateAndAssociateBranchENIs(otherPod, SecurityGroups, 1)
+	assert.NoError(t, err)
+}
+
+// TestTrunkENI_VerifyBranchLedger_InvalidVlanTagFallsBackToVlan0 verifies that an attached branch
+// ENI with a missing or out-of-range VLAN tag does not panic the gate: it falls back to the
+// reserved VLAN 0 (never freed on delete) and is still enqueued for deletion when unowned.
+func TestTrunkENI_VerifyBranchLedger_InvalidVlanTagFallsBackToVlan0(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	noTagId := "eni-orphan-no-vlan-tag"
+	outOfRangeId := "eni-orphan-vlan-out-of-range"
+	attached := []*awsEc2Types.NetworkInterface{
+		{
+			InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+			NetworkInterfaceId: &noTagId,
+			TagSet:             []awsEc2Types.Tag{trunkIDTag},
+		},
+		{
+			InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+			NetworkInterfaceId: &outOfRangeId,
+			TagSet: []awsEc2Types.Tag{{
+				Key:   aws.String(config.VLandIDTag),
+				Value: aws.String(strconv.Itoa(MaxAllocatableVlanIds + 5)),
+			}, trunkIDTag},
+		},
+	}
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(attached, nil).Times(1)
+
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	assert.NotPanics(t, func() {
+		eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+		assert.NoError(t, err)
+		assert.Len(t, eniDetails, 1)
+	})
+
+	assert.True(t, trunkENI.branchLedgerVerified)
+	// Both un-taggable orphans are enqueued with the reserved VLAN 0.
+	assert.Len(t, trunkENI.deleteQueue, 2)
+	assert.ElementsMatch(t, []string{noTagId, outOfRangeId},
+		[]string{trunkENI.deleteQueue[0].ID, trunkENI.deleteQueue[1].ID})
+	assert.Equal(t, 0, trunkENI.deleteQueue[0].VlanID)
+	assert.Equal(t, 0, trunkENI.deleteQueue[1].VlanID)
+}
+
+// TestTrunkENI_VerifyBranchLedger_MetricRecorded verifies the gate emits the
+// branch_ledger_verify_total metric on both outcomes, giving live validation a direct proof the
+// gate ran.
+func TestTrunkENI_VerifyBranchLedger_MetricRecorded(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	verifiedBefore := testutil.ToFloat64(branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultVerified))
+	errorBefore := testutil.ToFloat64(branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultError))
+
+	gomock.InOrder(
+		mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, MockError),
+		mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil),
+	)
+
+	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.Error(t, err)
+
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	_, err = trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultError))-errorBefore)
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultVerified))-verifiedBefore)
 }

@@ -114,7 +114,26 @@ var (
 		[]string{"attribute"},
 	)
 
+	// branchLedgerVerifyCount counts runs of the lazy branch-ledger verification gate on hydrated
+	// trunks (result="verified"|"error"). The gate closes the VLAN-reuse race after a hydrate-based
+	// re-init: the in-memory ledger only knows pod-owned branch ENIs, so an orphaned branch ENI
+	// still occupying its VLAN on the trunk in EC2 would otherwise collide with a new allocation.
+	// A "verified" sample proves the gate ran before the first allocation on a hydrated trunk.
+	branchLedgerVerifyCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_ledger_verify_total",
+			Help: "The number of lazy branch-ledger verification gate runs before the first allocation on hydrated trunks",
+		},
+		[]string{"result"},
+	)
+
 	prometheusRegistered = false
+)
+
+// branchLedgerVerifyCount result label values.
+const (
+	ledgerVerifyResultVerified = "verified"
+	ledgerVerifyResultError    = "error"
 )
 
 type TrunkENI interface {
@@ -160,6 +179,15 @@ type trunkENI struct {
 	deleteQueue []*ENIDetails
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
 	nodeIDTag []ec2types.Tag
+	// branchLedgerVerified records whether the in-memory VLAN/branch ledger has been verified
+	// against EC2 (guarded by lock). The EC2 init path (InitTrunk) lists all branch ENIs, so it
+	// sets this true. The hydrate path (InitTrunkFromStatus) rebuilds the ledger from pod
+	// annotations only, so an orphaned branch ENI (its pod deleted right before the controller
+	// restarted, in-memory delete queue lost) still occupies its VLAN on the trunk in EC2 while
+	// the ledger believes that VLAN is free; assigning it to a new pod would fail
+	// AssociateTrunkInterface. CreateAndAssociateBranchENIs therefore verifies the ledger from
+	// EC2 (verifyBranchLedger) before the first allocation on a hydrated trunk.
+	branchLedgerVerified bool
 }
 
 // getConnectionTrackingSpec builds a ConnectionTrackingSpecificationRequest from the
@@ -249,6 +277,7 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
 		metrics.Registry.MustRegister(branchENIOrphanReclaimedCount)
 		metrics.Registry.MustRegister(branchENIDeleteForgottenCount)
+		metrics.Registry.MustRegister(branchLedgerVerifyCount)
 
 		prometheusRegistered = true
 	}
@@ -269,6 +298,10 @@ func (t *trunkENI) InitTrunkFromStatus(status rcv1alpha1.TrunkENIStatus, podList
 	t.trunkENIId = status.ID
 	t.uidToBranchENIMap = make(map[string][]*ENIDetails)
 	t.deleteQueue = nil
+	// The hydrated ledger only knows pod-owned branch ENIs; it has not been checked against the
+	// trunk's actual branch ENIs in EC2. Leave it unverified so the first allocation runs
+	// verifyBranchLedger before any VLAN is handed out.
+	t.branchLedgerVerified = false
 
 	for _, pod := range podList {
 		pod := pod
@@ -387,6 +420,8 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		t.trunkENIId = *trunk.NetworkInterfaceId
 		log.Info("created a new trunk interface", "trunk id", t.trunkENIId)
 
+		// A freshly created trunk has no branch ENIs, so the (empty) ledger is verified.
+		t.setBranchLedgerVerified()
 		return nil
 	}
 
@@ -463,9 +498,100 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 
 	t.pushUnassignedBranchInterfacesToDeleteQueue(associatedBranchInterfaces)
 
+	// The EC2 path listed every branch ENI on the trunk, so the ledger reflects EC2 reality.
+	t.setBranchLedgerVerified()
+
 	log.V(1).Info("successfully initialized trunk with all associated branch interfaces",
 		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
 
+	return nil
+}
+
+// setBranchLedgerVerified marks the in-memory branch/VLAN ledger as verified against EC2.
+func (t *trunkENI) setBranchLedgerVerified() {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.branchLedgerVerified = true
+}
+
+// verifyBranchLedger is the lazy correctness gate for hydrated trunks. InitTrunkFromStatus rebuilds
+// the ledger from pod annotations only, so a branch ENI orphaned right around the controller restart
+// (pod deleted, in-memory delete queue lost) still occupies its VLAN on the trunk in EC2 while the
+// hydrated ledger believes that VLAN is free - handing it to a new pod would fail
+// AssociateTrunkInterface. Before the first allocation on an unverified ledger, this lists the
+// trunk's branch ENIs from EC2 (the same describe the orphan sweep uses), marks every attached
+// ENI's VLAN as used, enqueues the unowned ones for deletion, and only then flips
+// branchLedgerVerified. On describe failure the ledger stays unverified and the error propagates so
+// the allocation fails and the pod reconcile retries - never allocate on an unverified ledger.
+// Locking mirrors ReconcileUnassignedBranchENIs: the EC2 describe runs without the lock, the ledger
+// mutation takes the lock.
+func (t *trunkENI) verifyBranchLedger() error {
+	t.lock.RLock()
+	verified := t.branchLedgerVerified
+	trunkENIID := t.trunkENIId
+	t.lock.RUnlock()
+
+	if verified {
+		return nil
+	}
+
+	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&trunkENIID, aws.String(t.instance.SubnetID()))
+	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("verify_branch_ledger").Inc()
+		branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultError).Inc()
+		return fmt.Errorf("verifying branch ledger from EC2, %w", err)
+	}
+
+	t.lock.Lock()
+	if t.branchLedgerVerified {
+		// A concurrent allocation completed the verification while we were describing.
+		t.lock.Unlock()
+		return nil
+	}
+	// Under the lock: mark EVERY attached branch ENI's VLAN as used (same tag parsing and
+	// reserved-VLAN-0 fallback as the orphan delete-queue path) and partition the ENIs into
+	// pod-owned and orphaned. Marking must complete before branchLedgerVerified flips so no
+	// concurrent allocation can grab a VLAN that is occupied in EC2. Owned ENIs' VLANs were
+	// already marked by hydrate from the pod annotation; markVlanAssignedLocked is idempotent,
+	// so re-marking from the tag is harmless and covers annotation/tag divergence.
+	assignedBranchENIs := make(map[string]struct{})
+	for _, branchENIs := range t.uidToBranchENIMap {
+		for _, eni := range branchENIs {
+			assignedBranchENIs[eni.ID] = struct{}{}
+		}
+	}
+	unassignedBranchInterfaces := make(map[string]*ec2types.NetworkInterface)
+	for _, branchInterface := range branchInterfaces {
+		if branchInterface.NetworkInterfaceId == nil {
+			continue
+		}
+		branchENIID := *branchInterface.NetworkInterfaceId
+		vlanId, err := t.getVlanIdFromTag(branchInterface.TagSet)
+		if err != nil || vlanId < 0 || vlanId >= MaxAllocatableVlanIds {
+			// Same fallback as pushUnassignedBranchInterfacesToDeleteQueue: reserved VLAN 0 is
+			// permanently marked, so there is nothing extra to reserve for this ENI.
+			t.log.Info("could not determine a valid vlan id at ledger verification, treating as reserved vlan id 0",
+				"interface", branchENIID, "error", err)
+			vlanId = 0
+		}
+		if err := t.markVlanAssignedLocked(vlanId); err != nil {
+			t.log.Error(err, "failed to mark vlan id at ledger verification", "interface", branchENIID)
+		}
+		if _, assigned := assignedBranchENIs[branchENIID]; !assigned {
+			unassignedBranchInterfaces[branchENIID] = branchInterface
+		}
+	}
+	t.branchLedgerVerified = true
+	t.lock.Unlock()
+
+	// Orphans: enqueue for deletion through the shared path (it takes its own locks, so it is
+	// called outside the critical section above; its VLAN re-mark is an idempotent no-op here).
+	t.pushUnassignedBranchInterfacesToDeleteQueue(unassignedBranchInterfaces)
+
+	branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultVerified).Inc()
+	t.log.Info("verified hydrated branch ledger against EC2 before first allocation",
+		"trunk", trunkENIID, "attachedBranchENIs", len(branchInterfaces), "orphans", len(unassignedBranchInterfaces))
 	return nil
 }
 
@@ -514,6 +640,14 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 
 	if !t.canCreateMore() {
 		return nil, ErrCurrentlyAtMaxCapacity
+	}
+
+	// On a hydrated trunk, verify the ledger against EC2 before assigning any VLAN. Failing the
+	// verification fails the allocation (the pod reconcile retries); allocating on an unverified
+	// ledger could hand out a VLAN still occupied by an orphaned branch ENI in EC2.
+	if err := t.verifyBranchLedger(); err != nil {
+		log.Error(err, "failed to verify the branch ledger against EC2, not allocating")
+		return nil, err
 	}
 
 	// If the security group is empty use the instance security group
