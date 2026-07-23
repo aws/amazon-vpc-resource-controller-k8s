@@ -724,15 +724,16 @@ func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
 
 // selfHealFakeProvider wraps the mock resource provider and additionally implements
 // cniNodeStatusReconciler and orphanBranchENIReclaimer so CheckNodeForLeakedENIs will invoke the
-// self-heal and the independent EC2 orphan sweep paths. It records whether ReconcileCNINodeStatus and
-// SubmitReconcileUnassignedBranchENIsJob were called via buffered channels.
+// self-heal and the independent EC2 orphan sweep paths. It records whether
+// SubmitReconcileCNINodeStatusJob and SubmitReconcileUnassignedBranchENIsJob were called via
+// buffered channels.
 type selfHealFakeProvider struct {
 	*mock_provider.MockResourceProvider
 	healed chan string
 	swept  chan string
 }
 
-func (p *selfHealFakeProvider) ReconcileCNINodeStatus(nodeName string) {
+func (p *selfHealFakeProvider) SubmitReconcileCNINodeStatusJob(nodeName string) {
 	p.healed <- nodeName
 }
 
@@ -818,7 +819,7 @@ func Test_CheckNodeForLeakedENIs_SelfHeal_WhenReady(t *testing.T) {
 	case got := <-provider.healed:
 		assert.Equal(t, nodeName, got)
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected ReconcileCNINodeStatus to be called for a ready node")
+		t.Fatal("expected the self-heal job to be submitted for a ready node")
 	}
 
 	// The EC2 orphan sweep must NOT fire on this fast cadence when its own slow timer is not yet due.
@@ -851,7 +852,7 @@ func Test_CheckNodeForLeakedENIs_SelfHeal_SkippedWhenNotReady(t *testing.T) {
 
 	select {
 	case <-provider.healed:
-		t.Fatal("did not expect ReconcileCNINodeStatus for a not-ready node")
+		t.Fatal("did not expect a self-heal job submission for a not-ready node")
 	case <-time.After(500 * time.Millisecond):
 		// expected: no self-heal call
 	}

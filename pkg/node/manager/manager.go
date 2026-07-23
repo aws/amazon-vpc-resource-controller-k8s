@@ -143,11 +143,11 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 }
 
 // cniNodeStatusReconciler is optionally implemented by a resource provider (the branch/trunk
-// provider) to periodically self-heal the CNINode status snapshot. Kept out of the core
-// ResourceProvider interface so the IPv4/prefix providers, which have no trunk state to persist,
-// need not implement it.
+// provider) to submit the periodic CNINode status snapshot self-heal to its own worker pool.
+// Kept out of the core ResourceProvider interface so the IPv4/prefix providers, which have no
+// trunk state to persist, need not implement it.
 type cniNodeStatusReconciler interface {
-	ReconcileCNINodeStatus(nodeName string)
+	SubmitReconcileCNINodeStatusJob(nodeName string)
 }
 
 // orphanBranchENIReclaimer is optionally implemented by the branch/trunk provider to submit the
@@ -197,13 +197,15 @@ func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 		}
 
 		if reconcileDue {
-			// Self-heal the CNINode status snapshot on the same jittered cadence. Only attempt
-			// it once the node is ready (its in-memory trunk is initialized); the reconciler
-			// only PATCHes an existing CNINode and makes no EC2 calls, so it converges the
+			// Self-heal the CNINode status snapshot on the same jittered cadence. Only submit
+			// it once the node is ready (its in-memory trunk is initialized); the job only
+			// PATCHes an existing CNINode and makes no EC2 calls, so it converges the
 			// snapshot regardless of cold-start timing and survives a controller restart
 			// (re-init rebuilds the in-memory trunk via AddNode, then this repopulates status).
+			// The work runs in the provider's worker pool, not this goroutine, mirroring how
+			// the EC2 orphan sweep below is submitted.
 			if healer, ok := resourceProvider.(cniNodeStatusReconciler); ok && cachedNode.IsReady() {
-				healer.ReconcileCNINodeStatus(nodeName)
+				healer.SubmitReconcileCNINodeStatusJob(nodeName)
 			}
 
 			// Fast, zero-EC2 reconcile against the in-memory ledger. This is free and stays on the

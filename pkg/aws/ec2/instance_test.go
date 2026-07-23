@@ -464,7 +464,7 @@ func TestEc2Instance_HydrateFromCNINodeStatus_MissingSubnetMask(t *testing.T) {
 	s.Instance.SubnetMask = ""
 	ok, reason = inst2.HydrateFromCNINodeStatus(s)
 	assert.False(t, ok)
-	assert.Equal(t, "missing_subnet_mask", reason)
+	assert.Equal(t, HydrateMissSubnetMask, reason)
 
 	// A v6 CIDR present without its v6 mask must also miss.
 	inst3, _ := getMockInstance(ctrl)
@@ -473,5 +473,31 @@ func TestEc2Instance_HydrateFromCNINodeStatus_MissingSubnetMask(t *testing.T) {
 	s.Instance.SubnetV6Mask = ""
 	ok, reason = inst3.HydrateFromCNINodeStatus(s)
 	assert.False(t, ok)
-	assert.Equal(t, "missing_subnet_v6_mask", reason)
+	assert.Equal(t, HydrateMissSubnetV6Mask, reason)
+}
+
+// TestHydrateResult_WireValuesStable pins the string values of every HydrateResult constant.
+// These values are emitted in structured logs and are label-value material for metrics, so they
+// must never change; add a new constant instead of editing an existing value.
+func TestHydrateResult_WireValuesStable(t *testing.T) {
+	expected := map[HydrateResult]string{
+		HydrateHit:                                       "hit",
+		HydrateMissSnapshotVersionMismatch:               "snapshot_version_mismatch",
+		HydrateMissTrunkENI:                              "missing_trunk_eni",
+		HydrateMissInstanceIDMismatch:                    "instance_id_mismatch",
+		HydrateMissInstanceType:                          "missing_instance_type",
+		HydrateMissInstanceSubnet:                        "missing_instance_subnet",
+		HydrateMissCurrentSubnet:                         "missing_current_subnet",
+		HydrateMissSubnetMask:                            "missing_subnet_mask",
+		HydrateMissSubnetV6Mask:                          "missing_subnet_v6_mask",
+		HydrateMissPrimaryENI:                            "missing_primary_eni",
+		HydrateMissSecurityGroups:                        "missing_security_groups",
+		HydrateMissTrunkSubnetMismatch:                   "trunk_subnet_mismatch",
+		HydrateMissCustomNetworkingSubnetMismatch:        "custom_networking_subnet_mismatch",
+		HydrateMissCustomNetworkingSecurityGroupMismatch: "custom_networking_security_group_mismatch",
+		HydrateMissInstanceNetworkingMismatch:            "instance_networking_mismatch",
+	}
+	for constant, wire := range expected {
+		assert.Equal(t, wire, string(constant))
+	}
 }

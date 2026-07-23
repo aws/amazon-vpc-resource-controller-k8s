@@ -154,6 +154,11 @@ type branchENIProvider struct {
 	lock sync.RWMutex
 	// trunkENICache is the map of node name to the trunk ENI
 	trunkENICache map[string]trunk.TrunkENI
+	// instanceCache is the map of node name to the instance backing the cached trunk. It lets the
+	// CNINode status self-heal snapshot the instance exactly the way the onboarding persist does
+	// (instance.CNINodeStatus()), without the trunk having to forward its instance. Kept in
+	// lockstep with trunkENICache under the same lock.
+	instanceCache map[string]ec2.EC2Instance
 	// workerPool is the worker pool and queue for submitting async job
 	workerPool worker.Worker
 	// apiWrapper
@@ -174,6 +179,7 @@ func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
 		log:           logger,
 		workerPool:    worker,
 		trunkENICache: make(map[string]trunk.TrunkENI),
+		instanceCache: make(map[string]ec2.EC2Instance),
 		ctx:           ctx,
 	}
 	provider.checker = provider.check()
@@ -223,7 +229,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceSeconds(start))
 
 	// Add the Trunk ENI to cache if it does not already exist
-	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil && err != ErrTrunkExistInCache {
+	if err := b.addTrunkToCache(nodeName, trunkENI, instance); err != nil && err != ErrTrunkExistInCache {
 		branchProviderOperationsErrCount.WithLabelValues("add_trunk_to_cache").Inc()
 		return err
 	}
@@ -368,6 +374,8 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 		return b.ProcessDeleteQueue(onDemandJob.NodeName)
 	case worker.OperationReconcileUnassignedBranchENIs:
 		return b.ReconcileUnassignedBranchENIs(onDemandJob.NodeName)
+	case worker.OperationReconcileCNINodeStatus:
+		return b.ReconcileCNINodeStatus(onDemandJob.NodeName)
 	case worker.OperationDeleteNode:
 		return b.DeleteNode(onDemandJob.NodeName)
 	}
@@ -448,45 +456,55 @@ func (b *branchENIProvider) SubmitReconcileUnassignedBranchENIsJob(nodeName stri
 	b.SubmitAsyncJob(worker.NewOnDemandReconcileUnassignedBranchENIsJob(nodeName))
 }
 
+// SubmitReconcileCNINodeStatusJob submits the CNINode status self-heal as an async job to the
+// provider's worker pool. It is invoked by the node manager on the fast per-node reconcile timer;
+// submitting through the pool keeps the actual work out of the manager's unmanaged goroutine and in
+// the same bounded worker set as every other branch-provider operation.
+func (b *branchENIProvider) SubmitReconcileCNINodeStatusJob(nodeName string) {
+	b.SubmitAsyncJob(worker.NewOnDemandReconcileCNINodeStatusJob(nodeName))
+}
+
 // ReconcileCNINodeStatus is the periodic self-heal for the CNINode status snapshot. When a node's
 // trunk is initialized in memory but its CNINode status is empty or stale, the inline persist during
 // onboarding either never ran or lost the create/delete-recreate race, leaving hydrate unable to skip
 // EC2 on the next re-init. This rebuilds the status snapshot from the cached (in-memory) trunk and
-// re-persists it. It only ever PATCHes an existing CNINode via UpdateCNINodeStatus; it never creates
-// one (creation belongs to AddNode and the CNINode controller's delete-recreate logic). It is
-// event-driven and cheap: it makes zero EC2 calls and returns quickly. The caller is responsible for
-// only invoking this once the node is ready.
-func (b *branchENIProvider) ReconcileCNINodeStatus(nodeName string) {
+// instance (the same sources persistCNINodeStatus snapshots during onboarding) and re-persists it.
+// It only ever PATCHes an existing CNINode via UpdateCNINodeStatus; it never creates one (creation
+// belongs to AddNode and the CNINode controller's delete-recreate logic). It makes zero EC2 calls
+// and returns quickly. It runs as a worker-pool job (OperationReconcileCNINodeStatus), submitted by
+// the node manager once the node is ready. All outcomes are terminal for the job (no requeue): the
+// self-heal is best-effort and the next reconcile-timer submission retries naturally.
+func (b *branchENIProvider) ReconcileCNINodeStatus(nodeName string) (ctrl.Result, error) {
 	log := b.log.WithValues("node", nodeName)
 
-	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
+	trunkENI, instance, isPresent := b.getTrunkAndInstanceFromCache(nodeName)
 	if !isPresent {
 		// Trunk not initialized in memory yet; nothing to persist.
 		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultTrunkAbsent).Inc()
-		return
+		return ctrl.Result{}, nil
 	}
 
 	desired := rcv1alpha1.CNINodeStatus{
 		SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
-		Instance:        trunkENI.InstanceStatus(),
+		Instance:        instance.CNINodeStatus(),
 		TrunkENI:        trunkENI.CNINodeStatus(),
 	}
 	// A trunk still missing its ID is not usable for hydrate; skip until it is set.
 	if desired.TrunkENI.ID == "" {
 		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultNotReady).Inc()
-		return
+		return ctrl.Result{}, nil
 	}
 
 	cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
 	if err != nil {
 		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultError).Inc()
 		log.V(1).Info("self-heal skipped: could not read CNINode", "error", err)
-		return
+		return ctrl.Result{}, nil
 	}
 
 	if cniNodeStatusUpToDate(cniNode.Status, desired) {
 		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultUpToDate).Inc()
-		return
+		return ctrl.Result{}, nil
 	}
 
 	desired.LastUpdated = metav1.Now()
@@ -494,10 +512,11 @@ func (b *branchENIProvider) ReconcileCNINodeStatus(nodeName string) {
 		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultError).Inc()
 		branchProviderOperationsErrCount.WithLabelValues("self_heal_cninode_status").Inc()
 		log.V(1).Info("self-heal failed to patch CNINode status, will retry next reconcile", "error", err)
-		return
+		return ctrl.Result{}, nil
 	}
 	cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultPatched).Inc()
 	log.Info("self-healed CNINode status snapshot")
+	return ctrl.Result{}, nil
 }
 
 // cniNodeStatusUpToDate reports whether the persisted status already reflects the desired snapshot
@@ -740,8 +759,9 @@ func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) 
 	return ctrl.Result{}, nil
 }
 
-// addTrunkToCache adds the trunk eni to cache, if the trunk already exists an error is thrown
-func (b *branchENIProvider) addTrunkToCache(nodeName string, trunkENI trunk.TrunkENI) error {
+// addTrunkToCache adds the trunk eni and its backing instance to cache, if the trunk already
+// exists an error is thrown
+func (b *branchENIProvider) addTrunkToCache(nodeName string, trunkENI trunk.TrunkENI, instance ec2.EC2Instance) error {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -754,6 +774,7 @@ func (b *branchENIProvider) addTrunkToCache(nodeName string, trunkENI trunk.Trun
 	}
 
 	b.trunkENICache[nodeName] = trunkENI
+	b.instanceCache[nodeName] = instance
 	log.Info("trunk added to cache successfully")
 	return nil
 }
@@ -773,6 +794,7 @@ func (b *branchENIProvider) removeTrunkFromCache(nodeName string) {
 	}
 
 	delete(b.trunkENICache, nodeName)
+	delete(b.instanceCache, nodeName)
 	log.Info("trunk removed from cache successfully")
 }
 
@@ -783,6 +805,17 @@ func (b *branchENIProvider) getTrunkFromCache(nodeName string) (trunkENI trunk.T
 
 	trunkENI, present = b.trunkENICache[nodeName]
 	return
+}
+
+// getTrunkAndInstanceFromCache returns the trunkENI and its backing instance from the cache for
+// the given node name. Both are added and removed together, so present is true only when both exist.
+func (b *branchENIProvider) getTrunkAndInstanceFromCache(nodeName string) (trunk.TrunkENI, ec2.EC2Instance, bool) {
+	b.lock.RLock()
+	defer b.lock.RUnlock()
+
+	trunkENI, trunkPresent := b.trunkENICache[nodeName]
+	instance, instancePresent := b.instanceCache[nodeName]
+	return trunkENI, instance, trunkPresent && instancePresent
 }
 
 // GetPool is not supported for Branch ENI

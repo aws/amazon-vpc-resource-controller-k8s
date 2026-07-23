@@ -126,10 +126,6 @@ type TrunkENI interface {
 	ReconcileUnassignedBranchENIs() (bool, error)
 	// CNINodeStatus returns a snapshot of trunk ENI state persisted in CNINode status.
 	CNINodeStatus() rcv1alpha1.TrunkENIStatus
-	// InstanceStatus returns a snapshot of the underlying instance state persisted in CNINode
-	// status. It lets the periodic self-heal rebuild the full CNINode status snapshot from the
-	// cached trunk (which already holds the instance) without a separate instance reference.
-	InstanceStatus() rcv1alpha1.InstanceStatus
 	// CreateAndAssociateBranchENIs creates and associate branch interface/s to trunk interface
 	CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int) ([]*ENIDetails, error)
 	// PushBranchENIsToCoolDownQueue pushes the branch interface belonging to the pod to the cool down queue
@@ -339,10 +335,6 @@ func (t *trunkENI) CNINodeStatus() rcv1alpha1.TrunkENIStatus {
 		SubnetID:       t.instance.SubnetID(),
 		SecurityGroups: slices.Clone(t.instance.CurrentInstanceSecurityGroups()),
 	}
-}
-
-func (t *trunkENI) InstanceStatus() rcv1alpha1.InstanceStatus {
-	return t.instance.CNINodeStatus()
 }
 
 // InitTrunk initializes the trunk network interface and all it's associated branch network interfaces by making calls

@@ -22,6 +22,8 @@ const (
 	OperationProcessDeleteQueue Operations = "ProcessDeleteQueue"
 	// OperationReconcileUnassignedBranchENIs discovers branch ENIs not owned by pods after a fast trunk cache rebuild.
 	OperationReconcileUnassignedBranchENIs Operations = "ReconcileUnassignedBranchENIs"
+	// OperationReconcileCNINodeStatus re-persists the CNINode status snapshot from the cached trunk (self-heal).
+	OperationReconcileCNINodeStatus Operations = "ReconcileCNINodeStatus"
 	// OperationReconcileNode represents a reconcile operation that reclaims dangling network interfaces using local cache
 	OperationReconcileNode Operations = "ReconcileNode"
 	// OperationCreate represents pods that are in created state
@@ -93,6 +95,14 @@ func NewOnDemandProcessDeleteQueueJob(nodeName string) OnDemandJob {
 func NewOnDemandReconcileUnassignedBranchENIsJob(nodeName string) OnDemandJob {
 	return OnDemandJob{
 		Operation: OperationReconcileUnassignedBranchENIs,
+		NodeName:  nodeName,
+	}
+}
+
+// NewOnDemandReconcileCNINodeStatusJob returns a job that self-heals the CNINode status snapshot.
+func NewOnDemandReconcileCNINodeStatusJob(nodeName string) OnDemandJob {
+	return OnDemandJob{
+		Operation: OperationReconcileCNINodeStatus,
 		NodeName:  nodeName,
 	}
 }

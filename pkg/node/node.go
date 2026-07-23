@@ -98,15 +98,24 @@ type node struct {
 	k8sAPI k8s.K8sWrapper
 	// node has reference to EC2 APIs
 	ec2API api.EC2APIHelper
-	// lastReconciledTime time.Time
+	// nextReconciliationTime is the earliest time the FAST reconcile (trunkENI.Reconcile) may run
+	// for this node. Fast timer: 1-15min jittered cadence, zero EC2 calls. It catches drift in the
+	// direction "ledger has it, pod is gone" - a missed pod deletion event leaves branch ENIs owned
+	// by a vanished pod in the in-memory ledger, and this pass frees their IPs/VLANs quickly.
+	// Guarded by the node lock. Both this path and the slow sweep below converge on the trunk's own
+	// lock, so the worst case of the two overlapping is a duplicate idempotent pass.
 	nextReconciliationTime time.Time
 	// reconciliation interval between cleanups
 	reconciliationInterval time.Duration
-	// nextEC2SweepTime is the earliest time the EC2 orphan branch-ENI reclaim
-	// (ReconcileUnassignedBranchENIs) may run for this node. It is an independent, low-frequency
-	// timer, separate from nextReconciliationTime: the zero-EC2 Reconcile runs on the fast
-	// reconciliation cadence, while the expensive DescribeNetworkInterfaces sweep runs on this
-	// slower, jittered cadence owned by the node manager.
+	// nextEC2SweepTime is the earliest time the SLOW EC2 orphan branch-ENI reclaim
+	// (ReconcileUnassignedBranchENIs) may run for this node. Slow timer: 1h jittered cadence, one
+	// DescribeNetworkInterfaces call per node. It catches drift in the opposite direction to
+	// nextReconciliationTime: "EC2 has it, ledger doesn't" - orphan branch ENIs left attached in
+	// EC2 by rare failure paths (e.g. delete retries exhausted, controller died mid-create) that
+	// no pod and no ledger entry owns. The two timers exist because the two drift directions have
+	// very different costs: the fast pass is free so it runs often, the sweep costs an EC2 describe
+	// per node so it runs rarely. Guarded by the node lock; both work paths converge on the trunk's
+	// own lock, so the worst case is a duplicate idempotent pass.
 	nextEC2SweepTime time.Time
 }
 

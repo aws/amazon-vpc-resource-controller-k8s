@@ -21,6 +21,7 @@ import (
 	reflect "reflect"
 
 	v1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
+	ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -48,20 +49,6 @@ func (m *MockEC2Instance) EXPECT() *MockEC2InstanceMockRecorder {
 	return m.recorder
 }
 
-// CurrentInstanceSecurityGroups mocks base method.
-func (m *MockEC2Instance) CurrentInstanceSecurityGroups() []string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CurrentInstanceSecurityGroups")
-	ret0, _ := ret[0].([]string)
-	return ret0
-}
-
-// CurrentInstanceSecurityGroups indicates an expected call of CurrentInstanceSecurityGroups.
-func (mr *MockEC2InstanceMockRecorder) CurrentInstanceSecurityGroups() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentInstanceSecurityGroups", reflect.TypeOf((*MockEC2Instance)(nil).CurrentInstanceSecurityGroups))
-}
-
 // CNINodeStatus mocks base method.
 func (m *MockEC2Instance) CNINodeStatus() v1alpha1.InstanceStatus {
 	m.ctrl.T.Helper()
@@ -74,6 +61,20 @@ func (m *MockEC2Instance) CNINodeStatus() v1alpha1.InstanceStatus {
 func (mr *MockEC2InstanceMockRecorder) CNINodeStatus() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CNINodeStatus", reflect.TypeOf((*MockEC2Instance)(nil).CNINodeStatus))
+}
+
+// CurrentInstanceSecurityGroups mocks base method.
+func (m *MockEC2Instance) CurrentInstanceSecurityGroups() []string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CurrentInstanceSecurityGroups")
+	ret0, _ := ret[0].([]string)
+	return ret0
+}
+
+// CurrentInstanceSecurityGroups indicates an expected call of CurrentInstanceSecurityGroups.
+func (mr *MockEC2InstanceMockRecorder) CurrentInstanceSecurityGroups() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentInstanceSecurityGroups", reflect.TypeOf((*MockEC2Instance)(nil).CurrentInstanceSecurityGroups))
 }
 
 // FreeDeviceIndex mocks base method.
@@ -135,11 +136,11 @@ func (mr *MockEC2InstanceMockRecorder) GetHighestUnusedDeviceIndex() *gomock.Cal
 }
 
 // HydrateFromCNINodeStatus mocks base method.
-func (m *MockEC2Instance) HydrateFromCNINodeStatus(arg0 v1alpha1.CNINodeStatus) (bool, string) {
+func (m *MockEC2Instance) HydrateFromCNINodeStatus(arg0 v1alpha1.CNINodeStatus) (bool, ec2.HydrateResult) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "HydrateFromCNINodeStatus", arg0)
 	ret0, _ := ret[0].(bool)
-	ret1, _ := ret[1].(string)
+	ret1, _ := ret[1].(ec2.HydrateResult)
 	return ret0, ret1
 }
 

@@ -28,6 +28,7 @@ import (
 	mock_utils "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/utils"
 	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
@@ -87,6 +88,7 @@ func getProviderAndMocks(ctrl *gomock.Controller) (branchENIProvider, *mock_pod.
 		},
 		log:           log,
 		trunkENICache: make(map[string]trunk.TrunkENI),
+		instanceCache: make(map[string]ec2.EC2Instance),
 		ctx:           ctx,
 	}, mockPodAPI, mockSGPAPI, mockK8sAPI
 }
@@ -102,6 +104,7 @@ func getProviderAndMockK8sWrapper(ctrl *gomock.Controller) (branchENIProvider, *
 		},
 		log:           log,
 		trunkENICache: make(map[string]trunk.TrunkENI),
+		instanceCache: make(map[string]ec2.EC2Instance),
 	}, mockK8sWrapper
 }
 
@@ -118,6 +121,7 @@ func getProvider() branchENIProvider {
 	return branchENIProvider{
 		log:           log,
 		trunkENICache: make(map[string]trunk.TrunkENI),
+		instanceCache: make(map[string]ec2.EC2Instance),
 	}
 }
 
@@ -176,13 +180,18 @@ func TestBranchENIProvider_addTrunkToCache(t *testing.T) {
 	provider := getProvider()
 
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-	err := provider.addTrunkToCache(NodeName, fakeTrunk)
+	fakeInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	err := provider.addTrunkToCache(NodeName, fakeTrunk, fakeInstance)
 
 	assert.NoError(t, err)
 	trunkENI, ok := provider.trunkENICache[NodeName]
 
 	assert.True(t, ok)
 	assert.Equal(t, fakeTrunk, trunkENI)
+
+	cachedInstance, ok := provider.instanceCache[NodeName]
+	assert.True(t, ok)
+	assert.Equal(t, fakeInstance, cachedInstance)
 }
 
 // TestBranchENIProvider_addTrunkToCache_AlreadyExist tests error is thrown if adding an entry that already exists
@@ -196,7 +205,7 @@ func TestBranchENIProvider_addTrunkToCache_AlreadyExist(t *testing.T) {
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk
 
-	err := provider.addTrunkToCache(NodeName, fakeTrunk)
+	err := provider.addTrunkToCache(NodeName, fakeTrunk, mock_ec2.NewMockEC2Instance(ctrl))
 
 	assert.NotNil(t, err)
 }
@@ -559,6 +568,37 @@ func TestBranchENIProvider_SubmitReconcileUnassignedBranchENIsJob(t *testing.T) 
 	provider.SubmitReconcileUnassignedBranchENIsJob(NodeName)
 }
 
+// TestBranchENIProvider_SubmitReconcileCNINodeStatusJob verifies that the fast-timer entry point used
+// by the node manager submits exactly the CNINode status self-heal job to the worker pool, so the
+// self-heal work never runs inside the manager's timer goroutine.
+func TestBranchENIProvider_SubmitReconcileCNINodeStatusJob(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	provider.workerPool = mockWorker
+
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandReconcileCNINodeStatusJob(NodeName))
+
+	provider.SubmitReconcileCNINodeStatusJob(NodeName)
+}
+
+// TestBranchENIProvider_ProcessAsyncJob_ReconcileCNINodeStatus verifies the self-heal job type is
+// dispatched through ProcessAsyncJob to ReconcileCNINodeStatus (exercised here via the trunk-absent
+// no-op path, which returns a terminal empty result).
+func TestBranchENIProvider_ProcessAsyncJob_ReconcileCNINodeStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+
+	result, err := provider.ProcessAsyncJob(worker.NewOnDemandReconcileCNINodeStatusJob(NodeName))
+
+	assert.NoError(t, err)
+	assert.Equal(t, k8sCtrl.Result{}, result)
+}
+
 // TestBranchENIProvider_ProcessDeleteQueue_TrunkENIDeleted tests that the requeue job is removed once the trunk eni
 // no longer exists in the cache
 func TestBranchENIProvider_ProcessDeleteQueue_TrunkENIDeleted(t *testing.T) {
@@ -785,9 +825,12 @@ func TestBranchENIProvider_ReconcileCNINodeStatus_EmptyStatusPatched(t *testing.
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk
 
+	fakeInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	provider.instanceCache[NodeName] = fakeInstance
+
 	trunkStatus, instanceStatus := healSnapshot()
 	fakeTrunk.EXPECT().CNINodeStatus().Return(trunkStatus).AnyTimes()
-	fakeTrunk.EXPECT().InstanceStatus().Return(instanceStatus).AnyTimes()
+	fakeInstance.EXPECT().CNINodeStatus().Return(instanceStatus).AnyTimes()
 
 	// CNINode exists but its status is empty -> patch expected.
 	mockK8s.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).
@@ -813,9 +856,12 @@ func TestBranchENIProvider_ReconcileCNINodeStatus_UpToDateSkipsPatch(t *testing.
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk
 
+	fakeInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	provider.instanceCache[NodeName] = fakeInstance
+
 	trunkStatus, instanceStatus := healSnapshot()
 	fakeTrunk.EXPECT().CNINodeStatus().Return(trunkStatus).AnyTimes()
-	fakeTrunk.EXPECT().InstanceStatus().Return(instanceStatus).AnyTimes()
+	fakeInstance.EXPECT().CNINodeStatus().Return(instanceStatus).AnyTimes()
 
 	existing := &rcv1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{Name: NodeName},
@@ -842,8 +888,11 @@ func TestBranchENIProvider_ReconcileCNINodeStatus_TrunkIDEmptySkips(t *testing.T
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk
 
+	fakeInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	provider.instanceCache[NodeName] = fakeInstance
+
 	fakeTrunk.EXPECT().CNINodeStatus().Return(rcv1alpha1.TrunkENIStatus{}).AnyTimes()
-	fakeTrunk.EXPECT().InstanceStatus().Return(rcv1alpha1.InstanceStatus{}).AnyTimes()
+	fakeInstance.EXPECT().CNINodeStatus().Return(rcv1alpha1.InstanceStatus{}).AnyTimes()
 
 	// Trunk ID empty -> neither read nor patch.
 	mockK8s.EXPECT().GetCNINode(gomock.Any()).Times(0)
@@ -862,9 +911,12 @@ func TestBranchENIProvider_ReconcileCNINodeStatus_GetError(t *testing.T) {
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk
 
+	fakeInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	provider.instanceCache[NodeName] = fakeInstance
+
 	trunkStatus, instanceStatus := healSnapshot()
 	fakeTrunk.EXPECT().CNINodeStatus().Return(trunkStatus).AnyTimes()
-	fakeTrunk.EXPECT().InstanceStatus().Return(instanceStatus).AnyTimes()
+	fakeInstance.EXPECT().CNINodeStatus().Return(instanceStatus).AnyTimes()
 
 	mockK8s.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).Return(nil, MockError).Times(1)
 	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any(), gomock.Any()).Times(0)

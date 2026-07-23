@@ -286,3 +286,25 @@ func TestK8sWrapper_UpdateCNINodeStatus_NilAPIReaderFallsBackToCache(t *testing.
 	assert.NoError(t, err)
 	assert.Equal(t, "eni-trunk-123", cniNode.Status.TrunkENI.ID)
 }
+
+// TestK8sWrapper_FreshReader_PrefersAPIReader verifies the fresh-read reader selection order:
+// the non-cached apiReader is preferred whenever wired, and the cache client is only a fallback
+// when no apiReader exists. Both GetCNINodeFromAPIServer and UpdateCNINodeStatus read through this
+// selection, so a wrong order would silently reintroduce stale-informer-cache reads on the hydrate
+// fast path.
+func TestK8sWrapper_FreshReader_PrefersAPIReader(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
+
+	cacheClient := fakeClient.NewClientBuilder().WithScheme(scheme).Build()
+	apiReader := fakeClient.NewClientBuilder().WithScheme(scheme).Build()
+
+	withAPIReader := &k8sWrapper{cacheClient: cacheClient, apiReader: apiReader}
+	assert.Equal(t, client.Reader(apiReader), withAPIReader.freshReader(),
+		"apiReader must be preferred when wired")
+
+	withoutAPIReader := &k8sWrapper{cacheClient: cacheClient}
+	assert.Equal(t, client.Reader(cacheClient), withoutAPIReader.freshReader(),
+		"cache client must be the fallback when no apiReader is wired")
+}

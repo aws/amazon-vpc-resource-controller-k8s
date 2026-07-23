@@ -77,6 +77,29 @@ type ec2Instance struct {
 	loadedFromCNINodeStatus bool
 }
 
+// HydrateResult is the typed outcome of HydrateFromCNINodeStatus. The string values are
+// wire-stable: they are emitted as structured log fields and are label-value material for
+// metrics, so never change an existing value - add a new constant instead.
+type HydrateResult string
+
+const (
+	HydrateHit                                       HydrateResult = "hit"
+	HydrateMissSnapshotVersionMismatch               HydrateResult = "snapshot_version_mismatch"
+	HydrateMissTrunkENI                              HydrateResult = "missing_trunk_eni"
+	HydrateMissInstanceIDMismatch                    HydrateResult = "instance_id_mismatch"
+	HydrateMissInstanceType                          HydrateResult = "missing_instance_type"
+	HydrateMissInstanceSubnet                        HydrateResult = "missing_instance_subnet"
+	HydrateMissCurrentSubnet                         HydrateResult = "missing_current_subnet"
+	HydrateMissSubnetMask                            HydrateResult = "missing_subnet_mask"
+	HydrateMissSubnetV6Mask                          HydrateResult = "missing_subnet_v6_mask"
+	HydrateMissPrimaryENI                            HydrateResult = "missing_primary_eni"
+	HydrateMissSecurityGroups                        HydrateResult = "missing_security_groups"
+	HydrateMissTrunkSubnetMismatch                   HydrateResult = "trunk_subnet_mismatch"
+	HydrateMissCustomNetworkingSubnetMismatch        HydrateResult = "custom_networking_subnet_mismatch"
+	HydrateMissCustomNetworkingSecurityGroupMismatch HydrateResult = "custom_networking_security_group_mismatch"
+	HydrateMissInstanceNetworkingMismatch            HydrateResult = "instance_networking_mismatch"
+)
+
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
 type EC2Instance interface {
 	LoadDetails(ec2APIHelper api.EC2APIHelper) error
@@ -97,7 +120,7 @@ type EC2Instance interface {
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
-	HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) (bool, string)
+	HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) (bool, HydrateResult)
 	CNINodeStatus() rcv1alpha1.InstanceStatus
 	LoadedFromCNINodeStatus() bool
 }
@@ -362,63 +385,63 @@ func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, ud
 	return i.tcpEstablishedTimeout, i.udpStreamTimeout, i.udpTimeout
 }
 
-func (i *ec2Instance) HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) (bool, string) {
+func (i *ec2Instance) HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) (bool, HydrateResult) {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
 	if status.SnapshotVersion != rcv1alpha1.CNINodeStatusSnapshotVersion {
-		return false, "snapshot_version_mismatch"
+		return false, HydrateMissSnapshotVersionMismatch
 	}
 	if status.TrunkENI.ID == "" {
-		return false, "missing_trunk_eni"
+		return false, HydrateMissTrunkENI
 	}
 
 	instanceStatus := status.Instance
 	if instanceStatus.InstanceID != i.instanceID {
-		return false, "instance_id_mismatch"
+		return false, HydrateMissInstanceIDMismatch
 	}
 	if instanceStatus.InstanceType == "" {
-		return false, "missing_instance_type"
+		return false, HydrateMissInstanceType
 	}
 	if instanceStatus.InstanceSubnetID == "" || instanceStatus.InstanceSubnetCIDRBlock == "" {
-		return false, "missing_instance_subnet"
+		return false, HydrateMissInstanceSubnet
 	}
 	if instanceStatus.CurrentSubnetID == "" || instanceStatus.CurrentSubnetCIDRBlock == "" {
-		return false, "missing_current_subnet"
+		return false, HydrateMissCurrentSubnet
 	}
 	// SubnetMask is derived from the subnet CIDR on the EC2 path and is consumed downstream
 	// (e.g. the IPv4 ENI provider builds pod CIDRs as "<ip>/" + instance.SubnetMask()). A
 	// snapshot that carries a CIDR but an empty mask is incomplete/pruned; treat it as a miss
 	// so we fall back to EC2 rather than hydrating an instance that would produce malformed CIDRs.
 	if instanceStatus.SubnetMask == "" {
-		return false, "missing_subnet_mask"
+		return false, HydrateMissSubnetMask
 	}
 	// If a v6 CIDR is present, the corresponding v6 mask must be too (same downstream consumption).
 	if instanceStatus.InstanceSubnetV6CIDRBlock != "" && instanceStatus.SubnetV6Mask == "" {
-		return false, "missing_subnet_v6_mask"
+		return false, HydrateMissSubnetV6Mask
 	}
 	if instanceStatus.PrimaryNetworkInterfaceID == "" {
-		return false, "missing_primary_eni"
+		return false, HydrateMissPrimaryENI
 	}
 	if len(instanceStatus.PrimaryNetworkInterfaceSecurityGroups) == 0 ||
 		len(instanceStatus.CurrentInstanceSecurityGroups) == 0 {
-		return false, "missing_security_groups"
+		return false, HydrateMissSecurityGroups
 	}
 	if status.TrunkENI.SubnetID != "" && status.TrunkENI.SubnetID != instanceStatus.CurrentSubnetID {
-		return false, "trunk_subnet_mismatch"
+		return false, HydrateMissTrunkSubnetMismatch
 	}
 
 	if i.newCustomNetworkingSubnetID != "" {
 		if instanceStatus.CurrentSubnetID != i.newCustomNetworkingSubnetID {
-			return false, "custom_networking_subnet_mismatch"
+			return false, HydrateMissCustomNetworkingSubnetMismatch
 		}
 		if len(i.newCustomNetworkingSecurityGroups) > 0 &&
 			!sameStringSet(instanceStatus.CurrentInstanceSecurityGroups, i.newCustomNetworkingSecurityGroups) {
-			return false, "custom_networking_security_group_mismatch"
+			return false, HydrateMissCustomNetworkingSecurityGroupMismatch
 		}
 	} else if instanceStatus.CurrentSubnetID != instanceStatus.InstanceSubnetID ||
 		!sameStringSet(instanceStatus.CurrentInstanceSecurityGroups, instanceStatus.PrimaryNetworkInterfaceSecurityGroups) {
-		return false, "instance_networking_mismatch"
+		return false, HydrateMissInstanceNetworkingMismatch
 	}
 
 	i.instanceType = instanceStatus.InstanceType
@@ -444,7 +467,7 @@ func (i *ec2Instance) HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) 
 	}
 
 	i.loadedFromCNINodeStatus = true
-	return true, "hit"
+	return true, HydrateHit
 }
 
 func (i *ec2Instance) CNINodeStatus() rcv1alpha1.InstanceStatus {

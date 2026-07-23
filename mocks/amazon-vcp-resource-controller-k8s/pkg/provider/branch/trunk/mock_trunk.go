@@ -50,6 +50,20 @@ func (m *MockTrunkENI) EXPECT() *MockTrunkENIMockRecorder {
 	return m.recorder
 }
 
+// CNINodeStatus mocks base method.
+func (m *MockTrunkENI) CNINodeStatus() v1alpha1.TrunkENIStatus {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CNINodeStatus")
+	ret0, _ := ret[0].(v1alpha1.TrunkENIStatus)
+	return ret0
+}
+
+// CNINodeStatus indicates an expected call of CNINodeStatus.
+func (mr *MockTrunkENIMockRecorder) CNINodeStatus() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CNINodeStatus", reflect.TypeOf((*MockTrunkENI)(nil).CNINodeStatus))
+}
+
 // CreateAndAssociateBranchENIs mocks base method.
 func (m *MockTrunkENI) CreateAndAssociateBranchENIs(arg0 *v1.Pod, arg1 []string, arg2 int) ([]*trunk.ENIDetails, error) {
 	m.ctrl.T.Helper()
@@ -75,34 +89,6 @@ func (m *MockTrunkENI) DeleteCooledDownENIs() {
 func (mr *MockTrunkENIMockRecorder) DeleteCooledDownENIs() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteCooledDownENIs", reflect.TypeOf((*MockTrunkENI)(nil).DeleteCooledDownENIs))
-}
-
-// CNINodeStatus mocks base method.
-func (m *MockTrunkENI) CNINodeStatus() v1alpha1.TrunkENIStatus {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CNINodeStatus")
-	ret0, _ := ret[0].(v1alpha1.TrunkENIStatus)
-	return ret0
-}
-
-// InstanceStatus mocks base method.
-func (m *MockTrunkENI) InstanceStatus() v1alpha1.InstanceStatus {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InstanceStatus")
-	ret0, _ := ret[0].(v1alpha1.InstanceStatus)
-	return ret0
-}
-
-// InstanceStatus indicates an expected call of InstanceStatus.
-func (mr *MockTrunkENIMockRecorder) InstanceStatus() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceStatus", reflect.TypeOf((*MockTrunkENI)(nil).InstanceStatus))
-}
-
-// CNINodeStatus indicates an expected call of CNINodeStatus.
-func (mr *MockTrunkENIMockRecorder) CNINodeStatus() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CNINodeStatus", reflect.TypeOf((*MockTrunkENI)(nil).CNINodeStatus))
 }
 
 // InitTrunk mocks base method.

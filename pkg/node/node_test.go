@@ -24,6 +24,7 @@ import (
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
 	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
@@ -143,7 +144,7 @@ func TestNode_InitResources_CNINodeStatusHydrated(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetCNINodeFromAPIServer(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{
 		Status: status,
 	}, nil)
-	mock.MockInstance.EXPECT().HydrateFromCNINodeStatus(status).Return(true, "hit")
+	mock.MockInstance.EXPECT().HydrateFromCNINodeStatus(status).Return(true, ec2.HydrateHit)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
 	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
 	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
@@ -171,7 +172,7 @@ func TestNode_InitResources_ProofMetric_Hydrated(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetCNINodeFromAPIServer(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{
 		Status: status,
 	}, nil)
-	mock.MockInstance.EXPECT().HydrateFromCNINodeStatus(status).Return(true, "hit")
+	mock.MockInstance.EXPECT().HydrateFromCNINodeStatus(status).Return(true, ec2.HydrateHit)
 	// LoadDetails must NOT be called on the hydrated path.
 	mock.MockInstance.EXPECT().LoadDetails(gomock.Any()).Times(0)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)

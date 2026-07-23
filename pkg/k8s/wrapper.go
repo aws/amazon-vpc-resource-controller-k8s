@@ -141,6 +141,15 @@ func NewK8sWrapper(client client.Client, apiReader client.Reader, coreV1 corev1.
 	return &k8sWrapper{cacheClient: client, apiReader: apiReader, eventRecorder: recorder, context: ctx}
 }
 
+// freshReader returns the reader to use for reads that must not be served from a possibly
+// stale informer cache: the non-cached apiReader when wired, otherwise the cache client.
+func (k *k8sWrapper) freshReader() client.Reader {
+	if k.apiReader != nil {
+		return k.apiReader
+	}
+	return k.cacheClient
+}
+
 func (k *k8sWrapper) GetDaemonSet(name, namespace string) (*appv1.DaemonSet, error) {
 	ds := &appv1.DaemonSet{}
 	err := k.cacheClient.Get(k.context, types.NamespacedName{
@@ -273,12 +282,8 @@ func (k *k8sWrapper) GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha
 // re-init hydrate fast path so a lagging informer cache on restart / leader change does not
 // spuriously miss and force the EC2 LoadDetails fallback.
 func (k *k8sWrapper) GetCNINodeFromAPIServer(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error) {
-	reader := client.Reader(k.cacheClient)
-	if k.apiReader != nil {
-		reader = k.apiReader
-	}
 	cninode := &rcv1alpha1.CNINode{}
-	if err := reader.Get(k.context, namespacedName, cninode); err != nil {
+	if err := k.freshReader().Get(k.context, namespacedName, cninode); err != nil {
 		return cninode, err
 	}
 	return cninode, nil
@@ -339,10 +344,7 @@ func (k *k8sWrapper) UpdateCNINodeStatus(nodeName string, status rcv1alpha1.CNIN
 	// may have been created moments earlier (and is not yet in the informer
 	// cache) before patching its status. Fall back to the cache client only if
 	// no apiReader was wired.
-	reader := client.Reader(k.cacheClient)
-	if k.apiReader != nil {
-		reader = k.apiReader
-	}
+	reader := k.freshReader()
 
 	// Retry on both Conflict (optimistic-lock write races) and NotFound (the
 	// object was created moments ago by AddNode, or deleted+recreated by the
