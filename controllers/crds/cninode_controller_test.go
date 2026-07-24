@@ -163,6 +163,88 @@ func TestCNINodeReconcile(t *testing.T) {
 				assert.Equal(t, res, reconcile.Result{})
 			},
 		},
+		{
+			name: "verify CNINode managed by another controller is skipped entirely",
+			args: args{
+				mockNode: mockNodeWithLabel,
+				mockCNINode: &v1alpha1.CNINode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: mockName,
+					},
+					Spec: v1alpha1.CNINodeSpec{
+						ManagedBy: v1alpha1.ManagedByEKSAutoMode,
+					},
+				},
+			},
+			prepare: nil,
+			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
+				assert.NoError(t, err)
+				assert.Equal(t, res, reconcile.Result{})
+				// no tags, labels, or finalizer added by this controller
+				assert.Empty(t, cniNode.Labels)
+				assert.Empty(t, cniNode.Spec.Tags)
+				assert.NotContains(t, cniNode.Finalizers, config.NodeTerminationFinalizer)
+			},
+		},
+		{
+			name: "verify empty managedBy is treated as vpc-resource-controller (backward compatibility)",
+			args: args{
+				mockNode: mockNodeWithLabel,
+				mockCNINode: &v1alpha1.CNINode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: mockName,
+						Labels: map[string]string{
+							config.NodeLabelOS: "linux",
+						},
+					},
+					Spec: v1alpha1.CNINodeSpec{
+						Tags: map[string]string{
+							config.VPCCNIClusterNameKey: mockClusterName,
+						},
+					},
+				},
+			},
+			// This branch adds finalizers through the finalizer manager (master uses
+			// controllerutil.AddFinalizer + patch); expecting the call proves the object
+			// was reconciled as self-owned rather than skipped.
+			prepare: func(f *fields) {
+				f.mockFinalizerManager.EXPECT().
+					AddFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
+					Return(nil)
+			},
+			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
+				assert.NoError(t, err)
+				assert.Equal(t, res, reconcile.Result{})
+			},
+		},
+		{
+			name: "verify finalizer is added when labels and tags are present",
+			args: args{
+				mockNode: mockNodeWithLabel,
+				mockCNINode: &v1alpha1.CNINode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: mockName,
+						Labels: map[string]string{
+							config.NodeLabelOS: "linux",
+						},
+					},
+					Spec: v1alpha1.CNINodeSpec{
+						Tags: map[string]string{
+							config.VPCCNIClusterNameKey: mockClusterName,
+						},
+					},
+				},
+			},
+			prepare: func(f *fields) {
+				f.mockFinalizerManager.EXPECT().
+					AddFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
+					Return(nil)
+			},
+			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
+				assert.NoError(t, err)
+				assert.Equal(t, res, reconcile.Result{})
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
