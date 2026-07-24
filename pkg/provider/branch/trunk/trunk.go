@@ -47,6 +47,15 @@ const (
 	MaxDeleteRetries    = 3
 	SubnetLabel         = "subnet"
 	SecurityGroupsLabel = "security_groups"
+
+	// shadowReuseWindow is the age limit for a recently-released branch ENI to count as a
+	// would-have-been reuse hit in the Phase-2 shadow instrumentation (design doc section 4.2:
+	// Option 2 evaluation). Deliberately a constant, not a flag: the shadow window is a
+	// measurement definition, and comparing hit rates across clusters requires it to be fixed.
+	shadowReuseWindow = 10 * time.Minute
+	// maxShadowRecordsPerTrunk bounds the per-trunk recently-released record list (FIFO evict)
+	// so the shadow instrumentation cannot grow memory unboundedly at high pod churn.
+	maxShadowRecordsPerTrunk = 32
 )
 
 var (
@@ -127,7 +136,41 @@ var (
 		[]string{"result"},
 	)
 
+	// branchLedgerVerifyOrphanCount counts orphan branch ENIs discovered specifically by the
+	// verification gate (as opposed to the periodic reclaim sweep, which increments
+	// branch_eni_orphan_reclaimed_total). Restart-produced orphans (evaporated delete queue)
+	// surface exactly here, at the first allocation after a hydrate-based re-init, so this
+	// metric measures restart-orphan volume at the precise moment Phase-2 reuse (design doc
+	// section 4.2) would adopt them instead of deleting them.
+	branchLedgerVerifyOrphanCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "branch_ledger_verify_orphans_total",
+			Help: "The number of orphan branch ENIs discovered by the lazy branch-ledger verification gate on hydrated trunks",
+		},
+	)
+
+	// orphanReuseShadowHitCount is Phase-2 shadow instrumentation (design doc section 4.2): it
+	// counts pod allocations that COULD have been served by reusing a recently-released branch
+	// ENI on the same trunk, without changing any allocation behavior. sg_match="exact" means a
+	// released ENI with identical security groups was available within shadowReuseWindow (reuse
+	// would cost zero EC2 calls); sg_match="mismatch" means only differently-SG'd ENIs were
+	// available (reuse would cost one ModifyNetworkInterfaceAttribute). The hit rate quantifies
+	// the steady-state EC2 call savings of Option 2 before building the reuse pool.
+	orphanReuseShadowHitCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "orphan_reuse_shadow_hit_total",
+			Help: "The number of branch ENI allocations that could have reused a recently-released ENI on the same trunk (observation only, no behavior change)",
+		},
+		[]string{"sg_match"},
+	)
+
 	prometheusRegistered = false
+)
+
+// orphanReuseShadowHitCount sg_match label values.
+const (
+	shadowSGMatchExact    = "exact"
+	shadowSGMatchMismatch = "mismatch"
 )
 
 // branchLedgerVerifyCount result label values.
@@ -181,6 +224,13 @@ type trunkENI struct {
 	deleteQueue []*ENIDetails
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
 	nodeIDTag []ec2types.Tag
+	// shadowReleased is the Phase-2 shadow-instrumentation record of recently-released branch
+	// ENIs on this trunk (design doc section 4.2). Appended when an ENI enters the delete queue
+	// from pod release (PushBranchENIsToCoolDownQueue) or orphan discovery
+	// (pushUnassignedBranchInterfacesToDeleteQueue); read by the would-have-been reuse check in
+	// CreateAndAssociateBranchENIs. Bounded by maxShadowRecordsPerTrunk (FIFO evict), entries
+	// expire lazily on check. Observation only: it never affects allocation behavior. Guarded by lock.
+	shadowReleased []shadowReleaseRecord
 	// branchLedgerVerified records whether the in-memory VLAN/branch ledger has been verified
 	// against EC2 (guarded by lock). The EC2 init path (InitTrunk) lists all branch ENIs, so it
 	// sets this true. The hydrate path (InitTrunkFromStatus) rebuilds the ledger from pod
@@ -190,6 +240,63 @@ type trunkENI struct {
 	// AssociateTrunkInterface. CreateAndAssociateBranchENIs therefore verifies the ledger from
 	// EC2 (verifyBranchLedger) before the first allocation on a hydrated trunk.
 	branchLedgerVerified bool
+}
+
+// shadowReleaseRecord is one recently-released branch ENI observed by the Phase-2 shadow reuse
+// instrumentation: the security groups it carried (sorted) and when it was released.
+type shadowReleaseRecord struct {
+	sortedSecurityGroups []string
+	releasedAt           time.Time
+}
+
+// recordShadowReleaseLocked appends a shadow release record for the given security groups,
+// FIFO-evicting beyond maxShadowRecordsPerTrunk. Caller must hold the trunk lock.
+func (t *trunkENI) recordShadowReleaseLocked(securityGroups []string) {
+	sorted := slices.Clone(securityGroups)
+	slices.Sort(sorted)
+	t.shadowReleased = append(t.shadowReleased, shadowReleaseRecord{
+		sortedSecurityGroups: sorted,
+		releasedAt:           time.Now(),
+	})
+	if len(t.shadowReleased) > maxShadowRecordsPerTrunk {
+		t.shadowReleased = t.shadowReleased[len(t.shadowReleased)-maxShadowRecordsPerTrunk:]
+	}
+}
+
+// observeShadowReuse checks whether a pod allocation requesting the given security groups could
+// have been served by a recently-released branch ENI on this trunk, incrementing
+// orphan_reuse_shadow_hit_total accordingly (sg_match="exact" preferred over "mismatch").
+// Expired records (older than shadowReuseWindow) are pruned lazily here. Observation only:
+// records are not consumed on a hit, since without a real pool there is no claim to model - the
+// metric measures availability of reusable ENIs, and the FIFO cap plus expiry bound any over-count.
+func (t *trunkENI) observeShadowReuse(requestedSecurityGroups []string) {
+	sorted := slices.Clone(requestedSecurityGroups)
+	slices.Sort(sorted)
+
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	cutoff := time.Now().Add(-shadowReuseWindow)
+	live := t.shadowReleased[:0]
+	exact, mismatch := false, false
+	for _, rec := range t.shadowReleased {
+		if rec.releasedAt.Before(cutoff) {
+			continue
+		}
+		live = append(live, rec)
+		if slices.Equal(rec.sortedSecurityGroups, sorted) {
+			exact = true
+		} else {
+			mismatch = true
+		}
+	}
+	t.shadowReleased = live
+
+	if exact {
+		orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact).Inc()
+	} else if mismatch {
+		orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch).Inc()
+	}
 }
 
 // getConnectionTrackingSpec builds a ConnectionTrackingSpecificationRequest from the
@@ -234,6 +341,11 @@ type ENIDetails struct {
 	deleteRetryCount int
 	// ID of association between branch and trunk ENI
 	AssociationID string `json:"associationID"`
+	// securityGroups are the security group ids the branch ENI was created with. In-memory
+	// only (excluded from the pod-annotation JSON, which is a wire format shared with the CNI
+	// plugin); consumed by the Phase-2 shadow reuse instrumentation on pod release. Empty for
+	// ENIs rebuilt from annotations or discovered via EC2 describe (SGs unknown there).
+	securityGroups []string
 }
 
 type IntrospectResponse struct {
@@ -280,6 +392,8 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(branchENIOrphanReclaimedCount)
 		metrics.Registry.MustRegister(branchENIDeleteForgottenCount)
 		metrics.Registry.MustRegister(branchLedgerVerifyCount)
+		metrics.Registry.MustRegister(branchLedgerVerifyOrphanCount)
+		metrics.Registry.MustRegister(orphanReuseShadowHitCount)
 
 		prometheusRegistered = true
 	}
@@ -591,6 +705,10 @@ func (t *trunkENI) verifyBranchLedger() error {
 	// called outside the critical section above; its VLAN re-mark is an idempotent no-op here).
 	t.pushUnassignedBranchInterfacesToDeleteQueue(unassignedBranchInterfaces)
 
+	// Gate-discovered orphans measured separately from the periodic sweep's discoveries:
+	// restart-produced orphans surface exactly here (design doc section 4.2).
+	branchLedgerVerifyOrphanCount.Add(float64(len(unassignedBranchInterfaces)))
+
 	branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultVerified).Inc()
 	t.log.Info("verified hydrated branch ledger against EC2 before first allocation",
 		"trunk", trunkENIID, "attachedBranchENIs", len(branchInterfaces), "orphans", len(unassignedBranchInterfaces))
@@ -657,6 +775,10 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		securityGroups = t.instance.CurrentInstanceSecurityGroups()
 	}
 
+	// Phase-2 shadow instrumentation (design doc section 4.2): record whether this allocation
+	// could have reused a recently-released branch ENI. Observation only, no behavior change.
+	t.observeShadowReuse(securityGroups)
+
 	connectionTrackingSpec := t.getConnectionTrackingSpec()
 
 	var newENIs []*ENIDetails
@@ -710,6 +832,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 			ID: *nwInterface.NetworkInterfaceId, MACAdd: *nwInterface.MacAddress,
 			IPV4Addr: v4Addr, IPV6Addr: v6Addr, SubnetCIDR: t.instance.SubnetCidrBlock(),
 			SubnetV6CIDR: t.instance.SubnetV6CidrBlock(), VlanID: vlanID,
+			securityGroups: slices.Clone(securityGroups),
 		}
 		newENIs = append(newENIs, newENI)
 
@@ -756,6 +879,8 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 	for _, eni := range branchENIs {
 		eni.deletionTimeStamp = time.Now()
 		t.deleteQueue = append(t.deleteQueue, eni)
+		// Phase-2 shadow instrumentation: this ENI is exactly what a reuse pool would hold.
+		t.recordShadowReleaseLocked(eni.securityGroups)
 	}
 
 	delete(t.uidToBranchENIMap, UID)
@@ -859,6 +984,10 @@ func (t *trunkENI) pushENIToDeleteQueue(eni *ENIDetails) {
 	defer t.lock.Unlock()
 
 	t.deleteQueue = append(t.deleteQueue, eni)
+	// Phase-2 shadow instrumentation: an orphan entering the delete queue is a reuse candidate
+	// too. Its security groups are unknown from the describe (empty), so it can only ever count
+	// as an sg_match="mismatch" availability - a real pool would describe or modify before reuse.
+	t.recordShadowReleaseLocked(eni.securityGroups)
 }
 
 func (t *trunkENI) pushUnassignedBranchInterfacesToDeleteQueue(branchInterfaces map[string]*ec2types.NetworkInterface) bool {

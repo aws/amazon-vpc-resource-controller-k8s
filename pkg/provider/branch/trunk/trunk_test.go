@@ -989,6 +989,14 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 
 // TestTrunkENI_CreateAndAssociateBranchENIs test branch is created and associated with the trunk and valid eni details
 // are returned
+// withSecurityGroups clones an ENIDetails fixture and sets the in-memory securityGroups field
+// that CreateAndAssociateBranchENIs now records on created ENIs (Phase-2 shadow instrumentation).
+func withSecurityGroups(eni *ENIDetails, securityGroups []string) *ENIDetails {
+	clone := *eni
+	clone.securityGroups = securityGroups
+	return &clone
+}
+
 func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1011,7 +1019,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(mockAssociationOutput2, nil)
 
 	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
-	expectedENIDetails := []*ENIDetails{EniDetails1, EniDetails2}
+	expectedENIDetails := []*ENIDetails{withSecurityGroups(EniDetails1, SecurityGroups), withSecurityGroups(EniDetails2, SecurityGroups)}
 
 	assert.NoError(t, err)
 	// VLan ID are marked as used
@@ -1047,7 +1055,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(mockAssociationOutput2, nil)
 
 	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, []string{}, 2)
-	expectedENIDetails := []*ENIDetails{EniDetails1, EniDetails2}
+	expectedENIDetails := []*ENIDetails{withSecurityGroups(EniDetails1, InstanceSecurityGroup), withSecurityGroups(EniDetails2, InstanceSecurityGroup)}
 
 	assert.NoError(t, err)
 	// VLan ID are marked as used
@@ -1085,7 +1093,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
 	assert.Error(t, MockError, err)
-	assert.Equal(t, []*ENIDetails{EniDetails1, ENIDetailsMissingAssociationID}, trunkENI.deleteQueue)
+	assert.Equal(t, []*ENIDetails{withSecurityGroups(EniDetails1, SecurityGroups), withSecurityGroups(ENIDetailsMissingAssociationID, SecurityGroups)}, trunkENI.deleteQueue)
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate tests if error is returned on associate then the created interfaces
@@ -1114,7 +1122,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
 	assert.Error(t, MockError, err)
-	assert.Equal(t, []*ENIDetails{EniDetails1}, trunkENI.deleteQueue)
+	assert.Equal(t, []*ENIDetails{withSecurityGroups(EniDetails1, SecurityGroups)}, trunkENI.deleteQueue)
 }
 
 func TestTrunkENI_Introspect(t *testing.T) {
@@ -1466,4 +1474,156 @@ func TestTrunkENI_VerifyBranchLedger_MetricRecorded(t *testing.T) {
 		testutil.ToFloat64(branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultError))-errorBefore)
 	assert.Equal(t, float64(1),
 		testutil.ToFloat64(branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultVerified))-verifiedBefore)
+}
+
+// TestTrunkENI_VerifyBranchLedger_OrphanCountMetric verifies the gate increments
+// branch_ledger_verify_orphans_total by exactly the number of orphans it discovers (here: one
+// orphan among three attached branch ENIs; Branch1/Branch2 are pod-owned).
+func TestTrunkENI_VerifyBranchLedger_OrphanCountMetric(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	orphanId := "eni-orphan-gate-metric"
+	orphan := &awsEc2Types.NetworkInterface{
+		InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+		NetworkInterfaceId: &orphanId,
+		TagSet: []awsEc2Types.Tag{{
+			Key:   aws.String(config.VLandIDTag),
+			Value: aws.String("7"),
+		}, trunkIDTag},
+	}
+	attached := append(append([]*awsEc2Types.NetworkInterface{}, branchInterfaces...), orphan)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(attached, nil).Times(1)
+
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	before := testutil.ToFloat64(branchLedgerVerifyOrphanCount)
+
+	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+
+	assert.Equal(t, float64(1), testutil.ToFloat64(branchLedgerVerifyOrphanCount)-before,
+		"the gate discovered exactly one orphan, so the counter must increase by one")
+}
+
+// TestTrunkENI_ShadowReuse_ExactMatchWithinWindow verifies that releasing an ENI and then
+// allocating with identical security groups within the shadow window counts one sg_match="exact"
+// shadow reuse hit.
+func TestTrunkENI_ShadowReuse_ExactMatchWithinWindow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI := getMockTrunk()
+	trunkENI.lock.Lock()
+	trunkENI.recordShadowReleaseLocked([]string{SecurityGroup2, SecurityGroup1}) // unsorted on purpose
+	trunkENI.lock.Unlock()
+
+	exactBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))
+	mismatchBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))
+
+	trunkENI.observeShadowReuse([]string{SecurityGroup1, SecurityGroup2})
+
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))-exactBefore)
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))-mismatchBefore)
+}
+
+// TestTrunkENI_ShadowReuse_MismatchLabelOnSGDifference verifies that when only records with
+// different security groups are available within the window, the hit is counted with
+// sg_match="mismatch" (a reuse would need one ModifyNetworkInterfaceAttribute).
+func TestTrunkENI_ShadowReuse_MismatchLabelOnSGDifference(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI := getMockTrunk()
+	trunkENI.lock.Lock()
+	trunkENI.recordShadowReleaseLocked([]string{"sg-different"})
+	trunkENI.lock.Unlock()
+
+	exactBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))
+	mismatchBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))
+
+	trunkENI.observeShadowReuse([]string{SecurityGroup1})
+
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))-exactBefore)
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))-mismatchBefore)
+}
+
+// TestTrunkENI_ShadowReuse_NoHitOutsideWindow verifies that a record older than the shadow window
+// neither counts as a hit nor survives the lazy expiry.
+func TestTrunkENI_ShadowReuse_NoHitOutsideWindow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI := getMockTrunk()
+	trunkENI.lock.Lock()
+	trunkENI.recordShadowReleaseLocked([]string{SecurityGroup1})
+	// Backdate the record beyond the window.
+	trunkENI.shadowReleased[0].releasedAt = time.Now().Add(-shadowReuseWindow - time.Minute)
+	trunkENI.lock.Unlock()
+
+	exactBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))
+	mismatchBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))
+
+	trunkENI.observeShadowReuse([]string{SecurityGroup1})
+
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))-exactBefore)
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))-mismatchBefore)
+	assert.Empty(t, trunkENI.shadowReleased, "expired record must be pruned lazily on check")
+}
+
+// TestTrunkENI_ShadowReuse_RecordsEvictedBeyondCap verifies the per-trunk record list is bounded:
+// pushing more than maxShadowRecordsPerTrunk records FIFO-evicts the oldest.
+func TestTrunkENI_ShadowReuse_RecordsEvictedBeyondCap(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI := getMockTrunk()
+	trunkENI.lock.Lock()
+	trunkENI.recordShadowReleaseLocked([]string{"sg-oldest"})
+	for i := 0; i < maxShadowRecordsPerTrunk; i++ {
+		trunkENI.recordShadowReleaseLocked([]string{fmt.Sprintf("sg-%d", i)})
+	}
+	trunkENI.lock.Unlock()
+
+	assert.Len(t, trunkENI.shadowReleased, maxShadowRecordsPerTrunk)
+	for _, rec := range trunkENI.shadowReleased {
+		assert.NotEqual(t, []string{"sg-oldest"}, rec.sortedSecurityGroups,
+			"the oldest record must have been FIFO-evicted")
+	}
+}
+
+// TestTrunkENI_ShadowReuse_PodReleaseFeedsShadowRecords verifies the end-to-end shadow flow on the
+// release side: PushBranchENIsToCoolDownQueue records the released ENI's security groups, so a
+// following same-SG allocation counts an exact shadow hit.
+func TestTrunkENI_ShadowReuse_PodReleaseFeedsShadowRecords(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI := getMockTrunk()
+	eni := &ENIDetails{ID: Branch1Id, VlanID: VlanId1, securityGroups: []string{SecurityGroup1, SecurityGroup2}}
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{eni}
+
+	trunkENI.PushBranchENIsToCoolDownQueue(PodUID)
+	assert.Len(t, trunkENI.shadowReleased, 1)
+
+	exactBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))
+	trunkENI.observeShadowReuse([]string{SecurityGroup1, SecurityGroup2})
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))-exactBefore)
 }
