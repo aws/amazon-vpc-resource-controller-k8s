@@ -711,7 +711,7 @@ func TestTrunkENI_InitTrunkFromStatus(t *testing.T) {
 	trunkENI, _, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 	mockInstance.EXPECT().SubnetID().Return(SubnetId)
 
-	err := trunkENI.InitTrunkFromStatus(rcv1alpha1.TrunkENIStatus{
+	err := trunkENI.InitTrunkFromStatus(&rcv1alpha1.TrunkInterface{
 		ID:       trunkId,
 		SubnetID: SubnetId,
 	}, []v1.Pod{*MockPod1, *MockPod2})
@@ -1192,7 +1192,7 @@ func getMockHydratedTrunk(t *testing.T, ctrl *gomock.Controller) (*trunkENI, *mo
 	trunkENI.instance = mockInstance
 
 	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
-	err := trunkENI.InitTrunkFromStatus(rcv1alpha1.TrunkENIStatus{ID: trunkId, SubnetID: SubnetId},
+	err := trunkENI.InitTrunkFromStatus(&rcv1alpha1.TrunkInterface{ID: trunkId, SubnetID: SubnetId},
 		[]v1.Pod{*MockPod1})
 	assert.NoError(t, err)
 	assert.False(t, trunkENI.branchLedgerVerified,

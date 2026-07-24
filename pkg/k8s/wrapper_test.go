@@ -229,9 +229,11 @@ func TestK8sWrapper_UpdateCNINodeStatus_Success(t *testing.T) {
 	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockCNINode})
 
 	status := v1alpha1.CNINodeStatus{
-		SnapshotVersion: v1alpha1.CNINodeStatusSnapshotVersion,
-		TrunkENI:        v1alpha1.TrunkENIStatus{ID: "eni-trunk-123"},
-		Instance:        v1alpha1.InstanceStatus{InstanceID: "i-abc", InstanceType: "m5.large"},
+		TrunkInterface: &v1alpha1.TrunkInterface{ID: "eni-trunk-123"},
+		ReinitCheckpoint: &v1alpha1.ReinitCheckpoint{
+			SnapshotVersion: v1alpha1.CNINodeStatusSnapshotVersion,
+			Instance:        v1alpha1.InstanceStatus{InstanceID: "i-abc", InstanceType: "m5.large"},
+		},
 	}
 
 	err := wrapper.UpdateCNINodeStatus(nodeName, status)
@@ -239,9 +241,9 @@ func TestK8sWrapper_UpdateCNINodeStatus_Success(t *testing.T) {
 
 	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: nodeName})
 	assert.NoError(t, err)
-	assert.Equal(t, "eni-trunk-123", cniNode.Status.TrunkENI.ID)
-	assert.Equal(t, "i-abc", cniNode.Status.Instance.InstanceID)
-	assert.Equal(t, v1alpha1.CNINodeStatusSnapshotVersion, cniNode.Status.SnapshotVersion)
+	assert.Equal(t, "eni-trunk-123", cniNode.Status.TrunkInterface.ID)
+	assert.Equal(t, "i-abc", cniNode.Status.ReinitCheckpoint.Instance.InstanceID)
+	assert.Equal(t, v1alpha1.CNINodeStatusSnapshotVersion, cniNode.Status.ReinitCheckpoint.SnapshotVersion)
 }
 
 // TestK8sWrapper_UpdateCNINodeStatus_NotFound verifies that a persistently-missing CNINode is a
@@ -253,8 +255,8 @@ func TestK8sWrapper_UpdateCNINodeStatus_NotFound(t *testing.T) {
 	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{})
 
 	err := wrapper.UpdateCNINodeStatus(nodeName, v1alpha1.CNINodeStatus{
-		SnapshotVersion: v1alpha1.CNINodeStatusSnapshotVersion,
-		TrunkENI:        v1alpha1.TrunkENIStatus{ID: "eni-trunk-123"},
+		TrunkInterface:   &v1alpha1.TrunkInterface{ID: "eni-trunk-123"},
+		ReinitCheckpoint: &v1alpha1.ReinitCheckpoint{SnapshotVersion: v1alpha1.CNINodeStatusSnapshotVersion},
 	})
 	assert.Error(t, err)
 	assert.True(t, errors.IsNotFound(err), "expected NotFound after bounded retries, got %v", err)
@@ -277,14 +279,14 @@ func TestK8sWrapper_UpdateCNINodeStatus_NilAPIReaderFallsBackToCache(t *testing.
 	wrapper := NewK8sWrapper(cacheClient, nil, clientSet.CoreV1(), context.Background())
 
 	err := wrapper.UpdateCNINodeStatus(nodeName, v1alpha1.CNINodeStatus{
-		SnapshotVersion: v1alpha1.CNINodeStatusSnapshotVersion,
-		TrunkENI:        v1alpha1.TrunkENIStatus{ID: "eni-trunk-123"},
+		TrunkInterface:   &v1alpha1.TrunkInterface{ID: "eni-trunk-123"},
+		ReinitCheckpoint: &v1alpha1.ReinitCheckpoint{SnapshotVersion: v1alpha1.CNINodeStatusSnapshotVersion},
 	})
 	assert.NoError(t, err)
 
 	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: nodeName})
 	assert.NoError(t, err)
-	assert.Equal(t, "eni-trunk-123", cniNode.Status.TrunkENI.ID)
+	assert.Equal(t, "eni-trunk-123", cniNode.Status.TrunkInterface.ID)
 }
 
 // TestK8sWrapper_FreshReader_PrefersAPIReader verifies the fresh-read reader selection order:

@@ -263,7 +263,7 @@ func (b *branchENIProvider) initTrunk(
 		// spuriously miss here and force the EC2 fallback, defeating the zero-EC2 re-init goal.
 		cniNode, err := b.apiWrapper.K8sAPI.GetCNINodeFromAPIServer(types.NamespacedName{Name: instance.Name()})
 		if err == nil {
-			err = trunkENI.InitTrunkFromStatus(cniNode.Status.TrunkENI, podList)
+			err = trunkENI.InitTrunkFromStatus(cniNode.Status.TrunkInterface, podList)
 			if err == nil {
 				cniNodeStatusFastPathCount.WithLabelValues(resultHit, "status_valid").Inc()
 				trunkCacheRebuildLatency.WithLabelValues(trunkInitPathCNINodeStatus, resultSuccess).
@@ -304,10 +304,12 @@ func (b *branchENIProvider) persistCNINodeStatus(
 	log logr.Logger,
 ) {
 	status := rcv1alpha1.CNINodeStatus{
-		SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
-		LastUpdated:     metav1.Now(),
-		Instance:        instance.CNINodeStatus(),
-		TrunkENI:        trunkENI.CNINodeStatus(),
+		TrunkInterface: trunkENI.CNINodeStatus(),
+		ReinitCheckpoint: &rcv1alpha1.ReinitCheckpoint{
+			SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
+			LastUpdated:     metav1.Now(),
+			Instance:        instance.CNINodeStatus(),
+		},
 	}
 	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(nodeName, status); err != nil {
 		branchProviderOperationsErrCount.WithLabelValues("update_cninode_status").Inc()
@@ -485,12 +487,14 @@ func (b *branchENIProvider) ReconcileCNINodeStatus(nodeName string) (ctrl.Result
 	}
 
 	desired := rcv1alpha1.CNINodeStatus{
-		SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
-		Instance:        instance.CNINodeStatus(),
-		TrunkENI:        trunkENI.CNINodeStatus(),
+		TrunkInterface: trunkENI.CNINodeStatus(),
+		ReinitCheckpoint: &rcv1alpha1.ReinitCheckpoint{
+			SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
+			Instance:        instance.CNINodeStatus(),
+		},
 	}
 	// A trunk still missing its ID is not usable for hydrate; skip until it is set.
-	if desired.TrunkENI.ID == "" {
+	if desired.TrunkInterface == nil || desired.TrunkInterface.ID == "" {
 		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultNotReady).Inc()
 		return ctrl.Result{}, nil
 	}
@@ -507,7 +511,7 @@ func (b *branchENIProvider) ReconcileCNINodeStatus(nodeName string) (ctrl.Result
 		return ctrl.Result{}, nil
 	}
 
-	desired.LastUpdated = metav1.Now()
+	desired.ReinitCheckpoint.LastUpdated = metav1.Now()
 	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(nodeName, desired); err != nil {
 		cniNodeStatusSelfHealCount.WithLabelValues(selfHealResultError).Inc()
 		branchProviderOperationsErrCount.WithLabelValues("self_heal_cninode_status").Inc()
@@ -529,14 +533,24 @@ func (b *branchENIProvider) ReconcileCNINodeStatus(nodeName string) (ctrl.Result
 // than skipped only to fail hydrate on the next re-init. Security groups are compared as sets to
 // mirror hydrate's order-independent sameStringSet semantics and avoid needless re-patch churn.
 func cniNodeStatusUpToDate(persisted, desired rcv1alpha1.CNINodeStatus) bool {
-	if persisted.SnapshotVersion != desired.SnapshotVersion {
+	// The caller builds desired with both pointers set; a persisted object missing either
+	// layer (e.g. pre-unification shape or never persisted) is out of date by definition.
+	if persisted.ReinitCheckpoint == nil || persisted.TrunkInterface == nil {
 		return false
 	}
-	if persisted.TrunkENI.ID != desired.TrunkENI.ID ||
-		persisted.TrunkENI.SubnetID != desired.TrunkENI.SubnetID {
+	if persisted.ReinitCheckpoint.SnapshotVersion != desired.ReinitCheckpoint.SnapshotVersion {
 		return false
 	}
-	pi, di := persisted.Instance, desired.Instance
+	if persisted.TrunkInterface.ID != desired.TrunkInterface.ID ||
+		persisted.TrunkInterface.SubnetID != desired.TrunkInterface.SubnetID {
+		return false
+	}
+	// The trunk security groups are persisted for visibility; hydrate reads the instance
+	// security groups below, but compare them anyway so the shared layer never goes stale.
+	if !sameStringSet(persisted.TrunkInterface.SecurityGroups, desired.TrunkInterface.SecurityGroups) {
+		return false
+	}
+	pi, di := persisted.ReinitCheckpoint.Instance, desired.ReinitCheckpoint.Instance
 	if pi.InstanceID != di.InstanceID ||
 		pi.InstanceType != di.InstanceType ||
 		pi.InstanceSubnetID != di.InstanceSubnetID ||

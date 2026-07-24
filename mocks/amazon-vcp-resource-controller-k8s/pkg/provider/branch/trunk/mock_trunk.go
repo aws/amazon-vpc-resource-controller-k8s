@@ -51,10 +51,10 @@ func (m *MockTrunkENI) EXPECT() *MockTrunkENIMockRecorder {
 }
 
 // CNINodeStatus mocks base method.
-func (m *MockTrunkENI) CNINodeStatus() v1alpha1.TrunkENIStatus {
+func (m *MockTrunkENI) CNINodeStatus() *v1alpha1.TrunkInterface {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CNINodeStatus")
-	ret0, _ := ret[0].(v1alpha1.TrunkENIStatus)
+	ret0, _ := ret[0].(*v1alpha1.TrunkInterface)
 	return ret0
 }
 
@@ -106,7 +106,7 @@ func (mr *MockTrunkENIMockRecorder) InitTrunk(arg0, arg1 interface{}) *gomock.Ca
 }
 
 // InitTrunkFromStatus mocks base method.
-func (m *MockTrunkENI) InitTrunkFromStatus(arg0 v1alpha1.TrunkENIStatus, arg1 []v1.Pod) error {
+func (m *MockTrunkENI) InitTrunkFromStatus(arg0 *v1alpha1.TrunkInterface, arg1 []v1.Pod) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "InitTrunkFromStatus", arg0, arg1)
 	ret0, _ := ret[0].(error)

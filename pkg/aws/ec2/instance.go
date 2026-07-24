@@ -389,14 +389,19 @@ func (i *ec2Instance) HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) 
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
-	if status.SnapshotVersion != rcv1alpha1.CNINodeStatusSnapshotVersion {
+	// A nil checkpoint yields an empty version and cleanly misses here. This also covers
+	// objects persisted in the pre-unification shape (fields at the status top level): they
+	// do not parse into ReinitCheckpoint, so they miss, fall back to EC2, and are rewritten
+	// in the current shape by the post-init persist.
+	if status.ReinitCheckpoint == nil ||
+		status.ReinitCheckpoint.SnapshotVersion != rcv1alpha1.CNINodeStatusSnapshotVersion {
 		return false, HydrateMissSnapshotVersionMismatch
 	}
-	if status.TrunkENI.ID == "" {
+	if status.TrunkInterface == nil || status.TrunkInterface.ID == "" {
 		return false, HydrateMissTrunkENI
 	}
 
-	instanceStatus := status.Instance
+	instanceStatus := status.ReinitCheckpoint.Instance
 	if instanceStatus.InstanceID != i.instanceID {
 		return false, HydrateMissInstanceIDMismatch
 	}
@@ -427,7 +432,7 @@ func (i *ec2Instance) HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) 
 		len(instanceStatus.CurrentInstanceSecurityGroups) == 0 {
 		return false, HydrateMissSecurityGroups
 	}
-	if status.TrunkENI.SubnetID != "" && status.TrunkENI.SubnetID != instanceStatus.CurrentSubnetID {
+	if status.TrunkInterface.SubnetID != "" && status.TrunkInterface.SubnetID != instanceStatus.CurrentSubnetID {
 		return false, HydrateMissTrunkSubnetMismatch
 	}
 

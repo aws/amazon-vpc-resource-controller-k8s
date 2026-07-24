@@ -140,11 +140,13 @@ type TrunkENI interface {
 	// InitTrunk initializes trunk interface
 	InitTrunk(instance ec2.EC2Instance, pods []v1.Pod) error
 	// InitTrunkFromStatus initializes trunk cache from CNINode status and pod annotations.
-	InitTrunkFromStatus(status rcv1alpha1.TrunkENIStatus, pods []v1.Pod) error
+	InitTrunkFromStatus(status *rcv1alpha1.TrunkInterface, pods []v1.Pod) error
 	// ReconcileUnassignedBranchENIs discovers branch ENIs missing pod annotations and pushes them to the delete queue.
 	ReconcileUnassignedBranchENIs() (bool, error)
 	// CNINodeStatus returns a snapshot of trunk ENI state persisted in CNINode status.
-	CNINodeStatus() rcv1alpha1.TrunkENIStatus
+	// v1 never populates Branches (per-pod state would write-amplify at pod churn) nor
+	// MacAddress/DeviceIndex (no v1 read path needs them).
+	CNINodeStatus() *rcv1alpha1.TrunkInterface
 	// CreateAndAssociateBranchENIs creates and associate branch interface/s to trunk interface
 	CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int) ([]*ENIDetails, error)
 	// PushBranchENIsToCoolDownQueue pushes the branch interface belonging to the pod to the cool down queue
@@ -283,8 +285,8 @@ func PrometheusRegister() {
 	}
 }
 
-func (t *trunkENI) InitTrunkFromStatus(status rcv1alpha1.TrunkENIStatus, podList []v1.Pod) error {
-	if status.ID == "" {
+func (t *trunkENI) InitTrunkFromStatus(status *rcv1alpha1.TrunkInterface, podList []v1.Pod) error {
+	if status == nil || status.ID == "" {
 		return fmt.Errorf("missing trunk ENI ID in CNINode status")
 	}
 	if status.SubnetID != "" && status.SubnetID != t.instance.SubnetID() {
@@ -359,11 +361,11 @@ func (t *trunkENI) ReconcileUnassignedBranchENIs() (bool, error) {
 	return t.pushUnassignedBranchInterfacesToDeleteQueue(unassignedBranchInterfaces), nil
 }
 
-func (t *trunkENI) CNINodeStatus() rcv1alpha1.TrunkENIStatus {
+func (t *trunkENI) CNINodeStatus() *rcv1alpha1.TrunkInterface {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
-	return rcv1alpha1.TrunkENIStatus{
+	return &rcv1alpha1.TrunkInterface{
 		ID:             t.trunkENIId,
 		SubnetID:       t.instance.SubnetID(),
 		SecurityGroups: slices.Clone(t.instance.CurrentInstanceSecurityGroups()),

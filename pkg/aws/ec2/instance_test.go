@@ -14,6 +14,7 @@
 package ec2
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -431,21 +432,64 @@ func TestEc2Instance_LoadDetails_InvalidCustomNetworkingConfiguration(t *testing
 // sub-tests then break to assert specific cache-miss reasons.
 func validHydrateStatus() rcv1alpha1.CNINodeStatus {
 	return rcv1alpha1.CNINodeStatus{
-		SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
-		Instance: rcv1alpha1.InstanceStatus{
-			InstanceID:                            instanceID,
-			InstanceType:                          string(instanceType),
-			InstanceSubnetID:                      subnetID,
-			InstanceSubnetCIDRBlock:               subnetCidrBlock,
-			CurrentSubnetID:                       subnetID,
-			CurrentSubnetCIDRBlock:                subnetCidrBlock,
-			SubnetMask:                            "16",
-			PrimaryNetworkInterfaceID:             "eni-primary",
-			PrimaryNetworkInterfaceSecurityGroups: []string{securityGroup1},
-			CurrentInstanceSecurityGroups:         []string{securityGroup1},
+		ReinitCheckpoint: &rcv1alpha1.ReinitCheckpoint{
+			SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
+			Instance: rcv1alpha1.InstanceStatus{
+				InstanceID:                            instanceID,
+				InstanceType:                          string(instanceType),
+				InstanceSubnetID:                      subnetID,
+				InstanceSubnetCIDRBlock:               subnetCidrBlock,
+				CurrentSubnetID:                       subnetID,
+				CurrentSubnetCIDRBlock:                subnetCidrBlock,
+				SubnetMask:                            "16",
+				PrimaryNetworkInterfaceID:             "eni-primary",
+				PrimaryNetworkInterfaceSecurityGroups: []string{securityGroup1},
+				CurrentInstanceSecurityGroups:         []string{securityGroup1},
+			},
 		},
-		TrunkENI: rcv1alpha1.TrunkENIStatus{ID: "eni-trunk", SubnetID: subnetID},
+		TrunkInterface: &rcv1alpha1.TrunkInterface{ID: "eni-trunk", SubnetID: subnetID},
 	}
+}
+
+// TestEc2Instance_HydrateFromCNINodeStatus_OldShapeMisses proves that an object persisted in the
+// pre-unification status shape (snapshotVersion/instance/trunkENI at the status top level) results
+// in a clean hydrate miss, never a partial read. The old top-level fields no longer exist in the
+// struct, so decoding old raw JSON yields a nil ReinitCheckpoint and the version check misses;
+// the controller then falls back to EC2 and rewrites the snapshot in the current shape.
+func TestEc2Instance_HydrateFromCNINodeStatus_OldShapeMisses(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// Raw JSON in the OLD persisted shape (as written by the pre-unification controller).
+	oldShape := []byte(`{
+		"snapshotVersion": "v1",
+		"lastUpdated": "2026-07-01T00:00:00Z",
+		"instance": {
+			"instanceID": "` + instanceID + `",
+			"instanceType": "` + string(instanceType) + `",
+			"instanceSubnetID": "` + subnetID + `",
+			"instanceSubnetCIDRBlock": "` + subnetCidrBlock + `",
+			"currentSubnetID": "` + subnetID + `",
+			"currentSubnetCIDRBlock": "` + subnetCidrBlock + `",
+			"subnetMask": "16",
+			"primaryNetworkInterfaceID": "eni-primary",
+			"primaryNetworkInterfaceSecurityGroups": ["` + securityGroup1 + `"],
+			"currentInstanceSecurityGroups": ["` + securityGroup1 + `"]
+		},
+		"trunkENI": {"id": "eni-trunk", "subnetID": "` + subnetID + `"}
+	}`)
+
+	var status rcv1alpha1.CNINodeStatus
+	assert.NoError(t, json.Unmarshal(oldShape, &status))
+	// Nothing from the old shape may leak into the new fields.
+	assert.Nil(t, status.ReinitCheckpoint)
+	assert.Nil(t, status.TrunkInterface)
+
+	inst, _ := getMockInstance(ctrl)
+	ok, reason := inst.HydrateFromCNINodeStatus(status)
+	assert.False(t, ok)
+	assert.Equal(t, HydrateMissSnapshotVersionMismatch, reason)
+	assert.False(t, inst.LoadedFromCNINodeStatus())
 }
 
 func TestEc2Instance_HydrateFromCNINodeStatus_MissingSubnetMask(t *testing.T) {
@@ -461,7 +505,7 @@ func TestEc2Instance_HydrateFromCNINodeStatus_MissingSubnetMask(t *testing.T) {
 	// so we do not hydrate an instance that would later build malformed pod CIDRs ("<ip>/").
 	inst2, _ := getMockInstance(ctrl)
 	s := validHydrateStatus()
-	s.Instance.SubnetMask = ""
+	s.ReinitCheckpoint.Instance.SubnetMask = ""
 	ok, reason = inst2.HydrateFromCNINodeStatus(s)
 	assert.False(t, ok)
 	assert.Equal(t, HydrateMissSubnetMask, reason)
@@ -469,8 +513,8 @@ func TestEc2Instance_HydrateFromCNINodeStatus_MissingSubnetMask(t *testing.T) {
 	// A v6 CIDR present without its v6 mask must also miss.
 	inst3, _ := getMockInstance(ctrl)
 	s = validHydrateStatus()
-	s.Instance.InstanceSubnetV6CIDRBlock = "2600:1f13::/64"
-	s.Instance.SubnetV6Mask = ""
+	s.ReinitCheckpoint.Instance.InstanceSubnetV6CIDRBlock = "2600:1f13::/64"
+	s.ReinitCheckpoint.Instance.SubnetV6Mask = ""
 	ok, reason = inst3.HydrateFromCNINodeStatus(s)
 	assert.False(t, ok)
 	assert.Equal(t, HydrateMissSubnetV6Mask, reason)

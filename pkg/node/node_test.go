@@ -137,7 +137,7 @@ func TestNode_InitResources_CNINodeStatusHydrated(t *testing.T) {
 	mock := NewMock(ctrl, 1)
 	mock.NodeWithMock.k8sAPI = mock.MockK8sAPI
 	status := rcv1alpha1.CNINodeStatus{
-		SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion,
+		ReinitCheckpoint: &rcv1alpha1.ReinitCheckpoint{SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion},
 	}
 
 	mock.MockInstance.EXPECT().Name().Return(nodeName)
@@ -166,7 +166,9 @@ func TestNode_InitResources_ProofMetric_Hydrated(t *testing.T) {
 
 	mock := NewMock(ctrl, 1)
 	mock.NodeWithMock.k8sAPI = mock.MockK8sAPI
-	status := rcv1alpha1.CNINodeStatus{SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion}
+	status := rcv1alpha1.CNINodeStatus{
+		ReinitCheckpoint: &rcv1alpha1.ReinitCheckpoint{SnapshotVersion: rcv1alpha1.CNINodeStatusSnapshotVersion},
+	}
 
 	mock.MockInstance.EXPECT().Name().Return(nodeName)
 	mock.MockK8sAPI.EXPECT().GetCNINodeFromAPIServer(types.NamespacedName{Name: nodeName}).Return(&rcv1alpha1.CNINode{
