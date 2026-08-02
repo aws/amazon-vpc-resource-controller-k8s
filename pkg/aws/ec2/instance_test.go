@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
@@ -518,6 +519,40 @@ func TestEc2Instance_HydrateFromCNINodeStatus_MissingSubnetMask(t *testing.T) {
 	ok, reason = inst3.HydrateFromCNINodeStatus(s)
 	assert.False(t, ok)
 	assert.Equal(t, HydrateMissSubnetV6Mask, reason)
+}
+
+// TestEc2Instance_HydrateFromCNINodeStatus_InstanceIDMismatch proves U8 (design-cn.md §5.1,
+// §2.7/§4.2 E7; issue #515): a CNINode snapshot whose checkpointed instance ID does not match the
+// live instance it is being hydrated against is a clean cache-miss (HydrateMissInstanceIDMismatch)
+// and increments cninode_instance_id_collision_total{source="hydrate"} exactly once. A matching
+// instance ID must hydrate successfully and must not touch the counter at all.
+func TestEc2Instance_HydrateFromCNINodeStatus_InstanceIDMismatch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	before := testutil.ToFloat64(InstanceIDCollisionCount.WithLabelValues(CollisionSourceHydrate))
+
+	inst, _ := getMockInstance(ctrl)
+	s := validHydrateStatus()
+	s.ReinitCheckpoint.Instance.InstanceID = "i-differentinstance"
+	ok, reason := inst.HydrateFromCNINodeStatus(s)
+	assert.False(t, ok)
+	assert.Equal(t, HydrateMissInstanceIDMismatch, reason)
+	assert.False(t, inst.LoadedFromCNINodeStatus())
+
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(InstanceIDCollisionCount.WithLabelValues(CollisionSourceHydrate))-before,
+		"instance ID mismatch must increment the collision counter with source=hydrate exactly once")
+
+	// Matching instance IDs: no collision, counter untouched, snapshot hydrates.
+	before = testutil.ToFloat64(InstanceIDCollisionCount.WithLabelValues(CollisionSourceHydrate))
+	inst2, _ := getMockInstance(ctrl)
+	ok, reason = inst2.HydrateFromCNINodeStatus(validHydrateStatus())
+	assert.True(t, ok, "valid snapshot should hydrate; got reason %q", reason)
+	assert.Equal(t, HydrateHit, reason)
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(InstanceIDCollisionCount.WithLabelValues(CollisionSourceHydrate))-before,
+		"matching instance IDs must not increment the collision counter")
 }
 
 // TestHydrateResult_WireValuesStable pins the string values of every HydrateResult constant.
