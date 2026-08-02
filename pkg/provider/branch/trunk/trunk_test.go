@@ -1079,10 +1079,17 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
+	// M3 (design doc section 2.4): the failed association now also triggers one error-driven orphan
+	// reclaim describe, which reads the subnet - hence one SubnetID call beyond the two creates.
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(3)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
 	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
 	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil)
+
+	// The reclaim describe returns the two branch ENIs this very allocation just created. Both are
+	// still in pendingCreates, so the M5 G1 guard keeps the reclaim from enqueueing them and the
+	// delete-queue assertion below is unchanged - proving M3 cannot cannibalize an in-flight create.
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil)
 
 	gomock.InOrder(
 		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
@@ -1802,4 +1809,192 @@ func TestTrunkENI_RegressionHB(t *testing.T) {
 	assert.True(t, trunkENI.usedVlanIds[sharedVlan],
 		"the vlan must remain reserved for the new owner despite the stale duplicate free")
 	assert.Equal(t, "eni-new-owner", trunkENI.vlanOwner[sharedVlan])
+}
+
+// --- M3: error-driven orphan reclaim (design doc section 2.4) ---------------------------------
+
+// newReclaimTrunk returns a trunk wired with mocks and a trunk ID, ready for the error-driven
+// reclaim path (which describes the trunk's branch ENIs).
+func newReclaimTrunk(ctrl *gomock.Controller) (*trunkENI, *mock_api.MockEC2APIHelper) {
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+	return trunkENI, mockHelper
+}
+
+// TestTrunkENI_U4_ErrorDrivenReclaim_EnqueuesOrphan proves the reactive floor: after a failed
+// branch-ENI addition, one describe runs and an attached-but-unknown ENI is enqueued for deletion.
+func TestTrunkENI_U4_ErrorDrivenReclaim_EnqueuesOrphan(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	orphanID := "eni-orphan-holding-slot"
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: &orphanID, TagSet: vlan1Tag},
+		}, nil).Times(1)
+
+	orphanBefore := testutil.ToFloat64(branchENIErrorDrivenOrphanCount)
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("InsufficientCapacityOnTrunk: no capacity"))
+
+	assert.Len(t, trunkENI.deleteQueue, 1, "the orphan wedging the trunk must be enqueued")
+	assert.Equal(t, orphanID, trunkENI.deleteQueue[0].ID)
+	assert.Equal(t, float64(1), testutil.ToFloat64(branchENIErrorDrivenOrphanCount)-orphanBefore)
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultReclaimed, reclaimErrorClassCapacity)))
+}
+
+// TestTrunkENI_U4_ErrorDrivenReclaim_VlanInUseClass proves a VLAN-collision failure also triggers
+// the reclaim (design section 2.4: the trigger is ANY addition failure, not just capacity).
+func TestTrunkENI_U4_ErrorDrivenReclaim_VlanInUseClass(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	orphanID := "eni-orphan-holding-vlan"
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: &orphanID, TagSet: vlan2Tag},
+		}, nil).Times(1)
+
+	before := testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultReclaimed, reclaimErrorClassVlanInUse))
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("VlanId 2 is already in use on the trunk"))
+
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultReclaimed, reclaimErrorClassVlanInUse))-before)
+}
+
+// TestTrunkENI_U4_ErrorDrivenReclaim_CleanWhenEC2Agrees proves that when EC2 agrees with the ledger
+// nothing is enqueued: the failure was not caused by an orphan.
+func TestTrunkENI_U4_ErrorDrivenReclaim_CleanWhenEC2Agrees(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	owned := &ENIDetails{ID: "eni-owned-by-pod", VlanID: VlanId1}
+	trunkENI.uidToBranchENIMap["pod-uid"] = []*ENIDetails{owned}
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: &owned.ID, TagSet: vlan1Tag},
+		}, nil).Times(1)
+
+	before := testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultClean, reclaimErrorClassOther))
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("some unrelated transient failure"))
+
+	assert.Empty(t, trunkENI.deleteQueue, "a pod-owned ENI must never be reclaimed")
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultClean, reclaimErrorClassOther))-before)
+}
+
+// TestTrunkENI_U4_ErrorDrivenReclaim_RateWindow proves the failure-path describe is bounded: a
+// second failure inside errorDrivenReclaimWindow must not issue another describe.
+func TestTrunkENI_U4_ErrorDrivenReclaim_RateWindow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	// Exactly one describe for two back-to-back failures.
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{}, nil).Times(1)
+
+	skipBefore := testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultSkippedWindow, reclaimErrorClassCapacity))
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("capacity exceeded"))
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("capacity exceeded"))
+
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultSkippedWindow, reclaimErrorClassCapacity))-skipBefore,
+		"the second failure inside the window must be skipped, not describe again")
+}
+
+// TestTrunkENI_U4_ErrorDrivenReclaim_DescribeFailure proves a failed reclaim describe never panics
+// and never mutates ledger state - the caller's original allocation error stands.
+func TestTrunkENI_U4_ErrorDrivenReclaim_DescribeFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, MockError).Times(1)
+
+	before := testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultDescribeError, reclaimErrorClassCapacity))
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("capacity exceeded"))
+
+	assert.Empty(t, trunkENI.deleteQueue, "a failed describe must not change ledger state")
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultDescribeError, reclaimErrorClassCapacity))-before)
+}
+
+// TestTrunkENI_ErrorDrivenReclaim_RespectsM5KnownSet proves the reclaim reuses the shared M5 known
+// set: an in-flight create (hazard H-A) and an ENI already awaiting deletion (hazard H-B) are never
+// reclaimed, so M3 cannot reintroduce either hazard.
+func TestTrunkENI_ErrorDrivenReclaim_RespectsM5KnownSet(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	inflightID := "eni-inflight-create"
+	queuedID := "eni-awaiting-delete"
+	trunkENI.pendingCreates[inflightID] = struct{}{}
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, &ENIDetails{ID: queuedID, VlanID: VlanId2})
+
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: &inflightID, TagSet: vlan1Tag},
+			{NetworkInterfaceId: &queuedID, TagSet: vlan2Tag},
+		}, nil).Times(1)
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("capacity exceeded"))
+
+	assert.Len(t, trunkENI.deleteQueue, 1, "no duplicate entry and no in-flight create enqueued")
+	assert.Equal(t, queuedID, trunkENI.deleteQueue[0].ID)
+}
+
+// TestTrunkENI_RegressionE4 replays design hazard E4: orphans the ledger does not know occupy the
+// trunk's real branch slots, so canCreateMore wrongly allows an allocation that then fails to
+// associate. Without the reclaim the node loops create/delete forever. This asserts the wedge is
+// broken - after the failure the orphans are queued for deletion, which is what frees the slots.
+func TestTrunkENI_RegressionE4(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	orphan1 := "eni-orphan-1"
+	orphan2 := "eni-orphan-2"
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: &orphan1, TagSet: vlan1Tag},
+			{NetworkInterfaceId: &orphan2, TagSet: vlan2Tag},
+		}, nil).Times(1)
+
+	// The ledger is empty: it believes the trunk is idle while EC2 has two attached orphans.
+	assert.Empty(t, trunkENI.uidToBranchENIMap)
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("InsufficientCapacityOnTrunk"))
+
+	assert.Len(t, trunkENI.deleteQueue, 2, "both slot-holding orphans must be queued for deletion")
+	queued := map[string]bool{}
+	for _, eni := range trunkENI.deleteQueue {
+		queued[eni.ID] = true
+	}
+	assert.True(t, queued[orphan1] && queued[orphan2])
+}
+
+// TestReclaimErrorClass documents that classification is best-effort observability and that an
+// unrecognized error is still eligible for reclaim (reported as "other", never excluded).
+func TestReclaimErrorClass(t *testing.T) {
+	assert.Equal(t, reclaimErrorClassCapacity, reclaimErrorClass(fmt.Errorf("InsufficientCapacityOnTrunk")))
+	assert.Equal(t, reclaimErrorClassCapacity, reclaimErrorClass(fmt.Errorf("ResourceLimitExceeded")))
+	assert.Equal(t, reclaimErrorClassVlanInUse, reclaimErrorClass(fmt.Errorf("VlanId already in use")))
+	assert.Equal(t, reclaimErrorClassOther, reclaimErrorClass(fmt.Errorf("RequestLimitExceeded throttle")))
+	assert.Equal(t, reclaimErrorClassOther, reclaimErrorClass(nil))
 }
