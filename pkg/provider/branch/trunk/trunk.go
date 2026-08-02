@@ -164,6 +164,18 @@ var (
 		[]string{"sg_match"},
 	)
 
+	// branchENIDeleteQueueDedupCount counts delete-queue enqueue attempts skipped because an
+	// entry with the same ENI ID was already queued (M5 G2, design doc section 2.6). A duplicate
+	// entry would later run deleteENI twice and double-free the ENI's VLAN - releasing a VLAN
+	// that may meanwhile belong to a NEW pod's branch ENI (hazard H-B). A non-zero rate here
+	// means the dedup guard is absorbing real high-churn races.
+	branchENIDeleteQueueDedupCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "branch_eni_delete_queue_dedup_total",
+			Help: "The number of delete queue enqueue attempts skipped because the branch ENI is already in the delete queue",
+		},
+	)
+
 	prometheusRegistered = false
 )
 
@@ -240,6 +252,21 @@ type trunkENI struct {
 	// AssociateTrunkInterface. CreateAndAssociateBranchENIs therefore verifies the ledger from
 	// EC2 (verifyBranchLedger) before the first allocation on a hydrated trunk.
 	branchLedgerVerified bool
+	// pendingCreates is the set of branch ENI IDs that exist in EC2 but are not yet in
+	// uidToBranchENIMap (M5 G1, design doc section 2.6). CreateAndAssociateBranchENIs adds an ID
+	// right after CreateNetworkInterface returns and removes it on EVERY exit for that ENI:
+	// success (addBranchToCache) or failure (PushENIsToFrontOfDeleteQueue). The ledger-verify
+	// gate and the orphan reclaim sweep never classify a pending ENI as an orphan - without this,
+	// an in-flight create in the Associate-to-cache window could be deleted from under a live pod
+	// (hazard H-A). Only needs to live within a single controller lifetime. Guarded by lock.
+	pendingCreates map[string]struct{}
+	// vlanOwner maps an assigned VLAN ID to the branch ENI ID that currently owns it (M5 G3,
+	// design doc section 2.6). Set wherever a VLAN is assigned or marked with a known ENI ID;
+	// cleared by freeVlanId. freeVlanId refuses to free a VLAN owned by a different ENI, so a
+	// duplicate delete cannot release a VLAN that meanwhile belongs to a NEW pod's branch ENI
+	// (hazard H-B defense in depth). An absent/empty owner preserves legacy free behavior.
+	// Reserved VLAN 0 never gets an owner and is never freed. Guarded by lock.
+	vlanOwner map[int]string
 }
 
 // shadowReleaseRecord is one recently-released branch ENI observed by the Phase-2 shadow reuse
@@ -374,6 +401,8 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 		ec2ApiHelper:      helper,
 		instance:          instance,
 		uidToBranchENIMap: make(map[string][]*ENIDetails),
+		pendingCreates:    make(map[string]struct{}),
+		vlanOwner:         make(map[int]string),
 		nodeIDTag: []ec2types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -394,6 +423,7 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(branchLedgerVerifyCount)
 		metrics.Registry.MustRegister(branchLedgerVerifyOrphanCount)
 		metrics.Registry.MustRegister(orphanReuseShadowHitCount)
+		metrics.Registry.MustRegister(branchENIDeleteQueueDedupCount)
 
 		prometheusRegistered = true
 	}
@@ -427,7 +457,7 @@ func (t *trunkENI) InitTrunkFromStatus(status *rcv1alpha1.TrunkInterface, podLis
 		}
 
 		for _, eni := range eniListFromPod {
-			if err := t.markVlanAssignedLocked(eni.VlanID); err != nil {
+			if err := t.markVlanAssignedWithOwnerLocked(eni.VlanID, eni.ID); err != nil {
 				return fmt.Errorf("invalid VLAN ID in pod annotation for pod %s/%s: %w",
 					pod.Namespace, pod.Name, err)
 			}
@@ -443,12 +473,10 @@ func (t *trunkENI) InitTrunkFromStatus(status *rcv1alpha1.TrunkInterface, podLis
 func (t *trunkENI) ReconcileUnassignedBranchENIs() (bool, error) {
 	t.lock.RLock()
 	trunkENIID := t.trunkENIId
-	assignedBranchENIs := make(map[string]struct{})
-	for _, branchENIs := range t.uidToBranchENIMap {
-		for _, eni := range branchENIs {
-			assignedBranchENIs[eni.ID] = struct{}{}
-		}
-	}
+	// M5 G1+G2 (design doc section 2.6): the "known" set is ledger UNION delete queue UNION
+	// pending creates. An ENI awaiting deletion is being processed, not an orphan (hazard H-B),
+	// and an ENI still being created must never be deleted from under a live pod (hazard H-A).
+	knownBranchENIs := t.knownBranchENIsLocked()
 	t.lock.RUnlock()
 
 	if trunkENIID == "" {
@@ -466,13 +494,33 @@ func (t *trunkENI) ReconcileUnassignedBranchENIs() (bool, error) {
 			continue
 		}
 		branchENIID := *branchInterface.NetworkInterfaceId
-		if _, assigned := assignedBranchENIs[branchENIID]; assigned {
+		if _, known := knownBranchENIs[branchENIID]; known {
 			continue
 		}
 		unassignedBranchInterfaces[branchENIID] = branchInterface
 	}
 
 	return t.pushUnassignedBranchInterfacesToDeleteQueue(unassignedBranchInterfaces), nil
+}
+
+// knownBranchENIsLocked builds the set of branch ENI IDs the controller knows about: the
+// pod-owned ledger UNION the delete queue UNION the pending-creates set (M5 G1+G2, design doc
+// section 2.6). Only an attached branch ENI OUTSIDE this set is an orphan. Caller must hold the
+// trunk lock (read or write).
+func (t *trunkENI) knownBranchENIsLocked() map[string]struct{} {
+	knownBranchENIs := make(map[string]struct{})
+	for _, branchENIs := range t.uidToBranchENIMap {
+		for _, eni := range branchENIs {
+			knownBranchENIs[eni.ID] = struct{}{}
+		}
+	}
+	for _, eni := range t.deleteQueue {
+		knownBranchENIs[eni.ID] = struct{}{}
+	}
+	for eniID := range t.pendingCreates {
+		knownBranchENIs[eniID] = struct{}{}
+	}
+	return knownBranchENIs
 }
 
 func (t *trunkENI) CNINodeStatus() *rcv1alpha1.TrunkInterface {
@@ -604,7 +652,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 				continue
 			}
 			// Mark the Vlan ID from the pod's annotation
-			t.markVlanAssigned(eni.VlanID)
+			t.markVlanAssignedWithOwner(eni.VlanID, eni.ID)
 
 			branchENIs = append(branchENIs, eni)
 			delete(associatedBranchInterfaces, eni.ID)
@@ -667,16 +715,14 @@ func (t *trunkENI) verifyBranchLedger() error {
 	}
 	// Under the lock: mark EVERY attached branch ENI's VLAN as used (same tag parsing and
 	// reserved-VLAN-0 fallback as the orphan delete-queue path) and partition the ENIs into
-	// pod-owned and orphaned. Marking must complete before branchLedgerVerified flips so no
+	// known and orphaned. Marking must complete before branchLedgerVerified flips so no
 	// concurrent allocation can grab a VLAN that is occupied in EC2. Owned ENIs' VLANs were
 	// already marked by hydrate from the pod annotation; markVlanAssignedLocked is idempotent,
 	// so re-marking from the tag is harmless and covers annotation/tag divergence.
-	assignedBranchENIs := make(map[string]struct{})
-	for _, branchENIs := range t.uidToBranchENIMap {
-		for _, eni := range branchENIs {
-			assignedBranchENIs[eni.ID] = struct{}{}
-		}
-	}
+	// M5 G1+G2 (design doc section 2.6): the "known" set is ledger UNION delete queue UNION
+	// pending creates - an ENI awaiting deletion (hazard H-B) or still being created (hazard
+	// H-A) must never be classified as an orphan here.
+	knownBranchENIs := t.knownBranchENIsLocked()
 	unassignedBranchInterfaces := make(map[string]*ec2types.NetworkInterface)
 	for _, branchInterface := range branchInterfaces {
 		if branchInterface.NetworkInterfaceId == nil {
@@ -691,10 +737,10 @@ func (t *trunkENI) verifyBranchLedger() error {
 				"interface", branchENIID, "error", err)
 			vlanId = 0
 		}
-		if err := t.markVlanAssignedLocked(vlanId); err != nil {
+		if err := t.markVlanAssignedWithOwnerLocked(vlanId, branchENIID); err != nil {
 			t.log.Error(err, "failed to mark vlan id at ledger verification", "interface", branchENIID)
 		}
-		if _, assigned := assignedBranchENIs[branchENIID]; !assigned {
+		if _, known := knownBranchENIs[branchENIID]; !known {
 			unassignedBranchInterfaces[branchENIID] = branchInterface
 		}
 	}
@@ -813,12 +859,20 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 			aws.String(t.instance.SubnetID()), securityGroups, tags, nil, nil, connectionTrackingSpec)
 		if err != nil {
 			err = fmt.Errorf("creating network interface, %w", err)
-			t.freeVlanId(vlanID)
+			// The ENI was never created, so the VLAN has no owner yet (legacy ownerless free).
+			t.freeVlanId(vlanID, "")
 			branchENIOperationsFailureCount.WithLabelValues("creating_branch_eni_failed").Inc()
 			break
 		} else {
 			branchENIOperationsSuccessCount.WithLabelValues("created_branch_eni_succeeded").Inc()
 		}
+
+		// M5 G1 (design doc section 2.6): the ENI now exists in EC2 but is not yet in
+		// uidToBranchENIMap. Record it as in-flight so the ledger-verify gate and the orphan
+		// reclaim sweep never classify it as an orphan (hazard H-A). Removed on every exit for
+		// this ENI: success via addBranchToCache, failure via PushENIsToFrontOfDeleteQueue.
+		// The ENI ID is known now, so also record it as the owner of its VLAN (M5 G3).
+		t.addPendingCreate(*nwInterface.NetworkInterfaceId, vlanID)
 
 		// Branch ENI can have an IPv4 address, IPv6 address, or both
 		var v4Addr, v6Addr string
@@ -950,9 +1004,9 @@ func (t *trunkENI) deleteENI(eniDetail *ENIDetails) (err error) {
 
 	t.log.Info("deleted eni", "eni details", eniDetail)
 
-	// Free vlan id used by the branch ENI
+	// Free vlan id used by the branch ENI (M5 G3: only freed if this ENI still owns the VLAN)
 	if eniDetail.VlanID != 0 {
-		t.freeVlanId(eniDetail.VlanID)
+		t.freeVlanId(eniDetail.VlanID, eniDetail.ID)
 	}
 
 	return nil
@@ -983,20 +1037,71 @@ func (t *trunkENI) pushENIToDeleteQueue(eni *ENIDetails) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	t.pushENIToDeleteQueueLocked(eni)
+}
+
+// pushENIToDeleteQueueLocked appends an ENI to the delete queue. M5 G2 (design doc section 2.6):
+// an ENI ID already present in the queue is skipped (logged and counted) - a duplicate entry
+// would later run deleteENI twice and double-free the ENI's VLAN (hazard H-B). Caller must hold
+// the trunk lock. Returns whether the ENI was actually queued.
+func (t *trunkENI) pushENIToDeleteQueueLocked(eni *ENIDetails) bool {
+	if t.isENIInDeleteQueueLocked(eni.ID) {
+		branchENIDeleteQueueDedupCount.Inc()
+		t.log.Info("skipping delete queue push, eni is already in the delete queue", "eni", eni.ID)
+		return false
+	}
+
 	t.deleteQueue = append(t.deleteQueue, eni)
 	// Phase-2 shadow instrumentation: an orphan entering the delete queue is a reuse candidate
 	// too. Its security groups are unknown from the describe (empty), so it can only ever count
 	// as an sg_match="mismatch" availability - a real pool would describe or modify before reuse.
 	t.recordShadowReleaseLocked(eni.securityGroups)
+	return true
+}
+
+// isENIInDeleteQueueLocked returns whether an ENI with the given ID is already in the delete
+// queue. Caller must hold the trunk lock (read or write).
+func (t *trunkENI) isENIInDeleteQueueLocked(eniID string) bool {
+	for _, queued := range t.deleteQueue {
+		if queued.ID == eniID {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *trunkENI) pushUnassignedBranchInterfacesToDeleteQueue(branchInterfaces map[string]*ec2types.NetworkInterface) bool {
 	foundUnassignedBranchENI := false
+
+	// One lock for the whole batch so the G1/G2 checks and the enqueue are atomic: a create or a
+	// concurrent enqueue cannot slip in between the classification and the queue insert.
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
 	for _, branchInterface := range branchInterfaces {
 		if branchInterface.NetworkInterfaceId == nil {
 			continue
 		}
 		branchENIID := *branchInterface.NetworkInterfaceId
+
+		// M5 G1 (design doc section 2.6): an ENI still being created (in EC2 but not yet in the
+		// ledger) is in-flight, not an orphan - deleting it would pull the ENI from under a live
+		// pod (hazard H-A). Re-checked here at enqueue time under the lock because the caller's
+		// known-set snapshot may predate a create that finished during the EC2 describe. Not
+		// counted as a discovered orphan.
+		if _, pending := t.pendingCreates[branchENIID]; pending {
+			t.log.Info("skipping in-flight branch eni, create in progress", "eni", branchENIID)
+			continue
+		}
+		// M5 G2 (design doc section 2.6): an ENI already awaiting deletion is being processed,
+		// not an orphan - re-enqueueing it would double-free its VLAN later (hazard H-B). Do not
+		// re-mark the VLAN and do not count it as a discovered orphan.
+		if t.isENIInDeleteQueueLocked(branchENIID) {
+			branchENIDeleteQueueDedupCount.Inc()
+			t.log.Info("skipping branch eni already in the delete queue", "eni", branchENIID)
+			continue
+		}
+
 		t.log.Info("pushing eni to delete queue as no pod owns it", "eni", branchENIID)
 		// An attached branch ENI owned by no pod in the ledger is an orphan. Count each discovery so
 		// the real orphan rate is observable in Grafana (previously only the log line above existed).
@@ -1023,10 +1128,14 @@ func (t *trunkENI) pushUnassignedBranchInterfacesToDeleteQueue(branchInterfaces 
 				"using reserved vlan id 0 for delete queue", "interface", branchENIID)
 			vlanId = 0
 		} else {
-			// Even though the ENI is going to be deleted, keep the VLAN reserved while it sits in the cool down queue.
-			t.markVlanAssigned(vlanId)
+			// Even though the ENI is going to be deleted, keep the VLAN reserved while it sits in
+			// the cool down queue, owned by this ENI (M5 G3).
+			if err := t.markVlanAssignedWithOwnerLocked(vlanId, branchENIID); err != nil {
+				trunkENIOperationsErrCount.WithLabelValues("mark_invalid_vlan_id").Inc()
+				t.log.Error(err, "failed to mark vlan id assigned", "vlan id", vlanId)
+			}
 		}
-		t.pushENIToDeleteQueue(&ENIDetails{
+		t.pushENIToDeleteQueueLocked(&ENIDetails{
 			ID:                branchENIID,
 			VlanID:            vlanId,
 			deletionTimeStamp: time.Now(),
@@ -1041,6 +1150,10 @@ func (t *trunkENI) PushENIsToFrontOfDeleteQueue(pod *v1.Pod, eniList []*ENIDetai
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	// M5 G1 (design doc section 2.6): an in-flight create pushed here (create/associate failure
+	// path) has terminally exited the create flow - it must not stay in the pending set.
+	t.removePendingCreatesLocked(eniList)
+
 	if pod != nil {
 		t.log.Info("pushing ENIs to delete queue and removing pod from cache",
 			"uid", pod.UID, "ENIs", eniList)
@@ -1049,7 +1162,19 @@ func (t *trunkENI) PushENIsToFrontOfDeleteQueue(pod *v1.Pod, eniList []*ENIDetai
 		t.log.Info("pushing ENIs to delete queue", "ENIs", eniList)
 	}
 
-	t.deleteQueue = append(eniList, t.deleteQueue...)
+	// M5 G2 (design doc section 2.6): never insert an ENI ID already present in the queue - a
+	// duplicate entry would later double-free the ENI's VLAN (hazard H-B).
+	var toQueue []*ENIDetails
+	for _, eni := range eniList {
+		if t.isENIInDeleteQueueLocked(eni.ID) {
+			branchENIDeleteQueueDedupCount.Inc()
+			t.log.Info("skipping delete queue push, eni is already in the delete queue", "eni", eni.ID)
+			continue
+		}
+		toQueue = append(toQueue, eni)
+	}
+
+	t.deleteQueue = append(toQueue, t.deleteQueue...)
 }
 
 // popENIFromDeleteQueue pops an ENI from delete queue, if the queue is empty then the false is returned
@@ -1070,6 +1195,11 @@ func (t *trunkENI) popENIFromDeleteQueue() (eni *ENIDetails, hasENI bool) {
 func (t *trunkENI) addBranchToCache(UID string, branchENIs []*ENIDetails) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
+
+	// M5 G1 (design doc section 2.6): the ENIs are entering the pod-owned ledger, so they are no
+	// longer in-flight. Done before the duplicate-UID early return so a pending entry can never
+	// be left behind on any exit.
+	t.removePendingCreatesLocked(branchENIs)
 
 	if _, ok := t.uidToBranchENIMap[UID]; ok {
 		t.log.Info("branch eni already exist not adding again", "request", branchENIs)
@@ -1096,6 +1226,9 @@ func (t *trunkENI) assignVlanId() (int, error) {
 	for index, used := range t.usedVlanIds {
 		if !used {
 			t.usedVlanIds[index] = true
+			// Fresh assignment: the owning ENI does not exist yet; the owner is recorded once
+			// CreateNetworkInterface returns the ENI ID (M5 G3). Clear any stale record.
+			delete(t.vlanOwner, index)
 			return index, nil
 		}
 	}
@@ -1121,8 +1254,59 @@ func (t *trunkENI) markVlanAssignedLocked(vlanId int) error {
 	return nil
 }
 
-// freeVlanId frees a vlan ID currently used by a network interface
-func (t *trunkENI) freeVlanId(vlanId int) {
+// markVlanAssignedWithOwner marks a vlan Id as assigned and records eniID as its owner (M5 G3,
+// design doc section 2.6). Reserved vlan id 0 never gets an owner (it is permanently marked and
+// never freed), and an empty eniID leaves any existing owner record untouched.
+func (t *trunkENI) markVlanAssignedWithOwner(vlanId int, eniID string) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if err := t.markVlanAssignedWithOwnerLocked(vlanId, eniID); err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("mark_invalid_vlan_id").Inc()
+		t.log.Error(err, "failed to mark vlan id assigned", "vlan id", vlanId)
+	}
+}
+
+// markVlanAssignedWithOwnerLocked is markVlanAssignedWithOwner's caller-locked counterpart.
+// Caller must hold the trunk lock.
+func (t *trunkENI) markVlanAssignedWithOwnerLocked(vlanId int, eniID string) error {
+	if err := t.markVlanAssignedLocked(vlanId); err != nil {
+		return err
+	}
+	if vlanId != 0 && eniID != "" {
+		t.vlanOwner[vlanId] = eniID
+	}
+	return nil
+}
+
+// addPendingCreate records eniID as an in-flight branch ENI create (M5 G1, design doc section
+// 2.6) and, since the ENI ID is now known, records it as the owner of vlanID (M5 G3). Must be
+// removed via removePendingCreatesLocked on every exit for this ENI.
+func (t *trunkENI) addPendingCreate(eniID string, vlanID int) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.pendingCreates[eniID] = struct{}{}
+	if vlanID != 0 {
+		t.vlanOwner[vlanID] = eniID
+	}
+}
+
+// removePendingCreatesLocked removes each ENI's ID from the pending-creates set (M5 G1, design
+// doc section 2.6). Caller must hold the trunk lock.
+func (t *trunkENI) removePendingCreatesLocked(enis []*ENIDetails) {
+	for _, eni := range enis {
+		delete(t.pendingCreates, eni.ID)
+	}
+}
+
+// freeVlanId frees a vlan ID currently used by a network interface. eniID is the ENI releasing
+// the vlan; if the vlan is owned by a DIFFERENT ENI, the free is refused (M5 G3, design doc
+// section 2.6) because a duplicate delete-queue entry must never release a vlan that meanwhile
+// belongs to a new pod's branch ENI (hazard H-B). An empty eniID or an unrecorded owner preserves
+// legacy ownerless-free behavior. Reserved vlan id 0 is never freed in production: callers
+// (deleteENI, and assignVlanId's never-returns-0 guarantee on a real trunk) never pass it here.
+func (t *trunkENI) freeVlanId(vlanId int, eniID string) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
@@ -1132,7 +1316,16 @@ func (t *trunkENI) freeVlanId(vlanId int) {
 		t.log.Error(fmt.Errorf("failed to free a unused vlan id"), "", "vlan id", vlanId)
 		return
 	}
+
+	if owner, hasOwner := t.vlanOwner[vlanId]; hasOwner && eniID != "" && owner != eniID {
+		trunkENIOperationsErrCount.WithLabelValues("free_vlan_owner_mismatch").Inc()
+		t.log.Error(fmt.Errorf("refusing to free vlan owned by another eni"), "",
+			"vlan id", vlanId, "owner", owner, "requester", eniID)
+		return
+	}
+
 	t.usedVlanIds[vlanId] = false
+	delete(t.vlanOwner, vlanId)
 }
 
 func (t *trunkENI) getVlanIdFromTag(tags []ec2types.Tag) (int, error) {

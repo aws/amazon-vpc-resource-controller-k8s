@@ -249,6 +249,8 @@ func getMockTrunk() trunkENI {
 		log:               log,
 		usedVlanIds:       make([]bool, MaxAllocatableVlanIds),
 		uidToBranchENIMap: map[string][]*ENIDetails{},
+		pendingCreates:    map[string]struct{}{},
+		vlanOwner:         map[int]string{},
 		nodeIDTag: []awsEc2Types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -289,7 +291,7 @@ func TestTrunkENI_freeVlanId(t *testing.T) {
 	assert.Equal(t, 0, id)
 
 	// Free the vlan Id
-	trunkENI.freeVlanId(0)
+	trunkENI.freeVlanId(0, "")
 
 	// Assign single Vlan Id again
 	id, err = trunkENI.assignVlanId()
@@ -1626,4 +1628,178 @@ func TestTrunkENI_ShadowReuse_PodReleaseFeedsShadowRecords(t *testing.T) {
 	trunkENI.observeShadowReuse([]string{SecurityGroup1, SecurityGroup2})
 	assert.Equal(t, float64(1),
 		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))-exactBefore)
+}
+
+// TestTrunkENI_U5_PendingCreateSkippedByGateAndSweep verifies M5 G1 (design doc section 2.6): an
+// ENI in pendingCreates is never classified as an orphan by either the known-set builder shared by
+// the gate and the sweep, or by the sweep's own re-check at enqueue time.
+func TestTrunkENI_U5_PendingCreateSkippedByGateAndSweep(t *testing.T) {
+	trunkENI := getMockTrunk()
+	inflightId := "eni-inflight-create"
+	trunkENI.pendingCreates[inflightId] = struct{}{}
+
+	knownBranchENIs := trunkENI.knownBranchENIsLocked()
+	_, known := knownBranchENIs[inflightId]
+	assert.True(t, known, "an in-flight create must be part of the known set")
+
+	orphanBefore := testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))
+	foundUnassigned := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(
+		map[string]*awsEc2Types.NetworkInterface{
+			inflightId: {NetworkInterfaceId: &inflightId, TagSet: vlan1Tag},
+		})
+
+	assert.False(t, foundUnassigned, "an in-flight create must not be discovered as an orphan")
+	assert.Empty(t, trunkENI.deleteQueue, "an in-flight create must never be enqueued for deletion")
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))-orphanBefore)
+}
+
+// TestTrunkENI_U6_DeleteQueueDedup verifies M5 G2 (design doc section 2.6): none of the three
+// enqueue paths insert a second entry for an ENI ID already in the delete queue.
+func TestTrunkENI_U6_DeleteQueueDedup(t *testing.T) {
+	trunkENI := getMockTrunk()
+	trunkENI.usedVlanIds[VlanId1] = true
+
+	dedupBefore := testutil.ToFloat64(branchENIDeleteQueueDedupCount)
+
+	// pushENIToDeleteQueue (used by the pod-delete path).
+	trunkENI.pushENIToDeleteQueue(EniDetails1)
+	trunkENI.pushENIToDeleteQueue(EniDetails1)
+	assert.Len(t, trunkENI.deleteQueue, 1, "pushENIToDeleteQueue must not insert a duplicate ID")
+
+	// PushENIsToFrontOfDeleteQueue (used by the create-failure path).
+	trunkENI.PushENIsToFrontOfDeleteQueue(nil, []*ENIDetails{EniDetails1})
+	assert.Len(t, trunkENI.deleteQueue, 1, "PushENIsToFrontOfDeleteQueue must not insert a duplicate ID")
+
+	// pushUnassignedBranchInterfacesToDeleteQueue (used by the gate and the sweep).
+	foundUnassigned := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(
+		map[string]*awsEc2Types.NetworkInterface{
+			Branch1Id: {NetworkInterfaceId: &Branch1Id, TagSet: vlan1Tag},
+		})
+	assert.False(t, foundUnassigned,
+		"an ENI already in the delete queue must not be re-discovered as an orphan")
+	assert.Len(t, trunkENI.deleteQueue, 1,
+		"pushUnassignedBranchInterfacesToDeleteQueue must not insert a duplicate ID")
+
+	assert.Equal(t, float64(3),
+		testutil.ToFloat64(branchENIDeleteQueueDedupCount)-dedupBefore,
+		"all three duplicate attempts must be counted")
+}
+
+// TestTrunkENI_U7_FreeVlanIdOwnerAware verifies M5 G3 (design doc section 2.6): freeVlanId only
+// frees a VLAN whose recorded owner matches the requesting ENI ID (or has no recorded owner, for
+// legacy callers), and reserved VLAN 0 is never handed out for a caller to free in the first place.
+func TestTrunkENI_U7_FreeVlanIdOwnerAware(t *testing.T) {
+	trunkENI := getMockTrunk()
+
+	// A VLAN with no recorded owner still frees (legacy/unknown-tag fallback paths).
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.freeVlanId(VlanId1, "eni-any")
+	assert.False(t, trunkENI.usedVlanIds[VlanId1], "an unowned vlan must still free")
+
+	// A VLAN owned by a different ENI must not be freed.
+	trunkENI.usedVlanIds[VlanId2] = true
+	trunkENI.vlanOwner[VlanId2] = "eni-owner"
+	trunkENI.freeVlanId(VlanId2, "eni-not-the-owner")
+	assert.True(t, trunkENI.usedVlanIds[VlanId2], "a vlan owned by another eni must not be freed")
+	assert.Equal(t, "eni-owner", trunkENI.vlanOwner[VlanId2])
+
+	// The rightful owner can free it.
+	trunkENI.freeVlanId(VlanId2, "eni-owner")
+	assert.False(t, trunkENI.usedVlanIds[VlanId2], "the rightful owner must be able to free the vlan")
+	_, stillOwned := trunkENI.vlanOwner[VlanId2]
+	assert.False(t, stillOwned, "the owner record must be cleared once freed")
+
+	// Reserved VLAN 0 is initialized permanently used and is never handed out by assignVlanId,
+	// so no caller ever reaches freeVlanId(0, ...) on a real trunk; markVlanAssignedWithOwnerLocked
+	// also never records an owner for it.
+	assert.NoError(t, trunkENI.markVlanAssignedWithOwnerLocked(0, "eni-x"))
+	_, ownerRecordedForVlan0 := trunkENI.vlanOwner[0]
+	assert.False(t, ownerRecordedForVlan0, "reserved vlan 0 must never get an owner")
+}
+
+// TestTrunkENI_RegressionHA is the design doc section 4 H-A regression: an ENI created in the
+// Associate-to-cache window (present in EC2, attached, but not yet in the pod-owned ledger) must
+// never be swept as an orphan by the ledger-verify gate.
+func TestTrunkENI_RegressionHA(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, _ := getMockHydratedTrunk(t, ctrl)
+
+	// Simulate CreateAndAssociateBranchENIs having just created and associated a new branch ENI
+	// for a different pod, but not yet reached addBranchToCache.
+	inflightId := "eni-inflight-associate-window"
+	inflightVlan := 5
+	trunkENI.pendingCreates[inflightId] = struct{}{}
+	trunkENI.usedVlanIds[inflightVlan] = true
+	trunkENI.vlanOwner[inflightVlan] = inflightId
+
+	inflight := &awsEc2Types.NetworkInterface{
+		InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+		NetworkInterfaceId: &inflightId,
+		TagSet: []awsEc2Types.Tag{{
+			Key:   aws.String(config.VLandIDTag),
+			Value: aws.String(strconv.Itoa(inflightVlan)),
+		}, trunkIDTag},
+	}
+	attached := append(append([]*awsEc2Types.NetworkInterface{}, branchInterfaces...), inflight)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(attached, nil).Times(1)
+
+	err := trunkENI.verifyBranchLedger()
+	assert.NoError(t, err)
+	assert.True(t, trunkENI.branchLedgerVerified)
+
+	assert.Empty(t, trunkENI.deleteQueue,
+		"an in-flight create must not be enqueued for deletion by the ledger-verify gate")
+	assert.True(t, trunkENI.usedVlanIds[inflightVlan], "the in-flight create's vlan must remain reserved")
+}
+
+// TestTrunkENI_RegressionHB is the design doc section 4 H-B regression: an ENI already in the
+// delete queue must not be re-enqueued by the sweep (G2), and even if a stale duplicate delete
+// somehow still ran, owner-aware freeVlanId (G3) must not release a vlan that has since been
+// reassigned to a new pod's branch ENI.
+func TestTrunkENI_RegressionHB(t *testing.T) {
+	trunkENI := getMockTrunk()
+	// Reserve vlan 0 like a real trunk so assignVlanId's lowest-free scan lands on sharedVlan
+	// once it is freed, instead of on the mock's otherwise-unreserved index 0.
+	trunkENI.usedVlanIds[0] = true
+
+	sharedVlan := 1
+	oldENI := &ENIDetails{ID: "eni-old-awaiting-delete", VlanID: sharedVlan}
+	trunkENI.usedVlanIds[sharedVlan] = true
+	trunkENI.vlanOwner[sharedVlan] = oldENI.ID
+
+	// The orphan sweep discovers the ENI awaiting deletion once...
+	trunkENI.pushENIToDeleteQueue(oldENI)
+	assert.Len(t, trunkENI.deleteQueue, 1)
+
+	// ...and a second sweep pass (e.g. before EC2 confirms the delete) must not duplicate it (G2).
+	foundUnassigned := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(
+		map[string]*awsEc2Types.NetworkInterface{
+			oldENI.ID: {NetworkInterfaceId: &oldENI.ID, TagSet: vlan1Tag},
+		})
+	assert.False(t, foundUnassigned)
+	assert.Len(t, trunkENI.deleteQueue, 1, "the awaiting-delete ENI must not be duplicated in the queue")
+
+	// The single queued entry is popped and actually deleted, freeing its vlan.
+	popped, hasENI := trunkENI.popENIFromDeleteQueue()
+	assert.True(t, hasENI)
+	assert.Equal(t, oldENI.ID, popped.ID)
+	trunkENI.freeVlanId(sharedVlan, popped.ID)
+	assert.False(t, trunkENI.usedVlanIds[sharedVlan])
+
+	// A new pod immediately grabs the now-free vlan.
+	newVlan, err := trunkENI.assignVlanId()
+	assert.NoError(t, err)
+	assert.Equal(t, sharedVlan, newVlan)
+	trunkENI.addPendingCreate("eni-new-owner", newVlan)
+
+	// If a stale duplicate of the old ENI's delete somehow still ran (the race G2 closes at the
+	// source), owner-aware freeVlanId (G3) refuses to release the vlan out from under the new
+	// owner.
+	trunkENI.freeVlanId(sharedVlan, oldENI.ID)
+	assert.True(t, trunkENI.usedVlanIds[sharedVlan],
+		"the vlan must remain reserved for the new owner despite the stale duplicate free")
+	assert.Equal(t, "eni-new-owner", trunkENI.vlanOwner[sharedVlan])
 }
