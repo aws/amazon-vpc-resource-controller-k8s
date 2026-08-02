@@ -56,6 +56,15 @@ const (
 	// maxShadowRecordsPerTrunk bounds the per-trunk recently-released record list (FIFO evict)
 	// so the shadow instrumentation cannot grow memory unboundedly at high pod churn.
 	maxShadowRecordsPerTrunk = 32
+
+	// errorDrivenReclaimWindow is the minimum interval between two error-driven orphan reclaim
+	// describes on the SAME trunk (M3, design doc section 2.4). The reclaim runs on the branch-ENI
+	// addition FAILURE path, so it must be bounded: without this window a persistent EC2 error plus
+	// pod-reconcile retries would turn every failure into a DescribeNetworkInterfaces call. One
+	// describe per trunk per window is enough because a reclaim that found nothing will not find
+	// anything on an immediate retry either, and a reclaim that did find orphans has already
+	// enqueued them.
+	errorDrivenReclaimWindow = 30 * time.Second
 )
 
 var (
@@ -187,7 +196,52 @@ var (
 		},
 	)
 
+	// branchENIErrorDrivenReclaimCount counts error-driven orphan reclaim attempts (M3, design doc
+	// section 2.4) - the reactive correctness floor that runs when a branch ENI could not be added to
+	// the trunk. result="reclaimed" means the describe ran and found at least one orphan (the wedge
+	// was real and is now broken), "clean" means it ran and found none (EC2 agreed with the ledger,
+	// so the failure was something else), "skipped_window" means another reclaim ran on this trunk
+	// within errorDrivenReclaimWindow, and "describe_error" means the reclaim describe itself failed.
+	// The error_class label is BEST-EFFORT observability only and never gates the reclaim.
+	branchENIErrorDrivenReclaimCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_eni_error_driven_reclaim_total",
+			Help: "The number of error-driven orphan reclaim attempts triggered by a failed branch ENI addition, by outcome and best-effort error class",
+		},
+		[]string{"result", "error_class"},
+	)
+
+	// branchENIErrorDrivenOrphanCount counts orphan branch ENIs discovered specifically by the
+	// error-driven reclaim path (M3). Deliberately separate from branch_ledger_verify_orphans_total
+	// (the proactive gate, M2) and branch_eni_orphan_reclaimed_total (the slow sweep, M4) so the
+	// three discovery sources stay separable in Grafana: a non-zero rate here means orphans are
+	// actually wedging live allocations, which is a stronger signal than the sweep finding them idle.
+	branchENIErrorDrivenOrphanCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "branch_eni_error_driven_orphans_total",
+			Help: "The number of orphan branch ENIs discovered by the error-driven reclaim path after a failed branch ENI addition",
+		},
+	)
+
 	prometheusRegistered = false
+)
+
+// branchENIErrorDrivenReclaimCount result label values.
+const (
+	reclaimResultReclaimed     = "reclaimed"
+	reclaimResultClean         = "clean"
+	reclaimResultSkippedWindow = "skipped_window"
+	reclaimResultDescribeError = "describe_error"
+)
+
+// branchENIErrorDrivenReclaimCount error_class label values. BEST-EFFORT classification of the
+// EC2 failure, used for observability only - it never decides whether the reclaim runs. AWS does
+// not document per-API error codes for AssociateTrunkInterface, so an unrecognized error is
+// reported as "other" rather than being treated as ineligible (see reclaimErrorClass).
+const (
+	reclaimErrorClassCapacity  = "capacity"
+	reclaimErrorClassVlanInUse = "vlan_in_use"
+	reclaimErrorClassOther     = "other"
 )
 
 // orphanReuseShadowHitCount sg_match label values.
@@ -271,6 +325,11 @@ type trunkENI struct {
 	// an in-flight create in the Associate-to-cache window could be deleted from under a live pod
 	// (hazard H-A). Only needs to live within a single controller lifetime. Guarded by lock.
 	pendingCreates map[string]struct{}
+	// lastErrorDrivenReclaim is when the error-driven orphan reclaim (M3, design doc section 2.4)
+	// last ran a describe for this trunk. It bounds that failure-path reclaim to at most one
+	// describe per errorDrivenReclaimWindow so a persistent EC2 error cannot turn pod-reconcile
+	// retries into a describe storm. Guarded by lock.
+	lastErrorDrivenReclaim time.Time
 	// vlanOwner maps an assigned VLAN ID to the branch ENI ID that currently owns it (M5 G3,
 	// design doc section 2.6). Set wherever a VLAN is assigned or marked with a known ENI ID;
 	// cleared by freeVlanId. freeVlanId refuses to free a VLAN owned by a different ENI, so a
@@ -453,6 +512,8 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(orphanReuseShadowHitCount)
 		metrics.Registry.MustRegister(branchENIDeleteQueueDedupCount)
 		metrics.Registry.MustRegister(branchENIVlanReuseCooldownBlockedCount)
+		metrics.Registry.MustRegister(branchENIErrorDrivenReclaimCount)
+		metrics.Registry.MustRegister(branchENIErrorDrivenOrphanCount)
 
 		prometheusRegistered = true
 	}
@@ -530,6 +591,119 @@ func (t *trunkENI) ReconcileUnassignedBranchENIs() (bool, error) {
 	}
 
 	return t.pushUnassignedBranchInterfacesToDeleteQueue(unassignedBranchInterfaces), nil
+}
+
+// reclaimErrorClass classifies a failed branch-ENI addition for METRIC LABELLING ONLY.
+//
+// It deliberately does NOT gate the reclaim. AWS does not document per-API error codes for
+// AssociateTrunkInterface, so any hard-coded allowlist of codes would be unverifiable and, worse,
+// would fail SILENTLY: a renamed or previously unseen code would mean the reclaim never runs and the
+// node stays wedged forever (design doc hazard E4) - the exact bug M3 exists to fix. Missing a
+// trigger is unbounded damage; an extra describe is one cheap read, already bounded by
+// errorDrivenReclaimWindow. So every addition failure is eligible and this function only records
+// what the error looked like.
+func reclaimErrorClass(err error) string {
+	if err == nil {
+		return reclaimErrorClassOther
+	}
+	msg := strings.ToLower(err.Error())
+	// API request throttling also says "limit exceeded" but is a rate problem, not a trunk-capacity
+	// problem. Classify it as "other" so the capacity label stays meaningful; it is still eligible
+	// for reclaim (this function never gates).
+	if strings.Contains(msg, "requestlimitexceeded") || strings.Contains(msg, "throttl") {
+		return reclaimErrorClassOther
+	}
+	switch {
+	case strings.Contains(msg, "capacity"), strings.Contains(msg, "limitexceeded"),
+		strings.Contains(msg, "limit exceeded"):
+		return reclaimErrorClassCapacity
+	case strings.Contains(msg, "vlan"), strings.Contains(msg, "duplicate"),
+		strings.Contains(msg, "already in use"), strings.Contains(msg, "alreadyexists"):
+		return reclaimErrorClassVlanInUse
+	default:
+		return reclaimErrorClassOther
+	}
+}
+
+// reclaimOrphansAfterAddFailure is the M3 reactive correctness floor (design doc section 2.4).
+//
+// When a branch ENI could not be added to the trunk, EC2 and the in-memory ledger may disagree: an
+// orphan (a restart leftover, a delete-retry "forgotten" ENI, or a create/associate partial) can be
+// attached in EC2 occupying a real branch slot or VLAN while the ledger believes that resource is
+// free. canCreateMore only counts the ledger, so without this path the node retries forever -
+// creating and deleting a fresh ENI each time while the orphan keeps the slot (hazard E4).
+//
+// This runs ONE describe, classifies orphans through the shared M5 known set (ledger UNION delete
+// queue UNION pending creates, so an in-flight create or an ENI already awaiting deletion is never
+// reclaimed - hazards H-A/H-B), and enqueues what it finds through the existing dedup-aware delete
+// path. It never blocks the allocation: the caller still returns its original error so the pod
+// reconcile retries against the reclaimed capacity.
+//
+// It does NOT replace the proactive gate (M2, verifyBranchLedger). Per the captain's A-tier decision
+// recorded in design doc section 2.4, both are kept: the gate avoids hitting this failure path at
+// all, while this path guarantees recovery whenever an orphan actually wedges a live allocation.
+//
+// Locking mirrors verifyBranchLedger: the EC2 describe runs unlocked, ledger mutation takes the lock.
+func (t *trunkENI) reclaimOrphansAfterAddFailure(cause error) {
+	errClass := reclaimErrorClass(cause)
+
+	t.lock.Lock()
+	if !t.lastErrorDrivenReclaim.IsZero() && time.Since(t.lastErrorDrivenReclaim) < errorDrivenReclaimWindow {
+		t.lock.Unlock()
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultSkippedWindow, errClass).Inc()
+		return
+	}
+	// Stamp BEFORE the describe so concurrent failures on this trunk collapse onto one call.
+	t.lastErrorDrivenReclaim = time.Now()
+	trunkENIID := t.trunkENIId
+	t.lock.Unlock()
+
+	if trunkENIID == "" {
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultDescribeError, errClass).Inc()
+		t.log.Error(fmt.Errorf("missing trunk ENI ID"), "skipping error-driven orphan reclaim")
+		return
+	}
+
+	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&trunkENIID, aws.String(t.instance.SubnetID()))
+	if err != nil {
+		// Never mask the original allocation failure: log and return so the caller's error stands.
+		trunkENIOperationsErrCount.WithLabelValues("error_driven_reclaim_describe").Inc()
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultDescribeError, errClass).Inc()
+		t.log.Error(err, "error-driven orphan reclaim describe failed", "trunk", trunkENIID)
+		return
+	}
+
+	t.lock.Lock()
+	knownBranchENIs := t.knownBranchENIsLocked()
+	unassignedBranchInterfaces := make(map[string]*ec2types.NetworkInterface)
+	for _, branchInterface := range branchInterfaces {
+		if branchInterface.NetworkInterfaceId == nil {
+			continue
+		}
+		branchENIID := *branchInterface.NetworkInterfaceId
+		if _, known := knownBranchENIs[branchENIID]; known {
+			continue
+		}
+		unassignedBranchInterfaces[branchENIID] = branchInterface
+	}
+	t.lock.Unlock()
+
+	if len(unassignedBranchInterfaces) == 0 {
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultClean, errClass).Inc()
+		t.log.Info("error-driven orphan reclaim found no orphans; EC2 agrees with the ledger",
+			"trunk", trunkENIID, "attachedBranchENIs", len(branchInterfaces))
+		return
+	}
+
+	// Takes its own lock; enqueues through the shared dedup-aware path so an ENI already queued is
+	// not duplicated and its VLAN is re-marked idempotently.
+	t.pushUnassignedBranchInterfacesToDeleteQueue(unassignedBranchInterfaces)
+
+	branchENIErrorDrivenOrphanCount.Add(float64(len(unassignedBranchInterfaces)))
+	branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultReclaimed, errClass).Inc()
+	t.log.Info("error-driven orphan reclaim enqueued orphans after a failed branch ENI addition",
+		"trunk", trunkENIID, "orphans", len(unassignedBranchInterfaces),
+		"attachedBranchENIs", len(branchInterfaces), "cause", cause)
 }
 
 // knownBranchENIsLocked builds the set of branch ENI IDs the controller knows about: the
@@ -867,6 +1041,9 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		if err != nil {
 			err = fmt.Errorf("assigning vlad id, %w", err)
 			trunkENIOperationsErrCount.WithLabelValues("assign_vlan_id").Inc()
+			// M3 (design doc section 2.4): the ledger has no free VLAN. Orphaned branch ENIs hold
+			// VLANs the ledger marks used, so reclaiming them is what eventually frees one.
+			t.reclaimOrphansAfterAddFailure(err)
 			break
 		}
 
@@ -925,6 +1102,12 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		if err != nil {
 			err = fmt.Errorf("associating branch to trunk, %w", err)
 			trunkENIOperationsErrCount.WithLabelValues("associate_branch").Inc()
+			// M3 (design doc section 2.4): the branch could not be added to the trunk, so EC2 and
+			// the ledger disagree - an orphan may be holding the slot or this VLAN. Reclaim it so
+			// the pod's retry has capacity, instead of looping create/delete forever (hazard E4).
+			// This ENI is still in pendingCreates here, so the shared known set keeps the reclaim
+			// from enqueueing the ENI we are about to hand to the delete queue ourselves.
+			t.reclaimOrphansAfterAddFailure(err)
 			break
 		}
 		newENI.AssociationID = *associationOutput.InterfaceAssociation.AssociationId
