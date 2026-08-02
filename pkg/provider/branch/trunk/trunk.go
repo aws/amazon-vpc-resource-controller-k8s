@@ -176,6 +176,17 @@ var (
 		},
 	)
 
+	// branchENIVlanReuseCooldownBlockedCount counts assignVlanId calls that skipped at least one
+	// otherwise-free VLAN because it was still inside its M1 reuse cooldown window (design doc
+	// section 2.2). This is the signal that would justify lowering reuseCooldown below its current
+	// floor (design doc section 5.4) once it shows a sustained non-trivial rate.
+	branchENIVlanReuseCooldownBlockedCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "branch_eni_vlan_reuse_cooldown_blocked_total",
+			Help: "The number of VLAN allocation attempts that skipped an otherwise-free VLAN still inside its M1 reuse cooldown window",
+		},
+	)
+
 	prometheusRegistered = false
 )
 
@@ -267,6 +278,13 @@ type trunkENI struct {
 	// (hazard H-B defense in depth). An absent/empty owner preserves legacy free behavior.
 	// Reserved VLAN 0 never gets an owner and is never freed. Guarded by lock.
 	vlanOwner map[int]string
+	// vlanReleasedAt records, for a VLAN ID that has been released by the M1 immediate-disassociate
+	// step (design doc section 2.2), the time its ENI entered the delete queue
+	// (ENIDetails.deletionTimeStamp - NOT the time disassociation itself completed, so the VLAN
+	// reuse cooldown reproduces today's cooldown timing exactly regardless of how long
+	// disassociation took to succeed). assignVlanId refuses to hand out a free VLAN still inside
+	// this window; the entry is cleared once the VLAN is reassigned. Guarded by lock.
+	vlanReleasedAt map[int]time.Time
 }
 
 // shadowReleaseRecord is one recently-released branch ENI observed by the Phase-2 shadow reuse
@@ -373,6 +391,15 @@ type ENIDetails struct {
 	// plugin); consumed by the Phase-2 shadow reuse instrumentation on pod release. Empty for
 	// ENIs rebuilt from annotations or discovered via EC2 describe (SGs unknown there).
 	securityGroups []string
+	// slotReleased records whether this ENI's trunk slot has been positively observed as released
+	// (M1, design doc section 2.2): set once DisassociateTrunkInterface succeeds (or EC2 reports
+	// the association already gone), or as a fallback once the ENI is confirmed deleted (covers a
+	// sweep-discovered orphan with no known AssociationID, or a disassociate that never
+	// succeeded). Never inferred from AssociationID=="" - a sweep-discovered orphan has no known
+	// AssociationID but is still attached in EC2, so canCreateMore must keep counting it as
+	// occupying a slot until release is positively observed (over-counting is safe, under-counting
+	// is not).
+	slotReleased bool
 }
 
 type IntrospectResponse struct {
@@ -403,6 +430,7 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 		uidToBranchENIMap: make(map[string][]*ENIDetails),
 		pendingCreates:    make(map[string]struct{}),
 		vlanOwner:         make(map[int]string),
+		vlanReleasedAt:    make(map[int]time.Time),
 		nodeIDTag: []ec2types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -424,6 +452,7 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(branchLedgerVerifyOrphanCount)
 		metrics.Registry.MustRegister(orphanReuseShadowHitCount)
 		metrics.Registry.MustRegister(branchENIDeleteQueueDedupCount)
+		metrics.Registry.MustRegister(branchENIVlanReuseCooldownBlockedCount)
 
 		prometheusRegistered = true
 	}
@@ -944,7 +973,19 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 }
 
 func (t *trunkENI) DeleteCooledDownENIs() {
+	// M1 (design doc section 2.2): a not-yet-cooled-down ENI is set aside here instead of being
+	// requeued (and immediately re-popped) inline, so every entry in the queue still gets its
+	// immediate-disassociate step this pass - not just the front one - regardless of delete
+	// cooldown. All set-aside entries are pushed back once the pass finishes draining the queue.
+	var notYetCooledDown []*ENIDetails
+
 	for eni, hasENI := t.popENIFromDeleteQueue(); hasENI; eni, hasENI = t.popENIFromDeleteQueue() {
+		// Disassociate as soon as the ENI is processed, with NO cooldown wait, so the trunk slot
+		// (and, subject to the VLAN reuse cooldown, the VLAN) is freed immediately instead of being
+		// held hostage for the full cooldown period. DeleteNetworkInterface timing below is
+		// deliberately left unchanged.
+		t.disassociateIfNeeded(eni)
+
 		if eni.deletionTimeStamp.IsZero() ||
 			time.Now().After(eni.deletionTimeStamp.Add(cooldown.GetCoolDown().GetCoolDownPeriod())) {
 			err := t.deleteENI(eni)
@@ -956,7 +997,6 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 					// orphan PRODUCER that a later orphan reclaim sweep will rediscover. Count it so
 					// orphan production is observable alongside branch_eni_orphan_reclaimed_total.
 					branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded").Inc()
-					// TODO: free vlan id?
 					continue
 				}
 				t.log.Error(err, "failed to delete eni, will retry", "eni", eni)
@@ -966,28 +1006,68 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 			t.log.V(1).Info("deleted eni successfully", "eni", eni, "deletion time", time.Now(),
 				"pushed to queue time", eni.deletionTimeStamp)
 		} else {
-			// Since the current item is not cooled down so the items added after it would not be cooled down either
-			t.PushENIsToFrontOfDeleteQueue(nil, []*ENIDetails{eni})
-			return
+			notYetCooledDown = append(notYetCooledDown, eni)
 		}
+	}
+
+	if len(notYetCooledDown) > 0 {
+		t.PushENIsToFrontOfDeleteQueue(nil, notYetCooledDown)
 	}
 }
 
-// deleteENIs deletes the provided ENIs and frees up the Vlan assigned to then
-func (t *trunkENI) deleteENI(eniDetail *ENIDetails) (err error) {
-	// Disassociate branch ENI from trunk if association ID exists and delete branch network interface
-	if eniDetail.AssociationID != "" {
-		err = t.ec2ApiHelper.DisassociateTrunkInterface(&eniDetail.AssociationID)
-		if err != nil {
-			trunkENIOperationsErrCount.WithLabelValues("disassociate_trunk_error").Inc()
-			if !strings.Contains(err.Error(), ec2Errors.NotFoundAssociationID) {
-				t.log.Error(err, "failed to disassociate branch ENI from trunk, will try to delete the branch ENI")
-				// Not returning error here, fallback to force branch ENI deletion
-			} else {
-				t.log.Info("AssociationID not found when disassociating branch from trunk ENI, it is already disassociated so delete the branch ENI")
-			}
-		}
+// disassociateIfNeeded is the M1 immediate-disassociate step (design doc section 2.2): called on
+// every processing pass through the delete queue, independent of the delete cooldown gate below it.
+// On success (or EC2 reporting the association already gone) it releases the trunk slot and starts
+// the VLAN reuse cooldown right away, instead of waiting for DeleteNetworkInterface to also
+// complete. A real failure is left for the next pass to retry; the slot stays counted as occupied
+// until release is positively observed (requirement R3/canCreateMore conservatism). An ENI with no
+// known AssociationID (a sweep-discovered orphan, see pushUnassignedBranchInterfacesToDeleteQueue)
+// has nothing for us to disassociate - its slot is released as a fallback at successful delete
+// instead (see deleteENI).
+func (t *trunkENI) disassociateIfNeeded(eni *ENIDetails) {
+	if eni.slotReleased || eni.AssociationID == "" {
+		return
 	}
+
+	err := t.ec2ApiHelper.DisassociateTrunkInterface(&eni.AssociationID)
+	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("disassociate_trunk_error").Inc()
+		if !strings.Contains(err.Error(), ec2Errors.NotFoundAssociationID) {
+			branchENIOperationsFailureCount.WithLabelValues("immediate_disassociate_failed").Inc()
+			t.log.Error(err, "failed to immediately disassociate branch ENI from trunk, will retry", "eni", eni.ID)
+			return
+		}
+		t.log.Info("AssociationID not found when disassociating branch from trunk ENI, it is already disassociated", "eni", eni.ID)
+	}
+
+	branchENIOperationsSuccessCount.WithLabelValues("immediate_disassociate_succeeded").Inc()
+	t.releaseSlot(eni)
+}
+
+// releaseSlot marks eni's trunk slot as positively released (M1, design doc section 2.2) and, for a
+// real VLAN, frees it subject to the VLAN reuse cooldown starting from eni.deletionTimeStamp - not
+// from now - so the cooldown reproduces today's cooldown timing exactly regardless of how long
+// release itself took (see assignVlanId). Idempotent: a no-op if the VLAN is not currently owned by
+// this ENI (already freed by a previous call, M5 G3).
+func (t *trunkENI) releaseSlot(eni *ENIDetails) {
+	eni.slotReleased = true
+	if eni.VlanID == 0 {
+		return
+	}
+
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if !t.freeVlanIdLocked(eni.VlanID, eni.ID) {
+		return
+	}
+	t.vlanReleasedAt[eni.VlanID] = eni.deletionTimeStamp
+}
+
+// deleteENIs deletes the provided ENIs. Disassociation is handled separately and earlier by
+// disassociateIfNeeded (M1, design doc section 2.2); this only calls DeleteNetworkInterface, whose
+// timing stays gated behind the existing cooldown check in DeleteCooledDownENIs.
+func (t *trunkENI) deleteENI(eniDetail *ENIDetails) (err error) {
 	err = t.ec2ApiHelper.DeleteNetworkInterface(&eniDetail.ID)
 	if err != nil {
 		branchENIOperationsFailureCount.WithLabelValues("delete_branch_error").Inc()
@@ -1004,9 +1084,12 @@ func (t *trunkENI) deleteENI(eniDetail *ENIDetails) (err error) {
 
 	t.log.Info("deleted eni", "eni details", eniDetail)
 
-	// Free vlan id used by the branch ENI (M5 G3: only freed if this ENI still owns the VLAN)
-	if eniDetail.VlanID != 0 {
-		t.freeVlanId(eniDetail.VlanID, eniDetail.ID)
+	// Fallback release (M1, design doc section 2.2): the ENI is now confirmed gone from EC2, so its
+	// slot and VLAN are definitely free even if disassociateIfNeeded never positively observed a
+	// release - covers a sweep-discovered orphan with no known AssociationID, and a disassociate
+	// that kept failing right up until delete itself succeeded. A no-op if already released.
+	if !eniDetail.slotReleased {
+		t.releaseSlot(eniDetail)
 	}
 
 	return nil
@@ -1223,14 +1306,33 @@ func (t *trunkENI) assignVlanId() (int, error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	reuseCooldown := cooldown.GetCoolDown().GetCoolDownPeriod()
+	now := time.Now()
+	blockedByCooldown := false
 	for index, used := range t.usedVlanIds {
-		if !used {
-			t.usedVlanIds[index] = true
-			// Fresh assignment: the owning ENI does not exist yet; the owner is recorded once
-			// CreateNetworkInterface returns the ENI ID (M5 G3). Clear any stale record.
-			delete(t.vlanOwner, index)
-			return index, nil
+		if used {
+			continue
 		}
+		// M1 (design doc section 2.2): a VLAN released by disassociateIfNeeded/releaseSlot is free
+		// in the ledger, but must not be handed out again until reuseCooldown has elapsed since its
+		// ENI entered the delete queue - the node dataplane needs that window to forget the old
+		// pod's rules before the VLAN number means something different.
+		if releasedAt, cooling := t.vlanReleasedAt[index]; cooling && now.Before(releasedAt.Add(reuseCooldown)) {
+			blockedByCooldown = true
+			continue
+		}
+		t.usedVlanIds[index] = true
+		// Fresh assignment: the owning ENI does not exist yet; the owner is recorded once
+		// CreateNetworkInterface returns the ENI ID (M5 G3). Clear any stale record.
+		delete(t.vlanOwner, index)
+		delete(t.vlanReleasedAt, index)
+		if blockedByCooldown {
+			branchENIVlanReuseCooldownBlockedCount.Inc()
+		}
+		return index, nil
+	}
+	if blockedByCooldown {
+		branchENIVlanReuseCooldownBlockedCount.Inc()
 	}
 	return 0, fmt.Errorf("failed to find free vlan id in the available %d ids", len(t.usedVlanIds))
 }
@@ -1310,22 +1412,30 @@ func (t *trunkENI) freeVlanId(vlanId int, eniID string) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	t.freeVlanIdLocked(vlanId, eniID)
+}
+
+// freeVlanIdLocked is freeVlanId's caller-locked counterpart, returning whether the VLAN was
+// actually freed (false if it was already unused, or owned by a different ENI - M5 G3). Caller
+// must hold the trunk lock.
+func (t *trunkENI) freeVlanIdLocked(vlanId int, eniID string) bool {
 	isUsed := t.usedVlanIds[vlanId]
 	if !isUsed {
 		trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id").Inc()
 		t.log.Error(fmt.Errorf("failed to free a unused vlan id"), "", "vlan id", vlanId)
-		return
+		return false
 	}
 
 	if owner, hasOwner := t.vlanOwner[vlanId]; hasOwner && eniID != "" && owner != eniID {
 		trunkENIOperationsErrCount.WithLabelValues("free_vlan_owner_mismatch").Inc()
 		t.log.Error(fmt.Errorf("refusing to free vlan owned by another eni"), "",
 			"vlan id", vlanId, "owner", owner, "requester", eniID)
-		return
+		return false
 	}
 
 	t.usedVlanIds[vlanId] = false
 	delete(t.vlanOwner, vlanId)
+	return true
 }
 
 func (t *trunkENI) getVlanIdFromTag(tags []ec2types.Tag) (int, error) {
@@ -1347,7 +1457,20 @@ func (t *trunkENI) canCreateMore() bool {
 		usedBranches += len(branches)
 	}
 
-	if usedBranches+len(t.deleteQueue) < vpc.Limits[t.instance.Type()].BranchInterface {
+	// M1 (design doc section 2.2): a delete-queue entry whose slot has been positively released
+	// (disassociateIfNeeded succeeded, or as a fallback, delete succeeded) no longer occupies a
+	// trunk slot. An entry never counted as released - including a sweep-discovered orphan with no
+	// known AssociationID, which is still attached in EC2 despite having nothing for us to
+	// disassociate - keeps counting as occupied. Over-counting here is safe (refuses a create that
+	// could have succeeded); under-counting is not (would over-subscribe the trunk).
+	var occupiedInQueue int
+	for _, eni := range t.deleteQueue {
+		if !eni.slotReleased {
+			occupiedInQueue++
+		}
+	}
+
+	if usedBranches+occupiedInQueue < vpc.Limits[t.instance.Type()].BranchInterface {
 		return true
 	}
 	return false

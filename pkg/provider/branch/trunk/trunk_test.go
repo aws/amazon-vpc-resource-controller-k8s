@@ -15,6 +15,7 @@ package trunk
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -26,7 +27,10 @@ import (
 	mock_cooldown "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/cooldown"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
+	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -40,6 +44,29 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
+
+// stubK8sWrapperNoConfigMap is a minimal k8s.K8sWrapper that reports no branch-ENI cooldown
+// configmap, so cooldown.InitCoolDownPeriod falls back to cooldown.DefaultCoolDownPeriod. Embeds
+// the interface (nil) so it satisfies k8s.K8sWrapper without implementing every method - only
+// GetConfigMap is ever called on it.
+type stubK8sWrapperNoConfigMap struct {
+	k8s.K8sWrapper
+}
+
+func (stubK8sWrapperNoConfigMap) GetConfigMap(string, string) (*v1.ConfigMap, error) {
+	return nil, fmt.Errorf("no cooldown configmap in tests")
+}
+
+// TestMain initializes the package-level cooldown singleton once before any test runs. M1 made
+// assignVlanId depend on cooldown.GetCoolDown() (the VLAN reuse cooldown window), so a test that
+// exercises VLAN assignment without itself calling cooldown.InitCoolDownPeriod would otherwise
+// panic on a nil singleton depending on which test happens to run first in this binary. A test
+// that cares about an exact period still calls cooldown.InitCoolDownPeriod itself, which simply
+// overrides this default.
+func TestMain(m *testing.M) {
+	cooldown.InitCoolDownPeriod(stubK8sWrapperNoConfigMap{}, zap.New(zap.UseDevMode(true)).WithName("cooldown-test-default"))
+	os.Exit(m.Run())
+}
 
 var (
 	// Instance details
@@ -239,6 +266,12 @@ func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *m
 	EniDetails2.deletionTimeStamp = time.Time{}
 	EniDetails1.deleteRetryCount = 0
 	EniDetails2.deleteRetryCount = 0
+	// M1 (design doc section 2.2): these are shared package-level fixtures, so a test that drives a
+	// real release (disassociateIfNeeded/releaseSlot/deleteENI) must not leak slotReleased=true into
+	// the next test that reuses the same pointer.
+	EniDetails1.slotReleased = false
+	EniDetails2.slotReleased = false
+	ENIDetailsMissingAssociationID.slotReleased = false
 
 	return &trunkENI, mockHelper, mockInstance
 }
@@ -251,6 +284,7 @@ func getMockTrunk() trunkENI {
 		uidToBranchENIMap: map[string][]*ENIDetails{},
 		pendingCreates:    map[string]struct{}{},
 		vlanOwner:         map[int]string{},
+		vlanReleasedAt:    map[int]time.Time{},
 		nodeIDTag: []awsEc2Types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -428,7 +462,10 @@ func TestTrunkENI_getBranchInterfaceMap_EmptyList(t *testing.T) {
 	assert.Zero(t, len(branchENIsMap))
 }
 
-// TestTrunkENI_deleteENI tests deleting branch ENI
+// TestTrunkENI_deleteENI tests deleting branch ENI. Disassociation (M1, design doc section 2.2) has
+// moved to disassociateIfNeeded and runs earlier/separately in DeleteCooledDownENIs (see
+// TestTrunkENI_disassociateIfNeeded); deleteENI here only calls DeleteNetworkInterface, plus a
+// fallback release for an ENI whose slot was never positively released beforehand.
 func TestTrunkENI_deleteENI(t *testing.T) {
 	type args struct {
 		eniDetail *ENIDetails
@@ -438,6 +475,7 @@ func TestTrunkENI_deleteENI(t *testing.T) {
 		mockEC2APIHelper *mock_api.MockEC2APIHelper
 		trunkENI         *trunkENI
 	}
+	var freeUnusedVlanErrBefore float64
 	testTrunkENI_deleteENI := []struct {
 		name    string
 		prepare func(f *fields)
@@ -446,52 +484,7 @@ func TestTrunkENI_deleteENI(t *testing.T) {
 		asserts func(f *fields)
 	}{
 		{
-			name: "Vland_Freed, verifies VLANID is freed when branch ENI is deleted",
-			prepare: func(f *fields) {
-				f.mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
-				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil)
-			},
-			args: args{
-				eniDetail: EniDetails1,
-				VlanID:    VlanId1,
-			},
-			wantErr: false,
-			asserts: func(f *fields) {
-				assert.False(t, f.trunkENI.usedVlanIds[VlanId1])
-			},
-		},
-		{
-			name: "Vland_NotFreed, verifies VLANID is not freed when branch ENI delete fails",
-			prepare: func(f *fields) {
-				f.mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
-				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(MockError)
-			},
-			args: args{
-				eniDetail: EniDetails1,
-				VlanID:    VlanId1,
-			},
-			wantErr: true,
-			asserts: func(f *fields) {
-				assert.True(t, f.trunkENI.usedVlanIds[VlanId1])
-			},
-		},
-		{
-			name: "DisassociateTrunkInterface_Fails, verifies branch ENI is deleted when disassociation fails for backward compatibility",
-			prepare: func(f *fields) {
-				f.mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(MockError)
-				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil)
-			},
-			args: args{
-				eniDetail: EniDetails1,
-				VlanID:    VlanId1,
-			},
-			wantErr: false,
-			asserts: func(f *fields) {
-				assert.False(t, f.trunkENI.usedVlanIds[VlanId1])
-			},
-		},
-		{
-			name: "MissingAssociationID, verifies DisassociateTrunkInterface is skipped when association ID is missing and branch ENI is deleted for backward compatibility",
+			name: "Vlan_FreedViaFallback, verifies an ENI whose slot was never released beforehand (e.g. a sweep-discovered orphan with no known AssociationID) still frees its vlan once delete succeeds",
 			prepare: func(f *fields) {
 				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
 			},
@@ -502,6 +495,48 @@ func TestTrunkENI_deleteENI(t *testing.T) {
 			wantErr: false,
 			asserts: func(f *fields) {
 				assert.False(t, f.trunkENI.usedVlanIds[VlanId2])
+				assert.True(t, ENIDetailsMissingAssociationID.slotReleased,
+					"a successful delete must positively release the slot as a fallback")
+			},
+		},
+		{
+			name: "Vlan_NotFreed_DeleteFails, verifies VLANID stays reserved and the slot stays occupied when delete fails",
+			prepare: func(f *fields) {
+				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(MockError)
+			},
+			args: args{
+				eniDetail: EniDetails1,
+				VlanID:    VlanId1,
+			},
+			wantErr: true,
+			asserts: func(f *fields) {
+				assert.True(t, f.trunkENI.usedVlanIds[VlanId1])
+				assert.False(t, EniDetails1.slotReleased,
+					"a delete failure must not release a slot that was never positively released")
+			},
+		},
+		{
+			name: "AlreadyReleased_DeleteDoesNotDoubleFree, verifies deleteENI does not attempt to re-release a slot disassociateIfNeeded already released",
+			prepare: func(f *fields) {
+				// Simulate disassociateIfNeeded having already released the slot and vlan before
+				// delete ever ran (the common M1 case).
+				f.trunkENI.releaseSlot(EniDetails2)
+				freeUnusedVlanErrBefore = testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id"))
+				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
+			},
+			args: args{
+				eniDetail: EniDetails2,
+				VlanID:    VlanId2,
+			},
+			wantErr: false,
+			asserts: func(f *fields) {
+				assert.False(t, f.trunkENI.usedVlanIds[VlanId2])
+				// If deleteENI had tried to release again, freeVlanIdLocked would have logged a
+				// "free_unused_vlan_id" error (the vlan is already free) instead of skipping the
+				// release entirely.
+				assert.Equal(t, freeUnusedVlanErrBefore,
+					testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id")),
+					"deleteENI must not attempt to re-release an already-released slot")
 			},
 		},
 	}
@@ -530,23 +565,37 @@ func TestTrunkENI_deleteENI(t *testing.T) {
 	}
 }
 
-// TestTrunkENI_DeleteCooledDownENIs_NotCooledDown tests that ENIs that have not cooled down are not deleted
+// TestTrunkENI_DeleteCooledDownENIs_NotCooledDown tests that ENIs that have not cooled down are not
+// deleted, but M1 (design doc section 2.2) still disassociates them immediately - with no cooldown
+// wait - so their trunk slot and vlan are released even though they remain queued for deletion.
 func TestTrunkENI_DeleteCooledDownENIs_NotCooledDown(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	trunkENI := getMockTrunk()
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.usedVlanIds[VlanId2] = true
 
 	EniDetails1.deletionTimeStamp = time.Now()
 	EniDetails2.deletionTimeStamp = time.Now()
 	trunkENI.deleteQueue = append(trunkENI.deleteQueue, EniDetails1, EniDetails2)
+
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID2).Return(nil)
 
 	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
 	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
 	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 
 	trunkENI.DeleteCooledDownENIs()
+
+	// Delete itself stays gated behind the cooldown, so both entries remain queued.
 	assert.Equal(t, 2, len(trunkENI.deleteQueue))
+	// But the immediate disassociate already ran: the slot and vlan are released.
+	assert.True(t, EniDetails1.slotReleased)
+	assert.True(t, EniDetails2.slotReleased)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
+	assert.False(t, trunkENI.usedVlanIds[VlanId2])
 }
 
 // TestTrunkENI_DeleteCooledDownENIs_NoDeletionTimeStamp tests that ENIs are deleted if they don't have any deletion timestamp
@@ -576,7 +625,8 @@ func TestTrunkENI_DeleteCooledDownENIs_NoDeletionTimeStamp(t *testing.T) {
 	assert.Equal(t, 0, len(trunkENI.deleteQueue))
 }
 
-// TestTrunkENI_DeleteCooledDownENIs_CooledDownResource tests that cooled down resources are deleted
+// TestTrunkENI_DeleteCooledDownENIs_CooledDownResource tests that cooled down resources are deleted,
+// and that the not-yet-cooled-down resource left behind is still immediately disassociated (M1).
 func TestTrunkENI_DeleteCooledDownENIs_CooledDownResource(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -591,6 +641,9 @@ func TestTrunkENI_DeleteCooledDownENIs_CooledDownResource(t *testing.T) {
 
 	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(nil)
+	// EniDetails2 has not cooled down for delete, but M1 disassociates it anyway, with no cooldown
+	// wait, releasing its slot and vlan even though it remains queued.
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID2).Return(nil)
 
 	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
 	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
@@ -599,10 +652,15 @@ func TestTrunkENI_DeleteCooledDownENIs_CooledDownResource(t *testing.T) {
 	trunkENI.DeleteCooledDownENIs()
 	assert.Equal(t, 1, len(trunkENI.deleteQueue))
 	assert.Equal(t, EniDetails2, trunkENI.deleteQueue[0])
+	assert.True(t, EniDetails2.slotReleased, "the not-yet-cooled-down entry must still be immediately disassociated")
+	assert.False(t, trunkENI.usedVlanIds[VlanId2], "its vlan must be released even though it remains queued for delete")
 }
 
-// TestTrunkENI_DeleteCooledDownENIs_DeleteFailed tests that when delete fails item is requeued into the delete queue for
-// the retry count
+// TestTrunkENI_DeleteCooledDownENIs_DeleteFailed tests that when delete fails item is requeued into
+// the delete queue for the retry count. M1 (design doc section 2.2): disassociate happens exactly
+// ONCE per ENI - not once per delete retry - because once the slot is positively released,
+// disassociateIfNeeded skips it on every subsequent pass through the queue; a delete failure must
+// not re-occupy the slot.
 func TestTrunkENI_DeleteCooledDownENIs_DeleteFailed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -621,13 +679,17 @@ func TestTrunkENI_DeleteCooledDownENIs_DeleteFailed(t *testing.T) {
 	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 
 	coolDown.EXPECT().GetCoolDownPeriod().Return(time.Second * 60).AnyTimes()
-	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil).Times(MaxDeleteRetries)
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(MockError).Times(MaxDeleteRetries)
 	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID2).Return(nil)
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails2.ID).Return(nil)
 
 	trunkENI.DeleteCooledDownENIs()
 	assert.Zero(t, len(trunkENI.deleteQueue))
+	// The repeatedly-failing delete's slot must stay released throughout - it was never re-occupied
+	// by the retries.
+	assert.True(t, EniDetails1.slotReleased)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
 }
 
 // TestTrunkENI_DeleteCooledDownENIs_ForgottenMetric verifies that when an ENI exhausts MaxDeleteRetries
@@ -646,8 +708,10 @@ func TestTrunkENI_DeleteCooledDownENIs_ForgottenMetric(t *testing.T) {
 	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("60"), nil)
 	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 
+	// The immediate disassociate (M1) runs exactly once - not once per delete retry - since it is
+	// skipped on every subsequent pass once the slot is positively released.
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
 	// Every delete attempt fails, so the ENI is retried MaxDeleteRetries times and then forgotten.
-	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil).Times(MaxDeleteRetries)
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(MockError).Times(MaxDeleteRetries)
 
 	before := testutil.ToFloat64(branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded"))
@@ -658,6 +722,229 @@ func TestTrunkENI_DeleteCooledDownENIs_ForgottenMetric(t *testing.T) {
 	after := testutil.ToFloat64(branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded"))
 	assert.Equal(t, float64(1), after-before, "expected one forgotten branch ENI to be counted")
 	assert.Zero(t, len(trunkENI.deleteQueue))
+	// Forgetting the ENI (giving up on delete retries) must NOT re-occupy its already-released slot.
+	assert.True(t, EniDetails1.slotReleased)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
+}
+
+// TestTrunkENI_disassociateIfNeeded_Success verifies that a successful immediate disassociate (M1,
+// design doc section 2.2) releases the trunk slot and vlan right away, starting the vlan reuse
+// cooldown clock at the ENI's deletionTimeStamp - not at disassociate time - and records the
+// immediate-disassociate success metric.
+func TestTrunkENI_disassociateIfNeeded_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.usedVlanIds[VlanId1] = true
+	deletedAt := time.Now().Add(-5 * time.Second)
+	EniDetails1.deletionTimeStamp = deletedAt
+
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
+
+	before := testutil.ToFloat64(branchENIOperationsSuccessCount.WithLabelValues("immediate_disassociate_succeeded"))
+
+	trunkENI.disassociateIfNeeded(EniDetails1)
+
+	assert.True(t, EniDetails1.slotReleased)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
+	assert.Equal(t, deletedAt, trunkENI.vlanReleasedAt[VlanId1],
+		"the reuse cooldown clock must start at the ENI's deletionTimeStamp, not now")
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(branchENIOperationsSuccessCount.WithLabelValues("immediate_disassociate_succeeded"))-before)
+}
+
+// TestTrunkENI_disassociateIfNeeded_AssociationAlreadyGone verifies that EC2 reporting the
+// association already gone is treated the same as a successful disassociate.
+func TestTrunkENI_disassociateIfNeeded_AssociationAlreadyGone(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.usedVlanIds[VlanId1] = true
+
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).
+		Return(fmt.Errorf("%s: already gone", ec2Errors.NotFoundAssociationID))
+
+	trunkENI.disassociateIfNeeded(EniDetails1)
+
+	assert.True(t, EniDetails1.slotReleased)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
+}
+
+// TestTrunkENI_disassociateIfNeeded_RealFailureLeavesSlotOccupied verifies that a genuine
+// disassociate failure leaves the slot counted as occupied (requirement 4: over-counting is safe,
+// under-counting is not), so a later processing pass can retry it.
+func TestTrunkENI_disassociateIfNeeded_RealFailureLeavesSlotOccupied(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.usedVlanIds[VlanId1] = true
+
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(MockError)
+
+	trunkENI.disassociateIfNeeded(EniDetails1)
+
+	assert.False(t, EniDetails1.slotReleased)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+}
+
+// TestTrunkENI_disassociateIfNeeded_SkipsAlreadyReleased verifies the immediate disassociate is not
+// re-attempted once the slot has already been positively released (no DisassociateTrunkInterface
+// expectation is registered below - gomock fails the test if it is called anyway).
+func TestTrunkENI_disassociateIfNeeded_SkipsAlreadyReleased(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	EniDetails1.slotReleased = true
+
+	trunkENI.disassociateIfNeeded(EniDetails1)
+}
+
+// TestTrunkENI_disassociateIfNeeded_SkipsMissingAssociationID verifies a sweep-discovered orphan
+// with no known AssociationID is left for deleteENI's fallback release instead of being
+// disassociated directly - there is nothing for us to disassociate with (no
+// DisassociateTrunkInterface expectation is registered below - gomock fails the test if it is
+// called anyway).
+func TestTrunkENI_disassociateIfNeeded_SkipsMissingAssociationID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+
+	trunkENI.disassociateIfNeeded(ENIDetailsMissingAssociationID)
+
+	assert.False(t, ENIDetailsMissingAssociationID.slotReleased)
+}
+
+// TestTrunkENI_U1_VlanReuseCooldown verifies M1's VLAN reuse cooldown (design doc section 2.2,
+// test scenario U1): a released vlan is not reassignable before deletionTimeStamp+reuseCooldown and
+// is reassignable after; the owner record is cleared on release; and the blocked-allocation metric
+// fires while the vlan is still cooling.
+func TestTrunkENI_U1_VlanReuseCooldown(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
+	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
+
+	trunkENI := getMockTrunk()
+	trunkENI.usedVlanIds[0] = true // reserved, as on a real trunk
+
+	releasedEni := &ENIDetails{ID: "eni-released", VlanID: VlanId1, deletionTimeStamp: time.Now().Add(-20 * time.Second)}
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.vlanOwner[VlanId1] = releasedEni.ID
+	trunkENI.releaseSlot(releasedEni)
+
+	assert.False(t, trunkENI.usedVlanIds[VlanId1], "the vlan must be marked free in the ledger immediately")
+	_, stillOwned := trunkENI.vlanOwner[VlanId1]
+	assert.False(t, stillOwned, "the owner record must be cleared on release")
+
+	// Released 20s ago, still within the 30s reuse cooldown: free in the ledger but must not be
+	// handed out, and the blocked-allocation metric must record it.
+	before := testutil.ToFloat64(branchENIVlanReuseCooldownBlockedCount)
+	consumedId, err := trunkENI.assignVlanId()
+	assert.NoError(t, err)
+	assert.NotEqual(t, VlanId1, consumedId, "a vlan still inside its reuse cooldown must not be reassigned")
+	assert.Equal(t, float64(1), testutil.ToFloat64(branchENIVlanReuseCooldownBlockedCount)-before)
+	trunkENI.freeVlanId(consumedId, "")
+
+	// Past the 30s cooldown window: now reassignable, and the cooldown record is cleared.
+	trunkENI.vlanReleasedAt[VlanId1] = time.Now().Add(-31 * time.Second)
+	id, err := trunkENI.assignVlanId()
+	assert.NoError(t, err)
+	assert.Equal(t, VlanId1, id, "past its reuse cooldown, the vlan must be reassignable")
+	_, stillCooling := trunkENI.vlanReleasedAt[VlanId1]
+	assert.False(t, stillCooling, "the cooldown record must be cleared once the vlan is reassigned")
+}
+
+// TestTrunkENI_U2_CanCreateMoreAccounting verifies M1's requirement 4 (design doc section 2.2):
+// canCreateMore stops counting a delete-queue entry as occupying a slot only once its release has
+// been positively observed - never inferred from an empty AssociationID, since a sweep-discovered
+// orphan is enqueued with no known AssociationID while still genuinely attached in EC2 (over-counting
+// is safe; under-counting would over-subscribe the trunk).
+func TestTrunkENI_U2_CanCreateMoreAccounting(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	mockInstance.EXPECT().Type().Return(InstanceType).AnyTimes()
+
+	limit := vpc.Limits[InstanceType].BranchInterface
+	for i := 0; i < limit-1; i++ {
+		podUID := fmt.Sprintf("filler-pod-%d", i)
+		trunkENI.uidToBranchENIMap[podUID] = []*ENIDetails{{ID: fmt.Sprintf("eni-filler-%d", i)}}
+	}
+
+	queued := &ENIDetails{ID: "eni-queued"}
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, queued)
+
+	assert.False(t, trunkENI.canCreateMore(),
+		"an unreleased delete-queue entry must still count as occupying a slot")
+
+	queued.slotReleased = true
+	assert.True(t, trunkENI.canCreateMore(),
+		"a positively-released delete-queue entry must free up a slot")
+
+	// A sweep-discovered orphan (empty AssociationID) must not be assumed released just because it
+	// has no known AssociationID - it is still attached in EC2.
+	orphan := &ENIDetails{ID: "eni-orphan-no-association-id"}
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, orphan)
+	assert.False(t, trunkENI.canCreateMore(),
+		"a sweep-discovered orphan must keep counting as occupied until release is positively observed")
+}
+
+// TestTrunkENI_RegressionE5 is the design doc section 4/5.2 R-E5 regression: on a capacity-full
+// trunk, deleting a pod must free its slot within a single DeleteCooledDownENIs processing pass -
+// not after a full cooldown period - while its vlan remains unavailable for reuse until the reuse
+// cooldown elapses.
+func TestTrunkENI_RegressionE5(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	mockInstance.EXPECT().Type().Return(InstanceType).AnyTimes()
+
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
+	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
+
+	// Fill the trunk to exactly the c5.xlarge branch-interface limit: limit-1 filler branches plus
+	// the one real pod (owning EniDetails1/VlanId1) that is about to be deleted.
+	limit := vpc.Limits[InstanceType].BranchInterface
+	for i := 0; i < limit-1; i++ {
+		podUID := fmt.Sprintf("filler-pod-%d", i)
+		trunkENI.uidToBranchENIMap[podUID] = []*ENIDetails{{ID: fmt.Sprintf("eni-filler-%d", i)}}
+	}
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.vlanOwner[VlanId1] = EniDetails1.ID
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails1}
+
+	assert.False(t, trunkENI.canCreateMore(), "the trunk must start at capacity")
+
+	// Pod deleted: synchronous hand-off to the delete queue, no EC2 call yet.
+	trunkENI.PushBranchENIsToCoolDownQueue(PodUID)
+	assert.False(t, trunkENI.canCreateMore(),
+		"queuing for deletion alone must not free the slot before disassociation is observed")
+
+	// One async processing pass: the delete cooldown has NOT elapsed (deletionTimeStamp is now),
+	// but M1 disassociates immediately anyway.
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
+	trunkENI.DeleteCooledDownENIs()
+
+	assert.True(t, trunkENI.canCreateMore(),
+		"the slot must be available after a single processing pass, not after a full cooldown")
+	assert.Len(t, trunkENI.deleteQueue, 1, "the ENI itself is still awaiting the unchanged delete cooldown")
+
+	// The vlan is free in the ledger but must still be withheld from reuse until the reuse cooldown
+	// elapses (started at deletionTimeStamp, reproducing today's cooldown timing exactly).
+	newVlan, err := trunkENI.assignVlanId()
+	assert.NoError(t, err)
+	assert.NotEqual(t, VlanId1, newVlan,
+		"the freed vlan must not be reused before its reuse cooldown elapses")
 }
 
 // TestTrunkENI_PushBranchENIsToCoolDownQueue tests that ENIs are pushed to the delete queue if the pod is being deleted
