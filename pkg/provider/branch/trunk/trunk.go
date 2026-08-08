@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
@@ -46,6 +47,15 @@ const (
 	MaxDeleteRetries    = 3
 	SubnetLabel         = "subnet"
 	SecurityGroupsLabel = "security_groups"
+
+	// shadowReuseWindow is the age limit for a recently-released branch ENI to count as a
+	// would-have-been reuse hit in the Phase-2 shadow instrumentation (design doc section 4.2:
+	// Option 2 evaluation). Deliberately a constant, not a flag: the shadow window is a
+	// measurement definition, and comparing hit rates across clusters requires it to be fixed.
+	shadowReuseWindow = 10 * time.Minute
+	// maxShadowRecordsPerTrunk bounds the per-trunk recently-released record list (FIFO evict)
+	// so the shadow instrumentation cannot grow memory unboundedly at high pod churn.
+	maxShadowRecordsPerTrunk = 32
 )
 
 var (
@@ -87,12 +97,99 @@ var (
 		[]string{"operation"},
 	)
 
+	// branchENIOrphanReclaimedCount counts orphan branch ENIs DISCOVERED by the orphan reclaim sweep -
+	// branch ENIs attached to the trunk in EC2 but owned by no pod in the in-memory ledger, pushed to
+	// the cooldown delete queue by ReconcileUnassignedBranchENIs. It makes the real orphan RATE
+	// observable in Grafana (previously only a log line). Orphans arise only from rare EC2 API
+	// failures, so a sustained non-zero rate here is a signal worth alerting on.
+	branchENIOrphanReclaimedCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_eni_orphan_reclaimed_total",
+			Help: "The number of orphan branch ENIs (attached to the trunk but owned by no pod) discovered and pushed to the delete queue by the orphan reclaim sweep",
+		},
+		[]string{"attribute"},
+	)
+
+	// branchENIDeleteForgottenCount counts branch ENIs abandoned from the delete queue after exhausting
+	// MaxDeleteRetries ("forgetting eni as max retries exceeded"). This is a class-2 PRODUCER of orphans:
+	// a forgotten ENI stays attached in EC2 with no pod owner and is exactly what a later orphan reclaim
+	// sweep rediscovers. Pairing this with branch_eni_orphan_reclaimed_total makes both the production
+	// and the reclaim of orphans observable.
+	branchENIDeleteForgottenCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_eni_delete_forgotten_total",
+			Help: "The number of branch ENIs forgotten (dropped from the delete queue) after exceeding the maximum delete retries",
+		},
+		[]string{"attribute"},
+	)
+
+	// branchLedgerVerifyCount counts runs of the lazy branch-ledger verification gate on hydrated
+	// trunks (result="verified"|"error"). The gate closes the VLAN-reuse race after a hydrate-based
+	// re-init: the in-memory ledger only knows pod-owned branch ENIs, so an orphaned branch ENI
+	// still occupying its VLAN on the trunk in EC2 would otherwise collide with a new allocation.
+	// A "verified" sample proves the gate ran before the first allocation on a hydrated trunk.
+	branchLedgerVerifyCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_ledger_verify_total",
+			Help: "The number of lazy branch-ledger verification gate runs before the first allocation on hydrated trunks",
+		},
+		[]string{"result"},
+	)
+
+	// branchLedgerVerifyOrphanCount counts orphan branch ENIs discovered specifically by the
+	// verification gate (as opposed to the periodic reclaim sweep, which increments
+	// branch_eni_orphan_reclaimed_total). Restart-produced orphans (evaporated delete queue)
+	// surface exactly here, at the first allocation after a hydrate-based re-init, so this
+	// metric measures restart-orphan volume at the precise moment Phase-2 reuse (design doc
+	// section 4.2) would adopt them instead of deleting them.
+	branchLedgerVerifyOrphanCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "branch_ledger_verify_orphans_total",
+			Help: "The number of orphan branch ENIs discovered by the lazy branch-ledger verification gate on hydrated trunks",
+		},
+	)
+
+	// orphanReuseShadowHitCount is Phase-2 shadow instrumentation (design doc section 4.2): it
+	// counts pod allocations that COULD have been served by reusing a recently-released branch
+	// ENI on the same trunk, without changing any allocation behavior. sg_match="exact" means a
+	// released ENI with identical security groups was available within shadowReuseWindow (reuse
+	// would cost zero EC2 calls); sg_match="mismatch" means only differently-SG'd ENIs were
+	// available (reuse would cost one ModifyNetworkInterfaceAttribute). The hit rate quantifies
+	// the steady-state EC2 call savings of Option 2 before building the reuse pool.
+	orphanReuseShadowHitCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "orphan_reuse_shadow_hit_total",
+			Help: "The number of branch ENI allocations that could have reused a recently-released ENI on the same trunk (observation only, no behavior change)",
+		},
+		[]string{"sg_match"},
+	)
+
 	prometheusRegistered = false
+)
+
+// orphanReuseShadowHitCount sg_match label values.
+const (
+	shadowSGMatchExact    = "exact"
+	shadowSGMatchMismatch = "mismatch"
+)
+
+// branchLedgerVerifyCount result label values.
+const (
+	ledgerVerifyResultVerified = "verified"
+	ledgerVerifyResultError    = "error"
 )
 
 type TrunkENI interface {
 	// InitTrunk initializes trunk interface
 	InitTrunk(instance ec2.EC2Instance, pods []v1.Pod) error
+	// InitTrunkFromStatus initializes trunk cache from CNINode status and pod annotations.
+	InitTrunkFromStatus(status *rcv1alpha1.TrunkInterface, pods []v1.Pod) error
+	// ReconcileUnassignedBranchENIs discovers branch ENIs missing pod annotations and pushes them to the delete queue.
+	ReconcileUnassignedBranchENIs() (bool, error)
+	// CNINodeStatus returns a snapshot of trunk ENI state persisted in CNINode status.
+	// v1 never populates Branches (per-pod state would write-amplify at pod churn) nor
+	// MacAddress/DeviceIndex (no v1 read path needs them).
+	CNINodeStatus() *rcv1alpha1.TrunkInterface
 	// CreateAndAssociateBranchENIs creates and associate branch interface/s to trunk interface
 	CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int) ([]*ENIDetails, error)
 	// PushBranchENIsToCoolDownQueue pushes the branch interface belonging to the pod to the cool down queue
@@ -127,6 +224,79 @@ type trunkENI struct {
 	deleteQueue []*ENIDetails
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
 	nodeIDTag []ec2types.Tag
+	// shadowReleased is the Phase-2 shadow-instrumentation record of recently-released branch
+	// ENIs on this trunk (design doc section 4.2). Appended when an ENI enters the delete queue
+	// from pod release (PushBranchENIsToCoolDownQueue) or orphan discovery
+	// (pushUnassignedBranchInterfacesToDeleteQueue); read by the would-have-been reuse check in
+	// CreateAndAssociateBranchENIs. Bounded by maxShadowRecordsPerTrunk (FIFO evict), entries
+	// expire lazily on check. Observation only: it never affects allocation behavior. Guarded by lock.
+	shadowReleased []shadowReleaseRecord
+	// branchLedgerVerified records whether the in-memory VLAN/branch ledger has been verified
+	// against EC2 (guarded by lock). The EC2 init path (InitTrunk) lists all branch ENIs, so it
+	// sets this true. The hydrate path (InitTrunkFromStatus) rebuilds the ledger from pod
+	// annotations only, so an orphaned branch ENI (its pod deleted right before the controller
+	// restarted, in-memory delete queue lost) still occupies its VLAN on the trunk in EC2 while
+	// the ledger believes that VLAN is free; assigning it to a new pod would fail
+	// AssociateTrunkInterface. CreateAndAssociateBranchENIs therefore verifies the ledger from
+	// EC2 (verifyBranchLedger) before the first allocation on a hydrated trunk.
+	branchLedgerVerified bool
+}
+
+// shadowReleaseRecord is one recently-released branch ENI observed by the Phase-2 shadow reuse
+// instrumentation: the security groups it carried (sorted) and when it was released.
+type shadowReleaseRecord struct {
+	sortedSecurityGroups []string
+	releasedAt           time.Time
+}
+
+// recordShadowReleaseLocked appends a shadow release record for the given security groups,
+// FIFO-evicting beyond maxShadowRecordsPerTrunk. Caller must hold the trunk lock.
+func (t *trunkENI) recordShadowReleaseLocked(securityGroups []string) {
+	sorted := slices.Clone(securityGroups)
+	slices.Sort(sorted)
+	t.shadowReleased = append(t.shadowReleased, shadowReleaseRecord{
+		sortedSecurityGroups: sorted,
+		releasedAt:           time.Now(),
+	})
+	if len(t.shadowReleased) > maxShadowRecordsPerTrunk {
+		t.shadowReleased = t.shadowReleased[len(t.shadowReleased)-maxShadowRecordsPerTrunk:]
+	}
+}
+
+// observeShadowReuse checks whether a pod allocation requesting the given security groups could
+// have been served by a recently-released branch ENI on this trunk, incrementing
+// orphan_reuse_shadow_hit_total accordingly (sg_match="exact" preferred over "mismatch").
+// Expired records (older than shadowReuseWindow) are pruned lazily here. Observation only:
+// records are not consumed on a hit, since without a real pool there is no claim to model - the
+// metric measures availability of reusable ENIs, and the FIFO cap plus expiry bound any over-count.
+func (t *trunkENI) observeShadowReuse(requestedSecurityGroups []string) {
+	sorted := slices.Clone(requestedSecurityGroups)
+	slices.Sort(sorted)
+
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	cutoff := time.Now().Add(-shadowReuseWindow)
+	live := t.shadowReleased[:0]
+	exact, mismatch := false, false
+	for _, rec := range t.shadowReleased {
+		if rec.releasedAt.Before(cutoff) {
+			continue
+		}
+		live = append(live, rec)
+		if slices.Equal(rec.sortedSecurityGroups, sorted) {
+			exact = true
+		} else {
+			mismatch = true
+		}
+	}
+	t.shadowReleased = live
+
+	if exact {
+		orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact).Inc()
+	} else if mismatch {
+		orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch).Inc()
+	}
 }
 
 // getConnectionTrackingSpec builds a ConnectionTrackingSpecificationRequest from the
@@ -171,6 +341,11 @@ type ENIDetails struct {
 	deleteRetryCount int
 	// ID of association between branch and trunk ENI
 	AssociationID string `json:"associationID"`
+	// securityGroups are the security group ids the branch ENI was created with. In-memory
+	// only (excluded from the pod-annotation JSON, which is a wire format shared with the CNI
+	// plugin); consumed by the Phase-2 shadow reuse instrumentation on pod release. Empty for
+	// ENIs rebuilt from annotations or discovered via EC2 describe (SGs unknown there).
+	securityGroups []string
 }
 
 type IntrospectResponse struct {
@@ -214,8 +389,100 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(unreconciledTrunkENICount)
 		metrics.Registry.MustRegister(branchENIOperationsSuccessCount)
 		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
+		metrics.Registry.MustRegister(branchENIOrphanReclaimedCount)
+		metrics.Registry.MustRegister(branchENIDeleteForgottenCount)
+		metrics.Registry.MustRegister(branchLedgerVerifyCount)
+		metrics.Registry.MustRegister(branchLedgerVerifyOrphanCount)
+		metrics.Registry.MustRegister(orphanReuseShadowHitCount)
 
 		prometheusRegistered = true
+	}
+}
+
+func (t *trunkENI) InitTrunkFromStatus(status *rcv1alpha1.TrunkInterface, podList []v1.Pod) error {
+	if status == nil || status.ID == "" {
+		return fmt.Errorf("missing trunk ENI ID in CNINode status")
+	}
+	if status.SubnetID != "" && status.SubnetID != t.instance.SubnetID() {
+		return fmt.Errorf("trunk subnet %s from CNINode status does not match instance subnet %s",
+			status.SubnetID, t.instance.SubnetID())
+	}
+
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.trunkENIId = status.ID
+	t.uidToBranchENIMap = make(map[string][]*ENIDetails)
+	t.deleteQueue = nil
+	// The hydrated ledger only knows pod-owned branch ENIs; it has not been checked against the
+	// trunk's actual branch ENIs in EC2. Leave it unverified so the first allocation runs
+	// verifyBranchLedger before any VLAN is handed out.
+	t.branchLedgerVerified = false
+
+	for _, pod := range podList {
+		pod := pod
+		eniListFromPod := t.getBranchInterfacesUsedByPod(&pod)
+		if len(eniListFromPod) == 0 {
+			continue
+		}
+
+		for _, eni := range eniListFromPod {
+			if err := t.markVlanAssignedLocked(eni.VlanID); err != nil {
+				return fmt.Errorf("invalid VLAN ID in pod annotation for pod %s/%s: %w",
+					pod.Namespace, pod.Name, err)
+			}
+		}
+		t.uidToBranchENIMap[string(pod.UID)] = eniListFromPod
+	}
+
+	t.log.V(1).Info("successfully initialized trunk cache from CNINode status",
+		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
+	return nil
+}
+
+func (t *trunkENI) ReconcileUnassignedBranchENIs() (bool, error) {
+	t.lock.RLock()
+	trunkENIID := t.trunkENIId
+	assignedBranchENIs := make(map[string]struct{})
+	for _, branchENIs := range t.uidToBranchENIMap {
+		for _, eni := range branchENIs {
+			assignedBranchENIs[eni.ID] = struct{}{}
+		}
+	}
+	t.lock.RUnlock()
+
+	if trunkENIID == "" {
+		return false, fmt.Errorf("missing trunk ENI ID")
+	}
+
+	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&trunkENIID, aws.String(t.instance.SubnetID()))
+	if err != nil {
+		return false, err
+	}
+
+	unassignedBranchInterfaces := make(map[string]*ec2types.NetworkInterface)
+	for _, branchInterface := range branchInterfaces {
+		if branchInterface.NetworkInterfaceId == nil {
+			continue
+		}
+		branchENIID := *branchInterface.NetworkInterfaceId
+		if _, assigned := assignedBranchENIs[branchENIID]; assigned {
+			continue
+		}
+		unassignedBranchInterfaces[branchENIID] = branchInterface
+	}
+
+	return t.pushUnassignedBranchInterfacesToDeleteQueue(unassignedBranchInterfaces), nil
+}
+
+func (t *trunkENI) CNINodeStatus() *rcv1alpha1.TrunkInterface {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return &rcv1alpha1.TrunkInterface{
+		ID:             t.trunkENIId,
+		SubnetID:       t.instance.SubnetID(),
+		SecurityGroups: slices.Clone(t.instance.CurrentInstanceSecurityGroups()),
 	}
 }
 
@@ -269,6 +536,8 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		t.trunkENIId = *trunk.NetworkInterfaceId
 		log.Info("created a new trunk interface", "trunk id", t.trunkENIId)
 
+		// A freshly created trunk has no branch ENIs, so the (empty) ledger is verified.
+		t.setBranchLedgerVerified()
 		return nil
 	}
 
@@ -343,30 +612,106 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		t.uidToBranchENIMap[string(pod.UID)] = branchENIs
 	}
 
-	// Delete the branch ENI that don't belong to any pod.
-	for _, branchInterface := range associatedBranchInterfaces {
-		t.log.Info("pushing eni to delete queue as no pod owns it", "eni",
-			*branchInterface.NetworkInterfaceId)
+	t.pushUnassignedBranchInterfacesToDeleteQueue(associatedBranchInterfaces)
 
-		vlanId, err := t.getVlanIdFromTag(branchInterface.TagSet)
-		if err != nil {
-			trunkENIOperationsErrCount.WithLabelValues("get_vlan_from_tag").Inc()
-			log.Error(err, "failed to find vlan id", "interface", *branchInterface.NetworkInterfaceId)
-			continue
-		}
-
-		// Even thought the ENI is going to be deleted still mark Vlan ID assigned as ENI will sit in cool down queue for a while
-		t.markVlanAssigned(vlanId)
-		t.pushENIToDeleteQueue(&ENIDetails{
-			ID:                *branchInterface.NetworkInterfaceId,
-			VlanID:            vlanId,
-			deletionTimeStamp: time.Now(),
-		})
-	}
+	// The EC2 path listed every branch ENI on the trunk, so the ledger reflects EC2 reality.
+	t.setBranchLedgerVerified()
 
 	log.V(1).Info("successfully initialized trunk with all associated branch interfaces",
 		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
 
+	return nil
+}
+
+// setBranchLedgerVerified marks the in-memory branch/VLAN ledger as verified against EC2.
+func (t *trunkENI) setBranchLedgerVerified() {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.branchLedgerVerified = true
+}
+
+// verifyBranchLedger is the lazy correctness gate for hydrated trunks. InitTrunkFromStatus rebuilds
+// the ledger from pod annotations only, so a branch ENI orphaned right around the controller restart
+// (pod deleted, in-memory delete queue lost) still occupies its VLAN on the trunk in EC2 while the
+// hydrated ledger believes that VLAN is free - handing it to a new pod would fail
+// AssociateTrunkInterface. Before the first allocation on an unverified ledger, this lists the
+// trunk's branch ENIs from EC2 (the same describe the orphan sweep uses), marks every attached
+// ENI's VLAN as used, enqueues the unowned ones for deletion, and only then flips
+// branchLedgerVerified. On describe failure the ledger stays unverified and the error propagates so
+// the allocation fails and the pod reconcile retries - never allocate on an unverified ledger.
+// Locking mirrors ReconcileUnassignedBranchENIs: the EC2 describe runs without the lock, the ledger
+// mutation takes the lock.
+func (t *trunkENI) verifyBranchLedger() error {
+	t.lock.RLock()
+	verified := t.branchLedgerVerified
+	trunkENIID := t.trunkENIId
+	t.lock.RUnlock()
+
+	if verified {
+		return nil
+	}
+
+	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&trunkENIID, aws.String(t.instance.SubnetID()))
+	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("verify_branch_ledger").Inc()
+		branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultError).Inc()
+		return fmt.Errorf("verifying branch ledger from EC2, %w", err)
+	}
+
+	t.lock.Lock()
+	if t.branchLedgerVerified {
+		// A concurrent allocation completed the verification while we were describing.
+		t.lock.Unlock()
+		return nil
+	}
+	// Under the lock: mark EVERY attached branch ENI's VLAN as used (same tag parsing and
+	// reserved-VLAN-0 fallback as the orphan delete-queue path) and partition the ENIs into
+	// pod-owned and orphaned. Marking must complete before branchLedgerVerified flips so no
+	// concurrent allocation can grab a VLAN that is occupied in EC2. Owned ENIs' VLANs were
+	// already marked by hydrate from the pod annotation; markVlanAssignedLocked is idempotent,
+	// so re-marking from the tag is harmless and covers annotation/tag divergence.
+	assignedBranchENIs := make(map[string]struct{})
+	for _, branchENIs := range t.uidToBranchENIMap {
+		for _, eni := range branchENIs {
+			assignedBranchENIs[eni.ID] = struct{}{}
+		}
+	}
+	unassignedBranchInterfaces := make(map[string]*ec2types.NetworkInterface)
+	for _, branchInterface := range branchInterfaces {
+		if branchInterface.NetworkInterfaceId == nil {
+			continue
+		}
+		branchENIID := *branchInterface.NetworkInterfaceId
+		vlanId, err := t.getVlanIdFromTag(branchInterface.TagSet)
+		if err != nil || vlanId < 0 || vlanId >= MaxAllocatableVlanIds {
+			// Same fallback as pushUnassignedBranchInterfacesToDeleteQueue: reserved VLAN 0 is
+			// permanently marked, so there is nothing extra to reserve for this ENI.
+			t.log.Info("could not determine a valid vlan id at ledger verification, treating as reserved vlan id 0",
+				"interface", branchENIID, "error", err)
+			vlanId = 0
+		}
+		if err := t.markVlanAssignedLocked(vlanId); err != nil {
+			t.log.Error(err, "failed to mark vlan id at ledger verification", "interface", branchENIID)
+		}
+		if _, assigned := assignedBranchENIs[branchENIID]; !assigned {
+			unassignedBranchInterfaces[branchENIID] = branchInterface
+		}
+	}
+	t.branchLedgerVerified = true
+	t.lock.Unlock()
+
+	// Orphans: enqueue for deletion through the shared path (it takes its own locks, so it is
+	// called outside the critical section above; its VLAN re-mark is an idempotent no-op here).
+	t.pushUnassignedBranchInterfacesToDeleteQueue(unassignedBranchInterfaces)
+
+	// Gate-discovered orphans measured separately from the periodic sweep's discoveries:
+	// restart-produced orphans surface exactly here (design doc section 4.2).
+	branchLedgerVerifyOrphanCount.Add(float64(len(unassignedBranchInterfaces)))
+
+	branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultVerified).Inc()
+	t.log.Info("verified hydrated branch ledger against EC2 before first allocation",
+		"trunk", trunkENIID, "attachedBranchENIs", len(branchInterfaces), "orphans", len(unassignedBranchInterfaces))
 	return nil
 }
 
@@ -417,10 +762,22 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		return nil, ErrCurrentlyAtMaxCapacity
 	}
 
+	// On a hydrated trunk, verify the ledger against EC2 before assigning any VLAN. Failing the
+	// verification fails the allocation (the pod reconcile retries); allocating on an unverified
+	// ledger could hand out a VLAN still occupied by an orphaned branch ENI in EC2.
+	if err := t.verifyBranchLedger(); err != nil {
+		log.Error(err, "failed to verify the branch ledger against EC2, not allocating")
+		return nil, err
+	}
+
 	// If the security group is empty use the instance security group
 	if securityGroups == nil || len(securityGroups) == 0 {
 		securityGroups = t.instance.CurrentInstanceSecurityGroups()
 	}
+
+	// Phase-2 shadow instrumentation (design doc section 4.2): record whether this allocation
+	// could have reused a recently-released branch ENI. Observation only, no behavior change.
+	t.observeShadowReuse(securityGroups)
 
 	connectionTrackingSpec := t.getConnectionTrackingSpec()
 
@@ -475,6 +832,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 			ID: *nwInterface.NetworkInterfaceId, MACAdd: *nwInterface.MacAddress,
 			IPV4Addr: v4Addr, IPV6Addr: v6Addr, SubnetCIDR: t.instance.SubnetCidrBlock(),
 			SubnetV6CIDR: t.instance.SubnetV6CidrBlock(), VlanID: vlanID,
+			securityGroups: slices.Clone(securityGroups),
 		}
 		newENIs = append(newENIs, newENI)
 
@@ -521,6 +879,8 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 	for _, eni := range branchENIs {
 		eni.deletionTimeStamp = time.Now()
 		t.deleteQueue = append(t.deleteQueue, eni)
+		// Phase-2 shadow instrumentation: this ENI is exactly what a reuse pool would hold.
+		t.recordShadowReleaseLocked(eni.securityGroups)
 	}
 
 	delete(t.uidToBranchENIMap, UID)
@@ -538,6 +898,10 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 				eni.deleteRetryCount++
 				if eni.deleteRetryCount >= MaxDeleteRetries {
 					t.log.Error(err, "forgetting eni as max retries exceeded", "eni", eni)
+					// This forgotten ENI stays attached in EC2 with no pod owner: it is a class-2
+					// orphan PRODUCER that a later orphan reclaim sweep will rediscover. Count it so
+					// orphan production is observable alongside branch_eni_orphan_reclaimed_total.
+					branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded").Inc()
 					// TODO: free vlan id?
 					continue
 				}
@@ -620,6 +984,56 @@ func (t *trunkENI) pushENIToDeleteQueue(eni *ENIDetails) {
 	defer t.lock.Unlock()
 
 	t.deleteQueue = append(t.deleteQueue, eni)
+	// Phase-2 shadow instrumentation: an orphan entering the delete queue is a reuse candidate
+	// too. Its security groups are unknown from the describe (empty), so it can only ever count
+	// as an sg_match="mismatch" availability - a real pool would describe or modify before reuse.
+	t.recordShadowReleaseLocked(eni.securityGroups)
+}
+
+func (t *trunkENI) pushUnassignedBranchInterfacesToDeleteQueue(branchInterfaces map[string]*ec2types.NetworkInterface) bool {
+	foundUnassignedBranchENI := false
+	for _, branchInterface := range branchInterfaces {
+		if branchInterface.NetworkInterfaceId == nil {
+			continue
+		}
+		branchENIID := *branchInterface.NetworkInterfaceId
+		t.log.Info("pushing eni to delete queue as no pod owns it", "eni", branchENIID)
+		// An attached branch ENI owned by no pod in the ledger is an orphan. Count each discovery so
+		// the real orphan rate is observable in Grafana (previously only the log line above existed).
+		branchENIOrphanReclaimedCount.WithLabelValues("discovered").Inc()
+
+		// The VLAN ID is parsed from an ENI tag, so it may be missing/unparseable
+		// (getVlanIdFromTag error) or out of range (corrupt or unexpectedly formatted
+		// tag). In either case we must still enqueue the discovered orphan for deletion -
+		// returning early here would leave a real orphan attached in EC2 indefinitely and
+		// make the metric above (already incremented) inconsistent with "pushed to delete
+		// queue". markVlanAssigned logs-and-continues on an invalid ID, but if we enqueue
+		// the ENI with an out-of-range ID, deleteENI later calls freeVlanId(vlanId) which
+		// indexes usedVlanIds and would panic on an out-of-bounds index. So fall back to
+		// the reserved VLAN ID 0 (never freed by deleteENI) whenever the tag is missing or
+		// invalid, so deletion still proceeds without panicking.
+		vlanId, err := t.getVlanIdFromTag(branchInterface.TagSet)
+		if err != nil {
+			trunkENIOperationsErrCount.WithLabelValues("get_vlan_from_tag").Inc()
+			t.log.Error(err, "failed to find vlan id; using reserved vlan id 0 for delete queue", "interface", branchENIID)
+			vlanId = 0
+		} else if vlanId < 0 || vlanId >= MaxAllocatableVlanIds {
+			trunkENIOperationsErrCount.WithLabelValues("invalid_vlan_id_on_delete").Inc()
+			t.log.Error(fmt.Errorf("vlan id %d is outside allocatable range [0,%d)", vlanId, MaxAllocatableVlanIds),
+				"using reserved vlan id 0 for delete queue", "interface", branchENIID)
+			vlanId = 0
+		} else {
+			// Even though the ENI is going to be deleted, keep the VLAN reserved while it sits in the cool down queue.
+			t.markVlanAssigned(vlanId)
+		}
+		t.pushENIToDeleteQueue(&ENIDetails{
+			ID:                branchENIID,
+			VlanID:            vlanId,
+			deletionTimeStamp: time.Now(),
+		})
+		foundUnassignedBranchENI = true
+	}
+	return foundUnassignedBranchENI
 }
 
 // pushENIsToFrontOfDeleteQueue pushes the ENI list to the front of the delete queue
@@ -693,7 +1107,18 @@ func (t *trunkENI) markVlanAssigned(vlanId int) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	if err := t.markVlanAssignedLocked(vlanId); err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("mark_invalid_vlan_id").Inc()
+		t.log.Error(err, "failed to mark vlan id assigned", "vlan id", vlanId)
+	}
+}
+
+func (t *trunkENI) markVlanAssignedLocked(vlanId int) error {
+	if vlanId < 0 || vlanId >= len(t.usedVlanIds) {
+		return fmt.Errorf("vlan id %d is outside allocatable range [0,%d)", vlanId, len(t.usedVlanIds))
+	}
 	t.usedVlanIds[vlanId] = true
+	return nil
 }
 
 // freeVlanId frees a vlan ID currently used by a network interface

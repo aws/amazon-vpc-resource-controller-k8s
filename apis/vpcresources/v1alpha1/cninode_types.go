@@ -25,6 +25,11 @@ const (
 	CustomNetworking      FeatureName = "CustomNetworking"
 )
 
+const (
+	// CNINodeStatusSnapshotVersion is the version of the controller-owned status snapshot.
+	CNINodeStatusSnapshotVersion = "v1"
+)
+
 // Feature is a type of feature being supported by VPC resource controller and other AWS Services
 type Feature struct {
 	Name  FeatureName `json:"name,omitempty"`
@@ -71,8 +76,58 @@ type CNINodeStatus struct {
 	// TrunkInterface describes the trunk network interface attached to the
 	// node and the branch interfaces associated with it, persisted by the
 	// managing controller (see spec.managedBy) for visibility and recovery.
+	// This is the layer shared with other CNINode status writers (e.g. the
+	// EKS Auto Mode controllers, which additionally populate Branches).
 	// +optional
 	TrunkInterface *TrunkInterface `json:"trunkInterface,omitempty"`
+	// ReinitCheckpoint is the vpc-resource-controller-private restart-recovery
+	// checkpoint: the instance fields needed to rebuild in-memory state on
+	// controller restart or leader change without synchronous EC2 describes.
+	// Written only by the vpc-resource-controller; other controllers must
+	// neither write nor depend on it.
+	// +optional
+	ReinitCheckpoint *ReinitCheckpoint `json:"reinitCheckpoint,omitempty"`
+}
+
+// ReinitCheckpoint wraps the controller-private snapshot used by the zero-EC2
+// re-init (hydrate) path. EC2 remains the source of truth: any missing or
+// invalid field is a cache miss and the controller falls back to describing
+// the instance from EC2.
+type ReinitCheckpoint struct {
+	// SnapshotVersion guards format skew: it is bumped whenever the snapshot
+	// layout changes so old snapshots cleanly miss and are rewritten.
+	SnapshotVersion string `json:"snapshotVersion,omitempty"`
+	// LastUpdated records when the snapshot was last persisted; useful for
+	// staleness debugging, deliberately excluded from drift comparison.
+	LastUpdated metav1.Time `json:"lastUpdated,omitempty"`
+	// Instance stores the EC2 instance fields needed on hydrate.
+	Instance InstanceStatus `json:"instance,omitempty"`
+}
+
+// InstanceStatus stores the EC2 instance fields needed to reinitialize
+// resource providers without synchronously describing the instance on restart.
+type InstanceStatus struct {
+	InstanceID                            string                    `json:"instanceID,omitempty"`
+	InstanceType                          string                    `json:"instanceType,omitempty"`
+	InstanceSubnetID                      string                    `json:"instanceSubnetID,omitempty"`
+	InstanceSubnetCIDRBlock               string                    `json:"instanceSubnetCIDRBlock,omitempty"`
+	InstanceSubnetV6CIDRBlock             string                    `json:"instanceSubnetV6CIDRBlock,omitempty"`
+	CurrentSubnetID                       string                    `json:"currentSubnetID,omitempty"`
+	CurrentSubnetCIDRBlock                string                    `json:"currentSubnetCIDRBlock,omitempty"`
+	CurrentSubnetV6CIDRBlock              string                    `json:"currentSubnetV6CIDRBlock,omitempty"`
+	CurrentInstanceSecurityGroups         []string                  `json:"currentInstanceSecurityGroups,omitempty"`
+	SubnetMask                            string                    `json:"subnetMask,omitempty"`
+	SubnetV6Mask                          string                    `json:"subnetV6Mask,omitempty"`
+	PrimaryNetworkInterfaceID             string                    `json:"primaryNetworkInterfaceID,omitempty"`
+	PrimaryNetworkInterfaceSecurityGroups []string                  `json:"primaryNetworkInterfaceSecurityGroups,omitempty"`
+	ConnectionTracking                    *ConnectionTrackingStatus `json:"connectionTracking,omitempty"`
+}
+
+// ConnectionTrackingStatus stores primary ENI connection tracking settings.
+type ConnectionTrackingStatus struct {
+	TCPEstablishedTimeout *int32 `json:"tcpEstablishedTimeout,omitempty"`
+	UDPStreamTimeout      *int32 `json:"udpStreamTimeout,omitempty"`
+	UDPTimeout            *int32 `json:"udpTimeout,omitempty"`
 }
 
 // TrunkInterface describes a trunk ENI and its associated branch ENIs.
@@ -80,6 +135,15 @@ type TrunkInterface struct {
 	// ID is the EC2 network interface id of the trunk ENI.
 	// +kubebuilder:validation:MinLength=1
 	ID string `json:"id"`
+	// SubnetID is the id of the subnet the trunk ENI belongs to. The
+	// vpc-resource-controller's hydrate path validates it against the
+	// instance subnet to reject stale snapshots after a subnet change.
+	// +optional
+	SubnetID string `json:"subnetID,omitempty"`
+	// SecurityGroups are the security group ids attached to the trunk ENI.
+	// +optional
+	// +listType=atomic
+	SecurityGroups []string `json:"securityGroups,omitempty"`
 	// MacAddress is the MAC address of the trunk ENI.
 	// +optional
 	MacAddress string `json:"macAddress,omitempty"`

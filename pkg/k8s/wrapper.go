@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -32,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
@@ -39,6 +41,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
+
+// cniNodeStatusUpdateBackoff bounds the retry of UpdateCNINodeStatus. Unlike
+// retry.DefaultBackoff (which only exists to smooth out write conflicts over a
+// few milliseconds), this also has to absorb the window where the CNINode was
+// created moments earlier by AddNode, or was just deleted+recreated by the
+// CNINode controller during node churn, so the object is briefly NotFound on a
+// non-cached read. Steps/Duration/Factor are kept intentionally small so the
+// onboarding worker is never blocked for more than a few seconds; if the object
+// still isn't there the periodic self-heal (manager.CheckNodeForLeakedENIs)
+// converges the status on a later reconcile.
+var cniNodeStatusUpdateBackoff = wait.Backoff{
+	Duration: 200 * time.Millisecond,
+	Factor:   2.0,
+	Jitter:   0.1,
+	Steps:    4, // ~200ms + 400ms + 800ms + 1600ms => <=3s worst case
+}
 
 var (
 	prometheusRegistered = false
@@ -81,9 +99,15 @@ type K8sWrapper interface {
 	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error)
 	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
 	GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error)
+	// GetCNINodeFromAPIServer reads a CNINode directly from the API server (non-cached).
+	// The re-init hydrate fast path must use this because on controller restart / leader
+	// change the informer cache can lag the API server, causing a spurious cache-miss that
+	// forces the EC2 LoadDetails fallback and defeats the zero-EC2 re-init goal.
+	GetCNINodeFromAPIServer(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error)
 	CreateCNINode(node *v1.Node, clusterName string) error
 	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
 	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
+	UpdateCNINodeStatus(nodeName string, status rcv1alpha1.CNINodeStatus) error
 	DeleteCNINode(cniNode *rcv1alpha1.CNINode) error
 }
 
@@ -92,13 +116,20 @@ type k8sWrapper struct {
 	// cacheClient MUST never be used for getting Pods. The Pods
 	// can be retrieved using the separate Pod Wrapper. For all
 	// other K8s Object use the cache client
-	cacheClient   client.Client
+	cacheClient client.Client
+	// apiReader is a non-cached reader that reads directly from the API server.
+	// It is used where the informer cache may be stale, e.g. reading back a
+	// CNINode that was created moments earlier before patching its status.
+	apiReader     client.Reader
 	eventRecorder record.EventRecorder
 	context       context.Context
 }
 
-// NewK8sWrapper returns a new K8sWrapper
-func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, ctx context.Context) K8sWrapper {
+// NewK8sWrapper returns a new K8sWrapper. apiReader is a non-cached reader
+// (mgr.GetAPIReader()) used for reads that must not be served from a possibly
+// stale informer cache. It may be nil, in which case those reads fall back to
+// the cache client.
+func NewK8sWrapper(client client.Client, apiReader client.Reader, coreV1 corev1.CoreV1Interface, ctx context.Context) K8sWrapper {
 	if !prometheusRegistered {
 		prometheusRegister()
 	}
@@ -107,7 +138,16 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, ctx cont
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{
 		Component: config.ControllerName,
 	})
-	return &k8sWrapper{cacheClient: client, eventRecorder: recorder, context: ctx}
+	return &k8sWrapper{cacheClient: client, apiReader: apiReader, eventRecorder: recorder, context: ctx}
+}
+
+// freshReader returns the reader to use for reads that must not be served from a possibly
+// stale informer cache: the non-cached apiReader when wired, otherwise the cache client.
+func (k *k8sWrapper) freshReader() client.Reader {
+	if k.apiReader != nil {
+		return k.apiReader
+	}
+	return k.cacheClient
 }
 
 func (k *k8sWrapper) GetDaemonSet(name, namespace string) (*appv1.DaemonSet, error) {
@@ -237,6 +277,18 @@ func (k *k8sWrapper) GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha
 	return cninode, nil
 }
 
+// GetCNINodeFromAPIServer reads a CNINode directly from the API server via the non-cached
+// apiReader (falling back to the cache client only if no apiReader was wired). Used by the
+// re-init hydrate fast path so a lagging informer cache on restart / leader change does not
+// spuriously miss and force the EC2 LoadDetails fallback.
+func (k *k8sWrapper) GetCNINodeFromAPIServer(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error) {
+	cninode := &rcv1alpha1.CNINode{}
+	if err := k.freshReader().Get(k.context, namespacedName, cninode); err != nil {
+		return cninode, err
+	}
+	return cninode, nil
+}
+
 func (k *k8sWrapper) CreateCNINode(node *v1.Node, clusterName string) error {
 	cniNode := &rcv1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{
@@ -283,4 +335,38 @@ func (k *k8sWrapper) ListCNINodes() ([]*rcv1alpha1.CNINode, error) {
 
 func (k *k8sWrapper) PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error {
 	return k.cacheClient.Patch(k.context, newCNINode, client.MergeFromWithOptions(oldCNINode, client.MergeFromWithOptimisticLock{}))
+}
+
+func (k *k8sWrapper) UpdateCNINodeStatus(nodeName string, status rcv1alpha1.CNINodeStatus) error {
+	request := types.NamespacedName{Name: nodeName}
+
+	// reader is the non-cached API server reader so we read back a CNINode that
+	// may have been created moments earlier (and is not yet in the informer
+	// cache) before patching its status. Fall back to the cache client only if
+	// no apiReader was wired.
+	reader := k.freshReader()
+
+	// Retry on both Conflict (optimistic-lock write races) and NotFound (the
+	// object was created moments ago by AddNode, or deleted+recreated by the
+	// CNINode controller during node churn). The backoff is bounded so this
+	// never blocks the onboarding worker for long; on exhaustion we return the
+	// error to the best-effort caller and let the periodic self-heal converge.
+	retriable := func(err error) bool {
+		return errors.IsConflict(err) || errors.IsNotFound(err)
+	}
+
+	return retry.OnError(cniNodeStatusUpdateBackoff, retriable, func() error {
+		cniNode := &rcv1alpha1.CNINode{}
+		if err := reader.Get(k.context, request, cniNode); err != nil {
+			return err
+		}
+
+		newCNINode := cniNode.DeepCopy()
+		newCNINode.Status = status
+		// Use an optimistic lock (keyed on resourceVersion) so a concurrent status
+		// write reliably surfaces as a Conflict and is retried against a freshly
+		// re-read object above, instead of silently clobbering the other writer.
+		// The retry is bounded by cniNodeStatusUpdateBackoff, so this cannot churn.
+		return k.cacheClient.Status().Patch(k.context, newCNINode, client.MergeFromWithOptions(cniNode, client.MergeFromWithOptimisticLock{}))
+	})
 }

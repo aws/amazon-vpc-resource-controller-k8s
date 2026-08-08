@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
@@ -32,6 +33,7 @@ import (
 	awsEc2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsEc2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -228,6 +230,9 @@ func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *m
 	trunkENI.usedVlanIds[0] = true
 	trunkENI.ec2ApiHelper = mockHelper
 	trunkENI.instance = mockInstance
+	// Hand-built trunks mimic the EC2 init path, whose ledger is verified. Gate tests
+	// (TestTrunkENI_VerifyBranchLedger_*) construct their own trunk with this left false.
+	trunkENI.branchLedgerVerified = true
 
 	// Clean up
 	EniDetails1.deletionTimeStamp = time.Time{}
@@ -623,6 +628,36 @@ func TestTrunkENI_DeleteCooledDownENIs_DeleteFailed(t *testing.T) {
 	assert.Zero(t, len(trunkENI.deleteQueue))
 }
 
+// TestTrunkENI_DeleteCooledDownENIs_ForgottenMetric verifies that when an ENI exhausts MaxDeleteRetries
+// and is forgotten (dropped from the delete queue while still attached in EC2), the class-2 orphan
+// PRODUCER metric branch_eni_delete_forgotten_total is incremented so orphan production is observable.
+func TestTrunkENI_DeleteCooledDownENIs_ForgottenMetric(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	EniDetails1.deletionTimeStamp = time.Now().Add(-time.Second * 61)
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, EniDetails1)
+
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("60"), nil)
+	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
+
+	// Every delete attempt fails, so the ENI is retried MaxDeleteRetries times and then forgotten.
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil).Times(MaxDeleteRetries)
+	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(MockError).Times(MaxDeleteRetries)
+
+	before := testutil.ToFloat64(branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded"))
+
+	// A single call retries the ENI in-loop until MaxDeleteRetries is exhausted and it is forgotten.
+	trunkENI.DeleteCooledDownENIs()
+
+	after := testutil.ToFloat64(branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded"))
+	assert.Equal(t, float64(1), after-before, "expected one forgotten branch ENI to be counted")
+	assert.Zero(t, len(trunkENI.deleteQueue))
+}
+
 // TestTrunkENI_PushBranchENIsToCoolDownQueue tests that ENIs are pushed to the delete queue if the pod is being deleted
 func TestTrunkENI_PushBranchENIsToCoolDownQueue(t *testing.T) {
 	trunkENI := getMockTrunk()
@@ -667,6 +702,131 @@ func TestTrunkENI_Reconcile_NoStateChange(t *testing.T) {
 	_, isPresent := trunkENI.uidToBranchENIMap[PodUID]
 	assert.Zero(t, trunkENI.deleteQueue)
 	assert.True(t, isPresent)
+}
+
+func TestTrunkENI_InitTrunkFromStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+
+	err := trunkENI.InitTrunkFromStatus(&rcv1alpha1.TrunkInterface{
+		ID:       trunkId,
+		SubnetID: SubnetId,
+	}, []v1.Pod{*MockPod1, *MockPod2})
+
+	assert.NoError(t, err)
+	assert.Equal(t, trunkId, trunkENI.trunkENIId)
+	branchENIs, isPresent := trunkENI.uidToBranchENIMap[PodUID]
+	assert.True(t, isPresent)
+	assert.Equal(t, Branch1Id, branchENIs[0].ID)
+	assert.Equal(t, Branch2Id, branchENIs[1].ID)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+	assert.True(t, trunkENI.usedVlanIds[VlanId2])
+	assert.Empty(t, trunkENI.deleteQueue)
+}
+
+func TestTrunkENI_ReconcileUnassignedBranchENIs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails1}
+
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	ec2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil)
+
+	// The orphan-discovery metric must increment once per orphan branch ENI found (here: Branch2).
+	before := testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))
+
+	found, err := trunkENI.ReconcileUnassignedBranchENIs()
+
+	assert.NoError(t, err)
+	assert.True(t, found)
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, Branch2Id, trunkENI.deleteQueue[0].ID)
+	assert.True(t, trunkENI.usedVlanIds[VlanId2])
+
+	after := testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))
+	assert.Equal(t, float64(1), after-before, "expected one orphan branch ENI discovery to be counted")
+}
+
+// TestTrunkENI_pushUnassignedBranchInterfacesToDeleteQueue_InvalidVlanId verifies that an ENI whose
+// VLAN tag is out of the allocatable range is still enqueued for deletion, but with the reserved
+// VLAN ID 0 so the later deleteENI -> freeVlanId call does not index out of bounds and panic.
+func TestTrunkENI_pushUnassignedBranchInterfacesToDeleteQueue_InvalidVlanId(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+
+	outOfRangeVlan := MaxAllocatableVlanIds + 5
+	invalidVlanTag := []awsEc2Types.Tag{{
+		Key:   aws.String(config.VLandIDTag),
+		Value: aws.String(strconv.Itoa(outOfRangeVlan)),
+	}}
+	interfaces := map[string]*awsEc2Types.NetworkInterface{
+		Branch2Id: {
+			InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+			NetworkInterfaceId: &Branch2Id,
+			TagSet:             invalidVlanTag,
+		},
+	}
+
+	found := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(interfaces)
+
+	assert.True(t, found)
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, Branch2Id, trunkENI.deleteQueue[0].ID)
+	// Out-of-range VLAN must be replaced with the reserved sentinel 0 so deleteENI skips freeVlanId.
+	assert.Equal(t, 0, trunkENI.deleteQueue[0].VlanID)
+	// The out-of-range index must never have been marked as used.
+	assert.Equal(t, MaxAllocatableVlanIds, len(trunkENI.usedVlanIds))
+
+	// deleteENI on the queued ENI must not panic even though the tag was invalid: with VlanID 0 it
+	// skips freeVlanId entirely (freeVlanId with an out-of-range index would have panicked).
+	ec2APIHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
+	assert.NotPanics(t, func() {
+		_ = trunkENI.deleteENI(trunkENI.deleteQueue[0])
+	})
+}
+
+// TestTrunkENI_pushUnassignedBranchInterfacesToDeleteQueue_MissingVlanTag verifies that a discovered
+// orphan branch ENI whose VLAN tag is missing/unparseable (getVlanIdFromTag returns an error) is
+// STILL enqueued for deletion with the reserved VLAN ID 0, rather than skipped. Skipping would leak a
+// real orphan in EC2 indefinitely and make the orphan-discovered metric lie about "pushed to delete
+// queue".
+func TestTrunkENI_pushUnassignedBranchInterfacesToDeleteQueue_MissingVlanTag(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+
+	// No VLAN tag at all -> getVlanIdFromTag returns an error.
+	interfaces := map[string]*awsEc2Types.NetworkInterface{
+		Branch2Id: {
+			InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+			NetworkInterfaceId: &Branch2Id,
+			TagSet:             []awsEc2Types.Tag{},
+		},
+	}
+
+	found := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(interfaces)
+
+	// The orphan must be enqueued (not skipped) so it actually gets deleted.
+	assert.True(t, found)
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, Branch2Id, trunkENI.deleteQueue[0].ID)
+	// Missing/invalid tag must fall back to the reserved sentinel 0 so deleteENI skips freeVlanId.
+	assert.Equal(t, 0, trunkENI.deleteQueue[0].VlanID)
+
+	// deleteENI on the queued ENI must not panic even though the tag was missing.
+	ec2APIHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
+	assert.NotPanics(t, func() {
+		_ = trunkENI.deleteENI(trunkENI.deleteQueue[0])
+	})
 }
 
 func TestTrunkENI_InitTrunk(t *testing.T) {
@@ -829,6 +989,14 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 
 // TestTrunkENI_CreateAndAssociateBranchENIs test branch is created and associated with the trunk and valid eni details
 // are returned
+// withSecurityGroups clones an ENIDetails fixture and sets the in-memory securityGroups field
+// that CreateAndAssociateBranchENIs now records on created ENIs (Phase-2 shadow instrumentation).
+func withSecurityGroups(eni *ENIDetails, securityGroups []string) *ENIDetails {
+	clone := *eni
+	clone.securityGroups = securityGroups
+	return &clone
+}
+
 func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -851,7 +1019,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(mockAssociationOutput2, nil)
 
 	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
-	expectedENIDetails := []*ENIDetails{EniDetails1, EniDetails2}
+	expectedENIDetails := []*ENIDetails{withSecurityGroups(EniDetails1, SecurityGroups), withSecurityGroups(EniDetails2, SecurityGroups)}
 
 	assert.NoError(t, err)
 	// VLan ID are marked as used
@@ -887,7 +1055,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.
 	mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(mockAssociationOutput2, nil)
 
 	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, []string{}, 2)
-	expectedENIDetails := []*ENIDetails{EniDetails1, EniDetails2}
+	expectedENIDetails := []*ENIDetails{withSecurityGroups(EniDetails1, InstanceSecurityGroup), withSecurityGroups(EniDetails2, InstanceSecurityGroup)}
 
 	assert.NoError(t, err)
 	// VLan ID are marked as used
@@ -925,7 +1093,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
 	assert.Error(t, MockError, err)
-	assert.Equal(t, []*ENIDetails{EniDetails1, ENIDetailsMissingAssociationID}, trunkENI.deleteQueue)
+	assert.Equal(t, []*ENIDetails{withSecurityGroups(EniDetails1, SecurityGroups), withSecurityGroups(ENIDetailsMissingAssociationID, SecurityGroups)}, trunkENI.deleteQueue)
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate tests if error is returned on associate then the created interfaces
@@ -954,7 +1122,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
 	assert.Error(t, MockError, err)
-	assert.Equal(t, []*ENIDetails{EniDetails1}, trunkENI.deleteQueue)
+	assert.Equal(t, []*ENIDetails{withSecurityGroups(EniDetails1, SecurityGroups)}, trunkENI.deleteQueue)
 }
 
 func TestTrunkENI_Introspect(t *testing.T) {
@@ -1017,4 +1185,445 @@ func TestTrunkENI_getConnectionTrackingSpec_NilValues(t *testing.T) {
 
 	spec := trunkENI.getConnectionTrackingSpec()
 	assert.Nil(t, spec)
+}
+
+// getMockHydratedTrunk returns a trunk initialized through the hydrate path
+// (InitTrunkFromStatus with MockPod1 owning VlanId1 and VlanId2), whose branch ledger is
+// therefore NOT yet verified against EC2.
+func getMockHydratedTrunk(t *testing.T, ctrl *gomock.Controller) (*trunkENI, *mock_api.MockEC2APIHelper, *mock_ec2.MockEC2Instance) {
+	mockHelper := mock_api.NewMockEC2APIHelper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+
+	trunkENI := getMockTrunk()
+	trunkENI.usedVlanIds[0] = true
+	trunkENI.ec2ApiHelper = mockHelper
+	trunkENI.instance = mockInstance
+
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+	err := trunkENI.InitTrunkFromStatus(&rcv1alpha1.TrunkInterface{ID: trunkId, SubnetID: SubnetId},
+		[]v1.Pod{*MockPod1})
+	assert.NoError(t, err)
+	assert.False(t, trunkENI.branchLedgerVerified,
+		"hydrate path must leave the branch ledger unverified")
+
+	return &trunkENI, mockHelper, mockInstance
+}
+
+// expectAllocationInstanceCalls registers the instance expectations CreateAndAssociateBranchENIs
+// makes besides SubnetID (which the caller registers).
+func expectAllocationInstanceCalls(mockInstance *mock_ec2.MockEC2Instance) {
+	mockInstance.EXPECT().Type().Return(InstanceType).AnyTimes()
+	mockInstance.EXPECT().InstanceID().Return(InstanceId).AnyTimes()
+	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).AnyTimes()
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).AnyTimes()
+	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil).AnyTimes()
+}
+
+// TestTrunkENI_VerifyBranchLedger_HydratedTrunkAvoidsVlanCollision is the core VLAN-reuse-race
+// regression test: a hydrated trunk defers the EC2 describe until the first allocation, and the
+// gate discovers an orphan branch ENI holding the lowest free VLAN, so the new pod's allocation
+// must receive a DIFFERENT VLAN and the orphan must be enqueued for deletion.
+func TestTrunkENI_VerifyBranchLedger_HydratedTrunkAvoidsVlanCollision(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	// MockPod1 owns VLANs 1 and 2, VLAN 0 is reserved: without the gate the next allocation
+	// would take VLAN 3. Seed EC2 with an orphan (no owning pod) holding exactly that VLAN.
+	orphanVlan := 3
+	orphanId := "eni-orphan-lowest-free-vlan"
+	orphan := &awsEc2Types.NetworkInterface{
+		InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+		NetworkInterfaceId: &orphanId,
+		TagSet: []awsEc2Types.Tag{{
+			Key:   aws.String(config.VLandIDTag),
+			Value: aws.String(strconv.Itoa(orphanVlan)),
+		}, trunkIDTag},
+	}
+	attached := append(append([]*awsEc2Types.NetworkInterface{}, branchInterfaces...), orphan)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(attached, nil).Times(1)
+
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+	assert.Len(t, eniDetails, 1)
+
+	// The allocated VLAN must NOT collide with the orphan's VLAN still occupied in EC2.
+	assert.NotEqual(t, orphanVlan, eniDetails[0].VlanID,
+		"allocation on a hydrated trunk must not reuse a VLAN occupied by an orphan in EC2")
+	assert.True(t, trunkENI.usedVlanIds[orphanVlan], "the orphan's VLAN must be marked used")
+	assert.True(t, trunkENI.branchLedgerVerified)
+
+	// The orphan (and only the orphan - Branch1/Branch2 are pod-owned) is enqueued for deletion.
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, orphanId, trunkENI.deleteQueue[0].ID)
+	assert.Equal(t, orphanVlan, trunkENI.deleteQueue[0].VlanID)
+}
+
+// TestTrunkENI_VerifyBranchLedger_EC2PathSkipsGate verifies a trunk initialized through the EC2
+// path never runs the gate describe: InitTrunk itself lists branch ENIs once, and the subsequent
+// allocation performs no further GetBranchNetworkInterface call (gomock would fail on an
+// unexpected second call).
+func TestTrunkENI_VerifyBranchLedger_EC2PathSkipsGate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockHelper := mock_api.NewMockEC2APIHelper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+
+	trunkENI := getMockTrunk()
+	trunkENI.usedVlanIds[0] = true
+	trunkENI.ec2ApiHelper = mockHelper
+	trunkENI.instance = mockInstance
+
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+	mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{}).AnyTimes()
+	expectAllocationInstanceCalls(mockInstance)
+
+	// EC2 init path: exactly ONE describe, owned by InitTrunk.
+	mockHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
+	mockHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil).Times(1)
+
+	err := trunkENI.InitTrunk(mockInstance, []v1.Pod{*MockPod1})
+	assert.NoError(t, err)
+	assert.True(t, trunkENI.branchLedgerVerified, "EC2 init path must mark the ledger verified")
+
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	// No GetBranchNetworkInterface expectation remains: the allocation must not describe again.
+	_, err = trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+}
+
+// TestTrunkENI_VerifyBranchLedger_DescribeErrorFailsAllocationThenRetries verifies that a failed
+// gate describe fails the allocation without marking the ledger verified, and the next allocation
+// retries the describe and succeeds.
+func TestTrunkENI_VerifyBranchLedger_DescribeErrorFailsAllocationThenRetries(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	gomock.InOrder(
+		mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, MockError),
+		mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil),
+	)
+
+	// First allocation: describe fails -> allocation fails, no VLAN assigned, ledger unverified.
+	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.Error(t, err)
+	assert.False(t, trunkENI.branchLedgerVerified,
+		"a failed verification must leave the ledger unverified")
+	assert.Empty(t, trunkENI.deleteQueue, "a failed allocation before any VLAN assignment enqueues nothing")
+
+	// Second allocation: describe retried and succeeds -> allocation proceeds.
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+	assert.Len(t, eniDetails, 1)
+	assert.True(t, trunkENI.branchLedgerVerified)
+}
+
+// TestTrunkENI_VerifyBranchLedger_RunsExactlyOnce verifies the gate describes EC2 only on the
+// first allocation: a second allocation on the (now verified) ledger makes no describe call.
+func TestTrunkENI_VerifyBranchLedger_RunsExactlyOnce(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	// Exactly one describe across both allocations.
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil).Times(1)
+
+	newBranchId1, newBranchId2 := "eni-new-branch-1", "eni-new-branch-2"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	first := mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId1, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).After(first).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId2, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, gomock.Any(), gomock.Any()).
+		Return(mockAssociationOutput1, nil).Times(2)
+
+	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+
+	otherPod := MockPod2.DeepCopy()
+	otherPod.UID = "uid-3"
+	_, err = trunkENI.CreateAndAssociateBranchENIs(otherPod, SecurityGroups, 1)
+	assert.NoError(t, err)
+}
+
+// TestTrunkENI_VerifyBranchLedger_InvalidVlanTagFallsBackToVlan0 verifies that an attached branch
+// ENI with a missing or out-of-range VLAN tag does not panic the gate: it falls back to the
+// reserved VLAN 0 (never freed on delete) and is still enqueued for deletion when unowned.
+func TestTrunkENI_VerifyBranchLedger_InvalidVlanTagFallsBackToVlan0(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	noTagId := "eni-orphan-no-vlan-tag"
+	outOfRangeId := "eni-orphan-vlan-out-of-range"
+	attached := []*awsEc2Types.NetworkInterface{
+		{
+			InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+			NetworkInterfaceId: &noTagId,
+			TagSet:             []awsEc2Types.Tag{trunkIDTag},
+		},
+		{
+			InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+			NetworkInterfaceId: &outOfRangeId,
+			TagSet: []awsEc2Types.Tag{{
+				Key:   aws.String(config.VLandIDTag),
+				Value: aws.String(strconv.Itoa(MaxAllocatableVlanIds + 5)),
+			}, trunkIDTag},
+		},
+	}
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(attached, nil).Times(1)
+
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	assert.NotPanics(t, func() {
+		eniDetails, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+		assert.NoError(t, err)
+		assert.Len(t, eniDetails, 1)
+	})
+
+	assert.True(t, trunkENI.branchLedgerVerified)
+	// Both un-taggable orphans are enqueued with the reserved VLAN 0.
+	assert.Len(t, trunkENI.deleteQueue, 2)
+	assert.ElementsMatch(t, []string{noTagId, outOfRangeId},
+		[]string{trunkENI.deleteQueue[0].ID, trunkENI.deleteQueue[1].ID})
+	assert.Equal(t, 0, trunkENI.deleteQueue[0].VlanID)
+	assert.Equal(t, 0, trunkENI.deleteQueue[1].VlanID)
+}
+
+// TestTrunkENI_VerifyBranchLedger_MetricRecorded verifies the gate emits the
+// branch_ledger_verify_total metric on both outcomes, giving live validation a direct proof the
+// gate ran.
+func TestTrunkENI_VerifyBranchLedger_MetricRecorded(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	verifiedBefore := testutil.ToFloat64(branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultVerified))
+	errorBefore := testutil.ToFloat64(branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultError))
+
+	gomock.InOrder(
+		mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, MockError),
+		mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil),
+	)
+
+	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.Error(t, err)
+
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	_, err = trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultError))-errorBefore)
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(branchLedgerVerifyCount.WithLabelValues(ledgerVerifyResultVerified))-verifiedBefore)
+}
+
+// TestTrunkENI_VerifyBranchLedger_OrphanCountMetric verifies the gate increments
+// branch_ledger_verify_orphans_total by exactly the number of orphans it discovers (here: one
+// orphan among three attached branch ENIs; Branch1/Branch2 are pod-owned).
+func TestTrunkENI_VerifyBranchLedger_OrphanCountMetric(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHydratedTrunk(t, ctrl)
+	expectAllocationInstanceCalls(mockInstance)
+
+	orphanId := "eni-orphan-gate-metric"
+	orphan := &awsEc2Types.NetworkInterface{
+		InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+		NetworkInterfaceId: &orphanId,
+		TagSet: []awsEc2Types.Tag{{
+			Key:   aws.String(config.VLandIDTag),
+			Value: aws.String("7"),
+		}, trunkIDTag},
+	}
+	attached := append(append([]*awsEc2Types.NetworkInterface{}, branchInterfaces...), orphan)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(attached, nil).Times(1)
+
+	newBranchId := "eni-new-branch"
+	mac := "FF:FF:FF:FF:FF:F1"
+	ip := "192.168.0.77"
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		gomock.Any(), nil, nil, gomock.Any()).
+		Return(&awsEc2Types.NetworkInterface{NetworkInterfaceId: &newBranchId, MacAddress: &mac, PrivateIpAddress: &ip}, nil)
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &newBranchId, gomock.Any()).
+		Return(mockAssociationOutput1, nil)
+
+	before := testutil.ToFloat64(branchLedgerVerifyOrphanCount)
+
+	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1)
+	assert.NoError(t, err)
+
+	assert.Equal(t, float64(1), testutil.ToFloat64(branchLedgerVerifyOrphanCount)-before,
+		"the gate discovered exactly one orphan, so the counter must increase by one")
+}
+
+// TestTrunkENI_ShadowReuse_ExactMatchWithinWindow verifies that releasing an ENI and then
+// allocating with identical security groups within the shadow window counts one sg_match="exact"
+// shadow reuse hit.
+func TestTrunkENI_ShadowReuse_ExactMatchWithinWindow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI := getMockTrunk()
+	trunkENI.lock.Lock()
+	trunkENI.recordShadowReleaseLocked([]string{SecurityGroup2, SecurityGroup1}) // unsorted on purpose
+	trunkENI.lock.Unlock()
+
+	exactBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))
+	mismatchBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))
+
+	trunkENI.observeShadowReuse([]string{SecurityGroup1, SecurityGroup2})
+
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))-exactBefore)
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))-mismatchBefore)
+}
+
+// TestTrunkENI_ShadowReuse_MismatchLabelOnSGDifference verifies that when only records with
+// different security groups are available within the window, the hit is counted with
+// sg_match="mismatch" (a reuse would need one ModifyNetworkInterfaceAttribute).
+func TestTrunkENI_ShadowReuse_MismatchLabelOnSGDifference(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI := getMockTrunk()
+	trunkENI.lock.Lock()
+	trunkENI.recordShadowReleaseLocked([]string{"sg-different"})
+	trunkENI.lock.Unlock()
+
+	exactBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))
+	mismatchBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))
+
+	trunkENI.observeShadowReuse([]string{SecurityGroup1})
+
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))-exactBefore)
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))-mismatchBefore)
+}
+
+// TestTrunkENI_ShadowReuse_NoHitOutsideWindow verifies that a record older than the shadow window
+// neither counts as a hit nor survives the lazy expiry.
+func TestTrunkENI_ShadowReuse_NoHitOutsideWindow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI := getMockTrunk()
+	trunkENI.lock.Lock()
+	trunkENI.recordShadowReleaseLocked([]string{SecurityGroup1})
+	// Backdate the record beyond the window.
+	trunkENI.shadowReleased[0].releasedAt = time.Now().Add(-shadowReuseWindow - time.Minute)
+	trunkENI.lock.Unlock()
+
+	exactBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))
+	mismatchBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))
+
+	trunkENI.observeShadowReuse([]string{SecurityGroup1})
+
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))-exactBefore)
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchMismatch))-mismatchBefore)
+	assert.Empty(t, trunkENI.shadowReleased, "expired record must be pruned lazily on check")
+}
+
+// TestTrunkENI_ShadowReuse_RecordsEvictedBeyondCap verifies the per-trunk record list is bounded:
+// pushing more than maxShadowRecordsPerTrunk records FIFO-evicts the oldest.
+func TestTrunkENI_ShadowReuse_RecordsEvictedBeyondCap(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI := getMockTrunk()
+	trunkENI.lock.Lock()
+	trunkENI.recordShadowReleaseLocked([]string{"sg-oldest"})
+	for i := 0; i < maxShadowRecordsPerTrunk; i++ {
+		trunkENI.recordShadowReleaseLocked([]string{fmt.Sprintf("sg-%d", i)})
+	}
+	trunkENI.lock.Unlock()
+
+	assert.Len(t, trunkENI.shadowReleased, maxShadowRecordsPerTrunk)
+	for _, rec := range trunkENI.shadowReleased {
+		assert.NotEqual(t, []string{"sg-oldest"}, rec.sortedSecurityGroups,
+			"the oldest record must have been FIFO-evicted")
+	}
+}
+
+// TestTrunkENI_ShadowReuse_PodReleaseFeedsShadowRecords verifies the end-to-end shadow flow on the
+// release side: PushBranchENIsToCoolDownQueue records the released ENI's security groups, so a
+// following same-SG allocation counts an exact shadow hit.
+func TestTrunkENI_ShadowReuse_PodReleaseFeedsShadowRecords(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI := getMockTrunk()
+	eni := &ENIDetails{ID: Branch1Id, VlanID: VlanId1, securityGroups: []string{SecurityGroup1, SecurityGroup2}}
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{eni}
+
+	trunkENI.PushBranchENIsToCoolDownQueue(PodUID)
+	assert.Len(t, trunkENI.shadowReleased, 1)
+
+	exactBefore := testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))
+	trunkENI.observeShadowReuse([]string{SecurityGroup1, SecurityGroup2})
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))-exactBefore)
 }

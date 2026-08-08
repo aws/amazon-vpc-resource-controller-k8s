@@ -91,6 +91,7 @@ func init() {
 // +kubebuilder:rbac:groups=crd.k8s.amazonaws.com,resources=eniconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=securitygrouppolicies,verbs=get;list;watch
 // +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=cninodes,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=cninodes/status,verbs=get;patch;update
 
 // Migration to leases based leader election
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,namespace=kube-system,verbs=create
@@ -306,7 +307,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	k8sApi := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), ctx)
+	k8sApi := k8s.NewK8sWrapper(mgr.GetClient(), mgr.GetAPIReader(), clientSet.CoreV1(), ctx)
 
 	featureGauge := prometheus.NewGauge(
 		prometheus.GaugeOpts{

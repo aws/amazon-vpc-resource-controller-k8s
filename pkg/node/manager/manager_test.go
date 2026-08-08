@@ -16,6 +16,7 @@ package manager
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
+	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
 	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
 	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
@@ -717,6 +719,204 @@ func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 	assert.True(t, mock.Manager.SkipHealthCheck())
 	assert.True(t, time.Since(mock.Manager.stopHealthCheckAt) > time.Second*2 && time.Since(mock.Manager.stopHealthCheckAt) < time.Second*3)
+}
+
+// selfHealFakeProvider wraps the mock resource provider and additionally implements
+// cniNodeStatusReconciler and orphanBranchENIReclaimer so CheckNodeForLeakedENIs will invoke the
+// self-heal and the independent EC2 orphan sweep paths. It records whether
+// SubmitReconcileCNINodeStatusJob and SubmitReconcileUnassignedBranchENIsJob were called via
+// buffered channels.
+type selfHealFakeProvider struct {
+	*mock_provider.MockResourceProvider
+	healed chan string
+	swept  chan string
+}
+
+func (p *selfHealFakeProvider) SubmitReconcileCNINodeStatusJob(nodeName string) {
+	p.healed <- nodeName
+}
+
+func (p *selfHealFakeProvider) SubmitReconcileUnassignedBranchENIsJob(nodeName string) {
+	p.swept <- nodeName
+}
+
+// selfHealFakeNode is a minimal node.Node used to control IsReady() and the reconciliation timing
+// without running full onboarding. Fields are guarded by mu, mirroring the real node's lock
+// discipline, so the background goroutine spawned by CheckNodeForLeakedENIs does not race the test.
+type selfHealFakeNode struct {
+	node.Node
+	mu          sync.Mutex
+	ready       bool
+	nextReconTs time.Time
+	reconInt    time.Duration
+	// nextSweepTs controls the independent EC2 orphan sweep timer. A zero value is armed on first
+	// CheckNodeForLeakedENIs; tests set it explicitly to force or suppress a sweep.
+	nextSweepTs time.Time
+}
+
+func (n *selfHealFakeNode) IsReady() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.ready
+}
+func (n *selfHealFakeNode) IsManaged() bool { return true }
+func (n *selfHealFakeNode) GetNextReconciliationTime() time.Time {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.nextReconTs
+}
+func (n *selfHealFakeNode) SetNextReconciliationTime(t time.Time) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.nextReconTs = t
+}
+func (n *selfHealFakeNode) GetReconciliationInterval() time.Duration {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.reconInt == 0 {
+		return node.NodeInitialCleanupInterval
+	}
+	return n.reconInt
+}
+func (n *selfHealFakeNode) SetReconciliationInterval(d time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.reconInt = d
+}
+func (n *selfHealFakeNode) GetNextEC2SweepTime() time.Time {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.nextSweepTs
+}
+func (n *selfHealFakeNode) SetNextEC2SweepTime(t time.Time) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.nextSweepTs = t
+}
+
+// Test_CheckNodeForLeakedENIs_SelfHeal_WhenReady verifies the periodic reconcile invokes the CNINode
+// status self-heal when the node is ready.
+func Test_CheckNodeForLeakedENIs_SelfHeal_WhenReady(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// nextSweepTs in the future so this exercise only the fast reconcile/self-heal path, not the sweep.
+	fakeNode := &selfHealFakeNode{ready: true, nextReconTs: time.Now().Add(-time.Minute), nextSweepTs: time.Now().Add(time.Hour)}
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: fakeNode})
+
+	provider := &selfHealFakeProvider{
+		MockResourceProvider: mock_provider.NewMockResourceProvider(ctrl),
+		healed:               make(chan string, 1),
+		swept:                make(chan string, 1),
+	}
+	provider.MockResourceProvider.EXPECT().ReconcileNode(nodeName).Return(false).Times(1)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNamePodENI).Return(provider, true).Times(1)
+
+	mock.Manager.CheckNodeForLeakedENIs(nodeName)
+
+	select {
+	case got := <-provider.healed:
+		assert.Equal(t, nodeName, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the self-heal job to be submitted for a ready node")
+	}
+
+	// The EC2 orphan sweep must NOT fire on this fast cadence when its own slow timer is not yet due.
+	select {
+	case <-provider.swept:
+		t.Fatal("did not expect the EC2 orphan sweep to be submitted before its slow timer is due")
+	case <-time.After(200 * time.Millisecond):
+		// expected: no sweep submitted
+	}
+}
+
+// Test_CheckNodeForLeakedENIs_SelfHeal_SkippedWhenNotReady verifies the self-heal is NOT invoked when
+// the node is not yet ready (its in-memory trunk is not initialized).
+func Test_CheckNodeForLeakedENIs_SelfHeal_SkippedWhenNotReady(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	fakeNode := &selfHealFakeNode{ready: false, nextReconTs: time.Now().Add(-time.Minute), nextSweepTs: time.Now().Add(time.Hour)}
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: fakeNode})
+
+	provider := &selfHealFakeProvider{
+		MockResourceProvider: mock_provider.NewMockResourceProvider(ctrl),
+		healed:               make(chan string, 1),
+		swept:                make(chan string, 1),
+	}
+	provider.MockResourceProvider.EXPECT().ReconcileNode(nodeName).Return(false).Times(1)
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNamePodENI).Return(provider, true).Times(1)
+
+	mock.Manager.CheckNodeForLeakedENIs(nodeName)
+
+	select {
+	case <-provider.healed:
+		t.Fatal("did not expect a self-heal job submission for a not-ready node")
+	case <-time.After(500 * time.Millisecond):
+		// expected: no self-heal call
+	}
+}
+
+// Test_CheckNodeForLeakedENIs_EC2Sweep_WhenDueAndReady verifies the independent EC2 orphan sweep is
+// submitted only when its own slow timer is due (and the node is ready), on a cadence distinct from
+// the fast reconcile.
+func Test_CheckNodeForLeakedENIs_EC2Sweep_WhenDueAndReady(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// Sweep timer due (in the past); fast reconcile NOT due (in the future) so only the sweep runs.
+	fakeNode := &selfHealFakeNode{ready: true, nextReconTs: time.Now().Add(time.Hour), nextSweepTs: time.Now().Add(-time.Minute)}
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: fakeNode})
+
+	provider := &selfHealFakeProvider{
+		MockResourceProvider: mock_provider.NewMockResourceProvider(ctrl),
+		healed:               make(chan string, 1),
+		swept:                make(chan string, 1),
+	}
+	// Only the sweep path runs: the fast reconcile is not due so ReconcileNode must not be called.
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNamePodENI).Return(provider, true).Times(1)
+
+	mock.Manager.CheckNodeForLeakedENIs(nodeName)
+
+	select {
+	case got := <-provider.swept:
+		assert.Equal(t, nodeName, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the EC2 orphan sweep to be submitted when its slow timer is due")
+	}
+
+	// The sweep timer must be rescheduled into the future so the next reconcile event does not sweep again.
+	// SetNextEC2SweepTime runs after the channel send inside the goroutine, so poll briefly.
+	assert.Eventually(t, func() bool {
+		return fakeNode.GetNextEC2SweepTime().After(time.Now())
+	}, 2*time.Second, 10*time.Millisecond, "expected the sweep timer to be rescheduled into the future")
+}
+
+// Test_CheckNodeForLeakedENIs_EC2Sweep_SkippedWhenNotReady verifies the EC2 orphan sweep is NOT
+// submitted for a not-ready node even when its timer is due: the un-hydrated in-memory ledger would
+// mis-classify every attached branch ENI as an orphan and queue live pods' ENIs for deletion.
+func Test_CheckNodeForLeakedENIs_EC2Sweep_SkippedWhenNotReady(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	fakeNode := &selfHealFakeNode{ready: false, nextReconTs: time.Now().Add(time.Hour), nextSweepTs: time.Now().Add(-time.Minute)}
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: fakeNode})
+
+	provider := &selfHealFakeProvider{
+		MockResourceProvider: mock_provider.NewMockResourceProvider(ctrl),
+		healed:               make(chan string, 1),
+		swept:                make(chan string, 1),
+	}
+	mock.MockResourceManager.EXPECT().GetResourceProvider(config.ResourceNamePodENI).Return(provider, true).Times(1)
+
+	mock.Manager.CheckNodeForLeakedENIs(nodeName)
+
+	select {
+	case <-provider.swept:
+		t.Fatal("did not expect the EC2 orphan sweep to be submitted for a not-ready node")
+	case <-time.After(500 * time.Millisecond):
+		// expected: no sweep submitted
+	}
 }
 
 // Test_isPodENICapacitySet test if the pod-eni capacity then true is returned
