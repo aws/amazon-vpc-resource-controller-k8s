@@ -110,7 +110,8 @@ func (m *AsyncJobMatcher) Matches(actual interface{}) bool {
 	actualJob := actual.(AsyncOperationJob)
 	return actualJob.op == m.expected.op &&
 		actualJob.nodeName == m.expected.nodeName &&
-		actualJob.node.IsManaged() == m.expected.node.IsManaged()
+		actualJob.node.IsManaged() == m.expected.node.IsManaged() &&
+		(actualJob.op != Init || !actualJob.submittedAt.IsZero())
 }
 
 func (m *AsyncJobMatcher) String() string {
@@ -170,7 +171,8 @@ func Test_GetNewManager(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(nil)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, mockClusterName, "v1.3.1", healthzHandler)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions,
+		mockClusterName, "v1.3.1", DefaultBranchENIOrphanSweepInterval, false, healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.NoError(t, err)
@@ -184,7 +186,8 @@ func Test_GetNewManager_Error(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(mockError)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, mockClusterName, "v1.3.1", healthzHandler)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions,
+		mockClusterName, "v1.3.1", DefaultBranchENIOrphanSweepInterval, false, healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.Error(t, err, mockError)
@@ -738,6 +741,20 @@ func (p *selfHealFakeProvider) SubmitReconcileCNINodeStatusJob(nodeName string) 
 
 func (p *selfHealFakeProvider) SubmitReconcileUnassignedBranchENIsJob(nodeName string) {
 	p.swept <- nodeName
+}
+
+func TestJitteredOrphanSweepInterval_Disabled(t *testing.T) {
+	m := &manager{
+		orphanSweepInterval:      30 * time.Second,
+		disableOrphanSweepJitter: true,
+	}
+	assert.Equal(t, 30*time.Second, m.jitteredOrphanSweepInterval())
+}
+
+func TestJitteredOrphanSweepInterval_DefaultFallback(t *testing.T) {
+	interval := (&manager{}).jitteredOrphanSweepInterval()
+	assert.GreaterOrEqual(t, interval, DefaultBranchENIOrphanSweepInterval)
+	assert.Less(t, interval, 2*DefaultBranchENIOrphanSweepInterval)
 }
 
 // selfHealFakeNode is a minimal node.Node used to control IsReady() and the reconciliation timing

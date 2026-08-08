@@ -31,16 +31,59 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	asyncWorker "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
 )
+
+var (
+	prometheusRegistered = false
+
+	summaryObjectives = map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0}
+
+	nodeManagerLockWaitLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "node_manager_lock_wait_latency",
+			Help:       "Time in seconds spent waiting to acquire the node manager lock",
+			Objectives: summaryObjectives,
+		},
+		[]string{"operation"},
+	)
+
+	nodeOnboardingLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "node_onboarding_latency",
+			Help:       "Time in seconds from node Init job submission to the node becoming ready",
+			Objectives: summaryObjectives,
+		},
+		[]string{"result"},
+	)
+)
+
+const (
+	lockOpAdd    = "add"
+	lockOpUpdate = "update"
+	lockOpDelete = "delete"
+	lockOpGet    = "get"
+)
+
+func prometheusRegister() {
+	if !prometheusRegistered {
+		metrics.Registry.MustRegister(
+			nodeManagerLockWaitLatency,
+			nodeOnboardingLatency,
+		)
+		prometheusRegistered = true
+	}
+}
 
 type manager struct {
 	// Log is the logger for node manager
@@ -54,11 +97,13 @@ type manager struct {
 	// wrapper around the clients for all APIs used by controller
 	wrapper api.Wrapper
 	// worker for performing async operation on node APIs
-	worker            asyncWorker.Worker
-	conditions        condition.Conditions
-	controllerVersion string
-	stopHealthCheckAt time.Time
-	clusterName       string
+	worker                   asyncWorker.Worker
+	conditions               condition.Conditions
+	controllerVersion        string
+	stopHealthCheckAt        time.Time
+	clusterName              string
+	orphanSweepInterval      time.Duration
+	disableOrphanSweepJitter bool
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -94,33 +139,42 @@ const (
 )
 
 type AsyncOperationJob struct {
-	op       AsyncOperation
-	node     node.Node
-	nodeName string
+	op          AsyncOperation
+	node        node.Node
+	nodeName    string
+	submittedAt time.Time
 }
 
 const pausingHealthCheckDuration = 10 * time.Minute
 
-// DefaultBranchENIOrphanSweepInterval is the base cadence of the independent, low-frequency EC2
-// orphan branch-ENI reclaim sweep (ReconcileUnassignedBranchENIs). It is deliberately not
-// configurable: the lazy branch-ledger verification gate on the allocation path owns correctness
-// after a hydrate-based re-init, so this sweep is pure housekeeping for rare orphans and one jittered
-// hour is a safe fleet-wide cadence (jitter is applied per node, see jitteredOrphanSweepInterval).
+// DefaultBranchENIOrphanSweepInterval is the production cadence of the independent, low-frequency
+// EC2 orphan branch-ENI reclaim sweep (ReconcileUnassignedBranchENIs). The lazy branch-ledger
+// verification gate owns correctness after a hydrate-based re-init, so one jittered hour is a safe
+// fleet-wide housekeeping cadence.
 const DefaultBranchENIOrphanSweepInterval = time.Hour
 
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
-	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string,
+	controllerVersion string, orphanSweepInterval time.Duration, disableOrphanSweepJitter bool,
+	healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+
+	prometheusRegister()
+	if orphanSweepInterval <= 0 {
+		orphanSweepInterval = DefaultBranchENIOrphanSweepInterval
+	}
 
 	manager := &manager{
-		resourceManager:   resourceManager,
-		Log:               logger,
-		dataStore:         make(map[string]node.Node),
-		wrapper:           wrapper,
-		worker:            worker,
-		conditions:        conditions,
-		controllerVersion: controllerVersion,
-		clusterName:       clusterName,
+		resourceManager:          resourceManager,
+		Log:                      logger,
+		dataStore:                make(map[string]node.Node),
+		wrapper:                  wrapper,
+		worker:                   worker,
+		conditions:               conditions,
+		controllerVersion:        controllerVersion,
+		clusterName:              clusterName,
+		orphanSweepInterval:      orphanSweepInterval,
+		disableOrphanSweepJitter: disableOrphanSweepJitter,
 	}
 
 	// add health check on subpath for node manager
@@ -150,7 +204,14 @@ type orphanBranchENIReclaimer interface {
 // does not issue DescribeNetworkInterfaces in a synchronized thundering herd. wait.Jitter adds a
 // random duration in [0, factor*interval), so factor 1.0 yields a value in [interval, 2*interval).
 func (m *manager) jitteredOrphanSweepInterval() time.Duration {
-	return wait.Jitter(DefaultBranchENIOrphanSweepInterval, 1.0)
+	interval := m.orphanSweepInterval
+	if interval <= 0 {
+		interval = DefaultBranchENIOrphanSweepInterval
+	}
+	if m.disableOrphanSweepJitter {
+		return interval
+	}
+	return wait.Jitter(interval, 1.0)
 }
 
 func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
@@ -231,7 +292,9 @@ func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 
 // GetNode returns the node from in memory data store
 func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
+	waitStart := time.Now()
 	m.lock.RLock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpGet).Observe(time.Since(waitStart).Seconds())
 	defer m.lock.RUnlock()
 
 	node, found = m.dataStore[nodeName]
@@ -241,7 +304,9 @@ func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
 // AddNode adds the managed and un-managed nodes to the in memory data store, the
 // user of node can verify if the node is managed before performing any operations
 func (m *manager) AddNode(nodeName string) error {
+	waitStart := time.Now()
 	m.lock.Lock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpAdd).Observe(time.Since(waitStart).Seconds())
 	defer m.lock.Unlock()
 
 	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
@@ -291,9 +356,10 @@ func (m *manager) AddNode(nodeName string) error {
 	}
 
 	m.worker.SubmitJob(AsyncOperationJob{
-		op:       op,
-		node:     newNode,
-		nodeName: nodeName,
+		op:          op,
+		node:        newNode,
+		nodeName:    nodeName,
+		submittedAt: time.Now(),
 	})
 	return nil
 }
@@ -318,7 +384,9 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 // and now is not required to be managed, it's resources are de-initialized. Finally,
 // if there is no toggling, the resources are updated
 func (m *manager) UpdateNode(nodeName string) error {
+	waitStart := time.Now()
 	m.lock.Lock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpUpdate).Observe(time.Since(waitStart).Seconds())
 	defer m.lock.Unlock()
 
 	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
@@ -375,11 +443,15 @@ func (m *manager) UpdateNode(nodeName string) error {
 		return nil
 	}
 
-	m.worker.SubmitJob(AsyncOperationJob{
+	job := AsyncOperationJob{
 		op:       op,
 		node:     cachedNode,
 		nodeName: nodeName,
-	})
+	}
+	if op == Init {
+		job.submittedAt = time.Now()
+	}
+	m.worker.SubmitJob(job)
 	return nil
 }
 
@@ -403,7 +475,9 @@ func (m *manager) GetNodeUpdateStatus(k8sNode *v1.Node, cachedNode node.Node) (N
 
 // DeleteNode deletes the nodes from the cache and cleans up the resources used by all the resource providers
 func (m *manager) DeleteNode(nodeName string) error {
+	waitStart := time.Now()
 	m.lock.Lock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpDelete).Observe(time.Since(waitStart).Seconds())
 	defer m.lock.Unlock()
 
 	log := m.Log.WithValues("node name", nodeName, "request", "delete")
@@ -505,6 +579,9 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		utils.SendNodeEventWithNodeName(m.wrapper.K8sAPI, asyncJob.nodeName, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", m.controllerVersion), v1.EventTypeNormal, m.Log)
 		err = asyncJob.node.InitResources(m.resourceManager)
 		if err != nil {
+			if !asyncJob.submittedAt.IsZero() {
+				nodeOnboardingLatency.WithLabelValues("failed").Observe(time.Since(asyncJob.submittedAt).Seconds())
+			}
 			if pauseHealthCheckOnError(err) && !m.SkipHealthCheck() {
 				m.setStopHealthCheck()
 				log.Info("node manager sets a pause on health check due to observing a EC2 error", "error", err.Error())
@@ -516,6 +593,10 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 
 			// Node will be retried for init on next event
 			return ctrl.Result{}, nil
+		}
+
+		if !asyncJob.submittedAt.IsZero() {
+			nodeOnboardingLatency.WithLabelValues("success").Observe(time.Since(asyncJob.submittedAt).Seconds())
 		}
 
 		// If there's no error, we need to update the node so the capacity is advertised

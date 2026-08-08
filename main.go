@@ -124,6 +124,8 @@ func main() {
 	var maxPodConcurrentReconciles int
 	var maxNodeConcurrentReconciles int
 	var disableController bool
+	var branchENIOrphanSweepInterval time.Duration
+	var disableBranchENIOrphanSweepJitter bool
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to.")
@@ -171,6 +173,12 @@ func main() {
 	flag.IntVar(&maxPodConcurrentReconciles, "max-pod-reconcile", 20, "The maximum number of concurrent reconciles for pod controller")
 	flag.IntVar(&maxNodeConcurrentReconciles, "max-node-reconcile", 10, "The maximum number of concurrent reconciles for node controller")
 	flag.BoolVar(&disableController, "disable-controller", false, "A flag to disable the controller.")
+	// TEMPORARY SCALE ACCEPTANCE ONLY: remove both sweep flags after this validation round.
+	// They must not be included in an upstream-facing change.
+	flag.DurationVar(&branchENIOrphanSweepInterval, "branch-eni-orphan-sweep-interval",
+		manager.DefaultBranchENIOrphanSweepInterval, "Temporary scale-test override for the branch ENI orphan sweep interval")
+	flag.BoolVar(&disableBranchENIOrphanSweepJitter, "disable-branch-eni-orphan-sweep-jitter",
+		false, "Temporary scale-test switch to disable branch ENI orphan sweep jitter")
 
 	flag.Parse()
 
@@ -207,6 +215,11 @@ func main() {
 		"GitCommit", version.GitCommit,
 		"BuildDate", version.BuildDate,
 	)
+
+	if branchENIOrphanSweepInterval <= 0 {
+		setupLog.Error(fmt.Errorf("branch ENI orphan sweep interval must be positive"), "invalid startup parameter")
+		os.Exit(1)
+	}
 
 	if clusterName == "" {
 		setupLog.Error(fmt.Errorf("cluster-name is a required parameter"), "unable to start the controller")
@@ -364,7 +377,8 @@ func main() {
 		nodeManagerWorkers := asyncWorkers.NewDefaultWorkerPool("node async workers",
 			nodeWorkerCount, 1, ctrl.Log.WithName("node async workers"), ctx)
 		nodeManager, err := manager.NewNodeManager(ctrl.Log.WithName("node manager"), resourceManager,
-			apiWrapper, nodeManagerWorkers, controllerConditions, clusterName, version.GitVersion, healthzHandler)
+			apiWrapper, nodeManagerWorkers, controllerConditions, clusterName, version.GitVersion,
+			branchENIOrphanSweepInterval, disableBranchENIOrphanSweepJitter, healthzHandler)
 
 		if err != nil {
 			ctrl.Log.Error(err, "failed to init node manager")
