@@ -255,9 +255,13 @@ spec:
                     x-kubernetes-list-type: atomic
                   subnetID:
                     description: |-
-                      SubnetID is the id of the subnet the trunk ENI belongs to. The
-                      vpc-resource-controller's hydrate path validates it against the
-                      instance subnet to reject stale snapshots after a subnet change.
+                      SubnetID is the id of the EC2 subnet the trunk ENI resides in, which is
+                      also the subnet its branch ENIs are created in. Persisted with the trunk
+                      so a controller can create a branch ENI straight from the CNINode,
+                      without a DescribeNetworkInterfaces call on the pod path, and so the
+                      value survives a controller restart that drops in-memory node state.
+                    maxLength: 24
+                    pattern: ^subnet-([0-9a-f]{8}|[0-9a-f]{17})$
                     type: string
                 required:
                 - id

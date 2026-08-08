@@ -135,10 +135,14 @@ type TrunkInterface struct {
 	// ID is the EC2 network interface id of the trunk ENI.
 	// +kubebuilder:validation:MinLength=1
 	ID string `json:"id"`
-	// SubnetID is the id of the subnet the trunk ENI belongs to. The
-	// vpc-resource-controller's hydrate path validates it against the
-	// instance subnet to reject stale snapshots after a subnet change.
+	// SubnetID is the id of the EC2 subnet the trunk ENI resides in, which is
+	// also the subnet its branch ENIs are created in. Persisted with the trunk
+	// so a controller can create a branch ENI straight from the CNINode,
+	// without a DescribeNetworkInterfaces call on the pod path, and so the
+	// value survives a controller restart that drops in-memory node state.
 	// +optional
+	// +kubebuilder:validation:MaxLength=24
+	// +kubebuilder:validation:Pattern=`^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`
 	SubnetID string `json:"subnetID,omitempty"`
 	// SecurityGroups are the security group ids attached to the trunk ENI.
 	// +optional
