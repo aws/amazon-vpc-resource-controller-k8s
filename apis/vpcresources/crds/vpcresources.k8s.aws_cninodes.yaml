@@ -175,6 +175,16 @@ spec:
                   macAddress:
                     description: MacAddress is the MAC address of the trunk ENI.
                     type: string
+                  subnetID:
+                    description: |-
+                      SubnetID is the id of the EC2 subnet the trunk ENI resides in, which is
+                      also the subnet its branch ENIs are created in. Persisted with the trunk
+                      so a controller can create a branch ENI straight from the CNINode,
+                      without a DescribeNetworkInterfaces call on the pod path, and so the
+                      value survives a controller restart that drops in-memory node state.
+                    maxLength: 24
+                    pattern: ^subnet-([0-9a-f]{8}|[0-9a-f]{17})$
+                    type: string
                 required:
                 - id
                 type: object
