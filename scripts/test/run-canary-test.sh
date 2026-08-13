@@ -12,6 +12,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 GINKGO_TEST_BUILD_DIR="$SCRIPT_DIR/../../build"
 SECONDS=0
 VPC_CNI_ADDON_NAME="vpc-cni"
+: "${SKIP_ADDON_INSTALLATION:=false}"
 
 source "$SCRIPT_DIR"/lib/cluster.sh
 
@@ -121,9 +122,13 @@ function run_canary_tests() {
 echo "Starting the ginkgo test suite"
 load_cluster_details
 
+if [[ "$SKIP_ADDON_INSTALLATION" != "true" ]]; then
 # Addons is supported from 1.18 onwards
 load_addon_details
 install_add_on "$LATEST_ADDON_VERSION"
+else
+  echo "skipping addon installation"
+fi
 
 attach_controller_policy_cluster_role
 set_env_aws_node "ENABLE_POD_ENI" "true"
