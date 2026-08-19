@@ -172,7 +172,7 @@ func Test_GetNewManager(t *testing.T) {
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(nil)
 	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions,
-		mockClusterName, "v1.3.1", DefaultBranchENIOrphanSweepInterval, false, healthzHandler)
+		mockClusterName, "v1.3.1", healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.NoError(t, err)
@@ -187,7 +187,7 @@ func Test_GetNewManager_Error(t *testing.T) {
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(mockError)
 	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions,
-		mockClusterName, "v1.3.1", DefaultBranchENIOrphanSweepInterval, false, healthzHandler)
+		mockClusterName, "v1.3.1", healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.Error(t, err, mockError)
@@ -741,14 +741,6 @@ func (p *selfHealFakeProvider) SubmitReconcileCNINodeStatusJob(nodeName string) 
 
 func (p *selfHealFakeProvider) SubmitReconcileUnassignedBranchENIsJob(nodeName string) {
 	p.swept <- nodeName
-}
-
-func TestJitteredOrphanSweepInterval_Disabled(t *testing.T) {
-	m := &manager{
-		orphanSweepInterval:      30 * time.Second,
-		disableOrphanSweepJitter: true,
-	}
-	assert.Equal(t, 30*time.Second, m.jitteredOrphanSweepInterval())
 }
 
 func TestJitteredOrphanSweepInterval_DefaultFallback(t *testing.T) {

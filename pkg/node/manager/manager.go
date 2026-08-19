@@ -97,13 +97,11 @@ type manager struct {
 	// wrapper around the clients for all APIs used by controller
 	wrapper api.Wrapper
 	// worker for performing async operation on node APIs
-	worker                   asyncWorker.Worker
-	conditions               condition.Conditions
-	controllerVersion        string
-	stopHealthCheckAt        time.Time
-	clusterName              string
-	orphanSweepInterval      time.Duration
-	disableOrphanSweepJitter bool
+	worker            asyncWorker.Worker
+	conditions        condition.Conditions
+	controllerVersion string
+	stopHealthCheckAt time.Time
+	clusterName       string
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -156,25 +154,20 @@ const DefaultBranchENIOrphanSweepInterval = time.Hour
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
 	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string,
-	controllerVersion string, orphanSweepInterval time.Duration, disableOrphanSweepJitter bool,
+	controllerVersion string,
 	healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
 
 	prometheusRegister()
-	if orphanSweepInterval <= 0 {
-		orphanSweepInterval = DefaultBranchENIOrphanSweepInterval
-	}
 
 	manager := &manager{
-		resourceManager:          resourceManager,
-		Log:                      logger,
-		dataStore:                make(map[string]node.Node),
-		wrapper:                  wrapper,
-		worker:                   worker,
-		conditions:               conditions,
-		controllerVersion:        controllerVersion,
-		clusterName:              clusterName,
-		orphanSweepInterval:      orphanSweepInterval,
-		disableOrphanSweepJitter: disableOrphanSweepJitter,
+		resourceManager:   resourceManager,
+		Log:               logger,
+		dataStore:         make(map[string]node.Node),
+		wrapper:           wrapper,
+		worker:            worker,
+		conditions:        conditions,
+		controllerVersion: controllerVersion,
+		clusterName:       clusterName,
 	}
 
 	// add health check on subpath for node manager
@@ -204,14 +197,7 @@ type orphanBranchENIReclaimer interface {
 // does not issue DescribeNetworkInterfaces in a synchronized thundering herd. wait.Jitter adds a
 // random duration in [0, factor*interval), so factor 1.0 yields a value in [interval, 2*interval).
 func (m *manager) jitteredOrphanSweepInterval() time.Duration {
-	interval := m.orphanSweepInterval
-	if interval <= 0 {
-		interval = DefaultBranchENIOrphanSweepInterval
-	}
-	if m.disableOrphanSweepJitter {
-		return interval
-	}
-	return wait.Jitter(interval, 1.0)
+	return wait.Jitter(DefaultBranchENIOrphanSweepInterval, 1.0)
 }
 
 func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
