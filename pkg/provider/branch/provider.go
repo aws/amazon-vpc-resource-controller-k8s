@@ -34,7 +34,6 @@ import (
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
@@ -139,6 +138,14 @@ var (
 	// NodeDeleteRequeueRequestDelay represents the time after which the resources belonging to a node will be cleaned
 	// up after receiving the actual node delete event.
 	NodeDeleteRequeueRequestDelay = time.Minute * 1
+
+	// capacityRetryRequeueDelay bounds the requeue interval when pod branch ENI allocation fails
+	// because the trunk is at capacity (trunk.ErrCurrentlyAtMaxCapacity). M1 (design doc section
+	// 2.2) frees a trunk slot within one delete-queue processing pass instead of waiting a full
+	// cooldown period, so requeuing after a full cooldown (as before) would now be the dominant
+	// source of retry latency for a pod waiting on capacity (design doc E6). Kept short but bounded
+	// to avoid a hot loop while a slot is still genuinely full.
+	capacityRetryRequeueDelay = time.Second * 10
 
 	prometheusRegistered = false
 
@@ -715,7 +722,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
 	if err != nil {
 		if err == trunk.ErrCurrentlyAtMaxCapacity {
-			return ctrl.Result{RequeueAfter: cooldown.GetCoolDown().GetCoolDownPeriod(), Requeue: true}, nil
+			return ctrl.Result{RequeueAfter: capacityRetryRequeueDelay, Requeue: true}, nil
 		}
 		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
 			fmt.Sprintf("failed to allocate branch ENI to pod: %v", err), v1.EventTypeWarning)
