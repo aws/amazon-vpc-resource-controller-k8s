@@ -1658,13 +1658,15 @@ func (t *trunkENI) freeVlanIdLocked(vlanId int, eniID string, podUID ...string) 
 	isUsed := t.usedVlanIds[vlanId]
 	if !isUsed {
 		trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id").Inc()
-		t.log.Error(fmt.Errorf("failed to free a unused vlan id"), "", "vlan id", vlanId)
+		t.log.Error(fmt.Errorf("refusing to free vlan not marked in use"),
+			"refusing to free a VLAN ID that is not marked in use", "vlan id", vlanId)
 		return false
 	}
 
 	if owner, hasOwner := t.vlanOwner[vlanId]; hasOwner && eniID != "" && owner != eniID {
 		trunkENIOperationsErrCount.WithLabelValues("free_vlan_owner_mismatch").Inc()
-		t.log.Error(fmt.Errorf("refusing to free vlan owned by another eni"), "",
+		t.log.Error(fmt.Errorf("refusing to free vlan owned by another eni"),
+			"G3 owner-aware VLAN free guard refused to free a VLAN owned by a different branch ENI",
 			"vlan id", vlanId, "owner", owner, "requester", eniID)
 		return false
 	}
