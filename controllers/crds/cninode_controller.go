@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
@@ -134,6 +135,10 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			// Requeue request so it can be retried
 			return ctrl.Result{}, err
 		}
+	}
+
+	if nodeFound {
+		r.checkInstanceIDCollision(cniNode, node)
 	}
 
 	if cniNode.GetDeletionTimestamp().IsZero() {
@@ -254,6 +259,30 @@ func (r *CNINodeReconciler) SetupWithManager(mgr ctrl.Manager, maxNodeConcurrent
 		For(&v1alpha1.CNINode{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxNodeConcurrentReconciles}).
 		Complete(r)
+}
+
+// checkInstanceIDCollision compares a CNINode's checkpointed instance ID against the live
+// node's instance ID (parsed from spec.providerID) to detect a leaked CNINode name reused by a
+// different EC2 instance after a private IP reuse (design-cn.md §2.7/§4.2 E7; issue #515). This
+// is detection/measurement only: it never fails the reconcile, and it skips silently whenever
+// either side of the comparison is unavailable (no checkpoint yet, or an unparseable providerID).
+func (r *CNINodeReconciler) checkInstanceIDCollision(cniNode *v1alpha1.CNINode, node *v1.Node) {
+	if cniNode.Status.ReinitCheckpoint == nil || cniNode.Status.ReinitCheckpoint.Instance.InstanceID == "" {
+		return
+	}
+	recordedInstanceID := cniNode.Status.ReinitCheckpoint.Instance.InstanceID
+
+	liveInstanceID, ok := utils.InstanceIDFromProviderID(node.Spec.ProviderID)
+	if !ok {
+		return
+	}
+
+	if recordedInstanceID != liveInstanceID {
+		r.log.Error(nil, "CNINode recorded instance ID does not match the node's live instance ID; "+
+			"possible CNINode name collision from a leaked object and EC2 private IP reuse (#515)",
+			"node", cniNode.Name, "recordedInstanceID", recordedInstanceID, "liveInstanceID", liveInstanceID)
+		ec2.RecordInstanceIDCollision(ec2.CollisionSourceBind)
+	}
 }
 
 // waitTillCNINodeDeleted waits for CNINode to be deleted with timeout and returns error

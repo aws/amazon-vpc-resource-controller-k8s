@@ -535,6 +535,56 @@ func TestIsNitroInstance_NonNitro(t *testing.T) {
 	assert.False(t, isNitro)
 }
 
+// TestInstanceIDFromProviderID covers the parser M6's bind-time collision check relies on to
+// get the live instance ID off a node (design-cn.md §2.7; issue #515): a well-formed AWS
+// providerID parses to its instance ID, while anything missing, non-AWS, or whose last path
+// segment does not look like an EC2 instance ID is reported as unparseable rather than guessed at.
+func TestInstanceIDFromProviderID(t *testing.T) {
+	tests := []struct {
+		name           string
+		providerID     string
+		wantInstanceID string
+		wantOk         bool
+	}{
+		{
+			name:           "well formed provider ID",
+			providerID:     "aws:///us-west-2c/i-0123456789abcdef0",
+			wantInstanceID: "i-0123456789abcdef0",
+			wantOk:         true,
+		},
+		{
+			name:       "empty provider ID",
+			providerID: "",
+			wantOk:     false,
+		},
+		{
+			name:       "non-AWS provider ID",
+			providerID: "azure:///westus/some-vm-id",
+			wantOk:     false,
+		},
+		{
+			name:       "last segment is not an instance ID shape",
+			providerID: "aws:///us-west-2c/not-an-instance-id",
+			wantOk:     false,
+		},
+		{
+			name:       "no path segments after scheme",
+			providerID: "aws://",
+			wantOk:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotInstanceID, gotOk := InstanceIDFromProviderID(tt.providerID)
+			assert.Equal(t, tt.wantOk, gotOk)
+			if tt.wantOk {
+				assert.Equal(t, tt.wantInstanceID, gotInstanceID)
+			}
+		})
+	}
+}
+
 // TestGetSourceAcctAndArn tests that generating account ID and cluster ARN
 func TestGetSourceAcctAndArn(t *testing.T) {
 	accountID := "123456789876"

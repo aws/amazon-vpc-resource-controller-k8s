@@ -8,10 +8,12 @@ import (
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	mock_cleanup "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -276,6 +278,118 @@ func TestCNINodeReconcile(t *testing.T) {
 			if tt.asserts != nil {
 				tt.asserts(res, err, cniNode)
 			}
+		})
+	}
+}
+
+// TestCNINodeReconcile_InstanceIDCollision proves the "bind" side of M6 (design-cn.md §2.7,
+// §4.2 E7; issue #515): every CNINode reconcile with a live node compares the CNINode's
+// checkpointed instance ID against the node's live instance ID (parsed from spec.providerID),
+// increments cninode_instance_id_collision_total{source="bind"} on a mismatch, leaves it
+// untouched on a match, and skips silently (no error, no metric change) whenever either side of
+// the comparison is unavailable.
+func TestCNINodeReconcile_InstanceIDCollision(t *testing.T) {
+	const recordedInstanceID = "i-0aaaaaaaaaaaaaaaa"
+	const liveInstanceID = "i-0bbbbbbbbbbbbbbbb"
+
+	nodeWithProviderID := func(providerID string) *corev1.Node {
+		return &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: mockName,
+				Labels: map[string]string{
+					config.NodeLabelOS: "linux",
+				},
+			},
+			Spec: corev1.NodeSpec{
+				ProviderID: providerID,
+			},
+		}
+	}
+
+	cniNodeWithCheckpoint := func(instanceID string) *v1alpha1.CNINode {
+		cniNode := &v1alpha1.CNINode{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: mockName,
+				Labels: map[string]string{
+					config.NodeLabelOS: "linux",
+				},
+			},
+			Spec: v1alpha1.CNINodeSpec{
+				Tags: map[string]string{
+					config.VPCCNIClusterNameKey: mockClusterName,
+				},
+			},
+		}
+		if instanceID != "" {
+			cniNode.Status = v1alpha1.CNINodeStatus{
+				ReinitCheckpoint: &v1alpha1.ReinitCheckpoint{
+					SnapshotVersion: v1alpha1.CNINodeStatusSnapshotVersion,
+					Instance:        v1alpha1.InstanceStatus{InstanceID: instanceID},
+				},
+			}
+		}
+		return cniNode
+	}
+
+	tests := []struct {
+		name      string
+		node      *corev1.Node
+		cniNode   *v1alpha1.CNINode
+		wantDelta float64
+	}{
+		{
+			name:      "mismatched instance ID increments the bind collision counter",
+			node:      nodeWithProviderID("aws:///us-west-2a/" + liveInstanceID),
+			cniNode:   cniNodeWithCheckpoint(recordedInstanceID),
+			wantDelta: 1,
+		},
+		{
+			name:      "matching instance ID does not increment the counter",
+			node:      nodeWithProviderID("aws:///us-west-2a/" + recordedInstanceID),
+			cniNode:   cniNodeWithCheckpoint(recordedInstanceID),
+			wantDelta: 0,
+		},
+		{
+			name:      "missing providerID skips the check",
+			node:      nodeWithProviderID(""),
+			cniNode:   cniNodeWithCheckpoint(recordedInstanceID),
+			wantDelta: 0,
+		},
+		{
+			name:      "unparseable providerID skips the check",
+			node:      nodeWithProviderID("not-a-providerid"),
+			cniNode:   cniNodeWithCheckpoint(recordedInstanceID),
+			wantDelta: 0,
+		},
+		{
+			name:      "no checkpoint yet skips the check",
+			node:      nodeWithProviderID("aws:///us-west-2a/" + liveInstanceID),
+			cniNode:   cniNodeWithCheckpoint(""),
+			wantDelta: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mock := NewCNINodeMock(ctrl, tt.cniNode, tt.node)
+			mockFinalizerManager := mock_k8s.NewMockFinalizerManager(ctrl)
+			mockFinalizerManager.EXPECT().
+				AddFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
+				Return(nil)
+			mock.Reconciler.finalizerManager = mockFinalizerManager
+			mock.Reconciler.k8sAPI = mock_k8s.NewMockK8sWrapper(ctrl)
+
+			before := testutil.ToFloat64(ec2.InstanceIDCollisionCount.WithLabelValues(ec2.CollisionSourceBind))
+
+			res, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
+			assert.NoError(t, err)
+			assert.Equal(t, reconcile.Result{}, res)
+
+			after := testutil.ToFloat64(ec2.InstanceIDCollisionCount.WithLabelValues(ec2.CollisionSourceBind))
+			assert.Equal(t, tt.wantDelta, after-before)
 		})
 	}
 }
