@@ -403,6 +403,10 @@ func (i *ec2Instance) HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) 
 
 	instanceStatus := status.ReinitCheckpoint.Instance
 	if instanceStatus.InstanceID != i.instanceID {
+		i.log.Error(nil, "CNINode recorded instance ID does not match the node's live instance ID; "+
+			"possible CNINode name collision from a leaked object and EC2 private IP reuse (#515)",
+			"node", i.name, "recordedInstanceID", instanceStatus.InstanceID, "liveInstanceID", i.instanceID)
+		RecordInstanceIDCollision(CollisionSourceHydrate)
 		return false, HydrateMissInstanceIDMismatch
 	}
 	if instanceStatus.InstanceType == "" {

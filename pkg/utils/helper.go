@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -201,6 +202,31 @@ func DeconstructIPsFromPrefix(prefix string) ([]string, error) {
 		deconstructedIPs = append(deconstructedIPs, ipAddr)
 	}
 	return deconstructedIPs, nil
+}
+
+// instanceIDFromProviderIDPattern matches the last path segment of an AWS node's
+// spec.providerID (e.g. "aws:///us-west-2c/i-0123456789abcdef0") against the EC2 instance ID
+// shape, so a providerID from an unexpected source/format is treated as unparseable rather than
+// silently extracted as garbage.
+var instanceIDFromProviderIDPattern = regexp.MustCompile(`^i-[0-9a-f]+$`)
+
+// InstanceIDFromProviderID extracts the EC2 instance ID from a Kubernetes node's
+// spec.providerID. Returns ok=false if providerID is empty, not AWS-formed, or its last path
+// segment does not look like an EC2 instance ID - callers should skip whatever check depends on
+// the live instance ID rather than acting on a bad parse.
+func InstanceIDFromProviderID(providerID string) (instanceID string, ok bool) {
+	if !strings.HasPrefix(providerID, "aws://") {
+		return "", false
+	}
+	idx := strings.LastIndex(providerID, "/")
+	if idx == -1 {
+		return "", false
+	}
+	instanceID = providerID[idx+1:]
+	if !instanceIDFromProviderIDPattern.MatchString(instanceID) {
+		return "", false
+	}
+	return instanceID, true
 }
 
 func IsNitroInstance(instanceType string) (bool, error) {
