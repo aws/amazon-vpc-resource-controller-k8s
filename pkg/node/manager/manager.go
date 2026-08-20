@@ -153,9 +153,7 @@ const DefaultBranchENIOrphanSweepInterval = time.Hour
 
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
-	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string,
-	controllerVersion string,
-	healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
 
 	prometheusRegister()
 

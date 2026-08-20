@@ -218,6 +218,12 @@ var _ = Describe("Branch ENI Pods", func() {
 			})
 
 			JustAfterEach(func() {
+				// firstPod is deleted mid-test and set to nil on the happy path; clean it up
+				// here so a failure between its creation and deletion does not leak a pod
+				// that pins the node at full branch-ENI capacity.
+				if firstPod != nil {
+					_ = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, firstPod)
+				}
 				if secondPod != nil {
 					_ = frameWork.PodManager.DeleteAndWaitTillPodIsDeleted(ctx, secondPod)
 				}
@@ -646,61 +652,3 @@ func CreateServiceAccount(serviceAccount *v1.ServiceAccount) {
 	err := frameWork.K8sClient.Create(ctx, serviceAccount)
 	Expect(err).NotTo(HaveOccurred())
 }
-
-/*
-==============================================================================
-新增集成测试用例说明（审阅用，确认无误后提交前请删除本注释块）
-用例：Context("when a branch ENI pod is deleted and a replacement is created on a trunk at full capacity")
-对应：M1 机制（design-cn.md §2.2）/ requirements.md 场景 S2
-
-【为什么加这个用例】
-S2 要验证的两条核心断言，此前只有单元测试（TestTrunkENI_U1_VlanReuseCooldown、
-TestTrunkENI_RegressionE5）在 mock 层面覆盖。手动在大集群上跑靠日志/metric 间接推断，
-不确定、噪音大、分不清是代码问题还是环境问题。这个集成用例在真实 EC2 + 真实 K8s 上，
-用行为层面的断言（不看日志、不解析 metric）确定性地验证同一逻辑。
-
-【关键设计点：必须先把节点填到满容量，否则 slot 释放这条断言测不出问题】
-初版设计只有 1 个测试 pod，删除后立即建第二个——但节点远没到容量上限（m5.xlarge 上限 18），
-这种情况下第二个 pod 能不能起来，跟第一个 pod 的 slot 有没有"立即"释放完全无关：不管释放
-与否，节点上都还有大把空闲名额。哪怕 M1 的立即释放逻辑整个坏掉（slot 要等满 60 秒 cooldown
-才放），这个测试依然会 PASS——是假阳性，测不出真正的问题。
-
-修正：先用 filler pod 把目标节点填到 (branch-ENI 上限 - 1)，让测试 pod 成为刚好把节点填满
-的第 N 个。这样删除测试 pod 后，第二个 pod 能否 Running 才真正依赖"那个 slot 是否被立即释
-放"——若释放逻辑坏了，节点在 controller 眼里仍然是满的，第二个 pod 会卡在 Pending
-（ErrCurrentlyAtMaxCapacity），断言会失败，测试才有意义。这个做法与单元测试
-TestTrunkENI_RegressionE5（先填 limit-1 个 filler，再测第 18 个的删除/替换）是同一个思路，
-只是从内存态搬到了真实 EC2/K8s。
-
-【场景步骤】
-1. 建 SGP。查询目标节点（nodeList 第一个节点）的 instance type，算出它的 branch-ENI 容量
-   上限 branchLimit（vpc.Limits[instanceType].BranchInterface）。
-2. 用 branchLimit-1 个 filler pod（NodeName 钉在目标节点）把该节点填到只差一个名额就满，
-   逐个等待 Running 并验证拿到了 branch ENI。
-3. 创建"测试 pod”（同样钉在该节点），此时节点达到满容量。记录它拿到的 branch ENI 的
-   vlanID（freedVlan）和 eniID（freedENIID）。
-4. 删除测试 pod，释放它占用的 trunk slot——此时节点从"满容量"变成"差一个测试 pod”。
-5. 立刻（在 VLAN reuse cooldown 窗口内，默认 60 秒）在同一节点创建"替换 pod”，等待 Running。
-6. 记录替换 pod 拿到的 branch ENI 的 vlanID / eniID。
-
-【预期结果】
-- slot 立即释放（M1 断言一）：替换 pod 能在 cooldown 未过、且节点刚好是"满容量减一"的
-  情况下成功 Running。这是本用例修正后才具备的确定性：若 slot 不是"一个 reconcile pass
-  内立即释放”、而是要等满 cooldown，替换 pod 会因为 controller 仍然认为节点满容量而卡在
-  Pending，测试会在这一步失败，不会有假阳性。
-- VLAN cooldown 内不复用（M1 断言二）：替换 pod 拿到的 vlanID ≠ freedVlan，
-  且 eniID ≠ freedENIID。证明刚释放的那个 VLAN 号在冷却期内没有被过早重新分配。
-- 最后 WaitTillTheENIIsDeleted(freedENIID) 成功：确认测试 pod 的 branch ENI 最终被清理，
-  不泄漏。
-
-【注意】
-- 默认 reuseCooldown = 60 秒（cooldown.DefaultCoolDownPeriod）。本用例的替换 pod 是在
-  冷却期"内"创建的，靠"拿到不同 VLAN"来验证不复用，因此不需要真的等满 60 秒，用例耗时
-  主要花在 filler pod 的创建/等待上（branchLimit-1 个，视目标节点 instance type 而定）。
-- 若未来想额外验证"冷却期过后该 VLAN 能被重新分配"，需要 sleep > 60 秒后再建第三个 pod
-  并断言它这次可以拿到 freedVlan——但那样单个用例会明显变慢，且该点已被单元测试
-  TestTrunkENI_U1_VlanReuseCooldown 精确覆盖（31 秒边界），故这里不重复。
-- filler pod 数量取决于目标节点的真实 instance type（读 EC2 DescribeInstances 得到），
-  不是硬编码 18——这样测试在不同 instance type 的节点上跑都成立。
-==============================================================================
-*/

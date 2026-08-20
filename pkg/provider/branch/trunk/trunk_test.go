@@ -305,13 +305,13 @@ func TestTrunkENI_assignVlanId(t *testing.T) {
 	trunkENI := getMockTrunk()
 
 	for i := 0; i < MaxAllocatableVlanIds; i++ {
-		id, err := trunkENI.assignVlanId()
+		id, err := trunkENI.assignVlanId("")
 		assert.NoError(t, err)
 		assert.Equal(t, i, id)
 	}
 
 	// Try allocating one more Vlan Id after breaching max capacity
-	_, err := trunkENI.assignVlanId()
+	_, err := trunkENI.assignVlanId("")
 	assert.NotNil(t, err)
 }
 
@@ -320,15 +320,15 @@ func TestTrunkENI_freeVlanId(t *testing.T) {
 	trunkENI := getMockTrunk()
 
 	// Assign single Vlan Id
-	id, err := trunkENI.assignVlanId()
+	id, err := trunkENI.assignVlanId("")
 	assert.NoError(t, err)
 	assert.Equal(t, 0, id)
 
 	// Free the vlan Id
-	trunkENI.freeVlanId(0, "")
+	trunkENI.freeVlanId(0, "", "")
 
 	// Assign single Vlan Id again
-	id, err = trunkENI.assignVlanId()
+	id, err = trunkENI.assignVlanId("")
 	assert.NoError(t, err)
 	assert.Equal(t, 0, id)
 }
@@ -339,7 +339,7 @@ func TestTrunkENI_markVlanAssigned(t *testing.T) {
 	// Mark a Vlan as assigned
 	trunkENI.markVlanAssigned(0)
 
-	id, err := trunkENI.assignVlanId()
+	id, err := trunkENI.assignVlanId("")
 	assert.NoError(t, err)
 	assert.Equal(t, 1, id)
 }
@@ -846,15 +846,15 @@ func TestTrunkENI_U1_VlanReuseCooldown(t *testing.T) {
 	// Released 20s ago, still within the 30s reuse cooldown: free in the ledger but must not be
 	// handed out, and the blocked-allocation metric must record it.
 	before := testutil.ToFloat64(branchENIVlanReuseCooldownBlockedCount)
-	consumedId, err := trunkENI.assignVlanId()
+	consumedId, err := trunkENI.assignVlanId("")
 	assert.NoError(t, err)
 	assert.NotEqual(t, VlanId1, consumedId, "a vlan still inside its reuse cooldown must not be reassigned")
 	assert.Equal(t, float64(1), testutil.ToFloat64(branchENIVlanReuseCooldownBlockedCount)-before)
-	trunkENI.freeVlanId(consumedId, "")
+	trunkENI.freeVlanId(consumedId, "", "")
 
 	// Past the 30s cooldown window: now reassignable, and the cooldown record is cleared.
 	trunkENI.vlanReleasedAt[VlanId1] = time.Now().Add(-31 * time.Second)
-	id, err := trunkENI.assignVlanId()
+	id, err := trunkENI.assignVlanId("")
 	assert.NoError(t, err)
 	assert.Equal(t, VlanId1, id, "past its reuse cooldown, the vlan must be reassignable")
 	_, stillCooling := trunkENI.vlanReleasedAt[VlanId1]
@@ -941,7 +941,7 @@ func TestTrunkENI_RegressionE5(t *testing.T) {
 
 	// The vlan is free in the ledger but must still be withheld from reuse until the reuse cooldown
 	// elapses (started at deletionTimeStamp, reproducing today's cooldown timing exactly).
-	newVlan, err := trunkENI.assignVlanId()
+	newVlan, err := trunkENI.assignVlanId("")
 	assert.NoError(t, err)
 	assert.NotEqual(t, VlanId1, newVlan,
 		"the freed vlan must not be reused before its reuse cooldown elapses")
@@ -1988,18 +1988,18 @@ func TestTrunkENI_U7_FreeVlanIdOwnerAware(t *testing.T) {
 
 	// A VLAN with no recorded owner still frees (legacy/unknown-tag fallback paths).
 	trunkENI.usedVlanIds[VlanId1] = true
-	trunkENI.freeVlanId(VlanId1, "eni-any")
+	trunkENI.freeVlanId(VlanId1, "eni-any", "")
 	assert.False(t, trunkENI.usedVlanIds[VlanId1], "an unowned vlan must still free")
 
 	// A VLAN owned by a different ENI must not be freed.
 	trunkENI.usedVlanIds[VlanId2] = true
 	trunkENI.vlanOwner[VlanId2] = "eni-owner"
-	trunkENI.freeVlanId(VlanId2, "eni-not-the-owner")
+	trunkENI.freeVlanId(VlanId2, "eni-not-the-owner", "")
 	assert.True(t, trunkENI.usedVlanIds[VlanId2], "a vlan owned by another eni must not be freed")
 	assert.Equal(t, "eni-owner", trunkENI.vlanOwner[VlanId2])
 
 	// The rightful owner can free it.
-	trunkENI.freeVlanId(VlanId2, "eni-owner")
+	trunkENI.freeVlanId(VlanId2, "eni-owner", "")
 	assert.False(t, trunkENI.usedVlanIds[VlanId2], "the rightful owner must be able to free the vlan")
 	_, stillOwned := trunkENI.vlanOwner[VlanId2]
 	assert.False(t, stillOwned, "the owner record must be cleared once freed")
@@ -2080,19 +2080,19 @@ func TestTrunkENI_RegressionHB(t *testing.T) {
 	popped, hasENI := trunkENI.popENIFromDeleteQueue()
 	assert.True(t, hasENI)
 	assert.Equal(t, oldENI.ID, popped.ID)
-	trunkENI.freeVlanId(sharedVlan, popped.ID)
+	trunkENI.freeVlanId(sharedVlan, popped.ID, "")
 	assert.False(t, trunkENI.usedVlanIds[sharedVlan])
 
 	// A new pod immediately grabs the now-free vlan.
-	newVlan, err := trunkENI.assignVlanId()
+	newVlan, err := trunkENI.assignVlanId("")
 	assert.NoError(t, err)
 	assert.Equal(t, sharedVlan, newVlan)
-	trunkENI.addPendingCreate("eni-new-owner", newVlan)
+	trunkENI.addPendingCreate("eni-new-owner", newVlan, "")
 
 	// If a stale duplicate of the old ENI's delete somehow still ran (the race G2 closes at the
 	// source), owner-aware freeVlanId (G3) refuses to release the vlan out from under the new
 	// owner.
-	trunkENI.freeVlanId(sharedVlan, oldENI.ID)
+	trunkENI.freeVlanId(sharedVlan, oldENI.ID, "")
 	assert.True(t, trunkENI.usedVlanIds[sharedVlan],
 		"the vlan must remain reserved for the new owner despite the stale duplicate free")
 	assert.Equal(t, "eni-new-owner", trunkENI.vlanOwner[sharedVlan])

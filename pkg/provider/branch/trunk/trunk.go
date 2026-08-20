@@ -1125,8 +1125,11 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 
 	if err != nil {
 		log.Error(err, "failed to create ENI, moving the ENI to delete list")
-		// Moving to delete list, because it has all the retrying logic in case of failure
-		t.PushENIsToFrontOfDeleteQueue(pod, newENIs)
+		// Moving to delete list, because it has all the retrying logic in case of failure.
+		// nil pod: this pod was never added to uidToBranchENIMap (addBranchToCache runs only on
+		// full success), so there is no cache entry to remove; ownership for the lifecycle logs
+		// was already recorded per-ENI by addPendingCreate above.
+		t.PushENIsToFrontOfDeleteQueue(nil, newENIs)
 		return nil, err
 	}
 
@@ -1254,7 +1257,7 @@ func (t *trunkENI) releaseSlot(eni *ENIDetails) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	if !t.freeVlanIdLocked(eni.VlanID, eni.ID) {
+	if !t.freeVlanIdLocked(eni.VlanID, eni.ID, "") {
 		return
 	}
 	t.vlanReleasedAt[eni.VlanID] = eni.deletionTimeStamp
@@ -1503,15 +1506,11 @@ func (t *trunkENI) getBranchFromCache(UID string) (branchENIs []*ENIDetails, isP
 	return
 }
 
-// assignVlanId assigns a free vlan id from the list of available vlan ids. In the future this can be changed to LL
-func (t *trunkENI) assignVlanId(podUID ...string) (int, error) {
+// assignVlanId assigns a free vlan id from the list of available vlan ids. In the future this can be changed to LL.
+// podUID identifies the requesting pod in the VLAN lifecycle logs; pass "" when unknown.
+func (t *trunkENI) assignVlanId(podUID string) (int, error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
-
-	uid := ""
-	if len(podUID) > 0 {
-		uid = podUID[0]
-	}
 
 	reuseCooldown := cooldown.GetCoolDown().GetCoolDownPeriod()
 	now := time.Now()
@@ -1527,7 +1526,8 @@ func (t *trunkENI) assignVlanId(podUID ...string) (int, error) {
 		if releasedAt, cooling := t.vlanReleasedAt[index]; cooling && now.Before(releasedAt.Add(reuseCooldown)) {
 			if !blockedByCooldown {
 				t.log.Info("VLAN reuse blocked by cooldown",
-					"vlanID", index, "eniID", "", "podUID", uid)
+					"vlanID", index, "remainingCooldown", releasedAt.Add(reuseCooldown).Sub(now).String(),
+					"podUID", podUID)
 			}
 			blockedByCooldown = true
 			continue
@@ -1594,15 +1594,14 @@ func (t *trunkENI) markVlanAssignedWithOwnerLocked(vlanId int, eniID string) err
 
 // addPendingCreate records eniID as an in-flight branch ENI create (M5 G1, design doc section
 // 2.6) and, since the ENI ID is now known, records it as the owner of vlanID (M5 G3). Must be
-// removed via removePendingCreatesLocked on every exit for this ENI.
-func (t *trunkENI) addPendingCreate(eniID string, vlanID int, podUID ...string) {
+// removed via removePendingCreatesLocked on every exit for this ENI. podUID is the owning pod
+// for VLAN lifecycle logs; pass "" when unknown.
+func (t *trunkENI) addPendingCreate(eniID string, vlanID int, podUID string) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
 	t.pendingCreates[eniID] = struct{}{}
-	if len(podUID) > 0 {
-		t.rememberPodUIDLocked(eniID, podUID[0])
-	}
+	t.rememberPodUIDLocked(eniID, podUID)
 	if vlanID != 0 {
 		t.vlanOwner[vlanID] = eniID
 	}
@@ -1644,17 +1643,18 @@ func (t *trunkENI) removePendingCreatesLocked(enis []*ENIDetails) {
 // belongs to a new pod's branch ENI (hazard H-B). An empty eniID or an unrecorded owner preserves
 // legacy ownerless-free behavior. Reserved vlan id 0 is never freed in production: callers
 // (deleteENI, and assignVlanId's never-returns-0 guarantee on a real trunk) never pass it here.
-func (t *trunkENI) freeVlanId(vlanId int, eniID string, podUID ...string) {
+func (t *trunkENI) freeVlanId(vlanId int, eniID string, podUID string) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	t.freeVlanIdLocked(vlanId, eniID, podUID...)
+	t.freeVlanIdLocked(vlanId, eniID, podUID)
 }
 
 // freeVlanIdLocked is freeVlanId's caller-locked counterpart, returning whether the VLAN was
-// actually freed (false if it was already unused, or owned by a different ENI - M5 G3). Caller
-// must hold the trunk lock.
-func (t *trunkENI) freeVlanIdLocked(vlanId int, eniID string, podUID ...string) bool {
+// actually freed (false if it was already unused, or owned by a different ENI - M5 G3). podUID
+// identifies the pod in the freed-VLAN log; pass "" to fall back to the eniID's remembered owner.
+// Caller must hold the trunk lock.
+func (t *trunkENI) freeVlanIdLocked(vlanId int, eniID string, podUID string) bool {
 	isUsed := t.usedVlanIds[vlanId]
 	if !isUsed {
 		trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id").Inc()
@@ -1673,10 +1673,8 @@ func (t *trunkENI) freeVlanIdLocked(vlanId int, eniID string, podUID ...string) 
 
 	t.usedVlanIds[vlanId] = false
 	delete(t.vlanOwner, vlanId)
-	uid := ""
-	if len(podUID) > 0 {
-		uid = podUID[0]
-	} else if t.eniToPodUID != nil {
+	uid := podUID
+	if uid == "" {
 		uid = t.eniToPodUID[eniID]
 	}
 	t.log.Info("freed VLAN ID", "vlanID", vlanId, "eniID", eniID, "podUID", uid)

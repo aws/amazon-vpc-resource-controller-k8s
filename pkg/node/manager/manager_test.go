@@ -36,6 +36,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -171,8 +172,7 @@ func Test_GetNewManager(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(nil)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions,
-		mockClusterName, "v1.3.1", healthzHandler)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, mockClusterName, "v1.3.1", healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.NoError(t, err)
@@ -186,8 +186,7 @@ func Test_GetNewManager_Error(t *testing.T) {
 	mock := NewMock(ctrl, map[string]node.Node{})
 
 	mock.MockWorker.EXPECT().StartWorkerPool(gomock.Any()).Return(mockError)
-	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions,
-		mockClusterName, "v1.3.1", healthzHandler)
+	manager, err := NewNodeManager(zap.New(), nil, api.Wrapper{}, mock.MockWorker, mock.MockConditions, mockClusterName, "v1.3.1", healthzHandler)
 
 	assert.NotNil(t, manager)
 	assert.Error(t, err, mockError)
@@ -690,6 +689,56 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 	_, err := mock.Manager.performAsyncOperation(job)
 	assert.NotContains(t, mock.Manager.dataStore, nodeName) // It should be cleared from cache
 	assert.NoError(t, err)
+}
+
+// Test_performAsyncOperation_ObservesOnboardingLatency pins that an Init job carrying a
+// submittedAt timestamp records node_onboarding_latency for both results. The SummaryVec child
+// does not exist until the first Observe (preflight.sh relies on this behaviour), so S1's
+// evidence chain silently breaks if these observation points are ever dropped.
+func Test_performAsyncOperation_ObservesOnboardingLatency(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	nodeOnboardingLatency.Reset()
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+
+	mock.MockK8sAPI.EXPECT().AddLabelToManageNode(v1Node, config.HasTrunkAttachedLabel, config.BooleanTrue).Return(true, nil).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil).Times(2)
+	mock.MockK8sAPI.EXPECT().BroadcastEvent(v1Node, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", mock.Manager.controllerVersion), v1.EventTypeNormal).Times(2)
+
+	// Init success observes result=success.
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(nil)
+	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager).Return(nil)
+	_, err := mock.Manager.performAsyncOperation(AsyncOperationJob{
+		node: mock.MockNode, nodeName: nodeName, op: Init, submittedAt: time.Now(),
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, testutil.CollectAndCount(nodeOnboardingLatency),
+		"Init success must create the result=success series")
+
+	// Init failure observes result=failed.
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{})
+	_, err = mock.Manager.performAsyncOperation(AsyncOperationJob{
+		node: mock.MockNode, nodeName: nodeName, op: Init, submittedAt: time.Now(),
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, testutil.CollectAndCount(nodeOnboardingLatency),
+		"Init failure must create the result=failed series")
+}
+
+// Test_GetNode_ObservesLockWaitLatency pins that the node manager lock instrumentation records
+// node_manager_lock_wait_latency (same first-Observe visibility concern as above).
+func Test_GetNode_ObservesLockWaitLatency(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	nodeManagerLockWaitLatency.Reset()
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+
+	_, found := mock.Manager.GetNode(nodeName)
+	assert.True(t, found)
+	assert.Equal(t, 1, testutil.CollectAndCount(nodeManagerLockWaitLatency),
+		"GetNode must create the operation=get series")
 }
 
 func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
