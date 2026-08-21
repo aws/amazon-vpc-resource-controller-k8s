@@ -15,6 +15,7 @@ package trunk
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -26,7 +27,10 @@ import (
 	mock_cooldown "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/cooldown"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
+	ec2Errors "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/errors"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -40,6 +44,29 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
+
+// stubK8sWrapperNoConfigMap is a minimal k8s.K8sWrapper that reports no branch-ENI cooldown
+// configmap, so cooldown.InitCoolDownPeriod falls back to cooldown.DefaultCoolDownPeriod. Embeds
+// the interface (nil) so it satisfies k8s.K8sWrapper without implementing every method - only
+// GetConfigMap is ever called on it.
+type stubK8sWrapperNoConfigMap struct {
+	k8s.K8sWrapper
+}
+
+func (stubK8sWrapperNoConfigMap) GetConfigMap(string, string) (*v1.ConfigMap, error) {
+	return nil, fmt.Errorf("no cooldown configmap in tests")
+}
+
+// TestMain initializes the package-level cooldown singleton once before any test runs. M1 made
+// assignVlanId depend on cooldown.GetCoolDown() (the VLAN reuse cooldown window), so a test that
+// exercises VLAN assignment without itself calling cooldown.InitCoolDownPeriod would otherwise
+// panic on a nil singleton depending on which test happens to run first in this binary. A test
+// that cares about an exact period still calls cooldown.InitCoolDownPeriod itself, which simply
+// overrides this default.
+func TestMain(m *testing.M) {
+	cooldown.InitCoolDownPeriod(stubK8sWrapperNoConfigMap{}, zap.New(zap.UseDevMode(true)).WithName("cooldown-test-default"))
+	os.Exit(m.Run())
+}
 
 var (
 	// Instance details
@@ -239,6 +266,12 @@ func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *m
 	EniDetails2.deletionTimeStamp = time.Time{}
 	EniDetails1.deleteRetryCount = 0
 	EniDetails2.deleteRetryCount = 0
+	// M1 (design doc section 2.2): these are shared package-level fixtures, so a test that drives a
+	// real release (disassociateIfNeeded/releaseSlot/deleteENI) must not leak slotReleased=true into
+	// the next test that reuses the same pointer.
+	EniDetails1.slotReleased = false
+	EniDetails2.slotReleased = false
+	ENIDetailsMissingAssociationID.slotReleased = false
 
 	return &trunkENI, mockHelper, mockInstance
 }
@@ -249,6 +282,9 @@ func getMockTrunk() trunkENI {
 		log:               log,
 		usedVlanIds:       make([]bool, MaxAllocatableVlanIds),
 		uidToBranchENIMap: map[string][]*ENIDetails{},
+		inFlightENIs:      map[string]eniPhase{},
+		vlanOwner:         map[int]string{},
+		vlanReleasedAt:    map[int]time.Time{},
 		nodeIDTag: []awsEc2Types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -269,13 +305,13 @@ func TestTrunkENI_assignVlanId(t *testing.T) {
 	trunkENI := getMockTrunk()
 
 	for i := 0; i < MaxAllocatableVlanIds; i++ {
-		id, err := trunkENI.assignVlanId()
+		id, err := trunkENI.assignVlanId("")
 		assert.NoError(t, err)
 		assert.Equal(t, i, id)
 	}
 
 	// Try allocating one more Vlan Id after breaching max capacity
-	_, err := trunkENI.assignVlanId()
+	_, err := trunkENI.assignVlanId("")
 	assert.NotNil(t, err)
 }
 
@@ -284,15 +320,15 @@ func TestTrunkENI_freeVlanId(t *testing.T) {
 	trunkENI := getMockTrunk()
 
 	// Assign single Vlan Id
-	id, err := trunkENI.assignVlanId()
+	id, err := trunkENI.assignVlanId("")
 	assert.NoError(t, err)
 	assert.Equal(t, 0, id)
 
 	// Free the vlan Id
-	trunkENI.freeVlanId(0)
+	trunkENI.freeVlanId(0, "", "")
 
 	// Assign single Vlan Id again
-	id, err = trunkENI.assignVlanId()
+	id, err = trunkENI.assignVlanId("")
 	assert.NoError(t, err)
 	assert.Equal(t, 0, id)
 }
@@ -303,7 +339,7 @@ func TestTrunkENI_markVlanAssigned(t *testing.T) {
 	// Mark a Vlan as assigned
 	trunkENI.markVlanAssigned(0)
 
-	id, err := trunkENI.assignVlanId()
+	id, err := trunkENI.assignVlanId("")
 	assert.NoError(t, err)
 	assert.Equal(t, 1, id)
 }
@@ -426,7 +462,10 @@ func TestTrunkENI_getBranchInterfaceMap_EmptyList(t *testing.T) {
 	assert.Zero(t, len(branchENIsMap))
 }
 
-// TestTrunkENI_deleteENI tests deleting branch ENI
+// TestTrunkENI_deleteENI tests deleting branch ENI. Disassociation (M1, design doc section 2.2) has
+// moved to disassociateIfNeeded and runs earlier/separately in DeleteCooledDownENIs (see
+// TestTrunkENI_disassociateIfNeeded); deleteENI here only calls DeleteNetworkInterface, plus a
+// fallback release for an ENI whose slot was never positively released beforehand.
 func TestTrunkENI_deleteENI(t *testing.T) {
 	type args struct {
 		eniDetail *ENIDetails
@@ -436,6 +475,7 @@ func TestTrunkENI_deleteENI(t *testing.T) {
 		mockEC2APIHelper *mock_api.MockEC2APIHelper
 		trunkENI         *trunkENI
 	}
+	var freeUnusedVlanErrBefore float64
 	testTrunkENI_deleteENI := []struct {
 		name    string
 		prepare func(f *fields)
@@ -444,52 +484,7 @@ func TestTrunkENI_deleteENI(t *testing.T) {
 		asserts func(f *fields)
 	}{
 		{
-			name: "Vland_Freed, verifies VLANID is freed when branch ENI is deleted",
-			prepare: func(f *fields) {
-				f.mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
-				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil)
-			},
-			args: args{
-				eniDetail: EniDetails1,
-				VlanID:    VlanId1,
-			},
-			wantErr: false,
-			asserts: func(f *fields) {
-				assert.False(t, f.trunkENI.usedVlanIds[VlanId1])
-			},
-		},
-		{
-			name: "Vland_NotFreed, verifies VLANID is not freed when branch ENI delete fails",
-			prepare: func(f *fields) {
-				f.mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
-				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(MockError)
-			},
-			args: args{
-				eniDetail: EniDetails1,
-				VlanID:    VlanId1,
-			},
-			wantErr: true,
-			asserts: func(f *fields) {
-				assert.True(t, f.trunkENI.usedVlanIds[VlanId1])
-			},
-		},
-		{
-			name: "DisassociateTrunkInterface_Fails, verifies branch ENI is deleted when disassociation fails for backward compatibility",
-			prepare: func(f *fields) {
-				f.mockEC2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(MockError)
-				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil)
-			},
-			args: args{
-				eniDetail: EniDetails1,
-				VlanID:    VlanId1,
-			},
-			wantErr: false,
-			asserts: func(f *fields) {
-				assert.False(t, f.trunkENI.usedVlanIds[VlanId1])
-			},
-		},
-		{
-			name: "MissingAssociationID, verifies DisassociateTrunkInterface is skipped when association ID is missing and branch ENI is deleted for backward compatibility",
+			name: "Vlan_FreedViaFallback, verifies an ENI whose slot was never released beforehand (e.g. a sweep-discovered orphan with no known AssociationID) still frees its vlan once delete succeeds",
 			prepare: func(f *fields) {
 				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
 			},
@@ -500,6 +495,48 @@ func TestTrunkENI_deleteENI(t *testing.T) {
 			wantErr: false,
 			asserts: func(f *fields) {
 				assert.False(t, f.trunkENI.usedVlanIds[VlanId2])
+				assert.True(t, ENIDetailsMissingAssociationID.slotReleased,
+					"a successful delete must positively release the slot as a fallback")
+			},
+		},
+		{
+			name: "Vlan_NotFreed_DeleteFails, verifies VLANID stays reserved and the slot stays occupied when delete fails",
+			prepare: func(f *fields) {
+				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(MockError)
+			},
+			args: args{
+				eniDetail: EniDetails1,
+				VlanID:    VlanId1,
+			},
+			wantErr: true,
+			asserts: func(f *fields) {
+				assert.True(t, f.trunkENI.usedVlanIds[VlanId1])
+				assert.False(t, EniDetails1.slotReleased,
+					"a delete failure must not release a slot that was never positively released")
+			},
+		},
+		{
+			name: "AlreadyReleased_DeleteDoesNotDoubleFree, verifies deleteENI does not attempt to re-release a slot disassociateIfNeeded already released",
+			prepare: func(f *fields) {
+				// Simulate disassociateIfNeeded having already released the slot and vlan before
+				// delete ever ran (the common M1 case).
+				f.trunkENI.releaseSlot(EniDetails2)
+				freeUnusedVlanErrBefore = testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id"))
+				f.mockEC2APIHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
+			},
+			args: args{
+				eniDetail: EniDetails2,
+				VlanID:    VlanId2,
+			},
+			wantErr: false,
+			asserts: func(f *fields) {
+				assert.False(t, f.trunkENI.usedVlanIds[VlanId2])
+				// If deleteENI had tried to release again, freeVlanIdLocked would have logged a
+				// "free_unused_vlan_id" error (the vlan is already free) instead of skipping the
+				// release entirely.
+				assert.Equal(t, freeUnusedVlanErrBefore,
+					testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id")),
+					"deleteENI must not attempt to re-release an already-released slot")
 			},
 		},
 	}
@@ -528,23 +565,37 @@ func TestTrunkENI_deleteENI(t *testing.T) {
 	}
 }
 
-// TestTrunkENI_DeleteCooledDownENIs_NotCooledDown tests that ENIs that have not cooled down are not deleted
+// TestTrunkENI_DeleteCooledDownENIs_NotCooledDown tests that ENIs that have not cooled down are not
+// deleted, but M1 (design doc section 2.2) still disassociates them immediately - with no cooldown
+// wait - so their trunk slot and vlan are released even though they remain queued for deletion.
 func TestTrunkENI_DeleteCooledDownENIs_NotCooledDown(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	trunkENI := getMockTrunk()
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.usedVlanIds[VlanId2] = true
 
 	EniDetails1.deletionTimeStamp = time.Now()
 	EniDetails2.deletionTimeStamp = time.Now()
 	trunkENI.deleteQueue = append(trunkENI.deleteQueue, EniDetails1, EniDetails2)
+
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID2).Return(nil)
 
 	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
 	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
 	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 
 	trunkENI.DeleteCooledDownENIs()
+
+	// Delete itself stays gated behind the cooldown, so both entries remain queued.
 	assert.Equal(t, 2, len(trunkENI.deleteQueue))
+	// But the immediate disassociate already ran: the slot and vlan are released.
+	assert.True(t, EniDetails1.slotReleased)
+	assert.True(t, EniDetails2.slotReleased)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
+	assert.False(t, trunkENI.usedVlanIds[VlanId2])
 }
 
 // TestTrunkENI_DeleteCooledDownENIs_NoDeletionTimeStamp tests that ENIs are deleted if they don't have any deletion timestamp
@@ -574,7 +625,8 @@ func TestTrunkENI_DeleteCooledDownENIs_NoDeletionTimeStamp(t *testing.T) {
 	assert.Equal(t, 0, len(trunkENI.deleteQueue))
 }
 
-// TestTrunkENI_DeleteCooledDownENIs_CooledDownResource tests that cooled down resources are deleted
+// TestTrunkENI_DeleteCooledDownENIs_CooledDownResource tests that cooled down resources are deleted,
+// and that the not-yet-cooled-down resource left behind is still immediately disassociated (M1).
 func TestTrunkENI_DeleteCooledDownENIs_CooledDownResource(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -589,6 +641,9 @@ func TestTrunkENI_DeleteCooledDownENIs_CooledDownResource(t *testing.T) {
 
 	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(nil)
+	// EniDetails2 has not cooled down for delete, but M1 disassociates it anyway, with no cooldown
+	// wait, releasing its slot and vlan even though it remains queued.
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID2).Return(nil)
 
 	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
 	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
@@ -597,10 +652,15 @@ func TestTrunkENI_DeleteCooledDownENIs_CooledDownResource(t *testing.T) {
 	trunkENI.DeleteCooledDownENIs()
 	assert.Equal(t, 1, len(trunkENI.deleteQueue))
 	assert.Equal(t, EniDetails2, trunkENI.deleteQueue[0])
+	assert.True(t, EniDetails2.slotReleased, "the not-yet-cooled-down entry must still be immediately disassociated")
+	assert.False(t, trunkENI.usedVlanIds[VlanId2], "its vlan must be released even though it remains queued for delete")
 }
 
-// TestTrunkENI_DeleteCooledDownENIs_DeleteFailed tests that when delete fails item is requeued into the delete queue for
-// the retry count
+// TestTrunkENI_DeleteCooledDownENIs_DeleteFailed tests that when delete fails item is requeued into
+// the delete queue for the retry count. M1 (design doc section 2.2): disassociate happens exactly
+// ONCE per ENI - not once per delete retry - because once the slot is positively released,
+// disassociateIfNeeded skips it on every subsequent pass through the queue; a delete failure must
+// not re-occupy the slot.
 func TestTrunkENI_DeleteCooledDownENIs_DeleteFailed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -619,13 +679,17 @@ func TestTrunkENI_DeleteCooledDownENIs_DeleteFailed(t *testing.T) {
 	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 
 	coolDown.EXPECT().GetCoolDownPeriod().Return(time.Second * 60).AnyTimes()
-	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil).Times(MaxDeleteRetries)
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(MockError).Times(MaxDeleteRetries)
 	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID2).Return(nil)
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails2.ID).Return(nil)
 
 	trunkENI.DeleteCooledDownENIs()
 	assert.Zero(t, len(trunkENI.deleteQueue))
+	// The repeatedly-failing delete's slot must stay released throughout - it was never re-occupied
+	// by the retries.
+	assert.True(t, EniDetails1.slotReleased)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
 }
 
 // TestTrunkENI_DeleteCooledDownENIs_ForgottenMetric verifies that when an ENI exhausts MaxDeleteRetries
@@ -644,8 +708,10 @@ func TestTrunkENI_DeleteCooledDownENIs_ForgottenMetric(t *testing.T) {
 	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("60"), nil)
 	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
 
+	// The immediate disassociate (M1) runs exactly once - not once per delete retry - since it is
+	// skipped on every subsequent pass once the slot is positively released.
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
 	// Every delete attempt fails, so the ENI is retried MaxDeleteRetries times and then forgotten.
-	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil).Times(MaxDeleteRetries)
 	ec2APIHelper.EXPECT().DeleteNetworkInterface(&EniDetails1.ID).Return(MockError).Times(MaxDeleteRetries)
 
 	before := testutil.ToFloat64(branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded"))
@@ -656,6 +722,229 @@ func TestTrunkENI_DeleteCooledDownENIs_ForgottenMetric(t *testing.T) {
 	after := testutil.ToFloat64(branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded"))
 	assert.Equal(t, float64(1), after-before, "expected one forgotten branch ENI to be counted")
 	assert.Zero(t, len(trunkENI.deleteQueue))
+	// Forgetting the ENI (giving up on delete retries) must NOT re-occupy its already-released slot.
+	assert.True(t, EniDetails1.slotReleased)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
+}
+
+// TestTrunkENI_disassociateIfNeeded_Success verifies that a successful immediate disassociate (M1,
+// design doc section 2.2) releases the trunk slot and vlan right away, starting the vlan reuse
+// cooldown clock at the ENI's deletionTimeStamp - not at disassociate time - and records the
+// immediate-disassociate success metric.
+func TestTrunkENI_disassociateIfNeeded_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.usedVlanIds[VlanId1] = true
+	deletedAt := time.Now().Add(-5 * time.Second)
+	EniDetails1.deletionTimeStamp = deletedAt
+
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
+
+	before := testutil.ToFloat64(branchENIOperationsSuccessCount.WithLabelValues("immediate_disassociate_succeeded"))
+
+	trunkENI.disassociateIfNeeded(EniDetails1)
+
+	assert.True(t, EniDetails1.slotReleased)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
+	assert.Equal(t, deletedAt, trunkENI.vlanReleasedAt[VlanId1],
+		"the reuse cooldown clock must start at the ENI's deletionTimeStamp, not now")
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(branchENIOperationsSuccessCount.WithLabelValues("immediate_disassociate_succeeded"))-before)
+}
+
+// TestTrunkENI_disassociateIfNeeded_AssociationAlreadyGone verifies that EC2 reporting the
+// association already gone is treated the same as a successful disassociate.
+func TestTrunkENI_disassociateIfNeeded_AssociationAlreadyGone(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.usedVlanIds[VlanId1] = true
+
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).
+		Return(fmt.Errorf("%s: already gone", ec2Errors.NotFoundAssociationID))
+
+	trunkENI.disassociateIfNeeded(EniDetails1)
+
+	assert.True(t, EniDetails1.slotReleased)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
+}
+
+// TestTrunkENI_disassociateIfNeeded_RealFailureLeavesSlotOccupied verifies that a genuine
+// disassociate failure leaves the slot counted as occupied (requirement 4: over-counting is safe,
+// under-counting is not), so a later processing pass can retry it.
+func TestTrunkENI_disassociateIfNeeded_RealFailureLeavesSlotOccupied(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.usedVlanIds[VlanId1] = true
+
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(MockError)
+
+	trunkENI.disassociateIfNeeded(EniDetails1)
+
+	assert.False(t, EniDetails1.slotReleased)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+}
+
+// TestTrunkENI_disassociateIfNeeded_SkipsAlreadyReleased verifies the immediate disassociate is not
+// re-attempted once the slot has already been positively released (no DisassociateTrunkInterface
+// expectation is registered below - gomock fails the test if it is called anyway).
+func TestTrunkENI_disassociateIfNeeded_SkipsAlreadyReleased(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	EniDetails1.slotReleased = true
+
+	trunkENI.disassociateIfNeeded(EniDetails1)
+}
+
+// TestTrunkENI_disassociateIfNeeded_SkipsMissingAssociationID verifies a sweep-discovered orphan
+// with no known AssociationID is left for deleteENI's fallback release instead of being
+// disassociated directly - there is nothing for us to disassociate with (no
+// DisassociateTrunkInterface expectation is registered below - gomock fails the test if it is
+// called anyway).
+func TestTrunkENI_disassociateIfNeeded_SkipsMissingAssociationID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+
+	trunkENI.disassociateIfNeeded(ENIDetailsMissingAssociationID)
+
+	assert.False(t, ENIDetailsMissingAssociationID.slotReleased)
+}
+
+// TestTrunkENI_U1_VlanReuseCooldown verifies M1's VLAN reuse cooldown (design doc section 2.2,
+// test scenario U1): a released vlan is not reassignable before deletionTimeStamp+reuseCooldown and
+// is reassignable after; the owner record is cleared on release; and the blocked-allocation metric
+// fires while the vlan is still cooling.
+func TestTrunkENI_U1_VlanReuseCooldown(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
+	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
+
+	trunkENI := getMockTrunk()
+	trunkENI.usedVlanIds[0] = true // reserved, as on a real trunk
+
+	releasedEni := &ENIDetails{ID: "eni-released", VlanID: VlanId1, deletionTimeStamp: time.Now().Add(-20 * time.Second)}
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.vlanOwner[VlanId1] = releasedEni.ID
+	trunkENI.releaseSlot(releasedEni)
+
+	assert.False(t, trunkENI.usedVlanIds[VlanId1], "the vlan must be marked free in the ledger immediately")
+	_, stillOwned := trunkENI.vlanOwner[VlanId1]
+	assert.False(t, stillOwned, "the owner record must be cleared on release")
+
+	// Released 20s ago, still within the 30s reuse cooldown: free in the ledger but must not be
+	// handed out, and the blocked-allocation metric must record it.
+	before := testutil.ToFloat64(branchENIVlanReuseCooldownBlockedCount)
+	consumedId, err := trunkENI.assignVlanId("")
+	assert.NoError(t, err)
+	assert.NotEqual(t, VlanId1, consumedId, "a vlan still inside its reuse cooldown must not be reassigned")
+	assert.Equal(t, float64(1), testutil.ToFloat64(branchENIVlanReuseCooldownBlockedCount)-before)
+	trunkENI.freeVlanId(consumedId, "", "")
+
+	// Past the 30s cooldown window: now reassignable, and the cooldown record is cleared.
+	trunkENI.vlanReleasedAt[VlanId1] = time.Now().Add(-31 * time.Second)
+	id, err := trunkENI.assignVlanId("")
+	assert.NoError(t, err)
+	assert.Equal(t, VlanId1, id, "past its reuse cooldown, the vlan must be reassignable")
+	_, stillCooling := trunkENI.vlanReleasedAt[VlanId1]
+	assert.False(t, stillCooling, "the cooldown record must be cleared once the vlan is reassigned")
+}
+
+// TestTrunkENI_U2_CanCreateMoreAccounting verifies M1's requirement 4 (design doc section 2.2):
+// canCreateMore stops counting a delete-queue entry as occupying a slot only once its release has
+// been positively observed - never inferred from an empty AssociationID, since a sweep-discovered
+// orphan is enqueued with no known AssociationID while still genuinely attached in EC2 (over-counting
+// is safe; under-counting would over-subscribe the trunk).
+func TestTrunkENI_U2_CanCreateMoreAccounting(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	mockInstance.EXPECT().Type().Return(InstanceType).AnyTimes()
+
+	limit := vpc.Limits[InstanceType].BranchInterface
+	for i := 0; i < limit-1; i++ {
+		podUID := fmt.Sprintf("filler-pod-%d", i)
+		trunkENI.uidToBranchENIMap[podUID] = []*ENIDetails{{ID: fmt.Sprintf("eni-filler-%d", i)}}
+	}
+
+	queued := &ENIDetails{ID: "eni-queued"}
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, queued)
+
+	assert.False(t, trunkENI.canCreateMore(),
+		"an unreleased delete-queue entry must still count as occupying a slot")
+
+	queued.slotReleased = true
+	assert.True(t, trunkENI.canCreateMore(),
+		"a positively-released delete-queue entry must free up a slot")
+
+	// A sweep-discovered orphan (empty AssociationID) must not be assumed released just because it
+	// has no known AssociationID - it is still attached in EC2.
+	orphan := &ENIDetails{ID: "eni-orphan-no-association-id"}
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, orphan)
+	assert.False(t, trunkENI.canCreateMore(),
+		"a sweep-discovered orphan must keep counting as occupied until release is positively observed")
+}
+
+// TestTrunkENI_RegressionE5 is the design doc section 4/5.2 R-E5 regression: on a capacity-full
+// trunk, deleting a pod must free its slot within a single DeleteCooledDownENIs processing pass -
+// not after a full cooldown period - while its vlan remains unavailable for reuse until the reuse
+// cooldown elapses.
+func TestTrunkENI_RegressionE5(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, ec2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	mockInstance.EXPECT().Type().Return(InstanceType).AnyTimes()
+
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockK8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(createCoolDownMockCM("30"), nil)
+	cooldown.InitCoolDownPeriod(mockK8sAPI, zap.New(zap.UseDevMode(true)).WithName("cooldown"))
+
+	// Fill the trunk to exactly the c5.xlarge branch-interface limit: limit-1 filler branches plus
+	// the one real pod (owning EniDetails1/VlanId1) that is about to be deleted.
+	limit := vpc.Limits[InstanceType].BranchInterface
+	for i := 0; i < limit-1; i++ {
+		podUID := fmt.Sprintf("filler-pod-%d", i)
+		trunkENI.uidToBranchENIMap[podUID] = []*ENIDetails{{ID: fmt.Sprintf("eni-filler-%d", i)}}
+	}
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.vlanOwner[VlanId1] = EniDetails1.ID
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails1}
+
+	assert.False(t, trunkENI.canCreateMore(), "the trunk must start at capacity")
+
+	// Pod deleted: synchronous hand-off to the delete queue, no EC2 call yet.
+	trunkENI.PushBranchENIsToCoolDownQueue(PodUID)
+	assert.False(t, trunkENI.canCreateMore(),
+		"queuing for deletion alone must not free the slot before disassociation is observed")
+
+	// One async processing pass: the delete cooldown has NOT elapsed (deletionTimeStamp is now),
+	// but M1 disassociates immediately anyway.
+	ec2APIHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
+	trunkENI.DeleteCooledDownENIs()
+
+	assert.True(t, trunkENI.canCreateMore(),
+		"the slot must be available after a single processing pass, not after a full cooldown")
+	assert.Len(t, trunkENI.deleteQueue, 1, "the ENI itself is still awaiting the unchanged delete cooldown")
+
+	// The vlan is free in the ledger but must still be withheld from reuse until the reuse cooldown
+	// elapses (started at deletionTimeStamp, reproducing today's cooldown timing exactly).
+	newVlan, err := trunkENI.assignVlanId("")
+	assert.NoError(t, err)
+	assert.NotEqual(t, VlanId1, newVlan,
+		"the freed vlan must not be reused before its reuse cooldown elapses")
 }
 
 // TestTrunkENI_PushBranchENIsToCoolDownQueue tests that ENIs are pushed to the delete queue if the pod is being deleted
@@ -1077,10 +1366,17 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
+	// M3 (design doc section 2.4): the failed association now also triggers one error-driven orphan
+	// reclaim describe, which reads the subnet - hence one SubnetID call beyond the two creates.
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(3)
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
 	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
 	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil)
+
+	// The reclaim describe returns the two branch ENIs this very allocation just created. Both are
+	// still in-flight (phase=creating), so the M5 G1 guard keeps the reclaim from enqueueing them and the
+	// delete-queue assertion below is unchanged - proving M3 cannot cannibalize an in-flight create.
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil)
 
 	gomock.InOrder(
 		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
@@ -1626,4 +1922,519 @@ func TestTrunkENI_ShadowReuse_PodReleaseFeedsShadowRecords(t *testing.T) {
 	trunkENI.observeShadowReuse([]string{SecurityGroup1, SecurityGroup2})
 	assert.Equal(t, float64(1),
 		testutil.ToFloat64(orphanReuseShadowHitCount.WithLabelValues(shadowSGMatchExact))-exactBefore)
+}
+
+// TestTrunkENI_U5_PendingCreateSkippedByGateAndSweep verifies M5 G1 (design doc section 2.6): an
+// ENI in the in-flight set (phase=creating) is never classified as an orphan by either the known-set builder shared by
+// the gate and the sweep, or by the sweep's own re-check at enqueue time.
+func TestTrunkENI_U5_PendingCreateSkippedByGateAndSweep(t *testing.T) {
+	trunkENI := getMockTrunk()
+	inflightId := "eni-inflight-create"
+	trunkENI.inFlightENIs[inflightId] = eniPhaseCreating
+
+	knownBranchENIs := trunkENI.knownBranchENIsLocked()
+	_, known := knownBranchENIs[inflightId]
+	assert.True(t, known, "an in-flight create must be part of the known set")
+
+	orphanBefore := testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))
+	foundUnassigned := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(
+		map[string]*awsEc2Types.NetworkInterface{
+			inflightId: {NetworkInterfaceId: &inflightId, TagSet: vlan1Tag},
+		})
+
+	assert.False(t, foundUnassigned, "an in-flight create must not be discovered as an orphan")
+	assert.Empty(t, trunkENI.deleteQueue, "an in-flight create must never be enqueued for deletion")
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))-orphanBefore)
+}
+
+// TestTrunkENI_U6_DeleteQueueDedup verifies M5 G2 (design doc section 2.6): none of the three
+// enqueue paths insert a second entry for an ENI ID already in the delete queue.
+func TestTrunkENI_U6_DeleteQueueDedup(t *testing.T) {
+	trunkENI := getMockTrunk()
+	trunkENI.usedVlanIds[VlanId1] = true
+
+	dedupBefore := testutil.ToFloat64(branchENIDeleteQueueDedupCount)
+
+	// pushENIToDeleteQueue (used by the pod-delete path).
+	trunkENI.pushENIToDeleteQueue(EniDetails1)
+	trunkENI.pushENIToDeleteQueue(EniDetails1)
+	assert.Len(t, trunkENI.deleteQueue, 1, "pushENIToDeleteQueue must not insert a duplicate ID")
+
+	// PushENIsToFrontOfDeleteQueue (used by the create-failure path).
+	trunkENI.PushENIsToFrontOfDeleteQueue(nil, []*ENIDetails{EniDetails1})
+	assert.Len(t, trunkENI.deleteQueue, 1, "PushENIsToFrontOfDeleteQueue must not insert a duplicate ID")
+
+	// pushUnassignedBranchInterfacesToDeleteQueue (used by the gate and the sweep).
+	foundUnassigned := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(
+		map[string]*awsEc2Types.NetworkInterface{
+			Branch1Id: {NetworkInterfaceId: &Branch1Id, TagSet: vlan1Tag},
+		})
+	assert.False(t, foundUnassigned,
+		"an ENI already in the delete queue must not be re-discovered as an orphan")
+	assert.Len(t, trunkENI.deleteQueue, 1,
+		"pushUnassignedBranchInterfacesToDeleteQueue must not insert a duplicate ID")
+
+	assert.Equal(t, float64(3),
+		testutil.ToFloat64(branchENIDeleteQueueDedupCount)-dedupBefore,
+		"all three duplicate attempts must be counted")
+}
+
+// TestTrunkENI_U7_FreeVlanIdOwnerAware verifies M5 G3 (design doc section 2.6): freeVlanId only
+// frees a VLAN whose recorded owner matches the requesting ENI ID (or has no recorded owner, for
+// legacy callers), and reserved VLAN 0 is never handed out for a caller to free in the first place.
+func TestTrunkENI_U7_FreeVlanIdOwnerAware(t *testing.T) {
+	trunkENI := getMockTrunk()
+
+	// A VLAN with no recorded owner still frees (legacy/unknown-tag fallback paths).
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.freeVlanId(VlanId1, "eni-any", "")
+	assert.False(t, trunkENI.usedVlanIds[VlanId1], "an unowned vlan must still free")
+
+	// A VLAN owned by a different ENI must not be freed.
+	trunkENI.usedVlanIds[VlanId2] = true
+	trunkENI.vlanOwner[VlanId2] = "eni-owner"
+	trunkENI.freeVlanId(VlanId2, "eni-not-the-owner", "")
+	assert.True(t, trunkENI.usedVlanIds[VlanId2], "a vlan owned by another eni must not be freed")
+	assert.Equal(t, "eni-owner", trunkENI.vlanOwner[VlanId2])
+
+	// The rightful owner can free it.
+	trunkENI.freeVlanId(VlanId2, "eni-owner", "")
+	assert.False(t, trunkENI.usedVlanIds[VlanId2], "the rightful owner must be able to free the vlan")
+	_, stillOwned := trunkENI.vlanOwner[VlanId2]
+	assert.False(t, stillOwned, "the owner record must be cleared once freed")
+
+	// Reserved VLAN 0 is initialized permanently used and is never handed out by assignVlanId,
+	// so no caller ever reaches freeVlanId(0, ...) on a real trunk; markVlanAssignedWithOwnerLocked
+	// also never records an owner for it.
+	assert.NoError(t, trunkENI.markVlanAssignedWithOwnerLocked(0, "eni-x"))
+	_, ownerRecordedForVlan0 := trunkENI.vlanOwner[0]
+	assert.False(t, ownerRecordedForVlan0, "reserved vlan 0 must never get an owner")
+}
+
+// TestTrunkENI_RegressionHA is the design doc section 4 H-A regression: an ENI created in the
+// Associate-to-cache window (present in EC2, attached, but not yet in the pod-owned ledger) must
+// never be swept as an orphan by the ledger-verify gate.
+func TestTrunkENI_RegressionHA(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, _ := getMockHydratedTrunk(t, ctrl)
+
+	// Simulate CreateAndAssociateBranchENIs having just created and associated a new branch ENI
+	// for a different pod, but not yet reached addBranchToCache.
+	inflightId := "eni-inflight-associate-window"
+	inflightVlan := 5
+	trunkENI.inFlightENIs[inflightId] = eniPhaseCreating
+	trunkENI.usedVlanIds[inflightVlan] = true
+	trunkENI.vlanOwner[inflightVlan] = inflightId
+
+	inflight := &awsEc2Types.NetworkInterface{
+		InterfaceType:      awsEc2Types.NetworkInterfaceTypeBranch,
+		NetworkInterfaceId: &inflightId,
+		TagSet: []awsEc2Types.Tag{{
+			Key:   aws.String(config.VLandIDTag),
+			Value: aws.String(strconv.Itoa(inflightVlan)),
+		}, trunkIDTag},
+	}
+	attached := append(append([]*awsEc2Types.NetworkInterface{}, branchInterfaces...), inflight)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(attached, nil).Times(1)
+
+	err := trunkENI.verifyBranchLedger()
+	assert.NoError(t, err)
+	assert.True(t, trunkENI.branchLedgerVerified)
+
+	assert.Empty(t, trunkENI.deleteQueue,
+		"an in-flight create must not be enqueued for deletion by the ledger-verify gate")
+	assert.True(t, trunkENI.usedVlanIds[inflightVlan], "the in-flight create's vlan must remain reserved")
+}
+
+// TestTrunkENI_RegressionHB is the design doc section 4 H-B regression: an ENI already in the
+// delete queue must not be re-enqueued by the sweep (G2), and even if a stale duplicate delete
+// somehow still ran, owner-aware freeVlanId (G3) must not release a vlan that has since been
+// reassigned to a new pod's branch ENI.
+func TestTrunkENI_RegressionHB(t *testing.T) {
+	trunkENI := getMockTrunk()
+	// Reserve vlan 0 like a real trunk so assignVlanId's lowest-free scan lands on sharedVlan
+	// once it is freed, instead of on the mock's otherwise-unreserved index 0.
+	trunkENI.usedVlanIds[0] = true
+
+	sharedVlan := 1
+	oldENI := &ENIDetails{ID: "eni-old-awaiting-delete", VlanID: sharedVlan}
+	trunkENI.usedVlanIds[sharedVlan] = true
+	trunkENI.vlanOwner[sharedVlan] = oldENI.ID
+
+	// The orphan sweep discovers the ENI awaiting deletion once...
+	trunkENI.pushENIToDeleteQueue(oldENI)
+	assert.Len(t, trunkENI.deleteQueue, 1)
+
+	// ...and a second sweep pass (e.g. before EC2 confirms the delete) must not duplicate it (G2).
+	foundUnassigned := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(
+		map[string]*awsEc2Types.NetworkInterface{
+			oldENI.ID: {NetworkInterfaceId: &oldENI.ID, TagSet: vlan1Tag},
+		})
+	assert.False(t, foundUnassigned)
+	assert.Len(t, trunkENI.deleteQueue, 1, "the awaiting-delete ENI must not be duplicated in the queue")
+
+	// The single queued entry is popped and actually deleted, freeing its vlan.
+	popped, hasENI := trunkENI.popENIFromDeleteQueue()
+	assert.True(t, hasENI)
+	assert.Equal(t, oldENI.ID, popped.ID)
+	trunkENI.freeVlanId(sharedVlan, popped.ID, "")
+	assert.False(t, trunkENI.usedVlanIds[sharedVlan])
+
+	// A new pod immediately grabs the now-free vlan.
+	newVlan, err := trunkENI.assignVlanId("")
+	assert.NoError(t, err)
+	assert.Equal(t, sharedVlan, newVlan)
+	trunkENI.addInFlightCreate("eni-new-owner", newVlan, "")
+
+	// If a stale duplicate of the old ENI's delete somehow still ran (the race G2 closes at the
+	// source), owner-aware freeVlanId (G3) refuses to release the vlan out from under the new
+	// owner.
+	trunkENI.freeVlanId(sharedVlan, oldENI.ID, "")
+	assert.True(t, trunkENI.usedVlanIds[sharedVlan],
+		"the vlan must remain reserved for the new owner despite the stale duplicate free")
+	assert.Equal(t, "eni-new-owner", trunkENI.vlanOwner[sharedVlan])
+}
+
+// --- M3: error-driven orphan reclaim (design doc section 2.4) ---------------------------------
+
+// newReclaimTrunk returns a trunk wired with mocks and a trunk ID, ready for the error-driven
+// reclaim path (which describes the trunk's branch ENIs).
+func newReclaimTrunk(ctrl *gomock.Controller) (*trunkENI, *mock_api.MockEC2APIHelper) {
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+	return trunkENI, mockHelper
+}
+
+// TestTrunkENI_U4_ErrorDrivenReclaim_EnqueuesOrphan proves the reactive floor: after a failed
+// branch-ENI addition, one describe runs and an attached-but-unknown ENI is enqueued for deletion.
+func TestTrunkENI_U4_ErrorDrivenReclaim_EnqueuesOrphan(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	orphanID := "eni-orphan-holding-slot"
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: &orphanID, TagSet: vlan1Tag},
+		}, nil).Times(1)
+
+	orphanBefore := testutil.ToFloat64(branchENIErrorDrivenOrphanCount)
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("InsufficientCapacityOnTrunk: no capacity"))
+
+	assert.Len(t, trunkENI.deleteQueue, 1, "the orphan wedging the trunk must be enqueued")
+	assert.Equal(t, orphanID, trunkENI.deleteQueue[0].ID)
+	assert.Equal(t, float64(1), testutil.ToFloat64(branchENIErrorDrivenOrphanCount)-orphanBefore)
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultReclaimed, reclaimErrorClassCapacity)))
+}
+
+// TestTrunkENI_U4_ErrorDrivenReclaim_VlanInUseClass proves a VLAN-collision failure also triggers
+// the reclaim (design section 2.4: the trigger is ANY addition failure, not just capacity).
+func TestTrunkENI_U4_ErrorDrivenReclaim_VlanInUseClass(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	orphanID := "eni-orphan-holding-vlan"
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: &orphanID, TagSet: vlan2Tag},
+		}, nil).Times(1)
+
+	before := testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultReclaimed, reclaimErrorClassVlanInUse))
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("VlanId 2 is already in use on the trunk"))
+
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultReclaimed, reclaimErrorClassVlanInUse))-before)
+}
+
+// TestTrunkENI_U4_ErrorDrivenReclaim_CleanWhenEC2Agrees proves that when EC2 agrees with the ledger
+// nothing is enqueued: the failure was not caused by an orphan.
+func TestTrunkENI_U4_ErrorDrivenReclaim_CleanWhenEC2Agrees(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	owned := &ENIDetails{ID: "eni-owned-by-pod", VlanID: VlanId1}
+	trunkENI.uidToBranchENIMap["pod-uid"] = []*ENIDetails{owned}
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: &owned.ID, TagSet: vlan1Tag},
+		}, nil).Times(1)
+
+	before := testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultClean, reclaimErrorClassOther))
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("some unrelated transient failure"))
+
+	assert.Empty(t, trunkENI.deleteQueue, "a pod-owned ENI must never be reclaimed")
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultClean, reclaimErrorClassOther))-before)
+}
+
+// TestTrunkENI_U4_ErrorDrivenReclaim_RateWindow proves the failure-path describe is bounded: a
+// second failure inside errorDrivenReclaimWindow must not issue another describe.
+func TestTrunkENI_U4_ErrorDrivenReclaim_RateWindow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	// Exactly one describe for two back-to-back failures.
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{}, nil).Times(1)
+
+	skipBefore := testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultSkippedWindow, reclaimErrorClassCapacity))
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("capacity exceeded"))
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("capacity exceeded"))
+
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultSkippedWindow, reclaimErrorClassCapacity))-skipBefore,
+		"the second failure inside the window must be skipped, not describe again")
+}
+
+// TestTrunkENI_U4_ErrorDrivenReclaim_DescribeFailure proves a failed reclaim describe never panics
+// and never mutates ledger state - the caller's original allocation error stands.
+func TestTrunkENI_U4_ErrorDrivenReclaim_DescribeFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, MockError).Times(1)
+
+	before := testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultDescribeError, reclaimErrorClassCapacity))
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("capacity exceeded"))
+
+	assert.Empty(t, trunkENI.deleteQueue, "a failed describe must not change ledger state")
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		branchENIErrorDrivenReclaimCount.WithLabelValues(reclaimResultDescribeError, reclaimErrorClassCapacity))-before)
+}
+
+// TestTrunkENI_ErrorDrivenReclaim_RespectsM5KnownSet proves the reclaim reuses the shared M5 known
+// set: an in-flight create (hazard H-A) and an ENI already awaiting deletion (hazard H-B) are never
+// reclaimed, so M3 cannot reintroduce either hazard.
+func TestTrunkENI_ErrorDrivenReclaim_RespectsM5KnownSet(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	inflightID := "eni-inflight-create"
+	queuedID := "eni-awaiting-delete"
+	trunkENI.inFlightENIs[inflightID] = eniPhaseCreating
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, &ENIDetails{ID: queuedID, VlanID: VlanId2})
+
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: &inflightID, TagSet: vlan1Tag},
+			{NetworkInterfaceId: &queuedID, TagSet: vlan2Tag},
+		}, nil).Times(1)
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("capacity exceeded"))
+
+	assert.Len(t, trunkENI.deleteQueue, 1, "no duplicate entry and no in-flight create enqueued")
+	assert.Equal(t, queuedID, trunkENI.deleteQueue[0].ID)
+}
+
+// TestTrunkENI_RegressionE4 replays design hazard E4: orphans the ledger does not know occupy the
+// trunk's real branch slots, so canCreateMore wrongly allows an allocation that then fails to
+// associate. Without the reclaim the node loops create/delete forever. This asserts the wedge is
+// broken - after the failure the orphans are queued for deletion, which is what frees the slots.
+func TestTrunkENI_RegressionE4(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+	orphan1 := "eni-orphan-1"
+	orphan2 := "eni-orphan-2"
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: &orphan1, TagSet: vlan1Tag},
+			{NetworkInterfaceId: &orphan2, TagSet: vlan2Tag},
+		}, nil).Times(1)
+
+	// The ledger is empty: it believes the trunk is idle while EC2 has two attached orphans.
+	assert.Empty(t, trunkENI.uidToBranchENIMap)
+
+	trunkENI.reclaimOrphansAfterAddFailure(fmt.Errorf("InsufficientCapacityOnTrunk"))
+
+	assert.Len(t, trunkENI.deleteQueue, 2, "both slot-holding orphans must be queued for deletion")
+	queued := map[string]bool{}
+	for _, eni := range trunkENI.deleteQueue {
+		queued[eni.ID] = true
+	}
+	assert.True(t, queued[orphan1] && queued[orphan2])
+}
+
+// TestReclaimErrorClass documents that classification is best-effort observability and that an
+// unrecognized error is still eligible for reclaim (reported as "other", never excluded).
+func TestReclaimErrorClass(t *testing.T) {
+	assert.Equal(t, reclaimErrorClassCapacity, reclaimErrorClass(fmt.Errorf("InsufficientCapacityOnTrunk")))
+	assert.Equal(t, reclaimErrorClassCapacity, reclaimErrorClass(fmt.Errorf("ResourceLimitExceeded")))
+	assert.Equal(t, reclaimErrorClassVlanInUse, reclaimErrorClass(fmt.Errorf("VlanId already in use")))
+	assert.Equal(t, reclaimErrorClassOther, reclaimErrorClass(fmt.Errorf("RequestLimitExceeded throttle")))
+	assert.Equal(t, reclaimErrorClassOther, reclaimErrorClass(nil))
+}
+
+// --- Pop window (design doc section 4.1 H-C) ---------------------------------------------------
+
+// TestTrunkENI_RegressionPopWindow proves the delete-side in-flight guard: an ENI popped from the
+// delete queue is outside the ledger AND the queue while its EC2 disassociate/delete call runs, so
+// a concurrent gate/sweep/M3 describe - which still sees it attached in EC2 - must not re-classify
+// it as an orphan and enqueue a duplicate. The concurrent sweep is triggered deterministically from
+// inside the mocked DisassociateTrunkInterface call, i.e. exactly inside the pop window.
+func TestTrunkENI_RegressionPopWindow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+
+	vlan := 5
+	eni := &ENIDetails{
+		ID:                "eni-pop-window",
+		VlanID:            vlan,
+		AssociationID:     "trunk-assoc-pop-window",
+		deletionTimeStamp: time.Now().Add(-10 * time.Minute), // past cooldown: delete proceeds this pass
+	}
+	trunkENI.usedVlanIds[vlan] = true
+	trunkENI.vlanOwner[vlan] = eni.ID
+	trunkENI.pushENIToDeleteQueue(eni)
+
+	vlanTag := []awsEc2Types.Tag{{
+		Key:   aws.String(config.VLandIDTag),
+		Value: aws.String(strconv.Itoa(vlan)),
+	}, trunkIDTag}
+
+	discoveredBefore := testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))
+
+	mockHelper.EXPECT().DisassociateTrunkInterface(&eni.AssociationID).DoAndReturn(
+		func(*string) error {
+			// Mid-call: the ENI is popped and its disassociate is "in flight". Run the sweep now;
+			// its describe still reports the ENI attached.
+			mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+				[]*awsEc2Types.NetworkInterface{{NetworkInterfaceId: &eni.ID, TagSet: vlanTag}}, nil)
+			found, err := trunkENI.ReconcileUnassignedBranchENIs()
+			assert.NoError(t, err)
+			assert.False(t, found, "a mid-processing delete-queue ENI must not be classified as an orphan")
+			assert.Empty(t, trunkENI.deleteQueue, "the concurrent sweep must not enqueue a duplicate")
+			return nil
+		})
+	mockHelper.EXPECT().DeleteNetworkInterface(&eni.ID).Return(nil)
+
+	trunkENI.DeleteCooledDownENIs()
+
+	assert.Empty(t, trunkENI.deleteQueue)
+	assert.Empty(t, trunkENI.inFlightENIs, "the deleting marker must be cleared when the pass ends")
+	assert.False(t, trunkENI.usedVlanIds[vlan], "the VLAN must end up freed by the real delete flow")
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))-discoveredBefore,
+		"the pop window must not distort the discovered-orphan metric")
+}
+
+// TestTrunkENI_PopWindow_EnqueueRecheck covers the second guard layer: even when a stale known-set
+// snapshot (taken before the pop) already classified the ENI as unassigned, the enqueue-time
+// re-check under the lock skips an ENI whose delete is being processed, counting it as a
+// delete-queue dedup - not as a discovered orphan - and leaving its VLAN ownership untouched.
+func TestTrunkENI_PopWindow_EnqueueRecheck(t *testing.T) {
+	trunkENI := getMockTrunk()
+
+	vlan := VlanId2
+	eniID := "eni-mid-delete-processing"
+	trunkENI.usedVlanIds[vlan] = true
+	trunkENI.vlanOwner[vlan] = eniID
+	trunkENI.inFlightENIs[eniID] = eniPhaseDeleting
+
+	discoveredBefore := testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))
+	dedupBefore := testutil.ToFloat64(branchENIDeleteQueueDedupCount)
+
+	found := trunkENI.pushUnassignedBranchInterfacesToDeleteQueue(
+		map[string]*awsEc2Types.NetworkInterface{
+			eniID: {NetworkInterfaceId: &eniID, TagSet: vlan2Tag},
+		})
+
+	assert.False(t, found)
+	assert.Empty(t, trunkENI.deleteQueue, "an ENI being processed by the delete pipeline must not be re-enqueued")
+	assert.Equal(t, eniID, trunkENI.vlanOwner[vlan], "VLAN ownership must be left untouched")
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(branchENIDeleteQueueDedupCount)-dedupBefore,
+		"the skip is attributed to the delete-queue dedup counter (G2 extended to the pop window)")
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(branchENIOrphanReclaimedCount.WithLabelValues("discovered"))-discoveredBefore)
+}
+
+// TestTrunkENI_RegressionE2 proves the full E2 recovery chain end to end (design doc sections 4.1
+// E2 and 2.5 M4): persistent EC2 failures exhaust MaxDeleteRetries and the ENI is forgotten -
+// dropped from the queue while still attached in EC2, its VLAN still held (the leak). The sweep
+// then rediscovers it as an orphan, re-enqueues it with a fresh retry budget, and once the delete
+// finally succeeds the VLAN is freed - proving a forgotten ENI's VLAN is never PERMANENTLY leaked.
+func TestTrunkENI_RegressionE2(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper := newReclaimTrunk(ctrl)
+
+	vlan := 7
+	eni := &ENIDetails{
+		ID:                "eni-e2-forgotten",
+		VlanID:            vlan,
+		AssociationID:     "trunk-assoc-e2",
+		deletionTimeStamp: time.Now().Add(-10 * time.Minute),
+	}
+	trunkENI.usedVlanIds[vlan] = true
+	trunkENI.vlanOwner[vlan] = eni.ID
+	trunkENI.pushENIToDeleteQueue(eni)
+
+	// Phase 1 - produce the E2 leak: disassociate keeps failing (slot conservatively stays
+	// occupied, VLAN never freed) and delete fails until MaxDeleteRetries is exhausted within
+	// the pass, so the ENI is forgotten while still attached in EC2.
+	mockHelper.EXPECT().DisassociateTrunkInterface(&eni.AssociationID).Return(MockError).Times(MaxDeleteRetries)
+	mockHelper.EXPECT().DeleteNetworkInterface(&eni.ID).Return(MockError).Times(MaxDeleteRetries)
+	forgottenBefore := testutil.ToFloat64(branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded"))
+
+	trunkENI.DeleteCooledDownENIs()
+
+	assert.Equal(t, float64(1),
+		testutil.ToFloat64(branchENIDeleteForgottenCount.WithLabelValues("max_delete_retries_exceeded"))-forgottenBefore)
+	assert.Empty(t, trunkENI.deleteQueue, "the forgotten ENI is dropped from the queue")
+	assert.Empty(t, trunkENI.inFlightENIs, "a forgotten ENI must not linger in the in-flight set - the sweep must be able to rediscover it")
+	assert.True(t, trunkENI.usedVlanIds[vlan], "this is the E2 leak state: the VLAN is still held with nobody driving its release")
+
+	// Phase 2 - the sweep rediscovers the forgotten ENI attached in EC2 and re-enqueues it with a
+	// fresh retry budget.
+	vlanTag := []awsEc2Types.Tag{{
+		Key:   aws.String(config.VLandIDTag),
+		Value: aws.String(strconv.Itoa(vlan)),
+	}, trunkIDTag}
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(
+		[]*awsEc2Types.NetworkInterface{{NetworkInterfaceId: &eni.ID, TagSet: vlanTag}}, nil)
+
+	found, err := trunkENI.ReconcileUnassignedBranchENIs()
+	assert.NoError(t, err)
+	assert.True(t, found, "the sweep must rediscover the forgotten ENI as an orphan")
+	assert.Len(t, trunkENI.deleteQueue, 1)
+
+	// The rediscovered entry was just enqueued with deletionTimeStamp=now; age it past the delete
+	// cooldown so the delete proceeds in the next pass (cooldown timing itself is covered by U1).
+	trunkENI.deleteQueue[0].deletionTimeStamp = time.Now().Add(-10 * time.Minute)
+
+	// Phase 3 - the delete finally succeeds (no disassociate call: the sweep entry has no known
+	// AssociationID, its slot/VLAN release is the fallback at successful delete).
+	mockHelper.EXPECT().DeleteNetworkInterface(&eni.ID).Return(nil)
+
+	trunkENI.DeleteCooledDownENIs()
+
+	assert.Empty(t, trunkENI.deleteQueue)
+	assert.Empty(t, trunkENI.inFlightENIs)
+	assert.False(t, trunkENI.usedVlanIds[vlan], "R-E2: the forgotten ENI's VLAN must not be permanently leaked")
+	assert.NotContains(t, trunkENI.vlanOwner, vlan, "the VLAN's ownership record must be cleared with it")
 }
