@@ -15,6 +15,7 @@ package vpcresources
 
 import (
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,6 +43,45 @@ func TestCRDsUnmarshal(t *testing.T) {
 	assert.Contains(t, specProps, "managedBy")
 	require.Len(t, version.SelectableFields, 1)
 	assert.Equal(t, ".spec.managedBy", version.SelectableFields[0].JSONPath)
+}
+
+// TestTrunkInterfaceSubnetIDSchema pins the trunk subnetID contract: a
+// controller reads this field instead of calling EC2 DescribeNetworkInterfaces
+// to learn where to create branch ENIs, so both the property name and the
+// server-side validation are part of the API surface consumers depend on.
+func TestTrunkInterfaceSubnetIDSchema(t *testing.T) {
+	require.Len(t, CNINodeCRD.Spec.Versions, 1)
+	trunk := CNINodeCRD.Spec.Versions[0].Schema.OpenAPIV3Schema.
+		Properties["status"].Properties["trunkInterface"]
+
+	subnetID, ok := trunk.Properties["subnetID"]
+	require.True(t, ok, "status.trunkInterface.subnetID must be in the schema")
+	assert.Equal(t, "string", subnetID.Type)
+	assert.Equal(t, `^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`, subnetID.Pattern)
+	require.NotNil(t, subnetID.MaxLength)
+	assert.EqualValues(t, 24, *subnetID.MaxLength)
+
+	// Optional: only the trunk's own id is required, so existing objects and
+	// controllers that never set a subnet stay valid.
+	assert.NotContains(t, trunk.Required, "subnetID")
+	assert.Equal(t, []string{"id"}, trunk.Required)
+
+	// Exercise the pattern the API server will enforce, so a typo in it cannot
+	// silently reject real subnet ids. EC2 issues both the legacy 8-hex and
+	// the current 17-hex forms.
+	re, err := regexp.Compile(subnetID.Pattern)
+	require.NoError(t, err)
+	for _, valid := range []string{"subnet-1a2b3c4d", "subnet-0123456789abcdef0", "subnet-00000000"} {
+		assert.True(t, re.MatchString(valid), "%q must be accepted", valid)
+	}
+	for _, invalid := range []string{
+		"", "subnet-", "subnet-1a2b3c4", "subnet-1a2b3c4de", // wrong hex length
+		"subnet-0123456789ABCDEF0",     // uppercase hex
+		"eni-1a2b3c4d", "vpc-1a2b3c4d", // wrong resource type
+		"subnet-1a2b3c4d ", " subnet-1a2b3c4d", // surrounding whitespace
+	} {
+		assert.False(t, re.MatchString(invalid), "%q must be rejected", invalid)
+	}
 }
 
 // TestEmbeddedCRDsMatchGenerated fails if the embedded copies drift from the
