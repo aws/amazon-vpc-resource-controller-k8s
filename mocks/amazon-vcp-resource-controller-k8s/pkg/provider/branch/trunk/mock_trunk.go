@@ -20,6 +20,7 @@ package mock_trunk
 import (
 	reflect "reflect"
 
+	v1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	trunk "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	gomock "github.com/golang/mock/gomock"
@@ -47,6 +48,20 @@ func NewMockTrunkENI(ctrl *gomock.Controller) *MockTrunkENI {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockTrunkENI) EXPECT() *MockTrunkENIMockRecorder {
 	return m.recorder
+}
+
+// CNINodeStatus mocks base method.
+func (m *MockTrunkENI) CNINodeStatus() *v1alpha1.TrunkInterface {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CNINodeStatus")
+	ret0, _ := ret[0].(*v1alpha1.TrunkInterface)
+	return ret0
+}
+
+// CNINodeStatus indicates an expected call of CNINodeStatus.
+func (mr *MockTrunkENIMockRecorder) CNINodeStatus() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CNINodeStatus", reflect.TypeOf((*MockTrunkENI)(nil).CNINodeStatus))
 }
 
 // CreateAndAssociateBranchENIs mocks base method.
@@ -88,6 +103,20 @@ func (m *MockTrunkENI) InitTrunk(arg0 ec2.EC2Instance, arg1 []v1.Pod) error {
 func (mr *MockTrunkENIMockRecorder) InitTrunk(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitTrunk", reflect.TypeOf((*MockTrunkENI)(nil).InitTrunk), arg0, arg1)
+}
+
+// InitTrunkFromStatus mocks base method.
+func (m *MockTrunkENI) InitTrunkFromStatus(arg0 *v1alpha1.TrunkInterface, arg1 []v1.Pod) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InitTrunkFromStatus", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InitTrunkFromStatus indicates an expected call of InitTrunkFromStatus.
+func (mr *MockTrunkENIMockRecorder) InitTrunkFromStatus(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitTrunkFromStatus", reflect.TypeOf((*MockTrunkENI)(nil).InitTrunkFromStatus), arg0, arg1)
 }
 
 // Introspect mocks base method.
@@ -140,4 +169,19 @@ func (m *MockTrunkENI) Reconcile(arg0 []v1.Pod) bool {
 func (mr *MockTrunkENIMockRecorder) Reconcile(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reconcile", reflect.TypeOf((*MockTrunkENI)(nil).Reconcile), arg0)
+}
+
+// ReconcileUnassignedBranchENIs mocks base method.
+func (m *MockTrunkENI) ReconcileUnassignedBranchENIs() (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReconcileUnassignedBranchENIs")
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReconcileUnassignedBranchENIs indicates an expected call of ReconcileUnassignedBranchENIs.
+func (mr *MockTrunkENIMockRecorder) ReconcileUnassignedBranchENIs() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReconcileUnassignedBranchENIs", reflect.TypeOf((*MockTrunkENI)(nil).ReconcileUnassignedBranchENIs))
 }

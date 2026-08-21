@@ -91,11 +91,82 @@ spec:
           status:
             description: CNINodeStatus defines the managed VPC resources.
             properties:
+              reinitCheckpoint:
+                description: |-
+                  ReinitCheckpoint is the vpc-resource-controller-private restart-recovery
+                  checkpoint: the instance fields needed to rebuild in-memory state on
+                  controller restart or leader change without synchronous EC2 describes.
+                  Written only by the vpc-resource-controller; other controllers must
+                  neither write nor depend on it.
+                properties:
+                  instance:
+                    description: Instance stores the EC2 instance fields needed on
+                      hydrate.
+                    properties:
+                      connectionTracking:
+                        description: ConnectionTrackingStatus stores primary ENI connection
+                          tracking settings.
+                        properties:
+                          tcpEstablishedTimeout:
+                            format: int32
+                            type: integer
+                          udpStreamTimeout:
+                            format: int32
+                            type: integer
+                          udpTimeout:
+                            format: int32
+                            type: integer
+                        type: object
+                      currentInstanceSecurityGroups:
+                        items:
+                          type: string
+                        type: array
+                      currentSubnetCIDRBlock:
+                        type: string
+                      currentSubnetID:
+                        type: string
+                      currentSubnetV6CIDRBlock:
+                        type: string
+                      instanceID:
+                        type: string
+                      instanceSubnetCIDRBlock:
+                        type: string
+                      instanceSubnetID:
+                        type: string
+                      instanceSubnetV6CIDRBlock:
+                        type: string
+                      instanceType:
+                        type: string
+                      primaryNetworkInterfaceID:
+                        type: string
+                      primaryNetworkInterfaceSecurityGroups:
+                        items:
+                          type: string
+                        type: array
+                      subnetMask:
+                        type: string
+                      subnetV6Mask:
+                        type: string
+                    type: object
+                  lastUpdated:
+                    description: |-
+                      LastUpdated records when the snapshot was last persisted; useful for
+                      staleness debugging, deliberately excluded from drift comparison.
+                    format: date-time
+                    type: string
+                  snapshotVersion:
+                    description: |-
+                      SnapshotVersion guards format skew: it is bumped whenever the snapshot
+                      layout changes so old snapshots cleanly miss and are rewritten.
+                    type: string
+                type: object
               trunkInterface:
                 description: |-
                   TrunkInterface describes the trunk network interface attached to the
                   node and the branch interfaces associated with it, persisted by the
                   managing controller (see spec.managedBy) for visibility and recovery.
+                  This is the layer shared with other CNINode status writers (e.g. the
+                  EKS Auto Mode controllers, which additionally populate Branches).
                 properties:
                   branches:
                     description: |-
@@ -175,6 +246,13 @@ spec:
                   macAddress:
                     description: MacAddress is the MAC address of the trunk ENI.
                     type: string
+                  securityGroups:
+                    description: SecurityGroups are the security group ids attached
+                      to the trunk ENI.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
                   subnetID:
                     description: |-
                       SubnetID is the id of the EC2 subnet the trunk ENI resides in, which is

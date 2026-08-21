@@ -31,16 +31,59 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	asyncWorker "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
 )
+
+var (
+	prometheusRegistered = false
+
+	summaryObjectives = map[float64]float64{0: 0, 0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 1: 0}
+
+	nodeManagerLockWaitLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "node_manager_lock_wait_latency",
+			Help:       "Time in seconds spent waiting to acquire the node manager lock",
+			Objectives: summaryObjectives,
+		},
+		[]string{"operation"},
+	)
+
+	nodeOnboardingLatency = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "node_onboarding_latency",
+			Help:       "Time in seconds from node Init job submission to the node becoming ready",
+			Objectives: summaryObjectives,
+		},
+		[]string{"result"},
+	)
+)
+
+const (
+	lockOpAdd    = "add"
+	lockOpUpdate = "update"
+	lockOpDelete = "delete"
+	lockOpGet    = "get"
+)
+
+func prometheusRegister() {
+	if !prometheusRegistered {
+		metrics.Registry.MustRegister(
+			nodeManagerLockWaitLatency,
+			nodeOnboardingLatency,
+		)
+		prometheusRegistered = true
+	}
+}
 
 type manager struct {
 	// Log is the logger for node manager
@@ -94,16 +137,25 @@ const (
 )
 
 type AsyncOperationJob struct {
-	op       AsyncOperation
-	node     node.Node
-	nodeName string
+	op          AsyncOperation
+	node        node.Node
+	nodeName    string
+	submittedAt time.Time
 }
 
 const pausingHealthCheckDuration = 10 * time.Minute
 
+// DefaultBranchENIOrphanSweepInterval is the production cadence of the independent, low-frequency
+// EC2 orphan branch-ENI reclaim sweep (ReconcileUnassignedBranchENIs). The lazy branch-ledger
+// verification gate owns correctness after a hydrate-based re-init, so one jittered hour is a safe
+// fleet-wide housekeeping cadence.
+const DefaultBranchENIOrphanSweepInterval = time.Hour
+
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
 	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+
+	prometheusRegister()
 
 	manager := &manager{
 		resourceManager:   resourceManager,
@@ -124,6 +176,28 @@ func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager
 	return manager, worker.StartWorkerPool(manager.performAsyncOperation)
 }
 
+// cniNodeStatusReconciler is optionally implemented by a resource provider (the branch/trunk
+// provider) to submit the periodic CNINode status snapshot self-heal to its own worker pool.
+// Kept out of the core ResourceProvider interface so the IPv4/prefix providers, which have no
+// trunk state to persist, need not implement it.
+type cniNodeStatusReconciler interface {
+	SubmitReconcileCNINodeStatusJob(nodeName string)
+}
+
+// orphanBranchENIReclaimer is optionally implemented by the branch/trunk provider to submit the
+// independent, low-frequency EC2 orphan branch-ENI reclaim. Kept out of the core ResourceProvider
+// interface for the same reason as cniNodeStatusReconciler: the IPv4/prefix providers have no trunk.
+type orphanBranchENIReclaimer interface {
+	SubmitReconcileUnassignedBranchENIsJob(nodeName string)
+}
+
+// jitteredOrphanSweepInterval returns the base orphan sweep interval with jitter applied so the fleet
+// does not issue DescribeNetworkInterfaces in a synchronized thundering herd. wait.Jitter adds a
+// random duration in [0, factor*interval), so factor 1.0 yields a value in [interval, 2*interval).
+func (m *manager) jitteredOrphanSweepInterval() time.Duration {
+	return wait.Jitter(DefaultBranchENIOrphanSweepInterval, 1.0)
+}
+
 func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 	cachedNode, found := m.GetNode(nodeName)
 	if !found || !cachedNode.IsManaged() {
@@ -131,33 +205,80 @@ func (m *manager) CheckNodeForLeakedENIs(nodeName string) {
 		return
 	}
 
-	// Only start a goroutine when need to
-	if time.Now().After(cachedNode.GetNextReconciliationTime()) {
-		go func() {
-			if resourceProvider, found := m.resourceManager.GetResourceProvider(config.ResourceNamePodENI); found {
-				foundLeakedENI := resourceProvider.ReconcileNode(nodeName)
-				if foundLeakedENI {
-					cachedNode.SetReconciliationInterval(node.NodeInitialCleanupInterval)
-				} else {
-					interval := wait.Jitter(cachedNode.GetReconciliationInterval(), 5)
-					if interval > node.MaxNodeReconciliationInterval {
-						interval = node.MaxNodeReconciliationInterval
-					}
-					cachedNode.SetReconciliationInterval(interval)
-				}
-				cachedNode.SetNextReconciliationTime(time.Now().Add(cachedNode.GetReconciliationInterval()))
-				m.Log.Info("reconciled node to cleanup leaked branch ENIs", "NodeName", nodeName, "NextInterval", cachedNode.GetReconciliationInterval(), "NextReconciliationTime", cachedNode.GetNextReconciliationTime())
-			} else {
-				// no SGP provider enabled
-				return
-			}
-		}()
+	now := time.Now()
+
+	// Arm the independent EC2 orphan sweep timer on first sight so the fleet's first sweeps are
+	// spread across the jittered interval rather than all firing at startup - the very describe
+	// flood this timer exists to prevent. Orphans arise only from rare EC2 API failures, so
+	// deferring the first sweep by up to one interval is safe.
+	if cachedNode.GetNextEC2SweepTime().IsZero() {
+		cachedNode.SetNextEC2SweepTime(now.Add(m.jitteredOrphanSweepInterval()))
 	}
+
+	reconcileDue := now.After(cachedNode.GetNextReconciliationTime())
+	sweepDue := now.After(cachedNode.GetNextEC2SweepTime())
+
+	// Only start a goroutine when need to
+	if !reconcileDue && !sweepDue {
+		return
+	}
+
+	go func() {
+		resourceProvider, found := m.resourceManager.GetResourceProvider(config.ResourceNamePodENI)
+		if !found {
+			// no SGP provider enabled
+			return
+		}
+
+		if reconcileDue {
+			// Self-heal the CNINode status snapshot on the same jittered cadence. Only submit
+			// it once the node is ready (its in-memory trunk is initialized); the job only
+			// PATCHes an existing CNINode and makes no EC2 calls, so it converges the
+			// snapshot regardless of cold-start timing and survives a controller restart
+			// (re-init rebuilds the in-memory trunk via AddNode, then this repopulates status).
+			// The work runs in the provider's worker pool, not this goroutine, mirroring how
+			// the EC2 orphan sweep below is submitted.
+			if healer, ok := resourceProvider.(cniNodeStatusReconciler); ok && cachedNode.IsReady() {
+				healer.SubmitReconcileCNINodeStatusJob(nodeName)
+			}
+
+			// Fast, zero-EC2 reconcile against the in-memory ledger. This is free and stays on the
+			// 1-15min jittered cadence.
+			foundLeakedENI := resourceProvider.ReconcileNode(nodeName)
+			if foundLeakedENI {
+				cachedNode.SetReconciliationInterval(node.NodeInitialCleanupInterval)
+			} else {
+				interval := wait.Jitter(cachedNode.GetReconciliationInterval(), 5)
+				if interval > node.MaxNodeReconciliationInterval {
+					interval = node.MaxNodeReconciliationInterval
+				}
+				cachedNode.SetReconciliationInterval(interval)
+			}
+			cachedNode.SetNextReconciliationTime(time.Now().Add(cachedNode.GetReconciliationInterval()))
+			m.Log.Info("reconciled node to cleanup leaked branch ENIs", "NodeName", nodeName, "NextInterval", cachedNode.GetReconciliationInterval(), "NextReconciliationTime", cachedNode.GetNextReconciliationTime())
+		}
+
+		if sweepDue {
+			// Independent, low-frequency EC2 orphan branch-ENI reclaim (DescribeNetworkInterfaces).
+			// Only submit once the node is ready (its in-memory trunk ledger is hydrated); an empty
+			// ledger would mis-classify every attached ENI as an orphan and queue live pods' ENIs for
+			// deletion. The submitted job's handler independently guards on trunk-in-cache as well.
+			if reclaimer, ok := resourceProvider.(orphanBranchENIReclaimer); ok && cachedNode.IsReady() {
+				reclaimer.SubmitReconcileUnassignedBranchENIsJob(nodeName)
+				m.Log.Info("submitted EC2 orphan branch-ENI reclaim sweep", "NodeName", nodeName)
+			}
+			// Reschedule the next sweep with fresh jitter regardless of readiness so a not-yet-ready
+			// node does not busy-poll this branch on every reconcile event.
+			cachedNode.SetNextEC2SweepTime(time.Now().Add(m.jitteredOrphanSweepInterval()))
+		}
+	}()
 }
 
 // GetNode returns the node from in memory data store
 func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
+	waitStart := time.Now()
 	m.lock.RLock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpGet).Observe(time.Since(waitStart).Seconds())
 	defer m.lock.RUnlock()
 
 	node, found = m.dataStore[nodeName]
@@ -167,7 +288,9 @@ func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
 // AddNode adds the managed and un-managed nodes to the in memory data store, the
 // user of node can verify if the node is managed before performing any operations
 func (m *manager) AddNode(nodeName string) error {
+	waitStart := time.Now()
 	m.lock.Lock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpAdd).Observe(time.Since(waitStart).Seconds())
 	defer m.lock.Unlock()
 
 	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
@@ -217,9 +340,10 @@ func (m *manager) AddNode(nodeName string) error {
 	}
 
 	m.worker.SubmitJob(AsyncOperationJob{
-		op:       op,
-		node:     newNode,
-		nodeName: nodeName,
+		op:          op,
+		node:        newNode,
+		nodeName:    nodeName,
+		submittedAt: time.Now(),
 	})
 	return nil
 }
@@ -244,7 +368,9 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 // and now is not required to be managed, it's resources are de-initialized. Finally,
 // if there is no toggling, the resources are updated
 func (m *manager) UpdateNode(nodeName string) error {
+	waitStart := time.Now()
 	m.lock.Lock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpUpdate).Observe(time.Since(waitStart).Seconds())
 	defer m.lock.Unlock()
 
 	k8sNode, err := m.wrapper.K8sAPI.GetNode(nodeName)
@@ -301,11 +427,15 @@ func (m *manager) UpdateNode(nodeName string) error {
 		return nil
 	}
 
-	m.worker.SubmitJob(AsyncOperationJob{
+	job := AsyncOperationJob{
 		op:       op,
 		node:     cachedNode,
 		nodeName: nodeName,
-	})
+	}
+	if op == Init {
+		job.submittedAt = time.Now()
+	}
+	m.worker.SubmitJob(job)
 	return nil
 }
 
@@ -329,7 +459,9 @@ func (m *manager) GetNodeUpdateStatus(k8sNode *v1.Node, cachedNode node.Node) (N
 
 // DeleteNode deletes the nodes from the cache and cleans up the resources used by all the resource providers
 func (m *manager) DeleteNode(nodeName string) error {
+	waitStart := time.Now()
 	m.lock.Lock()
+	nodeManagerLockWaitLatency.WithLabelValues(lockOpDelete).Observe(time.Since(waitStart).Seconds())
 	defer m.lock.Unlock()
 
 	log := m.Log.WithValues("node name", nodeName, "request", "delete")
@@ -431,6 +563,9 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 		utils.SendNodeEventWithNodeName(m.wrapper.K8sAPI, asyncJob.nodeName, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", m.controllerVersion), v1.EventTypeNormal, m.Log)
 		err = asyncJob.node.InitResources(m.resourceManager)
 		if err != nil {
+			if !asyncJob.submittedAt.IsZero() {
+				nodeOnboardingLatency.WithLabelValues("failed").Observe(time.Since(asyncJob.submittedAt).Seconds())
+			}
 			if pauseHealthCheckOnError(err) && !m.SkipHealthCheck() {
 				m.setStopHealthCheck()
 				log.Info("node manager sets a pause on health check due to observing a EC2 error", "error", err.Error())
@@ -442,6 +577,10 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 
 			// Node will be retried for init on next event
 			return ctrl.Result{}, nil
+		}
+
+		if !asyncJob.submittedAt.IsZero() {
+			nodeOnboardingLatency.WithLabelValues("success").Observe(time.Since(asyncJob.submittedAt).Seconds())
 		}
 
 		// If there's no error, we need to update the node so the capacity is advertised

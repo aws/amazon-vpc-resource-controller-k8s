@@ -15,9 +15,11 @@ package ec2
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
@@ -71,7 +73,32 @@ type ec2Instance struct {
 	tcpEstablishedTimeout *int32
 	udpStreamTimeout      *int32
 	udpTimeout            *int32
+
+	loadedFromCNINodeStatus bool
 }
+
+// HydrateResult is the typed outcome of HydrateFromCNINodeStatus. The string values are
+// wire-stable: they are emitted as structured log fields and are label-value material for
+// metrics, so never change an existing value - add a new constant instead.
+type HydrateResult string
+
+const (
+	HydrateHit                                       HydrateResult = "hit"
+	HydrateMissSnapshotVersionMismatch               HydrateResult = "snapshot_version_mismatch"
+	HydrateMissTrunkENI                              HydrateResult = "missing_trunk_eni"
+	HydrateMissInstanceIDMismatch                    HydrateResult = "instance_id_mismatch"
+	HydrateMissInstanceType                          HydrateResult = "missing_instance_type"
+	HydrateMissInstanceSubnet                        HydrateResult = "missing_instance_subnet"
+	HydrateMissCurrentSubnet                         HydrateResult = "missing_current_subnet"
+	HydrateMissSubnetMask                            HydrateResult = "missing_subnet_mask"
+	HydrateMissSubnetV6Mask                          HydrateResult = "missing_subnet_v6_mask"
+	HydrateMissPrimaryENI                            HydrateResult = "missing_primary_eni"
+	HydrateMissSecurityGroups                        HydrateResult = "missing_security_groups"
+	HydrateMissTrunkSubnetMismatch                   HydrateResult = "trunk_subnet_mismatch"
+	HydrateMissCustomNetworkingSubnetMismatch        HydrateResult = "custom_networking_subnet_mismatch"
+	HydrateMissCustomNetworkingSecurityGroupMismatch HydrateResult = "custom_networking_security_group_mismatch"
+	HydrateMissInstanceNetworkingMismatch            HydrateResult = "instance_networking_mismatch"
+)
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
 type EC2Instance interface {
@@ -93,6 +120,9 @@ type EC2Instance interface {
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
+	HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) (bool, HydrateResult)
+	CNINodeStatus() rcv1alpha1.InstanceStatus
+	LoadedFromCNINodeStatus() bool
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -109,6 +139,7 @@ func NewEC2Instance(nodeName string, instanceID string, os string, log logr.Logg
 func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	i.lock.Lock()
 	defer i.lock.Unlock()
+	i.loadedFromCNINodeStatus = false
 
 	instance, err := ec2APIHelper.GetInstanceDetails(&i.instanceID)
 	if err != nil {
@@ -352,4 +383,146 @@ func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, ud
 	defer i.lock.RUnlock()
 
 	return i.tcpEstablishedTimeout, i.udpStreamTimeout, i.udpTimeout
+}
+
+func (i *ec2Instance) HydrateFromCNINodeStatus(status rcv1alpha1.CNINodeStatus) (bool, HydrateResult) {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	// A nil checkpoint yields an empty version and cleanly misses here. This also covers
+	// objects persisted in the pre-unification shape (fields at the status top level): they
+	// do not parse into ReinitCheckpoint, so they miss, fall back to EC2, and are rewritten
+	// in the current shape by the post-init persist.
+	if status.ReinitCheckpoint == nil ||
+		status.ReinitCheckpoint.SnapshotVersion != rcv1alpha1.CNINodeStatusSnapshotVersion {
+		return false, HydrateMissSnapshotVersionMismatch
+	}
+	if status.TrunkInterface == nil || status.TrunkInterface.ID == "" {
+		return false, HydrateMissTrunkENI
+	}
+
+	instanceStatus := status.ReinitCheckpoint.Instance
+	if instanceStatus.InstanceID != i.instanceID {
+		return false, HydrateMissInstanceIDMismatch
+	}
+	if instanceStatus.InstanceType == "" {
+		return false, HydrateMissInstanceType
+	}
+	if instanceStatus.InstanceSubnetID == "" || instanceStatus.InstanceSubnetCIDRBlock == "" {
+		return false, HydrateMissInstanceSubnet
+	}
+	if instanceStatus.CurrentSubnetID == "" || instanceStatus.CurrentSubnetCIDRBlock == "" {
+		return false, HydrateMissCurrentSubnet
+	}
+	// SubnetMask is derived from the subnet CIDR on the EC2 path and is consumed downstream
+	// (e.g. the IPv4 ENI provider builds pod CIDRs as "<ip>/" + instance.SubnetMask()). A
+	// snapshot that carries a CIDR but an empty mask is incomplete/pruned; treat it as a miss
+	// so we fall back to EC2 rather than hydrating an instance that would produce malformed CIDRs.
+	if instanceStatus.SubnetMask == "" {
+		return false, HydrateMissSubnetMask
+	}
+	// If a v6 CIDR is present, the corresponding v6 mask must be too (same downstream consumption).
+	if instanceStatus.InstanceSubnetV6CIDRBlock != "" && instanceStatus.SubnetV6Mask == "" {
+		return false, HydrateMissSubnetV6Mask
+	}
+	if instanceStatus.PrimaryNetworkInterfaceID == "" {
+		return false, HydrateMissPrimaryENI
+	}
+	if len(instanceStatus.PrimaryNetworkInterfaceSecurityGroups) == 0 ||
+		len(instanceStatus.CurrentInstanceSecurityGroups) == 0 {
+		return false, HydrateMissSecurityGroups
+	}
+	if status.TrunkInterface.SubnetID != "" && status.TrunkInterface.SubnetID != instanceStatus.CurrentSubnetID {
+		return false, HydrateMissTrunkSubnetMismatch
+	}
+
+	if i.newCustomNetworkingSubnetID != "" {
+		if instanceStatus.CurrentSubnetID != i.newCustomNetworkingSubnetID {
+			return false, HydrateMissCustomNetworkingSubnetMismatch
+		}
+		if len(i.newCustomNetworkingSecurityGroups) > 0 &&
+			!sameStringSet(instanceStatus.CurrentInstanceSecurityGroups, i.newCustomNetworkingSecurityGroups) {
+			return false, HydrateMissCustomNetworkingSecurityGroupMismatch
+		}
+	} else if instanceStatus.CurrentSubnetID != instanceStatus.InstanceSubnetID ||
+		!sameStringSet(instanceStatus.CurrentInstanceSecurityGroups, instanceStatus.PrimaryNetworkInterfaceSecurityGroups) {
+		return false, HydrateMissInstanceNetworkingMismatch
+	}
+
+	i.instanceType = instanceStatus.InstanceType
+	i.instanceSubnetID = instanceStatus.InstanceSubnetID
+	i.instanceSubnetCidrBlock = instanceStatus.InstanceSubnetCIDRBlock
+	i.instanceSubnetV6CidrBlock = instanceStatus.InstanceSubnetV6CIDRBlock
+	i.currentSubnetID = instanceStatus.CurrentSubnetID
+	i.currentSubnetCIDRBlock = instanceStatus.CurrentSubnetCIDRBlock
+	i.currentSubnetV6CIDRBlock = instanceStatus.CurrentSubnetV6CIDRBlock
+	i.currentInstanceSecurityGroups = slices.Clone(instanceStatus.CurrentInstanceSecurityGroups)
+	i.subnetMask = instanceStatus.SubnetMask
+	i.subnetV6Mask = instanceStatus.SubnetV6Mask
+	i.primaryENIID = instanceStatus.PrimaryNetworkInterfaceID
+	i.primaryENISecurityGroups = slices.Clone(instanceStatus.PrimaryNetworkInterfaceSecurityGroups)
+
+	i.tcpEstablishedTimeout = nil
+	i.udpStreamTimeout = nil
+	i.udpTimeout = nil
+	if instanceStatus.ConnectionTracking != nil {
+		i.tcpEstablishedTimeout = cloneInt32Ptr(instanceStatus.ConnectionTracking.TCPEstablishedTimeout)
+		i.udpStreamTimeout = cloneInt32Ptr(instanceStatus.ConnectionTracking.UDPStreamTimeout)
+		i.udpTimeout = cloneInt32Ptr(instanceStatus.ConnectionTracking.UDPTimeout)
+	}
+
+	i.loadedFromCNINodeStatus = true
+	return true, HydrateHit
+}
+
+func (i *ec2Instance) CNINodeStatus() rcv1alpha1.InstanceStatus {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return rcv1alpha1.InstanceStatus{
+		InstanceID:                            i.instanceID,
+		InstanceType:                          i.instanceType,
+		InstanceSubnetID:                      i.instanceSubnetID,
+		InstanceSubnetCIDRBlock:               i.instanceSubnetCidrBlock,
+		InstanceSubnetV6CIDRBlock:             i.instanceSubnetV6CidrBlock,
+		CurrentSubnetID:                       i.currentSubnetID,
+		CurrentSubnetCIDRBlock:                i.currentSubnetCIDRBlock,
+		CurrentSubnetV6CIDRBlock:              i.currentSubnetV6CIDRBlock,
+		CurrentInstanceSecurityGroups:         slices.Clone(i.currentInstanceSecurityGroups),
+		SubnetMask:                            i.subnetMask,
+		SubnetV6Mask:                          i.subnetV6Mask,
+		PrimaryNetworkInterfaceID:             i.primaryENIID,
+		PrimaryNetworkInterfaceSecurityGroups: slices.Clone(i.primaryENISecurityGroups),
+		ConnectionTracking: &rcv1alpha1.ConnectionTrackingStatus{
+			TCPEstablishedTimeout: cloneInt32Ptr(i.tcpEstablishedTimeout),
+			UDPStreamTimeout:      cloneInt32Ptr(i.udpStreamTimeout),
+			UDPTimeout:            cloneInt32Ptr(i.udpTimeout),
+		},
+	}
+}
+
+func (i *ec2Instance) LoadedFromCNINodeStatus() bool {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.loadedFromCNINodeStatus
+}
+
+func sameStringSet(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	a = slices.Clone(a)
+	b = slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
+}
+
+func cloneInt32Ptr(ptr *int32) *int32 {
+	if ptr == nil {
+		return nil
+	}
+	val := *ptr
+	return &val
 }

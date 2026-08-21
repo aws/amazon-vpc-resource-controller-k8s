@@ -30,6 +30,14 @@ import (
 var (
 	prometheusRegistered = false
 
+	workerQueueDepth = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "worker_queue_depth",
+			Help: "The current number of jobs in the worker queue",
+		},
+		[]string{"resource_name"},
+	)
+
 	jobsSubmittedCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "jobs_submitted_count",
@@ -97,7 +105,7 @@ func NewDefaultWorkerPool(resourceName string, workerCount int, maxRequeue int,
 
 	prometheusRegister()
 
-	return &worker{
+	worker := &worker{
 		resourceName:    resourceName,
 		maxRetriesOnErr: maxRequeue,
 		maxWorkerCount:  workerCount,
@@ -105,6 +113,8 @@ func NewDefaultWorkerPool(resourceName string, workerCount int, maxRequeue int,
 		queue:           workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		ctx:             ctx,
 	}
+	worker.updateQueueDepth()
+	return worker
 }
 
 // prometheusRegister registers the metrics.
@@ -114,7 +124,8 @@ func prometheusRegister() {
 			jobsSubmittedCount,
 			jobsCompletedCount,
 			jobsFailedCount,
-			jobsNotFoundCount)
+			jobsNotFoundCount,
+			workerQueueDepth)
 
 		prometheusRegistered = true
 	}
@@ -134,12 +145,18 @@ func (w *worker) SubmitJob(job interface{}) {
 	}
 	w.queue.Add(job)
 	jobsSubmittedCount.WithLabelValues(w.resourceName).Inc()
+	w.updateQueueDepth()
 }
 
 // SubmitJobAfter submits the job to the work queue after the given time period
 func (w *worker) SubmitJobAfter(job interface{}, submitAfter time.Duration) {
 	w.queue.AddAfter(job, submitAfter)
 	jobsSubmittedCount.WithLabelValues(w.resourceName).Inc()
+	w.updateQueueDepth()
+}
+
+func (w *worker) updateQueueDepth() {
+	workerQueueDepth.WithLabelValues(w.resourceName).Set(float64(w.queue.Len()))
 }
 
 // runWorker runs a worker that listens on new item on the worker queue
@@ -151,10 +168,14 @@ func (w *worker) runWorker() {
 // processNextItem returns false if the queue is shut down, otherwise processes the job and returns true
 func (w *worker) processNextItem() (cont bool) {
 	job, quit := w.queue.Get()
+	w.updateQueueDepth()
 	if quit {
 		return
 	}
-	defer w.queue.Done(job)
+	defer func() {
+		w.queue.Done(job)
+		w.updateQueueDepth()
+	}()
 	log := w.Log.WithValues("job", job)
 
 	cont = true
@@ -163,27 +184,32 @@ func (w *worker) processNextItem() (cont bool) {
 		if w.queue.NumRequeues(job) >= w.maxRetriesOnErr {
 			log.Error(err, "exceeded maximum retries", "max retries", w.maxRetriesOnErr)
 			w.queue.Forget(job)
+			w.updateQueueDepth()
 			jobsFailedCount.WithLabelValues(w.resourceName).Inc()
 			return
 		} else if apierrors.IsNotFound(err) {
 			//similar to upstream https://github.com/kubernetes-sigs/controller-runtime/issues/377#issue-426207628
 			log.Error(err, "won't requeue a not found errored job", "job", job)
 			w.queue.Forget(job)
+			w.updateQueueDepth()
 			jobsNotFoundCount.WithLabelValues(w.resourceName).Inc()
 			return
 		}
 		log.Error(err, "re-queuing job", "retry count", w.queue.NumRequeues(job))
 		w.queue.AddRateLimited(job)
+		w.updateQueueDepth()
 		return
 	} else if result.Requeue {
 		log.V(1).Info("timed retry", "retry after", result.RequeueAfter)
 		w.queue.AddAfter(job, result.RequeueAfter)
+		w.updateQueueDepth()
 		return
 	}
 
 	log.V(1).Info("completed job successfully")
 
 	w.queue.Forget(job)
+	w.updateQueueDepth()
 	jobsCompletedCount.WithLabelValues(w.resourceName).Inc()
 
 	return

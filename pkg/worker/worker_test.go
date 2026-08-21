@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -56,6 +57,27 @@ func TestNewWorkerPool(t *testing.T) {
 	defer cancel()
 	w := GetMockWorkerPool(ctx)
 	assert.NotNil(t, w)
+}
+
+func TestWorker_QueueDepthTracksQueue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const queueResourceName = "queue-depth-test"
+	w := NewDefaultWorkerPool(queueResourceName, 1, maxRequeue, zap.New(), ctx).(*worker)
+	assert.Equal(t, float64(0), testutil.ToFloat64(workerQueueDepth.WithLabelValues(queueResourceName)))
+
+	w.SubmitJob("job")
+	assert.Equal(t, float64(1), testutil.ToFloat64(workerQueueDepth.WithLabelValues(queueResourceName)))
+
+	job, quit := w.queue.Get()
+	assert.False(t, quit)
+	w.updateQueueDepth()
+	assert.Equal(t, float64(0), testutil.ToFloat64(workerQueueDepth.WithLabelValues(queueResourceName)))
+
+	w.queue.Done(job)
+	w.updateQueueDepth()
+	assert.Equal(t, float64(0), testutil.ToFloat64(workerQueueDepth.WithLabelValues(queueResourceName)))
 }
 
 // TestWorker_SubmitJob verifies that two different jobs are executed successfully.

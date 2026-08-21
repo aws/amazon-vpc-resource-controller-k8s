@@ -86,11 +86,13 @@ func getMockK8sWrapperWithClient(ctrl *gomock.Controller, objs []runtime.Object)
 	_ = appV1.AddToScheme(scheme)
 	_ = v1alpha1.AddToScheme(scheme)
 
-	client := fakeClient.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
+	client := fakeClient.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.CNINode{}).
+		WithRuntimeObjects(objs...).Build()
 	clientSet := fakeClientSet.NewSimpleClientset(mockNode)
 	mockController := mock_custom.NewMockController(ctrl)
 
-	return NewK8sWrapper(client, clientSet.CoreV1(), context.Background()), client, mockController
+	return NewK8sWrapper(client, client, clientSet.CoreV1(), context.Background()), client, mockController
 }
 
 // TestK8sWrapper_AdvertiseCapacity tests that the capacity is advertised to the k8s node
@@ -218,4 +220,93 @@ func TestK8sWrapper_CreateCNINode_NoError(t *testing.T) {
 	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name})
 	assert.NoError(t, err)
 	assert.Equal(t, mockNode.Name, cniNode.Name)
+}
+
+// TestK8sWrapper_UpdateCNINodeStatus_Success verifies that the status snapshot is persisted onto an
+// existing CNINode via the status subresource patch.
+func TestK8sWrapper_UpdateCNINodeStatus_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockCNINode})
+
+	status := v1alpha1.CNINodeStatus{
+		TrunkInterface: &v1alpha1.TrunkInterface{ID: "eni-trunk-123"},
+		ReinitCheckpoint: &v1alpha1.ReinitCheckpoint{
+			SnapshotVersion: v1alpha1.CNINodeStatusSnapshotVersion,
+			Instance:        v1alpha1.InstanceStatus{InstanceID: "i-abc", InstanceType: "m5.large"},
+		},
+	}
+
+	err := wrapper.UpdateCNINodeStatus(nodeName, status)
+	assert.NoError(t, err)
+
+	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: nodeName})
+	assert.NoError(t, err)
+	assert.Equal(t, "eni-trunk-123", cniNode.Status.TrunkInterface.ID)
+	assert.Equal(t, "i-abc", cniNode.Status.ReinitCheckpoint.Instance.InstanceID)
+	assert.Equal(t, v1alpha1.CNINodeStatusSnapshotVersion, cniNode.Status.ReinitCheckpoint.SnapshotVersion)
+}
+
+// TestK8sWrapper_UpdateCNINodeStatus_NotFound verifies that a persistently-missing CNINode is a
+// bounded best-effort failure: the call returns a NotFound error (rather than hanging forever) so
+// the caller can fall back to the periodic self-heal, and it never panics.
+func TestK8sWrapper_UpdateCNINodeStatus_NotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	// No CNINode seeded, so the read-back is always NotFound.
+	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{})
+
+	err := wrapper.UpdateCNINodeStatus(nodeName, v1alpha1.CNINodeStatus{
+		TrunkInterface:   &v1alpha1.TrunkInterface{ID: "eni-trunk-123"},
+		ReinitCheckpoint: &v1alpha1.ReinitCheckpoint{SnapshotVersion: v1alpha1.CNINodeStatusSnapshotVersion},
+	})
+	assert.Error(t, err)
+	assert.True(t, errors.IsNotFound(err), "expected NotFound after bounded retries, got %v", err)
+}
+
+// TestK8sWrapper_UpdateCNINodeStatus_NilAPIReaderFallsBackToCache verifies that when no apiReader is
+// wired the read-back falls back to the cache client rather than panicking on a nil reader.
+func TestK8sWrapper_UpdateCNINodeStatus_NilAPIReaderFallsBackToCache(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1.AddToScheme(scheme)
+	_ = appV1.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
+
+	cacheClient := fakeClient.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.CNINode{}).
+		WithRuntimeObjects(mockCNINode.DeepCopy()).Build()
+
+	clientSet := fakeClientSet.NewSimpleClientset(mockNode)
+	// Pass a nil apiReader to exercise the cache-client fallback.
+	wrapper := NewK8sWrapper(cacheClient, nil, clientSet.CoreV1(), context.Background())
+
+	err := wrapper.UpdateCNINodeStatus(nodeName, v1alpha1.CNINodeStatus{
+		TrunkInterface:   &v1alpha1.TrunkInterface{ID: "eni-trunk-123"},
+		ReinitCheckpoint: &v1alpha1.ReinitCheckpoint{SnapshotVersion: v1alpha1.CNINodeStatusSnapshotVersion},
+	})
+	assert.NoError(t, err)
+
+	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: nodeName})
+	assert.NoError(t, err)
+	assert.Equal(t, "eni-trunk-123", cniNode.Status.TrunkInterface.ID)
+}
+
+// TestK8sWrapper_FreshReader_PrefersAPIReader verifies the fresh-read reader selection order:
+// the non-cached apiReader is preferred whenever wired, and the cache client is only a fallback
+// when no apiReader exists. Both GetCNINodeFromAPIServer and UpdateCNINodeStatus read through this
+// selection, so a wrong order would silently reintroduce stale-informer-cache reads on the hydrate
+// fast path.
+func TestK8sWrapper_FreshReader_PrefersAPIReader(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
+
+	cacheClient := fakeClient.NewClientBuilder().WithScheme(scheme).Build()
+	apiReader := fakeClient.NewClientBuilder().WithScheme(scheme).Build()
+
+	withAPIReader := &k8sWrapper{cacheClient: cacheClient, apiReader: apiReader}
+	assert.Equal(t, client.Reader(apiReader), withAPIReader.freshReader(),
+		"apiReader must be preferred when wired")
+
+	withoutAPIReader := &k8sWrapper{cacheClient: cacheClient}
+	assert.Equal(t, client.Reader(cacheClient), withoutAPIReader.freshReader(),
+		"cache client must be the fallback when no apiReader is wired")
 }
