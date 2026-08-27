@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_pod "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
@@ -140,6 +141,46 @@ func TestBranchENIProvider_getTrunkFromCache_NotExist(t *testing.T) {
 	trunkENI, present := provider.getTrunkFromCache(NodeName)
 	assert.False(t, present)
 	assert.Nil(t, trunkENI)
+}
+
+// TestBranchENIProvider_persistCNINodeStatus tests the trunk skeleton is written
+// to the CNINode status subresource with the expected fields after an EC2-path init.
+func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+
+	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
+	mockInstance.EXPECT().InstanceID().Return("i-abc").AnyTimes()
+	mockInstance.EXPECT().Type().Return("t3.xlarge").AnyTimes()
+	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return([]string{"sg-1"}).AnyTimes()
+	mockInstance.EXPECT().SubnetID().Return("subnet-1").AnyTimes()
+	mockInstance.EXPECT().SubnetCidrBlock().Return("10.0.0.0/16").AnyTimes()
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return("").AnyTimes()
+	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil).AnyTimes()
+	mockTrunk.EXPECT().TrunkENIID().Return("eni-trunk").AnyTimes()
+
+	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(&rcv1alpha1.CNINode{}, nil)
+
+	var written *rcv1alpha1.CNINode
+	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any()).DoAndReturn(func(cniNode *rcv1alpha1.CNINode) error {
+		written = cniNode
+		return nil
+	})
+
+	provider.persistCNINodeStatus(mockInstance, mockTrunk)
+
+	assert.NotNil(t, written)
+	assert.Equal(t, "i-abc", written.Status.InstanceID)
+	assert.Equal(t, "t3.xlarge", written.Status.InstanceType)
+	assert.Equal(t, []string{"sg-1"}, written.Status.SecurityGroups)
+	assert.NotNil(t, written.Status.TrunkInterface)
+	assert.Equal(t, "eni-trunk", written.Status.TrunkInterface.ID)
+	assert.Equal(t, "subnet-1", written.Status.TrunkInterface.SubnetID)
+	assert.Equal(t, "10.0.0.0/16", written.Status.TrunkInterface.SubnetCIDR)
 }
 
 // TestBranchENIProvider_removeTrunkFromCache tests that once trunk ENI is removed from cache it's actually removed from

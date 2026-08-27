@@ -258,6 +258,52 @@ func TestNewTrunkENI(t *testing.T) {
 	assert.NotNil(t, trunkENI)
 }
 
+// TestTrunkENI_InitFromSnapshot tests the trunk ledger is rebuilt from the trunk
+// id and pod annotations with zero EC2 calls (no mock expectations are set, so
+// gomock fails the test if any EC2 API is invoked).
+func TestTrunkENI_InitFromSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+
+	err := trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod1})
+	assert.NoError(t, err)
+
+	assert.Equal(t, trunkId, trunkENI.trunkENIId)
+	// The pod annotation carries two branch ENIs on vlan 1 and 2.
+	assert.Len(t, trunkENI.uidToBranchENIMap[PodUID], 2)
+	assert.True(t, trunkENI.usedVlanIds[1])
+	assert.True(t, trunkENI.usedVlanIds[2])
+}
+
+// TestTrunkENI_reclaimOrphansOnAssociateFailure tests that a branch ENI attached
+// in EC2 but owned by no pod is marked and enqueued for deletion.
+func TestTrunkENI_reclaimOrphansOnAssociateFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+	orphan := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: &Branch1Id,
+		TagSet: []awsEc2Types.Tag{
+			{Key: aws.String(config.VLandIDTag), Value: aws.String("1")},
+		},
+	}
+	mockHelper.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).
+		Return([]*awsEc2Types.NetworkInterface{orphan}, nil)
+
+	trunkENI.reclaimOrphansOnAssociateFailure()
+
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, Branch1Id, trunkENI.deleteQueue[0].ID)
+	assert.Equal(t, 1, trunkENI.deleteQueue[0].VlanID)
+	assert.True(t, trunkENI.usedVlanIds[1])
+}
+
 // TestTrunkENI_assignVlanId tests that Vlan ids are assigned till the Max capacity is reached and after that assign
 // call will return an error
 func TestTrunkENI_assignVlanId(t *testing.T) {

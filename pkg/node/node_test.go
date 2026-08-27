@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
@@ -115,6 +116,81 @@ func TestNewUnManagedNode(t *testing.T) {
 	assert.False(t, node.IsManaged())
 	assert.False(t, node.IsReady())
 	assert.True(t, node.GetNodeInstanceID() == instanceID)
+}
+
+func validCNINode(instID, instType string) *rcv1alpha1.CNINode {
+	return &rcv1alpha1.CNINode{
+		Status: rcv1alpha1.CNINodeStatus{
+			InstanceID:     instID,
+			InstanceType:   instType,
+			SecurityGroups: []string{"sg-1"},
+			TrunkInterface: &rcv1alpha1.TrunkInterface{ID: "eni-trunk", SubnetID: "subnet-1", SubnetCIDR: "10.0.0.0/16"},
+		},
+	}
+}
+
+// TestNode_tryLoadInstanceFromCNINode_Hit tests that a valid CNINode snapshot
+// rebuilds the instance via LoadFromCNINode with no EC2 LoadDetails call.
+func TestNode_tryLoadInstanceFromCNINode_Hit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 0)
+	instID := "i-abc"
+	cniNode := validCNINode(instID, nitroInstanceType)
+
+	mock.MockInstance.EXPECT().Name().Return(nodeName).AnyTimes()
+	mock.MockInstance.EXPECT().InstanceID().Return(instID).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
+	// Hit path must hydrate from the snapshot and never call LoadDetails.
+	mock.MockInstance.EXPECT().LoadFromCNINode(cniNode)
+
+	assert.True(t, mock.NodeWithMock.tryLoadInstanceFromCNINode())
+}
+
+// TestNode_tryLoadInstanceFromCNINode_NoCheckpoint tests a GetCNINode error is a miss.
+func TestNode_tryLoadInstanceFromCNINode_NoCheckpoint(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 0)
+	mock.MockInstance.EXPECT().Name().Return(nodeName).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(nil, mockError)
+
+	assert.False(t, mock.NodeWithMock.tryLoadInstanceFromCNINode())
+}
+
+// TestNode_tryLoadInstanceFromCNINode_InstanceIDMismatch tests a reused CNINode
+// name (snapshot instance id != live instance id) is a miss.
+func TestNode_tryLoadInstanceFromCNINode_InstanceIDMismatch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 0)
+	cniNode := validCNINode("i-old", nitroInstanceType)
+
+	mock.MockInstance.EXPECT().Name().Return(nodeName).AnyTimes()
+	mock.MockInstance.EXPECT().InstanceID().Return("i-new").AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
+
+	assert.False(t, mock.NodeWithMock.tryLoadInstanceFromCNINode())
+}
+
+// TestNode_tryLoadInstanceFromCNINode_UnsupportedType tests an instance type not
+// in the supported limits is a miss.
+func TestNode_tryLoadInstanceFromCNINode_UnsupportedType(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 0)
+	instID := "i-abc"
+	cniNode := validCNINode(instID, "dummy.large")
+
+	mock.MockInstance.EXPECT().Name().Return(nodeName).AnyTimes()
+	mock.MockInstance.EXPECT().InstanceID().Return(instID).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
+
+	assert.False(t, mock.NodeWithMock.tryLoadInstanceFromCNINode())
 }
 
 // TestNode_InitResources tests the instance details is loaded and the node is initialized without error

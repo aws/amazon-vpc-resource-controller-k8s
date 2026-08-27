@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
@@ -101,6 +102,47 @@ func TestNewEC2Instance(t *testing.T) {
 	assert.Equal(t, nodeName, ec2Instance.Name())
 	assert.Equal(t, os, ec2Instance.Os())
 	assert.Equal(t, instanceID, ec2Instance.InstanceID())
+}
+
+// TestEc2Instance_IsHydrated_Default tests a freshly constructed instance is not hydrated.
+func TestEc2Instance_IsHydrated_Default(t *testing.T) {
+	instance := getMockInstanceInterface()
+	assert.False(t, instance.IsHydrated())
+	assert.Equal(t, "", instance.HydratedTrunkID())
+}
+
+// TestEc2Instance_LoadFromCNINode tests the instance details are rebuilt from a
+// CNINode status snapshot (no EC2 call) and the fields are populated correctly.
+func TestEc2Instance_LoadFromCNINode(t *testing.T) {
+	instance := getMockInstanceInterface()
+
+	tcpTimeout := int32(300)
+	cniNode := &rcv1alpha1.CNINode{
+		Status: rcv1alpha1.CNINodeStatus{
+			InstanceID:     instanceID,
+			InstanceType:   string(instanceType),
+			SecurityGroups: []string{securityGroup1, securityGroup2},
+			ConnectionTracking: &rcv1alpha1.ConnectionTrackingConfig{
+				TCPEstablishedTimeout: &tcpTimeout,
+			},
+			TrunkInterface: &rcv1alpha1.TrunkInterface{
+				ID:         "eni-trunk",
+				SubnetID:   subnetID,
+				SubnetCIDR: subnetCidrBlock,
+			},
+		},
+	}
+
+	instance.LoadFromCNINode(cniNode)
+
+	assert.True(t, instance.IsHydrated())
+	assert.Equal(t, "eni-trunk", instance.HydratedTrunkID())
+	assert.Equal(t, string(instanceType), instance.Type())
+	assert.Equal(t, subnetID, instance.SubnetID())
+	assert.Equal(t, subnetCidrBlock, instance.SubnetCidrBlock())
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, instance.CurrentInstanceSecurityGroups())
+	gotTCP, _, _ := instance.GetConnectionTrackingSpec()
+	assert.Equal(t, &tcpTimeout, gotTCP)
 }
 
 // TestEc2Instance_LoadDetails tests that load instance details loads all the instance details correctly by making calls
