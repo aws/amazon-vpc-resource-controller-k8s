@@ -91,6 +91,46 @@ spec:
           status:
             description: CNINodeStatus defines the managed VPC resources.
             properties:
+              connectionTracking:
+                description: |-
+                  ConnectionTracking holds the connection tracking timeouts inherited from
+                  the instance's primary ENI and applied to branch ENIs. Persisted so the
+                  value survives a controller restart without a DescribeInstances call; a
+                  nil value means branch ENIs use the EC2 default connection tracking.
+                properties:
+                  tcpEstablishedTimeout:
+                    description: TCPEstablishedTimeout is the timeout for established
+                      TCP connections.
+                    format: int32
+                    type: integer
+                  udpStreamTimeout:
+                    description: UDPStreamTimeout is the timeout for UDP flows classified
+                      as streams.
+                    format: int32
+                    type: integer
+                  udpTimeout:
+                    description: UDPTimeout is the timeout for idle UDP flows.
+                    format: int32
+                    type: integer
+                type: object
+              instanceID:
+                description: InstanceID is the EC2 instance id of the node this CNINode
+                  corresponds to.
+                maxLength: 19
+                pattern: ^i-([0-9a-f]{8}|[0-9a-f]{17})$
+                type: string
+              instanceType:
+                description: InstanceType is the EC2 instance type of the node, used
+                  to size branch ENI capacity.
+                type: string
+              securityGroups:
+                description: |-
+                  SecurityGroups are the instance's default security group ids, applied to a
+                  branch ENI when the pod does not specify its own via a SecurityGroupPolicy.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
               trunkInterface:
                 description: |-
                   TrunkInterface describes the trunk network interface attached to the
@@ -175,6 +215,10 @@ spec:
                   macAddress:
                     description: MacAddress is the MAC address of the trunk ENI.
                     type: string
+                  subnetCIDR:
+                    description: SubnetCIDR is the IPv4 CIDR block of the trunk ENI's
+                      subnet.
+                    type: string
                   subnetID:
                     description: |-
                       SubnetID is the id of the EC2 subnet the trunk ENI resides in, which is
@@ -184,6 +228,10 @@ spec:
                       value survives a controller restart that drops in-memory node state.
                     maxLength: 24
                     pattern: ^subnet-([0-9a-f]{8}|[0-9a-f]{17})$
+                    type: string
+                  subnetV6CIDR:
+                    description: SubnetV6CIDR is the IPv6 CIDR block of the trunk
+                      ENI's subnet, if present.
                     type: string
                 required:
                 - id

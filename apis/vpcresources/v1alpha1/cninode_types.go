@@ -73,6 +73,41 @@ type CNINodeStatus struct {
 	// managing controller (see spec.managedBy) for visibility and recovery.
 	// +optional
 	TrunkInterface *TrunkInterface `json:"trunkInterface,omitempty"`
+	// InstanceID is the EC2 instance id of the node this CNINode corresponds to.
+	// +optional
+	// +kubebuilder:validation:MaxLength=19
+	// +kubebuilder:validation:Pattern=`^i-([0-9a-f]{8}|[0-9a-f]{17})$`
+	InstanceID string `json:"instanceID,omitempty"`
+	// InstanceType is the EC2 instance type of the node, used to size branch ENI capacity.
+	// +optional
+	InstanceType string `json:"instanceType,omitempty"`
+	// SecurityGroups are the instance's default security group ids, applied to a
+	// branch ENI when the pod does not specify its own via a SecurityGroupPolicy.
+	// +optional
+	// +listType=atomic
+	SecurityGroups []string `json:"securityGroups,omitempty"`
+	// ConnectionTracking holds the connection tracking timeouts inherited from
+	// the instance's primary ENI and applied to branch ENIs. Persisted so the
+	// value survives a controller restart without a DescribeInstances call; a
+	// nil value means branch ENIs use the EC2 default connection tracking.
+	// +optional
+	ConnectionTracking *ConnectionTrackingConfig `json:"connectionTracking,omitempty"`
+}
+
+// ConnectionTrackingConfig holds the idle timeouts (in seconds) EC2 uses for
+// connection tracking on an ENI, mirrored from the instance's primary ENI so
+// branch ENIs inherit the same behavior. A nil pointer field means the value
+// was not configured and the EC2 default applies.
+type ConnectionTrackingConfig struct {
+	// TCPEstablishedTimeout is the timeout for established TCP connections.
+	// +optional
+	TCPEstablishedTimeout *int32 `json:"tcpEstablishedTimeout,omitempty"`
+	// UDPStreamTimeout is the timeout for UDP flows classified as streams.
+	// +optional
+	UDPStreamTimeout *int32 `json:"udpStreamTimeout,omitempty"`
+	// UDPTimeout is the timeout for idle UDP flows.
+	// +optional
+	UDPTimeout *int32 `json:"udpTimeout,omitempty"`
 }
 
 // TrunkInterface describes a trunk ENI and its associated branch ENIs.
@@ -95,6 +130,12 @@ type TrunkInterface struct {
 	// +kubebuilder:validation:MaxLength=24
 	// +kubebuilder:validation:Pattern=`^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`
 	SubnetID string `json:"subnetID,omitempty"`
+	// SubnetCIDR is the IPv4 CIDR block of the trunk ENI's subnet.
+	// +optional
+	SubnetCIDR string `json:"subnetCIDR,omitempty"`
+	// SubnetV6CIDR is the IPv6 CIDR block of the trunk ENI's subnet, if present.
+	// +optional
+	SubnetV6CIDR string `json:"subnetV6CIDR,omitempty"`
 	// Branches are the branch ENIs associated with this trunk ENI.
 	// Listed as a map keyed by id so distinct field managers can own
 	// individual entries under Server-Side Apply without conflicting.
