@@ -247,11 +247,13 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 // optional and intentionally not required here.
 func snapshotMissReason(cniNode *rcv1alpha1.CNINode, instanceID string) string {
 	status := cniNode.Status
-	if status.TrunkInterface == nil || status.TrunkInterface.ID == "" || status.TrunkInterface.SubnetID == "" ||
-		status.TrunkInterface.SubnetCIDR == "" || len(status.SecurityGroups) == 0 || status.InstanceType == "" {
+	switch {
+	// Case expressions are evaluated left-to-right and stop at the first true one,
+	// so the nil check short-circuits before any TrunkInterface field is read.
+	case status.TrunkInterface == nil, status.TrunkInterface.ID == "", status.TrunkInterface.SubnetID == "",
+		status.TrunkInterface.SubnetCIDR == "", len(status.SecurityGroups) == 0, status.InstanceType == "":
 		return fastPathReasonMissingField
-	}
-	if status.InstanceID != instanceID {
+	case status.InstanceID != instanceID:
 		return fastPathReasonInstanceIDMismatch
 	}
 	if _, ok := vpc.Limits[status.InstanceType]; !ok {

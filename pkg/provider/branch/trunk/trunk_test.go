@@ -16,6 +16,7 @@ package trunk
 import (
 	"fmt"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	awsEc2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsEc2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -244,6 +246,7 @@ func getMockTrunk() trunkENI {
 		log:               log,
 		usedVlanIds:       make([]bool, MaxAllocatableVlanIds),
 		uidToBranchENIMap: map[string][]*ENIDetails{},
+		inFlightENIs:      map[string]struct{}{},
 		nodeIDTag: []awsEc2Types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -302,6 +305,125 @@ func TestTrunkENI_reclaimOrphansOnAssociateFailure(t *testing.T) {
 	assert.Equal(t, Branch1Id, trunkENI.deleteQueue[0].ID)
 	assert.Equal(t, 1, trunkENI.deleteQueue[0].VlanID)
 	assert.True(t, trunkENI.usedVlanIds[1])
+}
+
+// TestTrunkENI_reclaimOrphans_SkipsInFlightENI verifies that a branch ENI which
+// is attached in EC2 (so returned by the describe) but is currently in-flight
+// for a concurrent allocation (created, not yet in the cache or delete queue) is
+// NOT treated as an orphan. This is the guard against a reclaim triggered by one
+// pod's associate failure deleting another pod's freshly created branch ENI.
+func TestTrunkENI_reclaimOrphans_SkipsInFlightENI(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+
+	// Branch1 is a real orphan (no pod, not in-flight); Branch2 is in-flight for a
+	// concurrent allocation and must be left alone.
+	orphan := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: &Branch1Id,
+		TagSet:             []awsEc2Types.Tag{{Key: aws.String(config.VLandIDTag), Value: aws.String("1")}},
+	}
+	inFlight := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: &Branch2Id,
+		TagSet:             []awsEc2Types.Tag{{Key: aws.String(config.VLandIDTag), Value: aws.String("2")}},
+	}
+	trunkENI.markENIInFlight(Branch2Id)
+
+	mockHelper.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).
+		Return([]*awsEc2Types.NetworkInterface{orphan, inFlight}, nil)
+
+	// Counters are package-global; measure deltas to stay order-independent.
+	triggeredBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))
+	reclaimedBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("reclaimed"))
+	skippedBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("skipped_in_flight"))
+
+	trunkENI.reclaimOrphansOnAssociateFailure()
+
+	// Only the real orphan (Branch1/vlan 1) is reclaimed; the in-flight
+	// Branch2/vlan 2 is neither enqueued for deletion nor marked used by reclaim.
+	assert.Len(t, trunkENI.deleteQueue, 1)
+	assert.Equal(t, Branch1Id, trunkENI.deleteQueue[0].ID)
+	assert.True(t, trunkENI.usedVlanIds[1])
+	assert.False(t, trunkENI.usedVlanIds[2])
+
+	// The reclaim path is observable: one pass, one orphan reclaimed, one in-flight skip.
+	assert.Equal(t, 1.0, testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))-triggeredBefore)
+	assert.Equal(t, 1.0, testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("reclaimed"))-reclaimedBefore)
+	assert.Equal(t, 1.0, testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("skipped_in_flight"))-skippedBefore)
+}
+
+// TestTrunkENI_reclaimOrphans_ConcurrentInFlight stress-tests the in-flight guard
+// under real concurrency (run with -race): while many goroutines mark and clear
+// ENIs in-flight, concurrent reclaims run against a describe result that always
+// contains one permanently in-flight ENI and one real orphan. The in-flight ENI
+// must never be reaped, the orphan must be reaped, and there must be no data race
+// on the shared inFlightENIs/deleteQueue state.
+func TestTrunkENI_reclaimOrphans_ConcurrentInFlight(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+
+	const inFlightID = "eni-inflight-permanent"
+	const orphanID = "eni-real-orphan"
+	// Held in-flight for the whole test; a reclaim must always skip it.
+	trunkENI.markENIInFlight(inFlightID)
+
+	inFlight := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: aws.String(inFlightID),
+		TagSet:             []awsEc2Types.Tag{{Key: aws.String(config.VLandIDTag), Value: aws.String("5")}},
+	}
+	orphan := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: aws.String(orphanID),
+		TagSet:             []awsEc2Types.Tag{{Key: aws.String(config.VLandIDTag), Value: aws.String("6")}},
+	}
+	mockHelper.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).
+		Return([]*awsEc2Types.NetworkInterface{inFlight, orphan}, nil).AnyTimes()
+
+	var wg sync.WaitGroup
+	// Writers churn unrelated in-flight ids to exercise concurrent map writes
+	// against the reclaim readers.
+	for w := 0; w < 8; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				id := fmt.Sprintf("eni-churn-%d-%d", w, i)
+				trunkENI.markENIInFlight(id)
+				trunkENI.clearENIsInFlight([]string{id})
+			}
+		}(w)
+	}
+	// Readers run concurrent reclaims (coalesced by singleflight per trunk).
+	for r := 0; r < 8; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				trunkENI.reclaimOrphansOnAssociateFailure()
+			}
+		}()
+	}
+	wg.Wait()
+
+	inDeleteQueue := func(id string) bool {
+		trunkENI.lock.RLock()
+		defer trunkENI.lock.RUnlock()
+		for _, eni := range trunkENI.deleteQueue {
+			if eni.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+	assert.False(t, inDeleteQueue(inFlightID), "in-flight ENI must never be reaped by a concurrent reclaim")
+	assert.True(t, inDeleteQueue(orphanID), "real orphan should be reaped")
 }
 
 // TestTrunkENI_assignVlanId tests that Vlan ids are assigned till the Max capacity is reached and after that assign
@@ -906,6 +1028,8 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	// The returned content is as expected
 	assert.Equal(t, expectedENIDetails, eniDetails)
 	assert.Equal(t, expectedENIDetails, trunkENI.uidToBranchENIMap[PodUID2])
+	// Once committed to the cache, no ENI is left marked in-flight.
+	assert.Empty(t, trunkENI.inFlightENIs)
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup test branch is created and with instance security group
@@ -977,6 +1101,57 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
 	assert.Error(t, MockError, err)
 	assert.Equal(t, []*ENIDetails{EniDetails1, ENIDetailsMissingAssociationID}, trunkENI.deleteQueue)
+	// The failure path cleared the in-flight marks it set.
+	assert.Empty(t, trunkENI.inFlightENIs)
+}
+
+// TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate_NoSelfDoubleEnqueue
+// verifies that when this pod's own associate fails and the reclaim describe
+// returns this pod's own just-created branch ENIs, the in-flight guard keeps
+// reclaim from enqueuing them a second time. Without the guard those ENIs would
+// be enqueued once by reclaim and again by the failure path, and the duplicate
+// would later free the VLAN twice.
+func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate_NoSelfDoubleEnqueue(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+
+	mockInstance.EXPECT().Type().Return(InstanceType)
+	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
+	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil)
+
+	gomock.InOrder(
+		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+			append(vlan1Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).Return(BranchInterface1, nil),
+		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil),
+		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+			append(vlan2Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).Return(BranchInterface2, nil),
+		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(nil, MockError),
+	)
+
+	// The reclaim describe returns this pod's own in-flight branch ENIs. They must
+	// be recognized as in-flight (not orphans) and left for the failure path.
+	inFlight1 := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: &Branch1Id,
+		TagSet:             []awsEc2Types.Tag{{Key: aws.String(config.VLandIDTag), Value: aws.String(strconv.Itoa(VlanId1))}},
+	}
+	inFlight2 := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: &Branch2Id,
+		TagSet:             []awsEc2Types.Tag{{Key: aws.String(config.VLandIDTag), Value: aws.String(strconv.Itoa(VlanId2))}},
+	}
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).
+		Return([]*awsEc2Types.NetworkInterface{inFlight1, inFlight2}, nil)
+
+	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
+	assert.Error(t, MockError, err)
+	// Exactly the two ENIs from the failure path, no reclaim duplicates.
+	assert.Equal(t, []*ENIDetails{EniDetails1, ENIDetailsMissingAssociationID}, trunkENI.deleteQueue)
+	assert.Empty(t, trunkENI.inFlightENIs)
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate tests if error is returned on associate then the created interfaces

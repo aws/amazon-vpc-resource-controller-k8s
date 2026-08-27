@@ -87,6 +87,18 @@ var (
 		},
 		[]string{"operation"},
 	)
+	// branchENIOrphanReclaimCount makes the reactive orphan reclaim and the
+	// in-flight guard observable. result="triggered" counts each reclaim pass
+	// (one describe), "reclaimed" counts each orphan enqueued for deletion, and
+	// "skipped_in_flight" counts each attached ENI left alone because a concurrent
+	// allocation still owns it in flight.
+	branchENIOrphanReclaimCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_eni_orphan_reclaim_total",
+			Help: "The number of orphan branch ENI reclaim outcomes on associate failure",
+		},
+		[]string{"result"},
+	)
 
 	prometheusRegistered = false
 )
@@ -128,6 +140,13 @@ type trunkENI struct {
 	usedVlanIds []bool
 	// branchENIs is the list of BranchENIs associated with the trunk
 	uidToBranchENIMap map[string][]*ENIDetails
+	// inFlightENIs holds branch ENI ids that have been created in EC2 (and so
+	// already carry the trunk tag and are visible to GetBranchNetworkInterface)
+	// but are not yet committed to uidToBranchENIMap or the delete queue.
+	// reclaimOrphans treats these as known, so a concurrent associate failure on
+	// the same trunk does not reap another pod's half-completed (in-flight)
+	// branch ENI and silently delete a live pod's networking.
+	inFlightENIs map[string]struct{}
 	// deleteQueue is the queue of ENIs that are being cooled down before being deleted
 	deleteQueue []*ENIDetails
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
@@ -208,6 +227,7 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 		ec2ApiHelper:      helper,
 		instance:          instance,
 		uidToBranchENIMap: make(map[string][]*ENIDetails),
+		inFlightENIs:      make(map[string]struct{}),
 		nodeIDTag: []ec2types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -223,6 +243,7 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(unreconciledTrunkENICount)
 		metrics.Registry.MustRegister(branchENIOperationsSuccessCount)
 		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
+		metrics.Registry.MustRegister(branchENIOrphanReclaimCount)
 
 		prometheusRegistered = true
 	}
@@ -471,6 +492,14 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 	var nwInterface *ec2types.NetworkInterface
 	var vlanID int
 
+	// createdENIIDs tracks branch ENIs created in EC2 during this call. They are
+	// marked in-flight as soon as they exist (they already carry the trunk tag
+	// and so are visible to a concurrent orphan reclaim) and cleared once they
+	// reach a tracked state (added to the cache on success, or pushed to the
+	// delete queue on failure). Clearing on function exit guarantees no leak.
+	var createdENIIDs []string
+	defer func() { t.clearENIsInFlight(createdENIIDs) }()
+
 	for i := 0; i < eniCount; i++ {
 		// Assign VLAN
 		vlanID, err = t.assignVlanId()
@@ -503,6 +532,11 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 			break
 		} else {
 			branchENIOperationsSuccessCount.WithLabelValues("created_branch_eni_succeeded").Inc()
+			// The ENI now exists in EC2 with the trunk tag, so a concurrent orphan
+			// reclaim can see it. Mark it in-flight so it is not reaped before this
+			// call commits it to the cache or the delete queue.
+			t.markENIInFlight(*nwInterface.NetworkInterfaceId)
+			createdENIIDs = append(createdENIIDs, *nwInterface.NetworkInterfaceId)
 		}
 
 		// Branch ENI can have an IPv4 address, IPv6 address, or both
@@ -576,18 +610,24 @@ func (t *trunkENI) reclaimOrphans() {
 		t.log.Error(err, "failed to list branch ENIs for orphan reclaim")
 		return
 	}
+	branchENIOrphanReclaimCount.WithLabelValues("triggered").Inc()
 
-	// Build the set of ENIs a pod owns or that are already queued for deletion;
-	// anything attached in EC2 outside this set is an orphan.
+	// owned = ENIs a pod owns or that are already queued for deletion.
+	// inFlight = ENIs a concurrent allocation created but has not committed yet;
+	// anything attached in EC2 outside both sets is an orphan.
 	t.lock.RLock()
-	known := make(map[string]struct{})
+	owned := make(map[string]struct{})
 	for _, enis := range t.uidToBranchENIMap {
 		for _, eni := range enis {
-			known[eni.ID] = struct{}{}
+			owned[eni.ID] = struct{}{}
 		}
 	}
 	for _, eni := range t.deleteQueue {
-		known[eni.ID] = struct{}{}
+		owned[eni.ID] = struct{}{}
+	}
+	inFlight := make(map[string]struct{}, len(t.inFlightENIs))
+	for id := range t.inFlightENIs {
+		inFlight[id] = struct{}{}
 	}
 	t.lock.RUnlock()
 
@@ -596,7 +636,16 @@ func (t *trunkENI) reclaimOrphans() {
 			continue
 		}
 		id := *branchInterface.NetworkInterfaceId
-		if _, ok := known[id]; ok {
+		if _, ok := owned[id]; ok {
+			continue
+		}
+		if _, ok := inFlight[id]; ok {
+			// A concurrent allocation created this ENI but has not committed it to
+			// the cache or delete queue yet. Skipping it here is what prevents a
+			// reclaim (triggered by an unrelated pod's associate failure) from
+			// deleting another pod's freshly created/associated branch ENI.
+			branchENIOrphanReclaimCount.WithLabelValues("skipped_in_flight").Inc()
+			t.log.Info("skipping in-flight branch eni during orphan reclaim, create in progress", "eni", id)
 			continue
 		}
 		vlanID, err := t.getVlanIdFromTag(branchInterface.TagSet)
@@ -605,6 +654,7 @@ func (t *trunkENI) reclaimOrphans() {
 			continue
 		}
 		t.log.Info("reclaiming orphan branch eni owned by no pod", "eni", id, "vlanID", vlanID)
+		branchENIOrphanReclaimCount.WithLabelValues("reclaimed").Inc()
 		// Mark the VLAN used so the ledger does not hand it out again before the
 		// orphan is deleted, then enqueue the orphan for deletion.
 		t.markVlanAssigned(vlanID)
@@ -780,6 +830,30 @@ func (t *trunkENI) getBranchFromCache(UID string) (branchENIs []*ENIDetails, isP
 
 	branchENIs, isPresent = t.uidToBranchENIMap[UID]
 	return
+}
+
+// markENIInFlight records a branch ENI id as created-but-not-yet-tracked so a
+// concurrent orphan reclaim on the same trunk does not treat it as an orphan.
+func (t *trunkENI) markENIInFlight(id string) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.inFlightENIs[id] = struct{}{}
+}
+
+// clearENIsInFlight removes the given branch ENI ids from the in-flight set once
+// they have reached a tracked state (added to the cache or pushed to the delete
+// queue).
+func (t *trunkENI) clearENIsInFlight(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	for _, id := range ids {
+		delete(t.inFlightENIs, id)
+	}
 }
 
 // assignVlanId assigns a free vlan id from the list of available vlan ids. In the future this can be changed to LL
