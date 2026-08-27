@@ -35,6 +35,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/singleflight"
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
@@ -131,6 +132,10 @@ type trunkENI struct {
 	deleteQueue []*ENIDetails
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
 	nodeIDTag []ec2types.Tag
+	// reclaimGroup coalesces concurrent orphan-reclaim describes for this trunk
+	// into a single call (see reclaimOrphansOnAssociateFailure), so a burst of
+	// pods hitting an associate conflict at once produces only one EC2 describe.
+	reclaimGroup singleflight.Group
 }
 
 // getConnectionTrackingSpec builds a ConnectionTrackingSpecificationRequest from the
@@ -521,6 +526,10 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		if err != nil {
 			err = fmt.Errorf("associating branch to trunk, %w", err)
 			trunkENIOperationsErrCount.WithLabelValues("associate_branch").Inc()
+			// Associate can fail because an orphan branch ENI (attached in EC2 but
+			// tracked by no pod) already holds a VLAN or trunk slot. Reclaim orphans
+			// so a subsequent pod retry can allocate against the freed capacity.
+			t.reclaimOrphansOnAssociateFailure()
 			break
 		}
 		newENI.AssociationID = *associationOutput.InterfaceAssociation.AssociationId
@@ -539,6 +548,68 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		"security group used", securityGroups)
 
 	return newENIs, nil
+}
+
+// reclaimOrphansOnAssociateFailure handles an AssociateTrunkInterface failure
+// caused by a branch ENI that is attached in EC2 but tracked by no pod in the
+// in-memory ledger (an orphan): its owning pod's delete queue was lost on a
+// restart, or a create/associate half-completed. Concurrent calls for the same
+// trunk are coalesced by reclaimGroup into a single describe (the rest share its
+// result), so a burst of pods hitting an associate conflict at once produces only
+// one EC2 describe rather than one per pod.
+func (t *trunkENI) reclaimOrphansOnAssociateFailure() {
+	_, _, _ = t.reclaimGroup.Do(t.trunkENIId, func() (interface{}, error) {
+		t.reclaimOrphans()
+		return nil, nil
+	})
+}
+
+// reclaimOrphans lists the trunk's branch ENIs once and, for every ENI attached
+// in EC2 but owned by no pod and not already queued for deletion, marks its VLAN
+// used and enqueues it for deletion, so a subsequent pod retry can allocate
+// against the freed VLAN/slot. Best-effort: a describe error is logged and the
+// pod retry proceeds.
+func (t *trunkENI) reclaimOrphans() {
+	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&t.trunkENIId, aws.String(t.instance.SubnetID()))
+	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("reclaim_orphans_describe").Inc()
+		t.log.Error(err, "failed to list branch ENIs for orphan reclaim")
+		return
+	}
+
+	// Build the set of ENIs a pod owns or that are already queued for deletion;
+	// anything attached in EC2 outside this set is an orphan.
+	t.lock.RLock()
+	known := make(map[string]struct{})
+	for _, enis := range t.uidToBranchENIMap {
+		for _, eni := range enis {
+			known[eni.ID] = struct{}{}
+		}
+	}
+	for _, eni := range t.deleteQueue {
+		known[eni.ID] = struct{}{}
+	}
+	t.lock.RUnlock()
+
+	for _, branchInterface := range branchInterfaces {
+		if branchInterface.NetworkInterfaceId == nil {
+			continue
+		}
+		id := *branchInterface.NetworkInterfaceId
+		if _, ok := known[id]; ok {
+			continue
+		}
+		vlanID, err := t.getVlanIdFromTag(branchInterface.TagSet)
+		if err != nil || vlanID <= 0 || vlanID >= MaxAllocatableVlanIds {
+			t.log.Info("skipping orphan branch eni with unusable vlan tag", "eni", id, "vlanID", vlanID)
+			continue
+		}
+		t.log.Info("reclaiming orphan branch eni owned by no pod", "eni", id, "vlanID", vlanID)
+		// Mark the VLAN used so the ledger does not hand it out again before the
+		// orphan is deleted, then enqueue the orphan for deletion.
+		t.markVlanAssigned(vlanID)
+		t.pushENIToDeleteQueue(&ENIDetails{ID: id, VlanID: vlanID, deletionTimeStamp: time.Now()})
+	}
 }
 
 // DeleteBranchNetworkInterface deletes the branch network interface and returns an error in case of failure to delete

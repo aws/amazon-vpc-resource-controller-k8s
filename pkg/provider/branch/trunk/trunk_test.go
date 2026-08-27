@@ -909,7 +909,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 
 	mockInstance.EXPECT().Type().Return(InstanceType)
 	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
 	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
 	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
 	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil)
@@ -922,6 +922,11 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 			append(vlan2Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).Return(BranchInterface2, nil),
 		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(nil, MockError),
 	)
+
+	// The failed associate triggers a reactive orphan-reclaim describe; return no
+	// attached branch ENIs so nothing is reclaimed and the delete queue stays the
+	// two half-built ENIs pushed by the failure path.
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).Return(nil, nil)
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2)
 	assert.Error(t, MockError, err)
