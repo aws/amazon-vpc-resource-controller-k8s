@@ -20,6 +20,7 @@ package mock_ec2
 import (
 	reflect "reflect"
 
+	v1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -119,6 +120,20 @@ func (mr *MockEC2InstanceMockRecorder) GetHighestUnusedDeviceIndex() *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHighestUnusedDeviceIndex", reflect.TypeOf((*MockEC2Instance)(nil).GetHighestUnusedDeviceIndex))
 }
 
+// HydratedTrunkID mocks base method.
+func (m *MockEC2Instance) HydratedTrunkID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HydratedTrunkID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// HydratedTrunkID indicates an expected call of HydratedTrunkID.
+func (mr *MockEC2InstanceMockRecorder) HydratedTrunkID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HydratedTrunkID", reflect.TypeOf((*MockEC2Instance)(nil).HydratedTrunkID))
+}
+
 // InstanceID mocks base method.
 func (m *MockEC2Instance) InstanceID() string {
 	m.ctrl.T.Helper()
@@ -133,6 +148,20 @@ func (mr *MockEC2InstanceMockRecorder) InstanceID() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceID", reflect.TypeOf((*MockEC2Instance)(nil).InstanceID))
 }
 
+// IsHydrated mocks base method.
+func (m *MockEC2Instance) IsHydrated() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsHydrated")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsHydrated indicates an expected call of IsHydrated.
+func (mr *MockEC2InstanceMockRecorder) IsHydrated() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsHydrated", reflect.TypeOf((*MockEC2Instance)(nil).IsHydrated))
+}
+
 // LoadDetails mocks base method.
 func (m *MockEC2Instance) LoadDetails(arg0 api.EC2APIHelper) error {
 	m.ctrl.T.Helper()
@@ -145,6 +174,18 @@ func (m *MockEC2Instance) LoadDetails(arg0 api.EC2APIHelper) error {
 func (mr *MockEC2InstanceMockRecorder) LoadDetails(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadDetails", reflect.TypeOf((*MockEC2Instance)(nil).LoadDetails), arg0)
+}
+
+// LoadFromCNINode mocks base method.
+func (m *MockEC2Instance) LoadFromCNINode(arg0 *v1alpha1.CNINode) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "LoadFromCNINode", arg0)
+}
+
+// LoadFromCNINode indicates an expected call of LoadFromCNINode.
+func (mr *MockEC2InstanceMockRecorder) LoadFromCNINode(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadFromCNINode", reflect.TypeOf((*MockEC2Instance)(nil).LoadFromCNINode), arg0)
 }
 
 // Name mocks base method.

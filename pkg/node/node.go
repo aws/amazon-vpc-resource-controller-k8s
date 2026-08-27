@@ -19,15 +19,20 @@ import (
 	"sync"
 	"time"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
-	v1 "k8s.io/api/core/v1"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 type node struct {
@@ -55,7 +60,33 @@ type node struct {
 const (
 	MaxNodeReconciliationInterval = 15 * time.Minute
 	NodeInitialCleanupInterval    = 1 * time.Minute
+
+	// CNINode status fast-path (zero-EC2 restart hydrate) metric label values.
+	fastPathResultHit  = "hit"
+	fastPathResultMiss = "miss"
+
+	fastPathReasonNoCheckpoint       = "no_checkpoint"
+	fastPathReasonInstanceIDMismatch = "instance_id_mismatch"
+	fastPathReasonMissingField       = "missing_field"
+	fastPathReasonUnsupportedType    = "unsupported_type"
 )
+
+var (
+	cniNodeStatusFastPathCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cninode_status_fast_path_total",
+			Help: "Number of trunk re-init attempts served from the CNINode status snapshot (result=hit, zero EC2) or fallen back to EC2 discovery (result=miss), labeled by miss reason",
+		},
+		[]string{"result", "reason"},
+	)
+	registerMetricsOnce sync.Once
+)
+
+func registerNodeMetrics() {
+	registerMetricsOnce.Do(func() {
+		metrics.Registry.MustRegister(cniNodeStatusFastPathCount)
+	})
+}
 
 // ErrInitResources to wrap error messages for all errors encountered
 // during node initialization so the node can be de-registered on failure
@@ -89,6 +120,7 @@ type Node interface {
 
 // NewManagedNode returns node managed by the controller
 func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
+	registerNodeMetrics()
 	return &node{
 		managed: true,
 		log: log.WithName("node resource handler").
@@ -152,16 +184,20 @@ func (n *node) UpdateResources(resourceManager resource.ResourceManager) error {
 func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
-	err := n.instance.LoadDetails(n.ec2API)
-	if err != nil {
-		if errors.Is(err, utils.ErrNotFound) {
-			// Send a node event for users' visibility
-			msg := fmt.Sprintf("The instance type %s is not supported yet by the vpc resource controller", n.instance.Type())
-			utils.SendNodeEventWithNodeName(n.k8sAPI, n.instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, n.log)
-		}
-		return &ErrInitResources{
-			Message: "failed to load instance details",
-			Err:     err,
+	// Prefer the zero-EC2 fast path: rebuild instance details from the CNINode
+	// snapshot. On any miss, fall back to EC2 discovery.
+	if !n.tryLoadInstanceFromCNINode() {
+		err := n.instance.LoadDetails(n.ec2API)
+		if err != nil {
+			if errors.Is(err, utils.ErrNotFound) {
+				// Send a node event for users' visibility
+				msg := fmt.Sprintf("The instance type %s is not supported yet by the vpc resource controller", n.instance.Type())
+				utils.SendNodeEventWithNodeName(n.k8sAPI, n.instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, n.log)
+			}
+			return &ErrInitResources{
+				Message: "failed to load instance details",
+				Err:     err,
+			}
 		}
 	}
 
@@ -195,6 +231,57 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 
 	n.ready = true
 	return errInit
+}
+
+// tryLoadInstanceFromCNINode rebuilds the instance details from the node's
+// CNINode status snapshot without any EC2 call, returning true on success. It
+// returns false (leaving the instance untouched for the EC2 LoadDetails
+// fallback) when there is no usable snapshot: missing/partial status, an
+// instance-id mismatch (a reused CNINode name), or an unsupported instance type.
+// Every outcome is recorded on cninode_status_fast_path_total.
+// snapshotMissReason returns "" if the CNINode status is a usable checkpoint for
+// the given live instance id, otherwise the fast-path miss reason. A snapshot is
+// usable when the required trunk skeleton fields are present, its recorded
+// instance id matches the live node (guards against a reused CNINode name), and
+// its instance type is supported. SubnetV6CIDR and ConnectionTracking are
+// optional and intentionally not required here.
+func snapshotMissReason(cniNode *rcv1alpha1.CNINode, instanceID string) string {
+	status := cniNode.Status
+	if status.TrunkInterface == nil || status.TrunkInterface.ID == "" || status.TrunkInterface.SubnetID == "" ||
+		status.TrunkInterface.SubnetCIDR == "" || len(status.SecurityGroups) == 0 || status.InstanceType == "" {
+		return fastPathReasonMissingField
+	}
+	if status.InstanceID != instanceID {
+		return fastPathReasonInstanceIDMismatch
+	}
+	if _, ok := vpc.Limits[status.InstanceType]; !ok {
+		return fastPathReasonUnsupportedType
+	}
+	return ""
+}
+
+func (n *node) tryLoadInstanceFromCNINode() bool {
+	nodeName := n.instance.Name()
+
+	cniNode, err := n.k8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
+	if err != nil {
+		cniNodeStatusFastPathCount.WithLabelValues(fastPathResultMiss, fastPathReasonNoCheckpoint).Inc()
+		return false
+	}
+
+	if reason := snapshotMissReason(cniNode, n.instance.InstanceID()); reason != "" {
+		if reason == fastPathReasonInstanceIDMismatch {
+			n.log.Info("CNINode snapshot instance id does not match the live node, falling back to EC2",
+				"snapshotInstanceID", cniNode.Status.InstanceID, "nodeInstanceID", n.instance.InstanceID())
+		}
+		cniNodeStatusFastPathCount.WithLabelValues(fastPathResultMiss, reason).Inc()
+		return false
+	}
+
+	n.instance.LoadFromCNINode(cniNode)
+	cniNodeStatusFastPathCount.WithLabelValues(fastPathResultHit, "").Inc()
+	n.log.Info("rebuilt instance details from CNINode snapshot without EC2", "trunk", cniNode.Status.TrunkInterface.ID)
+	return true
 }
 
 // DeleteResources performs clean up of all the resource pools and provider of the nodes

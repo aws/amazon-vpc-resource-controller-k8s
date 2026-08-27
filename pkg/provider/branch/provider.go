@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
@@ -41,6 +42,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -157,17 +159,26 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	if err := trunkENI.InitTrunk(instance, podList); err != nil {
+	// A hydrated instance was rebuilt from the CNINode snapshot, so rebuild the
+	// trunk from that snapshot and pod annotations without EC2; otherwise take
+	// the EC2 discovery path.
+	var initErr error
+	if instance.IsHydrated() {
+		initErr = trunkENI.InitFromSnapshot(instance.HydratedTrunkID(), podList)
+	} else {
+		initErr = trunkENI.InitTrunk(instance, podList)
+	}
+	if initErr != nil {
 		// If it's an AWS Error, get the exit code without the error message to avoid
 		// broadcasting multiple different messaged events
 
 		var apiErr smithy.APIError
 
-		if errors.As(err, &apiErr) {
+		if errors.As(initErr, &apiErr) {
 
 			node, errGetNode := b.apiWrapper.K8sAPI.GetNode(instance.Name())
 			if errGetNode != nil {
-				return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, err)
+				return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, initErr)
 			}
 			eventMessage := fmt.Sprintf("Failed to create trunk interface: "+
 				"Error Code: %s", apiErr.ErrorCode())
@@ -181,7 +192,15 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 
 		utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkFailedInitializationReason, "The node failed initializing trunk interface", v1.EventTypeNormal, b.log)
 		branchProviderOperationsErrCount.WithLabelValues("init").Inc()
-		return fmt.Errorf("initializing trunk, %w", err)
+		return fmt.Errorf("initializing trunk, %w", initErr)
+	}
+
+	// Persist the trunk skeleton to the CNINode after an EC2-path init so a future
+	// restart can hydrate from it without EC2. A hydrated init already came from
+	// the snapshot. Best-effort: a failure only degrades the next restart to the
+	// EC2 path, so it must not fail node initialization.
+	if !instance.IsHydrated() {
+		b.persistCNINodeStatus(instance, trunkENI)
 	}
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceSeconds(start))
 
@@ -201,6 +220,47 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkInitiatedReason, "The node has trunk interface initialized successfully", v1.EventTypeNormal, b.log)
 
 	return nil
+}
+
+// persistCNINodeStatus writes the trunk skeleton (instance identity, trunk ENI
+// id/subnet, default security groups, connection tracking) to the node's CNINode
+// status subresource after an EC2-path init, so a later restart can rebuild
+// in-memory state from the CNINode instead of EC2. Best-effort: errors are logged
+// and swallowed, since the only consequence is that the next restart for this
+// node falls back to the EC2 discovery path.
+func (b *branchENIProvider) persistCNINodeStatus(instance ec2.EC2Instance, trunkENI trunk.TrunkENI) {
+	nodeName := instance.Name()
+	cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
+	if err != nil {
+		b.log.Error(err, "failed to get CNINode to persist trunk skeleton", "node", nodeName)
+		return
+	}
+
+	tcp, udpStream, udp := instance.GetConnectionTrackingSpec()
+	var connectionTracking *rcv1alpha1.ConnectionTrackingConfig
+	if tcp != nil || udpStream != nil || udp != nil {
+		connectionTracking = &rcv1alpha1.ConnectionTrackingConfig{
+			TCPEstablishedTimeout: tcp,
+			UDPStreamTimeout:      udpStream,
+			UDPTimeout:            udp,
+		}
+	}
+
+	cniNode.Status.InstanceID = instance.InstanceID()
+	cniNode.Status.InstanceType = instance.Type()
+	cniNode.Status.SecurityGroups = instance.CurrentInstanceSecurityGroups()
+	cniNode.Status.ConnectionTracking = connectionTracking
+	if cniNode.Status.TrunkInterface == nil {
+		cniNode.Status.TrunkInterface = &rcv1alpha1.TrunkInterface{}
+	}
+	cniNode.Status.TrunkInterface.ID = trunkENI.TrunkENIID()
+	cniNode.Status.TrunkInterface.SubnetID = instance.SubnetID()
+	cniNode.Status.TrunkInterface.SubnetCIDR = instance.SubnetCidrBlock()
+	cniNode.Status.TrunkInterface.SubnetV6CIDR = instance.SubnetV6CidrBlock()
+
+	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(cniNode); err != nil {
+		b.log.Error(err, "failed to persist trunk skeleton to CNINode status", "node", nodeName)
+	}
 }
 
 // DeInitResources adds a an asynchronous delete job to the worker which will execute after a certain period.

@@ -103,6 +103,10 @@ type TrunkENI interface {
 	Reconcile(pods []v1.Pod) bool
 	// PushENIsToFrontOfDeleteQueue pushes the eni network interfaces to the front of the delete queue
 	PushENIsToFrontOfDeleteQueue(*v1.Pod, []*ENIDetails)
+	// InitFromSnapshot rebuilds trunk state from a CNINode snapshot (trunk id) and pod annotations, without any EC2 call
+	InitFromSnapshot(trunkENIID string, pods []v1.Pod) error
+	// TrunkENIID returns the trunk ENI id
+	TrunkENIID() string
 	// Introspect returns the state of the Trunk ENI
 	Introspect() IntrospectResponse
 }
@@ -368,6 +372,39 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
 
 	return nil
+}
+
+// InitFromSnapshot rebuilds the trunk's in-memory state from a persisted CNINode
+// snapshot: the trunk ENI id comes from the snapshot and the branch ENI / VLAN
+// ledger is rebuilt from pod annotations, with no EC2 call. Orphaned branch ENIs
+// (attached in EC2 but owned by no pod) are not reconciled here; that is handled
+// on the allocation path when an association actually conflicts. Runs during
+// single-threaded init, so it mirrors InitTrunk's lock-free ledger writes and
+// relies on markVlanAssigned's own locking.
+func (t *trunkENI) InitFromSnapshot(trunkENIID string, podList []v1.Pod) error {
+	t.trunkENIId = trunkENIID
+	for _, pod := range podList {
+		pod := pod
+		eniList := t.getBranchInterfacesUsedByPod(&pod)
+		if len(eniList) == 0 {
+			continue
+		}
+		for _, eni := range eniList {
+			t.markVlanAssigned(eni.VlanID)
+		}
+		t.uidToBranchENIMap[string(pod.UID)] = eniList
+	}
+	t.log.Info("initialized trunk from CNINode snapshot without EC2",
+		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
+	return nil
+}
+
+// TrunkENIID returns the trunk ENI id.
+func (t *trunkENI) TrunkENIID() string {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return t.trunkENIId
 }
 
 // Reconcile reconciles the state from the API Server to the internal cache of EC2 Branch Interfaces, if the controller

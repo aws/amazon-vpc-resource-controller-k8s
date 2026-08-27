@@ -68,20 +68,30 @@ func NewMock(ctrl *gomock.Controller, mockProviderCount int) Mocks {
 		convertedProvider[strconv.Itoa(i)] = mockProvider
 	}
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
 
 	return Mocks{
 		MockProviders:       mockProviders,
 		ResourceProvider:    convertedProvider,
 		MockResourceManager: mock_resource.NewMockResourceManager(ctrl),
 		MockEC2API:          mock_api.NewMockEC2APIHelper(ctrl),
-		MockK8sAPI:          mock_k8s.NewMockK8sWrapper(ctrl),
+		MockK8sAPI:          mockK8sAPI,
 		MockInstance:        mockInstance,
 		NodeWithMock: node{
 			log:      zap.New(zap.UseDevMode(true)).WithName("branch provider"),
 			instance: mockInstance,
 			ec2API:   mock_api.NewMockEC2APIHelper(ctrl),
+			k8sAPI:   mockK8sAPI,
 		},
 	}
+}
+
+// expectFastPathMiss makes the zero-EC2 fast path in InitResources miss
+// (GetCNINode returns an error) so tests exercise the existing EC2 LoadDetails
+// path unchanged.
+func expectFastPathMiss(mock Mocks) {
+	mock.MockInstance.EXPECT().Name().Return(nodeName).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(nil, mockError).AnyTimes()
 }
 
 // TestNewManagedNode tests the new node is not nil and node is managed but not ready
@@ -114,6 +124,8 @@ func TestNode_InitResources(t *testing.T) {
 
 	mock := NewMock(ctrl, 1)
 
+	expectFastPathMiss(mock)
+
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
 
@@ -130,6 +142,8 @@ func TestNode_InitResources_InstanceNotTrunkSupported(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl, 1)
+
+	expectFastPathMiss(mock)
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
@@ -156,12 +170,12 @@ func TestNode_InitResources_InstanceNotListed(t *testing.T) {
 	msg := "The instance type dummy.large is not supported yet by the vpc resource controller"
 
 	mock.MockInstance.EXPECT().Type().Return(testInstanceType).Times(1)
-	mock.MockInstance.EXPECT().Name().Return(nodeName).Times(1)
+	mock.MockInstance.EXPECT().Name().Return(nodeName).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(nil, mockError).AnyTimes()
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(node, nil).Times(1)
 	mock.MockK8sAPI.EXPECT().BroadcastEvent(node, "Unsupported", msg, v1.EventTypeWarning).Times(1)
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s, error: %w", testInstanceType, utils.ErrNotFound))
 
-	mock.NodeWithMock.k8sAPI = mock.MockK8sAPI
 	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
 	assert.Error(t, err)
 	assert.False(t, mock.NodeWithMock.IsReady())
@@ -173,6 +187,8 @@ func TestNode_InitResources_LoadInstanceDetails_Error(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl, 1)
+
+	expectFastPathMiss(mock)
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(mockError)
 
@@ -186,6 +202,8 @@ func TestNode_InitResources_SecondProviderInitFails(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl, 2)
+
+	expectFastPathMiss(mock)
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)

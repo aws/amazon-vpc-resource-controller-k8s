@@ -258,3 +258,17 @@ func (mr *MockK8sWrapperMockRecorder) PatchCNINode(arg0, arg1 interface{}) *gomo
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PatchCNINode", reflect.TypeOf((*MockK8sWrapper)(nil).PatchCNINode), arg0, arg1)
 }
+
+// UpdateCNINodeStatus mocks base method.
+func (m *MockK8sWrapper) UpdateCNINodeStatus(arg0 *v1alpha10.CNINode) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateCNINodeStatus", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateCNINodeStatus indicates an expected call of UpdateCNINodeStatus.
+func (mr *MockK8sWrapperMockRecorder) UpdateCNINodeStatus(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateCNINodeStatus", reflect.TypeOf((*MockK8sWrapper)(nil).UpdateCNINodeStatus), arg0)
+}

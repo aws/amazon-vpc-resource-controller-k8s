@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
@@ -71,6 +72,13 @@ type ec2Instance struct {
 	tcpEstablishedTimeout *int32
 	udpStreamTimeout      *int32
 	udpTimeout            *int32
+
+	// hydrated is true when the instance details were rebuilt from a CNINode
+	// snapshot (LoadFromSnapshot) instead of an EC2 DescribeInstances call.
+	hydrated bool
+	// hydratedTrunkID is the trunk ENI id carried from that snapshot, used to
+	// rebuild the trunk without EC2. Empty unless hydrated.
+	hydratedTrunkID string
 }
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
@@ -93,6 +101,9 @@ type EC2Instance interface {
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
+	LoadFromCNINode(cniNode *rcv1alpha1.CNINode)
+	IsHydrated() bool
+	HydratedTrunkID() string
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -352,4 +363,55 @@ func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, ud
 	defer i.lock.RUnlock()
 
 	return i.tcpEstablishedTimeout, i.udpStreamTimeout, i.udpTimeout
+}
+
+// LoadFromCNINode rebuilds the instance details from a persisted CNINode status
+// snapshot instead of EC2 DescribeInstances/DescribeSubnets calls. It fills only
+// the fields needed to serve branch ENI allocations on a node whose trunk already
+// exists; device indexes are intentionally left unset (a hydrated node does not
+// create a new trunk). The caller must validate the snapshot (trunk interface
+// present, instance id match, supported instance type) before calling this. It
+// reads fields off the CNINode type but performs no Kubernetes I/O.
+func (i *ec2Instance) LoadFromCNINode(cniNode *rcv1alpha1.CNINode) {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	status := cniNode.Status
+	trunk := status.TrunkInterface
+
+	i.instanceType = status.InstanceType
+	i.currentSubnetID = trunk.SubnetID
+	i.currentSubnetCIDRBlock = trunk.SubnetCIDR
+	i.currentSubnetV6CIDRBlock = trunk.SubnetV6CIDR
+	if parts := strings.Split(trunk.SubnetCIDR, "/"); len(parts) == 2 {
+		i.subnetMask = parts[1]
+	}
+	if parts := strings.Split(trunk.SubnetV6CIDR, "/"); len(parts) == 2 {
+		i.subnetV6Mask = parts[1]
+	}
+	i.currentInstanceSecurityGroups = status.SecurityGroups
+	if ct := status.ConnectionTracking; ct != nil {
+		i.tcpEstablishedTimeout = ct.TCPEstablishedTimeout
+		i.udpStreamTimeout = ct.UDPStreamTimeout
+		i.udpTimeout = ct.UDPTimeout
+	}
+	i.hydratedTrunkID = trunk.ID
+	i.hydrated = true
+}
+
+// IsHydrated reports whether the instance details came from a CNINode snapshot.
+func (i *ec2Instance) IsHydrated() bool {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.hydrated
+}
+
+// HydratedTrunkID returns the trunk ENI id from the CNINode snapshot, or "" if
+// the instance was not hydrated.
+func (i *ec2Instance) HydratedTrunkID() string {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.hydratedTrunkID
 }

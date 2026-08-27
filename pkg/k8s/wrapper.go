@@ -84,6 +84,7 @@ type K8sWrapper interface {
 	CreateCNINode(node *v1.Node, clusterName string) error
 	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
 	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
+	UpdateCNINodeStatus(cniNode *rcv1alpha1.CNINode) error
 	DeleteCNINode(cniNode *rcv1alpha1.CNINode) error
 }
 
@@ -283,4 +284,11 @@ func (k *k8sWrapper) ListCNINodes() ([]*rcv1alpha1.CNINode, error) {
 
 func (k *k8sWrapper) PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error {
 	return k.cacheClient.Patch(k.context, newCNINode, client.MergeFromWithOptions(oldCNINode, client.MergeFromWithOptimisticLock{}))
+}
+
+// UpdateCNINodeStatus writes the CNINode status subresource. cniNode must be an
+// object read from the API server (it carries the resourceVersion the update is
+// applied against); on a conflict the caller may skip and retry on a later pass.
+func (k *k8sWrapper) UpdateCNINodeStatus(cniNode *rcv1alpha1.CNINode) error {
+	return k.cacheClient.Status().Update(k.context, cniNode)
 }

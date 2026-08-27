@@ -76,6 +76,20 @@ func (mr *MockTrunkENIMockRecorder) DeleteCooledDownENIs() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteCooledDownENIs", reflect.TypeOf((*MockTrunkENI)(nil).DeleteCooledDownENIs))
 }
 
+// InitFromSnapshot mocks base method.
+func (m *MockTrunkENI) InitFromSnapshot(arg0 string, arg1 []v1.Pod) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InitFromSnapshot", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InitFromSnapshot indicates an expected call of InitFromSnapshot.
+func (mr *MockTrunkENIMockRecorder) InitFromSnapshot(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitFromSnapshot", reflect.TypeOf((*MockTrunkENI)(nil).InitFromSnapshot), arg0, arg1)
+}
+
 // InitTrunk mocks base method.
 func (m *MockTrunkENI) InitTrunk(arg0 ec2.EC2Instance, arg1 []v1.Pod) error {
 	m.ctrl.T.Helper()
@@ -140,4 +154,18 @@ func (m *MockTrunkENI) Reconcile(arg0 []v1.Pod) bool {
 func (mr *MockTrunkENIMockRecorder) Reconcile(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reconcile", reflect.TypeOf((*MockTrunkENI)(nil).Reconcile), arg0)
+}
+
+// TrunkENIID mocks base method.
+func (m *MockTrunkENI) TrunkENIID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TrunkENIID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// TrunkENIID indicates an expected call of TrunkENIID.
+func (mr *MockTrunkENIMockRecorder) TrunkENIID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TrunkENIID", reflect.TypeOf((*MockTrunkENI)(nil).TrunkENIID))
 }
