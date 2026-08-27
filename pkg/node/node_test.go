@@ -90,7 +90,7 @@ func NewMock(ctrl *gomock.Controller, mockProviderCount int) Mocks {
 // expectFastPathMiss makes the zero-EC2 fast path in InitResources miss
 // (GetCNINode returns an error) so tests exercise the existing EC2 LoadDetails
 // path unchanged.
-func expectFastPathMiss(mock Mocks) {
+func expectFastPathMiss(mock *Mocks) {
 	mock.MockInstance.EXPECT().Name().Return(nodeName).AnyTimes()
 	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(nil, mockError).AnyTimes()
 }
@@ -200,7 +200,7 @@ func TestNode_InitResources(t *testing.T) {
 
 	mock := NewMock(ctrl, 1)
 
-	expectFastPathMiss(mock)
+	expectFastPathMiss(&mock)
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
@@ -219,7 +219,7 @@ func TestNode_InitResources_InstanceNotTrunkSupported(t *testing.T) {
 
 	mock := NewMock(ctrl, 1)
 
-	expectFastPathMiss(mock)
+	expectFastPathMiss(&mock)
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
@@ -264,7 +264,7 @@ func TestNode_InitResources_LoadInstanceDetails_Error(t *testing.T) {
 
 	mock := NewMock(ctrl, 1)
 
-	expectFastPathMiss(mock)
+	expectFastPathMiss(&mock)
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(mockError)
 
@@ -279,7 +279,7 @@ func TestNode_InitResources_SecondProviderInitFails(t *testing.T) {
 
 	mock := NewMock(ctrl, 2)
 
-	expectFastPathMiss(mock)
+	expectFastPathMiss(&mock)
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
