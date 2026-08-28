@@ -133,16 +133,103 @@ func TestEc2Instance_LoadFromCNINode(t *testing.T) {
 		},
 	}
 
-	instance.LoadFromCNINode(cniNode)
+	err := instance.LoadFromCNINode(cniNode, nil)
+	assert.NoError(t, err)
 
 	assert.True(t, instance.IsHydrated())
 	assert.Equal(t, "eni-trunk", instance.HydratedTrunkID())
 	assert.Equal(t, string(instanceType), instance.Type())
+	// Source-of-truth layer restored from the snapshot.
+	assert.Equal(t, subnetID, instance.InstanceSubnetID())
+	assert.Equal(t, subnetCidrBlock, instance.InstanceSubnetCidrBlock())
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, instance.PrimaryENISecurityGroups())
+	// Effective layer derived from it (no custom networking here).
 	assert.Equal(t, subnetID, instance.SubnetID())
 	assert.Equal(t, subnetCidrBlock, instance.SubnetCidrBlock())
 	assert.Equal(t, []string{securityGroup1, securityGroup2}, instance.CurrentInstanceSecurityGroups())
 	gotTCP, _, _ := instance.GetConnectionTrackingSpec()
 	assert.Equal(t, &tcpTimeout, gotTCP)
+}
+
+// TestEc2Instance_LoadFromCNINode_UpdateIsIdempotent tests the regression where
+// the manager's first post-Init UpdateResources re-derivation wiped the hydrated
+// values: re-deriving after hydrate must keep the effective fields intact.
+func TestEc2Instance_LoadFromCNINode_UpdateIsIdempotent(t *testing.T) {
+	instance := getMockInstanceInterface()
+
+	err := instance.LoadFromCNINode(testCNINodeSnapshot(), nil)
+	assert.NoError(t, err)
+
+	// Simulate what UpdateResources does right after Init and on every node event.
+	assert.NoError(t, instance.UpdateCurrentSubnetAndCidrBlock(nil))
+	assert.NoError(t, instance.UpdateCurrentSubnetAndCidrBlock(nil))
+
+	assert.Equal(t, subnetID, instance.SubnetID())
+	assert.Equal(t, subnetCidrBlock, instance.SubnetCidrBlock())
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, instance.CurrentInstanceSecurityGroups())
+}
+
+// TestEc2Instance_LoadFromCNINode_CustomNetworking tests hydrate on a node using
+// custom networking: the snapshot restores the instance's own subnet/SGs while
+// the derivation applies the live ENIConfig override (one GetSubnet call for the
+// CIDR, which ENIConfig does not carry).
+func TestEc2Instance_LoadFromCNINode_CustomNetworking(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+
+	customSubnetID := "subnet-custom"
+	customCidr := "192.168.100.0/24"
+	customSubnet := ec2types.Subnet{CidrBlock: &customCidr}
+	// The manager injects the ENIConfig spec from K8s before Init.
+	ec2Instance.SetNewCustomNetworkingSpec(customSubnetID, []string{securityGroup3})
+	mockEC2ApiHelper.EXPECT().GetSubnet(&customSubnetID).Return(&customSubnet, nil)
+
+	err := ec2Instance.LoadFromCNINode(testCNINodeSnapshot(), mockEC2ApiHelper)
+	assert.NoError(t, err)
+
+	// Effective layer points at the ENIConfig values.
+	assert.Equal(t, customSubnetID, ec2Instance.SubnetID())
+	assert.Equal(t, customCidr, ec2Instance.SubnetCidrBlock())
+	assert.Equal(t, []string{securityGroup3}, ec2Instance.CurrentInstanceSecurityGroups())
+	// Source-of-truth layer keeps the instance's own subnet and SGs.
+	assert.Equal(t, subnetID, ec2Instance.InstanceSubnetID())
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.PrimaryENISecurityGroups())
+}
+
+// TestEc2Instance_LoadFromCNINode_DeriveError tests a derivation failure leaves
+// the instance un-hydrated so the caller falls back to EC2 discovery.
+func TestEc2Instance_LoadFromCNINode_DeriveError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+
+	customSubnetID := "subnet-custom"
+	ec2Instance.SetNewCustomNetworkingSpec(customSubnetID, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&customSubnetID).Return(nil, utils.ErrNotFound)
+
+	err := ec2Instance.LoadFromCNINode(testCNINodeSnapshot(), mockEC2ApiHelper)
+	assert.Error(t, err)
+	assert.False(t, ec2Instance.IsHydrated())
+}
+
+// testCNINodeSnapshot returns a valid CNINode checkpoint carrying the instance's
+// source-of-truth subnet and primary ENI security groups.
+func testCNINodeSnapshot() *rcv1alpha1.CNINode {
+	return &rcv1alpha1.CNINode{
+		Status: rcv1alpha1.CNINodeStatus{
+			InstanceID:     instanceID,
+			InstanceType:   string(instanceType),
+			SecurityGroups: []string{securityGroup1, securityGroup2},
+			TrunkInterface: &rcv1alpha1.TrunkInterface{
+				ID:         "eni-trunk",
+				SubnetID:   subnetID,
+				SubnetCIDR: subnetCidrBlock,
+			},
+		},
+	}
 }
 
 // TestEc2Instance_LoadDetails tests that load instance details loads all the instance details correctly by making calls

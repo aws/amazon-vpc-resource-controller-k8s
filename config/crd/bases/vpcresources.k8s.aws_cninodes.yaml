@@ -125,8 +125,11 @@ spec:
                 type: string
               securityGroups:
                 description: |-
-                  SecurityGroups are the instance's default security group ids, applied to a
-                  branch ENI when the pod does not specify its own via a SecurityGroupPolicy.
+                  SecurityGroups are the security group ids of the instance's primary
+                  network interface (the instance's own, source-of-truth value; any
+                  custom-networking ENIConfig override is re-derived from the live
+                  ENIConfig on restart rather than persisted here). Applied to a branch
+                  ENI when the pod does not specify its own via a SecurityGroupPolicy.
                 items:
                   type: string
                 type: array
@@ -216,22 +219,22 @@ spec:
                     description: MacAddress is the MAC address of the trunk ENI.
                     type: string
                   subnetCIDR:
-                    description: SubnetCIDR is the IPv4 CIDR block of the trunk ENI's
-                      subnet.
+                    description: SubnetCIDR is the IPv4 CIDR block of the instance's
+                      own subnet.
                     type: string
                   subnetID:
                     description: |-
-                      SubnetID is the id of the EC2 subnet the trunk ENI resides in, which is
-                      also the subnet its branch ENIs are created in. Persisted with the trunk
-                      so a controller can create a branch ENI straight from the CNINode,
-                      without a DescribeNetworkInterfaces call on the pod path, and so the
-                      value survives a controller restart that drops in-memory node state.
+                      SubnetID is the id of the instance's own EC2 subnet, which is where the
+                      trunk ENI resides. Persisted as the source-of-truth value (never an
+                      ENIConfig override; custom networking is re-derived from the live
+                      ENIConfig on restart) so a restarting controller can rebuild instance
+                      details straight from the CNINode without EC2 describe calls.
                     maxLength: 24
                     pattern: ^subnet-([0-9a-f]{8}|[0-9a-f]{17})$
                     type: string
                   subnetV6CIDR:
-                    description: SubnetV6CIDR is the IPv6 CIDR block of the trunk
-                      ENI's subnet, if present.
+                    description: SubnetV6CIDR is the IPv6 CIDR block of the instance's
+                      own subnet, if present.
                     type: string
                 required:
                 - id

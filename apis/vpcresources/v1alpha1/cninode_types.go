@@ -81,8 +81,11 @@ type CNINodeStatus struct {
 	// InstanceType is the EC2 instance type of the node, used to size branch ENI capacity.
 	// +optional
 	InstanceType string `json:"instanceType,omitempty"`
-	// SecurityGroups are the instance's default security group ids, applied to a
-	// branch ENI when the pod does not specify its own via a SecurityGroupPolicy.
+	// SecurityGroups are the security group ids of the instance's primary
+	// network interface (the instance's own, source-of-truth value; any
+	// custom-networking ENIConfig override is re-derived from the live
+	// ENIConfig on restart rather than persisted here). Applied to a branch
+	// ENI when the pod does not specify its own via a SecurityGroupPolicy.
 	// +optional
 	// +listType=atomic
 	SecurityGroups []string `json:"securityGroups,omitempty"`
@@ -121,19 +124,19 @@ type TrunkInterface struct {
 	// DeviceIndex is the attachment device index of the trunk ENI on the instance.
 	// +optional
 	DeviceIndex int32 `json:"deviceIndex,omitempty"`
-	// SubnetID is the id of the EC2 subnet the trunk ENI resides in, which is
-	// also the subnet its branch ENIs are created in. Persisted with the trunk
-	// so a controller can create a branch ENI straight from the CNINode,
-	// without a DescribeNetworkInterfaces call on the pod path, and so the
-	// value survives a controller restart that drops in-memory node state.
+	// SubnetID is the id of the instance's own EC2 subnet, which is where the
+	// trunk ENI resides. Persisted as the source-of-truth value (never an
+	// ENIConfig override; custom networking is re-derived from the live
+	// ENIConfig on restart) so a restarting controller can rebuild instance
+	// details straight from the CNINode without EC2 describe calls.
 	// +optional
 	// +kubebuilder:validation:MaxLength=24
 	// +kubebuilder:validation:Pattern=`^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`
 	SubnetID string `json:"subnetID,omitempty"`
-	// SubnetCIDR is the IPv4 CIDR block of the trunk ENI's subnet.
+	// SubnetCIDR is the IPv4 CIDR block of the instance's own subnet.
 	// +optional
 	SubnetCIDR string `json:"subnetCIDR,omitempty"`
-	// SubnetV6CIDR is the IPv6 CIDR block of the trunk ENI's subnet, if present.
+	// SubnetV6CIDR is the IPv6 CIDR block of the instance's own subnet, if present.
 	// +optional
 	SubnetV6CIDR string `json:"subnetV6CIDR,omitempty"`
 	// Branches are the branch ENIs associated with this trunk ENI.

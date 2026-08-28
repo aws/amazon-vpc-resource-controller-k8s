@@ -143,9 +143,28 @@ func TestNode_tryLoadInstanceFromCNINode_Hit(t *testing.T) {
 	mock.MockInstance.EXPECT().InstanceID().Return(instID).AnyTimes()
 	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
 	// Hit path must hydrate from the snapshot and never call LoadDetails.
-	mock.MockInstance.EXPECT().LoadFromCNINode(cniNode)
+	mock.MockInstance.EXPECT().LoadFromCNINode(cniNode, gomock.Any()).Return(nil)
 
 	assert.True(t, mock.NodeWithMock.tryLoadInstanceFromCNINode())
+}
+
+// TestNode_tryLoadInstanceFromCNINode_DeriveFailed tests a derivation error from
+// LoadFromCNINode (e.g. the ENIConfig subnet lookup failed) is treated as a miss
+// so the node falls back to EC2 discovery.
+func TestNode_tryLoadInstanceFromCNINode_DeriveFailed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 0)
+	instID := "i-abc"
+	cniNode := validCNINode(instID, nitroInstanceType)
+
+	mock.MockInstance.EXPECT().Name().Return(nodeName).AnyTimes()
+	mock.MockInstance.EXPECT().InstanceID().Return(instID).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
+	mock.MockInstance.EXPECT().LoadFromCNINode(cniNode, gomock.Any()).Return(mockError)
+
+	assert.False(t, mock.NodeWithMock.tryLoadInstanceFromCNINode())
 }
 
 // TestNode_tryLoadInstanceFromCNINode_NoCheckpoint tests a GetCNINode error is a miss.

@@ -777,6 +777,18 @@ func (t *trunkENI) pushENIToDeleteQueue(eni *ENIDetails) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	// Observation only: a duplicate id in the queue means two actors (e.g. the
+	// reactive orphan reclaim and the regular delete path) enqueued the same ENI,
+	// which can double-free its VLAN. Counted here to decide, on evidence,
+	// whether the owner-aware VLAN ledger work is needed (tracked in the
+	// follow-up vlan-lifecycle PR).
+	for _, queued := range t.deleteQueue {
+		if queued.ID == eni.ID {
+			trunkENIOperationsErrCount.WithLabelValues("duplicate_delete_queue_enqueue").Inc()
+			t.log.Info("eni is already in the delete queue", "eni", eni.ID)
+			break
+		}
+	}
 	t.deleteQueue = append(t.deleteQueue, eni)
 }
 
@@ -875,6 +887,15 @@ func (t *trunkENI) markVlanAssigned(vlanId int) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	// Guard against out-of-range values reaching the fixed-size ledger. Vlan ids
+	// assigned by this controller are always in range; an out-of-range value can
+	// only come from corrupted external data (e.g. a tampered pod annotation) or
+	// a write-side bug, so a hit here is an incident signal, not a normal event.
+	if vlanId < 0 || vlanId >= MaxAllocatableVlanIds {
+		trunkENIOperationsErrCount.WithLabelValues("vlan_id_out_of_range").Inc()
+		t.log.Error(fmt.Errorf("vlan id out of range"), "refusing to mark vlan as assigned", "vlan id", vlanId)
+		return
+	}
 	t.usedVlanIds[vlanId] = true
 }
 
@@ -883,6 +904,13 @@ func (t *trunkENI) freeVlanId(vlanId int) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	// See markVlanAssigned: out-of-range values never originate from this
+	// controller's own allocations.
+	if vlanId < 0 || vlanId >= MaxAllocatableVlanIds {
+		trunkENIOperationsErrCount.WithLabelValues("vlan_id_out_of_range").Inc()
+		t.log.Error(fmt.Errorf("vlan id out of range"), "refusing to free vlan", "vlan id", vlanId)
+		return
+	}
 	isUsed := t.usedVlanIds[vlanId]
 	if !isUsed {
 		trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id").Inc()

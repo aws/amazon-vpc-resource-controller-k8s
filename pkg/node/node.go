@@ -69,6 +69,13 @@ const (
 	fastPathReasonInstanceIDMismatch = "instance_id_mismatch"
 	fastPathReasonMissingField       = "missing_field"
 	fastPathReasonUnsupportedType    = "unsupported_type"
+	fastPathReasonDeriveFailed       = "derive_failed"
+
+	// node_init_duration_seconds label values.
+	initPathHydrated = "hydrated"
+	initPathEC2      = "ec2"
+	initResultOK     = "success"
+	initResultError  = "error"
 )
 
 var (
@@ -79,12 +86,19 @@ var (
 		},
 		[]string{"result", "reason"},
 	)
+	nodeInitDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "node_init_duration_seconds",
+			Help: "Duration of a single node's InitResources, from the manager's Init job entering until instance details, trunk, and providers are ready. Excludes controller startup and worker queue wait. path=hydrated|ec2 compares the snapshot fast path against EC2 discovery",
+		},
+		[]string{"path", "result"},
+	)
 	registerMetricsOnce sync.Once
 )
 
 func registerNodeMetrics() {
 	registerMetricsOnce.Do(func() {
-		metrics.Registry.MustRegister(cniNodeStatusFastPathCount)
+		metrics.Registry.MustRegister(cniNodeStatusFastPathCount, nodeInitDuration)
 	})
 }
 
@@ -184,9 +198,19 @@ func (n *node) UpdateResources(resourceManager resource.ResourceManager) error {
 func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
+
+	start := time.Now()
+	initPath := initPathEC2
+	initResult := initResultError
+	defer func() {
+		nodeInitDuration.WithLabelValues(initPath, initResult).Observe(time.Since(start).Seconds())
+	}()
+
 	// Prefer the zero-EC2 fast path: rebuild instance details from the CNINode
 	// snapshot. On any miss, fall back to EC2 discovery.
-	if !n.tryLoadInstanceFromCNINode() {
+	if n.tryLoadInstanceFromCNINode() {
+		initPath = initPathHydrated
+	} else {
 		err := n.instance.LoadDetails(n.ec2API)
 		if err != nil {
 			if errors.Is(err, utils.ErrNotFound) {
@@ -230,6 +254,7 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	}
 
 	n.ready = true
+	initResult = initResultOK
 	return errInit
 }
 
@@ -280,7 +305,11 @@ func (n *node) tryLoadInstanceFromCNINode() bool {
 		return false
 	}
 
-	n.instance.LoadFromCNINode(cniNode)
+	if err := n.instance.LoadFromCNINode(cniNode, n.ec2API); err != nil {
+		n.log.Error(err, "failed to derive effective subnet/security groups from the CNINode snapshot, falling back to EC2")
+		cniNodeStatusFastPathCount.WithLabelValues(fastPathResultMiss, fastPathReasonDeriveFailed).Inc()
+		return false
+	}
 	cniNodeStatusFastPathCount.WithLabelValues(fastPathResultHit, "").Inc()
 	n.log.Info("rebuilt instance details from CNINode snapshot without EC2", "trunk", cniNode.Status.TrunkInterface.ID)
 	return true

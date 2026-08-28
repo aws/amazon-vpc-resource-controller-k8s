@@ -156,17 +156,17 @@ func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
 	mockInstance.EXPECT().InstanceID().Return("i-abc").AnyTimes()
 	mockInstance.EXPECT().Type().Return("t3.xlarge").AnyTimes()
-	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return([]string{"sg-1"}).AnyTimes()
-	mockInstance.EXPECT().SubnetID().Return("subnet-1").AnyTimes()
-	mockInstance.EXPECT().SubnetCidrBlock().Return("10.0.0.0/16").AnyTimes()
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return("").AnyTimes()
+	mockInstance.EXPECT().PrimaryENISecurityGroups().Return([]string{"sg-1"}).AnyTimes()
+	mockInstance.EXPECT().InstanceSubnetID().Return("subnet-1").AnyTimes()
+	mockInstance.EXPECT().InstanceSubnetCidrBlock().Return("10.0.0.0/16").AnyTimes()
+	mockInstance.EXPECT().InstanceSubnetV6CidrBlock().Return("").AnyTimes()
 	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil).AnyTimes()
 	mockTrunk.EXPECT().TrunkENIID().Return("eni-trunk").AnyTimes()
 
 	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(&rcv1alpha1.CNINode{}, nil)
 
 	var written *rcv1alpha1.CNINode
-	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any()).DoAndReturn(func(cniNode *rcv1alpha1.CNINode) error {
+	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any(), gomock.Any()).DoAndReturn(func(base, cniNode *rcv1alpha1.CNINode) error {
 		written = cniNode
 		return nil
 	})

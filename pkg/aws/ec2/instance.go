@@ -101,9 +101,13 @@ type EC2Instance interface {
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
-	LoadFromCNINode(cniNode *rcv1alpha1.CNINode)
+	LoadFromCNINode(cniNode *rcv1alpha1.CNINode, helper api.EC2APIHelper) error
 	IsHydrated() bool
 	HydratedTrunkID() string
+	InstanceSubnetID() string
+	InstanceSubnetCidrBlock() string
+	InstanceSubnetV6CidrBlock() string
+	PrimaryENISecurityGroups() []string
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -366,13 +370,20 @@ func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, ud
 }
 
 // LoadFromCNINode rebuilds the instance details from a persisted CNINode status
-// snapshot instead of EC2 DescribeInstances/DescribeSubnets calls. It fills only
-// the fields needed to serve branch ENI allocations on a node whose trunk already
-// exists; device indexes are intentionally left unset (a hydrated node does not
-// create a new trunk). The caller must validate the snapshot (trunk interface
-// present, instance id match, supported instance type) before calling this. It
-// reads fields off the CNINode type but performs no Kubernetes I/O.
-func (i *ec2Instance) LoadFromCNINode(cniNode *rcv1alpha1.CNINode) {
+// snapshot instead of EC2 DescribeInstances/DescribeSubnets calls. The snapshot
+// carries the instance's source-of-truth fields (its own subnet and primary ENI
+// security groups); the effective (current*) fields are then derived through the
+// same updateCurrentSubnetAndCidrBlock path LoadDetails uses, so every later
+// re-derivation (UpdateResources) is idempotent. For a custom-networking node
+// the derivation may make one EC2 GetSubnet call (ENIConfig carries no CIDR);
+// on a derivation error the instance is left un-hydrated so the caller falls
+// back to EC2 discovery. Device indexes are intentionally left unset (a
+// hydrated node does not create a new trunk) and the primary ENI id is not
+// carried (only consumed by the Windows secondary-IP provider, whose nodes
+// have no trunk and therefore never hydrate). The caller must validate the
+// snapshot (trunk interface present, instance id match, supported instance
+// type) before calling this.
+func (i *ec2Instance) LoadFromCNINode(cniNode *rcv1alpha1.CNINode, helper api.EC2APIHelper) error {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
@@ -380,23 +391,31 @@ func (i *ec2Instance) LoadFromCNINode(cniNode *rcv1alpha1.CNINode) {
 	trunk := status.TrunkInterface
 
 	i.instanceType = status.InstanceType
-	i.currentSubnetID = trunk.SubnetID
-	i.currentSubnetCIDRBlock = trunk.SubnetCIDR
-	i.currentSubnetV6CIDRBlock = trunk.SubnetV6CIDR
+	i.instanceSubnetID = trunk.SubnetID
+	i.instanceSubnetCidrBlock = trunk.SubnetCIDR
+	i.instanceSubnetV6CidrBlock = trunk.SubnetV6CIDR
 	if parts := strings.Split(trunk.SubnetCIDR, "/"); len(parts) == 2 {
 		i.subnetMask = parts[1]
 	}
 	if parts := strings.Split(trunk.SubnetV6CIDR, "/"); len(parts) == 2 {
 		i.subnetV6Mask = parts[1]
 	}
-	i.currentInstanceSecurityGroups = status.SecurityGroups
+	i.primaryENISecurityGroups = status.SecurityGroups
 	if ct := status.ConnectionTracking; ct != nil {
 		i.tcpEstablishedTimeout = ct.TCPEstablishedTimeout
 		i.udpStreamTimeout = ct.UDPStreamTimeout
 		i.udpTimeout = ct.UDPTimeout
 	}
+
+	// Derive the effective subnet/CIDR/security groups exactly like LoadDetails
+	// does as its last step.
+	if err := i.updateCurrentSubnetAndCidrBlock(helper); err != nil {
+		return err
+	}
+
 	i.hydratedTrunkID = trunk.ID
 	i.hydrated = true
+	return nil
 }
 
 // IsHydrated reports whether the instance details came from a CNINode snapshot.
@@ -414,4 +433,40 @@ func (i *ec2Instance) HydratedTrunkID() string {
 	defer i.lock.RUnlock()
 
 	return i.hydratedTrunkID
+}
+
+// InstanceSubnetID returns the instance's own subnet id (the source-of-truth
+// value, not the effective one that may point to an ENIConfig subnet).
+func (i *ec2Instance) InstanceSubnetID() string {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.instanceSubnetID
+}
+
+// InstanceSubnetCidrBlock returns the CIDR block of the instance's own subnet.
+func (i *ec2Instance) InstanceSubnetCidrBlock() string {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.instanceSubnetCidrBlock
+}
+
+// InstanceSubnetV6CidrBlock returns the IPv6 CIDR block of the instance's own
+// subnet, or "" if the subnet has none.
+func (i *ec2Instance) InstanceSubnetV6CidrBlock() string {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.instanceSubnetV6CidrBlock
+}
+
+// PrimaryENISecurityGroups returns the security groups of the instance's
+// primary network interface (the source-of-truth value, not the effective one
+// that may point to ENIConfig security groups).
+func (i *ec2Instance) PrimaryENISecurityGroups() []string {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.primaryENISecurityGroups
 }

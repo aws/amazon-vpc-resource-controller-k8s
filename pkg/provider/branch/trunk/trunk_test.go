@@ -471,6 +471,43 @@ func TestTrunkENI_markVlanAssigned(t *testing.T) {
 	assert.Equal(t, 1, id)
 }
 
+// TestTrunkENI_vlanId_OutOfRangeGuard tests out-of-range vlan ids (which can only
+// come from corrupted external data, e.g. a tampered pod annotation) are refused
+// with an error count instead of panicking the controller.
+func TestTrunkENI_vlanId_OutOfRangeGuard(t *testing.T) {
+	trunkENI := getMockTrunk()
+
+	before := testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("vlan_id_out_of_range"))
+	assert.NotPanics(t, func() {
+		trunkENI.markVlanAssigned(-1)
+		trunkENI.markVlanAssigned(MaxAllocatableVlanIds)
+		trunkENI.freeVlanId(-1)
+		trunkENI.freeVlanId(MaxAllocatableVlanIds)
+	})
+	after := testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("vlan_id_out_of_range"))
+	assert.Equal(t, before+4, after)
+
+	// The ledger is untouched: the first assignable id is still 0.
+	id, err := trunkENI.assignVlanId()
+	assert.NoError(t, err)
+	assert.Equal(t, 0, id)
+}
+
+// TestTrunkENI_pushENIToDeleteQueue_DuplicateCounted tests a duplicate enqueue of
+// the same ENI id is counted (evidence gathering for the owner-aware VLAN ledger
+// follow-up) while the enqueue behavior itself is unchanged.
+func TestTrunkENI_pushENIToDeleteQueue_DuplicateCounted(t *testing.T) {
+	trunkENI := getMockTrunk()
+
+	before := testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("duplicate_delete_queue_enqueue"))
+	trunkENI.pushENIToDeleteQueue(&ENIDetails{ID: "eni-dup", VlanID: 1})
+	trunkENI.pushENIToDeleteQueue(&ENIDetails{ID: "eni-dup", VlanID: 1})
+	after := testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("duplicate_delete_queue_enqueue"))
+
+	assert.Equal(t, before+1, after)
+	assert.Len(t, trunkENI.deleteQueue, 2)
+}
+
 // TestTrunkENI_getBranchFromCache tests branch eni is returned when present in the cache
 func TestTrunkENI_getBranchFromCache(t *testing.T) {
 	trunkENI := getMockTrunk()

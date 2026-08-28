@@ -235,6 +235,7 @@ func (b *branchENIProvider) persistCNINodeStatus(instance ec2.EC2Instance, trunk
 		b.log.Error(err, "failed to get CNINode to persist trunk skeleton", "node", nodeName)
 		return
 	}
+	base := cniNode.DeepCopy()
 
 	tcp, udpStream, udp := instance.GetConnectionTrackingSpec()
 	var connectionTracking *rcv1alpha1.ConnectionTrackingConfig
@@ -246,19 +247,24 @@ func (b *branchENIProvider) persistCNINodeStatus(instance ec2.EC2Instance, trunk
 		}
 	}
 
+	// Persist the instance's source-of-truth values (its own subnet and primary
+	// ENI security groups), NOT the effective/derived ones: on hydrate these
+	// fields seed the same derivation LoadDetails uses, so custom-networking
+	// overrides are re-applied from the live ENIConfig rather than baked into
+	// the snapshot.
 	cniNode.Status.InstanceID = instance.InstanceID()
 	cniNode.Status.InstanceType = instance.Type()
-	cniNode.Status.SecurityGroups = instance.CurrentInstanceSecurityGroups()
+	cniNode.Status.SecurityGroups = instance.PrimaryENISecurityGroups()
 	cniNode.Status.ConnectionTracking = connectionTracking
 	if cniNode.Status.TrunkInterface == nil {
 		cniNode.Status.TrunkInterface = &rcv1alpha1.TrunkInterface{}
 	}
 	cniNode.Status.TrunkInterface.ID = trunkENI.TrunkENIID()
-	cniNode.Status.TrunkInterface.SubnetID = instance.SubnetID()
-	cniNode.Status.TrunkInterface.SubnetCIDR = instance.SubnetCidrBlock()
-	cniNode.Status.TrunkInterface.SubnetV6CIDR = instance.SubnetV6CidrBlock()
+	cniNode.Status.TrunkInterface.SubnetID = instance.InstanceSubnetID()
+	cniNode.Status.TrunkInterface.SubnetCIDR = instance.InstanceSubnetCidrBlock()
+	cniNode.Status.TrunkInterface.SubnetV6CIDR = instance.InstanceSubnetV6CidrBlock()
 
-	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(cniNode); err != nil {
+	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(base, cniNode); err != nil {
 		b.log.Error(err, "failed to persist trunk skeleton to CNINode status", "node", nodeName)
 	}
 }
