@@ -91,54 +91,98 @@ spec:
           status:
             description: CNINodeStatus defines the managed VPC resources.
             properties:
-              connectionTracking:
+              reinitCheckpoint:
                 description: |-
-                  ConnectionTracking holds the connection tracking timeouts inherited from
-                  the instance's primary ENI and applied to branch ENIs. Persisted so the
-                  value survives a controller restart without a DescribeInstances call; a
-                  nil value means branch ENIs use the EC2 default connection tracking.
+                  ReinitCheckpoint is the vpc-resource-controller-private restart-recovery
+                  checkpoint: the instance fields needed to rebuild in-memory state on a
+                  controller restart or leader change without synchronous EC2 describes.
                 properties:
-                  tcpEstablishedTimeout:
-                    description: TCPEstablishedTimeout is the timeout for established
-                      TCP connections.
-                    format: int32
-                    type: integer
-                  udpStreamTimeout:
-                    description: UDPStreamTimeout is the timeout for UDP flows classified
-                      as streams.
-                    format: int32
-                    type: integer
-                  udpTimeout:
-                    description: UDPTimeout is the timeout for idle UDP flows.
-                    format: int32
-                    type: integer
+                  connectionTracking:
+                    description: |-
+                      ConnectionTracking holds the connection tracking timeouts inherited from
+                      the instance's primary ENI and applied to branch ENIs. A nil value means
+                      branch ENIs use the EC2 default connection tracking.
+                    properties:
+                      tcpEstablishedTimeout:
+                        description: TCPEstablishedTimeout is the timeout for established
+                          TCP connections.
+                        format: int32
+                        type: integer
+                      udpStreamTimeout:
+                        description: UDPStreamTimeout is the timeout for UDP flows
+                          classified as streams.
+                        format: int32
+                        type: integer
+                      udpTimeout:
+                        description: UDPTimeout is the timeout for idle UDP flows.
+                        format: int32
+                        type: integer
+                    type: object
+                  currentInstanceSecurityGroups:
+                    description: |-
+                      CurrentInstanceSecurityGroups are the effective default security groups
+                      applied to a branch ENI when the pod does not specify its own.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  currentSubnetCIDRBlock:
+                    description: CurrentSubnetCIDRBlock is the effective IPv4 CIDR
+                      block for branch ENIs.
+                    type: string
+                  currentSubnetID:
+                    description: |-
+                      CurrentSubnetID is the effective subnet id used for branch ENIs (the
+                      instance subnet, or the ENIConfig subnet under custom networking).
+                    type: string
+                  currentSubnetV6CIDRBlock:
+                    description: CurrentSubnetV6CIDRBlock is the effective IPv6 CIDR
+                      block for branch ENIs.
+                    type: string
+                  instanceID:
+                    description: |-
+                      InstanceID is the EC2 instance id this checkpoint belongs to; hydrate
+                      rejects the checkpoint if it does not match the live node (a reused name).
+                    maxLength: 19
+                    pattern: ^i-([0-9a-f]{8}|[0-9a-f]{17})$
+                    type: string
+                  instanceSubnetCIDRBlock:
+                    description: InstanceSubnetCIDRBlock is the IPv4 CIDR block of
+                      the instance's own subnet.
+                    type: string
+                  instanceSubnetID:
+                    description: InstanceSubnetID is the id of the instance's own
+                      subnet.
+                    type: string
+                  instanceSubnetV6CIDRBlock:
+                    description: InstanceSubnetV6CIDRBlock is the IPv6 CIDR block
+                      of the instance's own subnet, if present.
+                    type: string
+                  instanceType:
+                    description: InstanceType is the EC2 instance type of the node,
+                      used to size branch ENI capacity.
+                    type: string
+                  primaryNetworkInterfaceSecurityGroups:
+                    description: |-
+                      PrimaryNetworkInterfaceSecurityGroups are the security groups of the
+                      instance's primary ENI (the source-of-truth value).
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  trunkENIID:
+                    description: TrunkENIID is the trunk ENI the branch ledger is
+                      rebuilt against.
+                    type: string
                 type: object
-              instanceID:
-                description: InstanceID is the EC2 instance id of the node this CNINode
-                  corresponds to.
-                maxLength: 19
-                pattern: ^i-([0-9a-f]{8}|[0-9a-f]{17})$
-                type: string
-              instanceType:
-                description: InstanceType is the EC2 instance type of the node, used
-                  to size branch ENI capacity.
-                type: string
-              securityGroups:
-                description: |-
-                  SecurityGroups are the security group ids of the instance's primary
-                  network interface (the instance's own, source-of-truth value; any
-                  custom-networking ENIConfig override is re-derived from the live
-                  ENIConfig on restart rather than persisted here). Applied to a branch
-                  ENI when the pod does not specify its own via a SecurityGroupPolicy.
-                items:
-                  type: string
-                type: array
-                x-kubernetes-list-type: atomic
               trunkInterface:
                 description: |-
                   TrunkInterface describes the trunk network interface attached to the
                   node and the branch interfaces associated with it, persisted by the
                   managing controller (see spec.managedBy) for visibility and recovery.
+                  This is the layer shared with other CNINode status writers (e.g. the
+                  EKS Auto Mode networking controllers, which additionally populate
+                  Branches); it retains its original observed-resource semantics.
                 properties:
                   branches:
                     description: |-
@@ -218,23 +262,13 @@ spec:
                   macAddress:
                     description: MacAddress is the MAC address of the trunk ENI.
                     type: string
-                  subnetCIDR:
-                    description: SubnetCIDR is the IPv4 CIDR block of the instance's
-                      own subnet.
-                    type: string
                   subnetID:
                     description: |-
-                      SubnetID is the id of the instance's own EC2 subnet, which is where the
-                      trunk ENI resides. Persisted as the source-of-truth value (never an
-                      ENIConfig override; custom networking is re-derived from the live
-                      ENIConfig on restart) so a restarting controller can rebuild instance
-                      details straight from the CNINode without EC2 describe calls.
+                      SubnetID is the id of the subnet the trunk ENI belongs to. The
+                      vpc-resource-controller's hydrate path validates it against the
+                      checkpoint's effective subnet to reject a stale snapshot.
                     maxLength: 24
                     pattern: ^subnet-([0-9a-f]{8}|[0-9a-f]{17})$
-                    type: string
-                  subnetV6CIDR:
-                    description: SubnetV6CIDR is the IPv6 CIDR block of the instance's
-                      own subnet, if present.
                     type: string
                 required:
                 - id

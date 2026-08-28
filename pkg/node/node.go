@@ -16,6 +16,7 @@ package node
 import (
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -65,11 +66,15 @@ const (
 	fastPathResultHit  = "hit"
 	fastPathResultMiss = "miss"
 
-	fastPathReasonNoCheckpoint       = "no_checkpoint"
-	fastPathReasonInstanceIDMismatch = "instance_id_mismatch"
-	fastPathReasonMissingField       = "missing_field"
-	fastPathReasonUnsupportedType    = "unsupported_type"
-	fastPathReasonDeriveFailed       = "derive_failed"
+	fastPathReasonNoCheckpoint         = "no_checkpoint"
+	fastPathReasonNotManaged           = "not_managed_by_controller"
+	fastPathReasonMissingField         = "missing_field"
+	fastPathReasonInvalidCIDR          = "invalid_cidr"
+	fastPathReasonInstanceIDMismatch   = "instance_id_mismatch"
+	fastPathReasonTrunkIDMismatch      = "trunk_id_mismatch"
+	fastPathReasonSubnetMismatch       = "subnet_mismatch"
+	fastPathReasonInstanceTypeMismatch = "instance_type_mismatch"
+	fastPathReasonUnsupportedType      = "unsupported_type"
 
 	// node_init_duration_seconds label values.
 	initPathHydrated = "hydrated"
@@ -206,9 +211,9 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 		nodeInitDuration.WithLabelValues(initPath, initResult).Observe(time.Since(start).Seconds())
 	}()
 
-	// Prefer the zero-EC2 fast path: rebuild instance details from the CNINode
-	// snapshot. On any miss, fall back to EC2 discovery.
-	if n.tryLoadInstanceFromCNINode() {
+	// Prefer the zero-EC2 fast path: rebuild instance details from the reinit
+	// checkpoint. On any miss, fall back to EC2 discovery.
+	if n.tryHydrateFromCheckpoint() {
 		initPath = initPathHydrated
 	} else {
 		err := n.instance.LoadDetails(n.ec2API)
@@ -258,36 +263,81 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	return errInit
 }
 
-// tryLoadInstanceFromCNINode rebuilds the instance details from the node's
-// CNINode status snapshot without any EC2 call, returning true on success. It
-// returns false (leaving the instance untouched for the EC2 LoadDetails
-// fallback) when there is no usable snapshot: missing/partial status, an
-// instance-id mismatch (a reused CNINode name), or an unsupported instance type.
-// Every outcome is recorded on cninode_status_fast_path_total.
-// snapshotMissReason returns "" if the CNINode status is a usable checkpoint for
-// the given live instance id, otherwise the fast-path miss reason. A snapshot is
-// usable when the required trunk skeleton fields are present, its recorded
-// instance id matches the live node (guards against a reused CNINode name), and
-// its instance type is supported. SubnetV6CIDR and ConnectionTracking are
-// optional and intentionally not required here.
-func snapshotMissReason(cniNode *rcv1alpha1.CNINode, instanceID string) string {
-	status := cniNode.Status
+// validateCheckpoint reports whether the reinit checkpoint may be hydrated for the
+// given live node, returning "" when it may be and the miss reason otherwise. It is
+// pure and Kubernetes-local: no EC2 call, and deliberately no EC2 freshness check.
+//
+// It asks three questions, and nothing else:
+//
+//  1. identity - does this checkpoint belong to this node? (instance id, and the
+//     observed trunk it claims to recover against)
+//  2. configuration compatibility - are its topology/capacity assumptions still
+//     true? (instance type)
+//  3. structural sanity - is the checkpoint itself a legal, representable state?
+//     (required fields present, CIDRs parse)
+//
+// The branch ledger's own structural invariants (VLAN range, no duplicate ENI or
+// VLAN owner) are checked where that ledger is rebuilt, in InitFromSnapshot.
+func validateCheckpoint(observed *rcv1alpha1.TrunkInterface, cp *rcv1alpha1.ReinitCheckpoint,
+	instanceID, nodeInstanceType string,
+) string {
+	if cp == nil {
+		return fastPathReasonNoCheckpoint
+	}
+
+	// Structural sanity: every field hydrate installs, or a later re-derivation
+	// reads, has to be present. The V6 CIDRs stay optional.
 	switch {
-	// Case expressions are evaluated left-to-right and stop at the first true one,
-	// so the nil check short-circuits before any TrunkInterface field is read.
-	case status.TrunkInterface == nil, status.TrunkInterface.ID == "", status.TrunkInterface.SubnetID == "",
-		status.TrunkInterface.SubnetCIDR == "", len(status.SecurityGroups) == 0, status.InstanceType == "":
+	case cp.TrunkENIID == "", cp.InstanceID == "", cp.InstanceType == "",
+		cp.InstanceSubnetID == "", cp.InstanceSubnetCIDRBlock == "",
+		len(cp.PrimaryNetworkInterfaceSecurityGroups) == 0,
+		cp.CurrentSubnetID == "", cp.CurrentSubnetCIDRBlock == "",
+		len(cp.CurrentInstanceSecurityGroups) == 0:
 		return fastPathReasonMissingField
-	case status.InstanceID != instanceID:
+	}
+	for _, cidr := range []string{
+		cp.InstanceSubnetCIDRBlock, cp.InstanceSubnetV6CIDRBlock,
+		cp.CurrentSubnetCIDRBlock, cp.CurrentSubnetV6CIDRBlock,
+	} {
+		if cidr == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fastPathReasonInvalidCIDR
+		}
+	}
+
+	// Identity: a CNINode name can be reused by a new instance.
+	if cp.InstanceID != instanceID {
 		return fastPathReasonInstanceIDMismatch
 	}
-	if _, ok := vpc.Limits[status.InstanceType]; !ok {
+	// Identity: the observed trunk is the resource this checkpoint claims to
+	// recover against. If another status writer has moved it on, or it is absent,
+	// the checkpoint may describe a trunk that is no longer the node's, so serving
+	// allocations against it is unsafe. EC2 can tell us; the checkpoint cannot.
+	if observed == nil || observed.ID != cp.TrunkENIID {
+		return fastPathReasonTrunkIDMismatch
+	}
+	if observed.SubnetID != cp.CurrentSubnetID {
+		return fastPathReasonSubnetMismatch
+	}
+
+	// Configuration compatibility: the instance type sets branch capacity, so a
+	// checkpoint written for a different or unsupported type cannot be trusted.
+	if nodeInstanceType != "" && nodeInstanceType != cp.InstanceType {
+		return fastPathReasonInstanceTypeMismatch
+	}
+	if _, ok := vpc.Limits[cp.InstanceType]; !ok {
 		return fastPathReasonUnsupportedType
 	}
 	return ""
 }
 
-func (n *node) tryLoadInstanceFromCNINode() bool {
+// tryHydrateFromCheckpoint rebuilds the instance details from the node's reinit
+// checkpoint without any EC2 call, returning true on success. On any miss it
+// leaves the instance untouched (so the EC2 LoadDetails fallback runs on a
+// pristine instance) and records the reason on cninode_status_fast_path_total.
+func (n *node) tryHydrateFromCheckpoint() bool {
 	nodeName := n.instance.Name()
 
 	cniNode, err := n.k8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
@@ -296,22 +346,36 @@ func (n *node) tryLoadInstanceFromCNINode() bool {
 		return false
 	}
 
-	if reason := snapshotMissReason(cniNode, n.instance.InstanceID()); reason != "" {
-		if reason == fastPathReasonInstanceIDMismatch {
-			n.log.Info("CNINode snapshot instance id does not match the live node, falling back to EC2",
-				"snapshotInstanceID", cniNode.Status.InstanceID, "nodeInstanceID", n.instance.InstanceID())
+	// The owning controller owns the object's status, so a checkpoint on someone
+	// else's CNINode is not ours to trust.
+	if !cniNode.IsManagedByVPCResourceController() {
+		n.log.Info("CNINode is managed by another controller, falling back to EC2",
+			"managedBy", cniNode.Spec.ManagedBy)
+		cniNodeStatusFastPathCount.WithLabelValues(fastPathResultMiss, fastPathReasonNotManaged).Inc()
+		return false
+	}
+
+	// Best-effort Kubernetes Node instance-type label (cache read, no EC2), used
+	// only when present to catch a checkpoint that belongs to a different type.
+	nodeInstanceType := ""
+	if k8sNode, err := n.k8sAPI.GetNode(nodeName); err == nil && k8sNode != nil {
+		if nodeInstanceType = k8sNode.Labels[v1.LabelInstanceTypeStable]; nodeInstanceType == "" {
+			nodeInstanceType = k8sNode.Labels[v1.LabelInstanceType]
 		}
+	}
+
+	checkpoint := cniNode.Status.ReinitCheckpoint
+	if reason := validateCheckpoint(cniNode.Status.TrunkInterface, checkpoint,
+		n.instance.InstanceID(), nodeInstanceType); reason != "" {
+		n.log.Info("reinit checkpoint unusable, falling back to EC2", "reason", reason,
+			"nodeInstanceID", n.instance.InstanceID(), "nodeInstanceType", nodeInstanceType)
 		cniNodeStatusFastPathCount.WithLabelValues(fastPathResultMiss, reason).Inc()
 		return false
 	}
 
-	if err := n.instance.LoadFromCNINode(cniNode, n.ec2API); err != nil {
-		n.log.Error(err, "failed to derive effective subnet/security groups from the CNINode snapshot, falling back to EC2")
-		cniNodeStatusFastPathCount.WithLabelValues(fastPathResultMiss, fastPathReasonDeriveFailed).Inc()
-		return false
-	}
+	n.instance.LoadFromCheckpoint(*checkpoint)
 	cniNodeStatusFastPathCount.WithLabelValues(fastPathResultHit, "").Inc()
-	n.log.Info("rebuilt instance details from CNINode snapshot without EC2", "trunk", cniNode.Status.TrunkInterface.ID)
+	n.log.Info("rebuilt instance details from reinit checkpoint without EC2", "trunk", checkpoint.TrunkENIID)
 	return true
 }
 

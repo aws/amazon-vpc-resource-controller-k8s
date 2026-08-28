@@ -244,14 +244,18 @@ func TestK8sWrapper_UpdateCNINodeStatus(t *testing.T) {
 	assert.NoError(t, k8sClient.Update(context.Background(), concurrent))
 
 	modified := base.DeepCopy()
-	modified.Status.InstanceID = "i-00000000000000000"
+	modified.Status.ReinitCheckpoint = &v1alpha1.ReinitCheckpoint{
+		InstanceID: "i-00000000000000000",
+		TrunkENIID: "eni-trunk",
+	}
 	modified.Status.TrunkInterface = &v1alpha1.TrunkInterface{ID: "eni-trunk", SubnetID: "subnet-0123456789abcdef0"}
 
 	assert.NoError(t, wrapper.UpdateCNINodeStatus(base, modified))
 
 	stored := &v1alpha1.CNINode{}
 	assert.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: nodeName}, stored))
-	assert.Equal(t, "i-00000000000000000", stored.Status.InstanceID)
+	assert.NotNil(t, stored.Status.ReinitCheckpoint)
+	assert.Equal(t, "i-00000000000000000", stored.Status.ReinitCheckpoint.InstanceID)
 	assert.Equal(t, "eni-trunk", stored.Status.TrunkInterface.ID)
 	// The concurrent writer's change is preserved by the merge patch.
 	assert.Equal(t, "true", stored.Labels["touched"])

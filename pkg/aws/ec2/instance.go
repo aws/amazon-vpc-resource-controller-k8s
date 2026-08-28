@@ -73,10 +73,10 @@ type ec2Instance struct {
 	udpStreamTimeout      *int32
 	udpTimeout            *int32
 
-	// hydrated is true when the instance details were rebuilt from a CNINode
-	// snapshot (LoadFromSnapshot) instead of an EC2 DescribeInstances call.
+	// hydrated is true when the instance details were rebuilt from a reinit
+	// checkpoint (LoadFromCheckpoint) instead of an EC2 DescribeInstances call.
 	hydrated bool
-	// hydratedTrunkID is the trunk ENI id carried from that snapshot, used to
+	// hydratedTrunkID is the trunk ENI id carried from that checkpoint, used to
 	// rebuild the trunk without EC2. Empty unless hydrated.
 	hydratedTrunkID string
 }
@@ -101,13 +101,10 @@ type EC2Instance interface {
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
-	LoadFromCNINode(cniNode *rcv1alpha1.CNINode, helper api.EC2APIHelper) error
+	LoadFromCheckpoint(checkpoint rcv1alpha1.ReinitCheckpoint)
+	BuildCheckpoint() rcv1alpha1.ReinitCheckpoint
 	IsHydrated() bool
 	HydratedTrunkID() string
-	InstanceSubnetID() string
-	InstanceSubnetCidrBlock() string
-	InstanceSubnetV6CidrBlock() string
-	PrimaryENISecurityGroups() []string
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -132,6 +129,25 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	if instance == nil || instance.SubnetId == nil {
 		return fmt.Errorf("failed to find instance %s details from EC2 API", i.instanceID)
 	}
+
+	// Clear conditionally populated and derived state so no checkpoint-derived
+	// value survives an authoritative EC2 reload. Two are load-bearing rather than
+	// tidiness: primaryENISecurityGroups also gates the primary-ENI block below, and
+	// currentSubnetID short-circuits the custom-networking subnet lookup in
+	// updateCurrentSubnetAndCidrBlock.
+	i.instanceSubnetV6CidrBlock = ""
+	i.subnetV6Mask = ""
+	i.primaryENISecurityGroups = nil
+	i.primaryENIID = ""
+	i.tcpEstablishedTimeout = nil
+	i.udpStreamTimeout = nil
+	i.udpTimeout = nil
+	i.currentSubnetID = ""
+	i.currentSubnetCIDRBlock = ""
+	i.currentSubnetV6CIDRBlock = ""
+	i.currentInstanceSecurityGroups = nil
+	i.hydrated = false
+	i.hydratedTrunkID = ""
 
 	// Set instance subnet and cidr during node initialization
 	i.instanceSubnetID = *instance.SubnetId
@@ -369,56 +385,88 @@ func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, ud
 	return i.tcpEstablishedTimeout, i.udpStreamTimeout, i.udpTimeout
 }
 
-// LoadFromCNINode rebuilds the instance details from a persisted CNINode status
-// snapshot instead of EC2 DescribeInstances/DescribeSubnets calls. The snapshot
-// carries the instance's source-of-truth fields (its own subnet and primary ENI
-// security groups); the effective (current*) fields are then derived through the
-// same updateCurrentSubnetAndCidrBlock path LoadDetails uses, so every later
-// re-derivation (UpdateResources) is idempotent. For a custom-networking node
-// the derivation may make one EC2 GetSubnet call (ENIConfig carries no CIDR);
-// on a derivation error the instance is left un-hydrated so the caller falls
-// back to EC2 discovery. Device indexes are intentionally left unset (a
-// hydrated node does not create a new trunk) and the primary ENI id is not
-// carried (only consumed by the Windows secondary-IP provider, whose nodes
-// have no trunk and therefore never hydrate). The caller must validate the
-// snapshot (trunk interface present, instance id match, supported instance
-// type) before calling this.
-func (i *ec2Instance) LoadFromCNINode(cniNode *rcv1alpha1.CNINode, helper api.EC2APIHelper) error {
+// maskFromCIDR returns the prefix length ("16" for "10.0.0.0/16") of a CIDR, or
+// "" if the input is empty or not in CIDR form. Mirrors how LoadDetails derives
+// the subnet mask, so it is not persisted in the checkpoint.
+func maskFromCIDR(cidr string) string {
+	if parts := strings.Split(cidr, "/"); len(parts) == 2 {
+		return parts[1]
+	}
+	return ""
+}
+
+// LoadFromCheckpoint rebuilds the instance details from a persisted reinit
+// checkpoint with no EC2 call. Both the source-of-truth and the derived
+// effective (current*) fields are restored directly, so custom networking nodes
+// hydrate without EC2 too; the ENIConfig re-derivation happens later off the
+// restart critical path. Subnet masks are derived from the stored CIDRs.
+//
+// The commit is a single locked assignment with no fallible call, so the
+// instance is never left partially hydrated. The caller validates the
+// checkpoint (checkpointMissReason) first. Device indexes and the primary ENI id
+// stay unset: a hydrated node has an existing trunk and never creates one, and
+// the primary ENI id is only used by the Windows secondary-IP provider, whose
+// nodes have no trunk to hydrate.
+func (i *ec2Instance) LoadFromCheckpoint(checkpoint rcv1alpha1.ReinitCheckpoint) {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
-	status := cniNode.Status
-	trunk := status.TrunkInterface
-
-	i.instanceType = status.InstanceType
-	i.instanceSubnetID = trunk.SubnetID
-	i.instanceSubnetCidrBlock = trunk.SubnetCIDR
-	i.instanceSubnetV6CidrBlock = trunk.SubnetV6CIDR
-	if parts := strings.Split(trunk.SubnetCIDR, "/"); len(parts) == 2 {
-		i.subnetMask = parts[1]
-	}
-	if parts := strings.Split(trunk.SubnetV6CIDR, "/"); len(parts) == 2 {
-		i.subnetV6Mask = parts[1]
-	}
-	i.primaryENISecurityGroups = status.SecurityGroups
-	if ct := status.ConnectionTracking; ct != nil {
+	i.instanceType = checkpoint.InstanceType
+	i.instanceSubnetID = checkpoint.InstanceSubnetID
+	i.instanceSubnetCidrBlock = checkpoint.InstanceSubnetCIDRBlock
+	i.instanceSubnetV6CidrBlock = checkpoint.InstanceSubnetV6CIDRBlock
+	i.currentSubnetID = checkpoint.CurrentSubnetID
+	i.currentSubnetCIDRBlock = checkpoint.CurrentSubnetCIDRBlock
+	i.currentSubnetV6CIDRBlock = checkpoint.CurrentSubnetV6CIDRBlock
+	i.currentInstanceSecurityGroups = checkpoint.CurrentInstanceSecurityGroups
+	i.subnetMask = maskFromCIDR(checkpoint.InstanceSubnetCIDRBlock)
+	i.subnetV6Mask = maskFromCIDR(checkpoint.InstanceSubnetV6CIDRBlock)
+	i.primaryENISecurityGroups = checkpoint.PrimaryNetworkInterfaceSecurityGroups
+	if ct := checkpoint.ConnectionTracking; ct != nil {
 		i.tcpEstablishedTimeout = ct.TCPEstablishedTimeout
 		i.udpStreamTimeout = ct.UDPStreamTimeout
 		i.udpTimeout = ct.UDPTimeout
+	} else {
+		i.tcpEstablishedTimeout = nil
+		i.udpStreamTimeout = nil
+		i.udpTimeout = nil
 	}
 
-	// Derive the effective subnet/CIDR/security groups exactly like LoadDetails
-	// does as its last step.
-	if err := i.updateCurrentSubnetAndCidrBlock(helper); err != nil {
-		return err
-	}
-
-	i.hydratedTrunkID = trunk.ID
+	i.hydratedTrunkID = checkpoint.TrunkENIID
 	i.hydrated = true
-	return nil
 }
 
-// IsHydrated reports whether the instance details came from a CNINode snapshot.
+// BuildCheckpoint snapshots the live instance details for persistence. Called
+// after an authoritative EC2-path init, so the fields reflect EC2 truth. The
+// caller fills in TrunkENIID.
+func (i *ec2Instance) BuildCheckpoint() rcv1alpha1.ReinitCheckpoint {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	var connectionTracking *rcv1alpha1.ConnectionTrackingStatus
+	if i.tcpEstablishedTimeout != nil || i.udpStreamTimeout != nil || i.udpTimeout != nil {
+		connectionTracking = &rcv1alpha1.ConnectionTrackingStatus{
+			TCPEstablishedTimeout: i.tcpEstablishedTimeout,
+			UDPStreamTimeout:      i.udpStreamTimeout,
+			UDPTimeout:            i.udpTimeout,
+		}
+	}
+	return rcv1alpha1.ReinitCheckpoint{
+		InstanceID:                            i.instanceID,
+		InstanceType:                          i.instanceType,
+		InstanceSubnetID:                      i.instanceSubnetID,
+		InstanceSubnetCIDRBlock:               i.instanceSubnetCidrBlock,
+		InstanceSubnetV6CIDRBlock:             i.instanceSubnetV6CidrBlock,
+		CurrentSubnetID:                       i.currentSubnetID,
+		CurrentSubnetCIDRBlock:                i.currentSubnetCIDRBlock,
+		CurrentSubnetV6CIDRBlock:              i.currentSubnetV6CIDRBlock,
+		CurrentInstanceSecurityGroups:         i.currentInstanceSecurityGroups,
+		PrimaryNetworkInterfaceSecurityGroups: i.primaryENISecurityGroups,
+		ConnectionTracking:                    connectionTracking,
+	}
+}
+
+// IsHydrated reports whether the instance details came from a reinit checkpoint.
 func (i *ec2Instance) IsHydrated() bool {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
@@ -426,47 +474,11 @@ func (i *ec2Instance) IsHydrated() bool {
 	return i.hydrated
 }
 
-// HydratedTrunkID returns the trunk ENI id from the CNINode snapshot, or "" if
+// HydratedTrunkID returns the trunk ENI id from the reinit checkpoint, or "" if
 // the instance was not hydrated.
 func (i *ec2Instance) HydratedTrunkID() string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
 
 	return i.hydratedTrunkID
-}
-
-// InstanceSubnetID returns the instance's own subnet id (the source-of-truth
-// value, not the effective one that may point to an ENIConfig subnet).
-func (i *ec2Instance) InstanceSubnetID() string {
-	i.lock.RLock()
-	defer i.lock.RUnlock()
-
-	return i.instanceSubnetID
-}
-
-// InstanceSubnetCidrBlock returns the CIDR block of the instance's own subnet.
-func (i *ec2Instance) InstanceSubnetCidrBlock() string {
-	i.lock.RLock()
-	defer i.lock.RUnlock()
-
-	return i.instanceSubnetCidrBlock
-}
-
-// InstanceSubnetV6CidrBlock returns the IPv6 CIDR block of the instance's own
-// subnet, or "" if the subnet has none.
-func (i *ec2Instance) InstanceSubnetV6CidrBlock() string {
-	i.lock.RLock()
-	defer i.lock.RUnlock()
-
-	return i.instanceSubnetV6CidrBlock
-}
-
-// PrimaryENISecurityGroups returns the security groups of the instance's
-// primary network interface (the source-of-truth value, not the effective one
-// that may point to ENIConfig security groups).
-func (i *ec2Instance) PrimaryENISecurityGroups() []string {
-	i.lock.RLock()
-	defer i.lock.RUnlock()
-
-	return i.primaryENISecurityGroups
 }

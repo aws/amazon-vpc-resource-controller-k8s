@@ -48,6 +48,20 @@ func (m *MockEC2Instance) EXPECT() *MockEC2InstanceMockRecorder {
 	return m.recorder
 }
 
+// BuildCheckpoint mocks base method.
+func (m *MockEC2Instance) BuildCheckpoint() v1alpha1.ReinitCheckpoint {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BuildCheckpoint")
+	ret0, _ := ret[0].(v1alpha1.ReinitCheckpoint)
+	return ret0
+}
+
+// BuildCheckpoint indicates an expected call of BuildCheckpoint.
+func (mr *MockEC2InstanceMockRecorder) BuildCheckpoint() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildCheckpoint", reflect.TypeOf((*MockEC2Instance)(nil).BuildCheckpoint))
+}
+
 // CurrentInstanceSecurityGroups mocks base method.
 func (m *MockEC2Instance) CurrentInstanceSecurityGroups() []string {
 	m.ctrl.T.Helper()
@@ -148,48 +162,6 @@ func (mr *MockEC2InstanceMockRecorder) InstanceID() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceID", reflect.TypeOf((*MockEC2Instance)(nil).InstanceID))
 }
 
-// InstanceSubnetCidrBlock mocks base method.
-func (m *MockEC2Instance) InstanceSubnetCidrBlock() string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InstanceSubnetCidrBlock")
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// InstanceSubnetCidrBlock indicates an expected call of InstanceSubnetCidrBlock.
-func (mr *MockEC2InstanceMockRecorder) InstanceSubnetCidrBlock() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceSubnetCidrBlock", reflect.TypeOf((*MockEC2Instance)(nil).InstanceSubnetCidrBlock))
-}
-
-// InstanceSubnetID mocks base method.
-func (m *MockEC2Instance) InstanceSubnetID() string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InstanceSubnetID")
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// InstanceSubnetID indicates an expected call of InstanceSubnetID.
-func (mr *MockEC2InstanceMockRecorder) InstanceSubnetID() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceSubnetID", reflect.TypeOf((*MockEC2Instance)(nil).InstanceSubnetID))
-}
-
-// InstanceSubnetV6CidrBlock mocks base method.
-func (m *MockEC2Instance) InstanceSubnetV6CidrBlock() string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InstanceSubnetV6CidrBlock")
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// InstanceSubnetV6CidrBlock indicates an expected call of InstanceSubnetV6CidrBlock.
-func (mr *MockEC2InstanceMockRecorder) InstanceSubnetV6CidrBlock() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceSubnetV6CidrBlock", reflect.TypeOf((*MockEC2Instance)(nil).InstanceSubnetV6CidrBlock))
-}
-
 // IsHydrated mocks base method.
 func (m *MockEC2Instance) IsHydrated() bool {
 	m.ctrl.T.Helper()
@@ -218,18 +190,16 @@ func (mr *MockEC2InstanceMockRecorder) LoadDetails(arg0 interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadDetails", reflect.TypeOf((*MockEC2Instance)(nil).LoadDetails), arg0)
 }
 
-// LoadFromCNINode mocks base method.
-func (m *MockEC2Instance) LoadFromCNINode(arg0 *v1alpha1.CNINode, arg1 api.EC2APIHelper) error {
+// LoadFromCheckpoint mocks base method.
+func (m *MockEC2Instance) LoadFromCheckpoint(arg0 v1alpha1.ReinitCheckpoint) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "LoadFromCNINode", arg0, arg1)
-	ret0, _ := ret[0].(error)
-	return ret0
+	m.ctrl.Call(m, "LoadFromCheckpoint", arg0)
 }
 
-// LoadFromCNINode indicates an expected call of LoadFromCNINode.
-func (mr *MockEC2InstanceMockRecorder) LoadFromCNINode(arg0, arg1 interface{}) *gomock.Call {
+// LoadFromCheckpoint indicates an expected call of LoadFromCheckpoint.
+func (mr *MockEC2InstanceMockRecorder) LoadFromCheckpoint(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadFromCNINode", reflect.TypeOf((*MockEC2Instance)(nil).LoadFromCNINode), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadFromCheckpoint", reflect.TypeOf((*MockEC2Instance)(nil).LoadFromCheckpoint), arg0)
 }
 
 // Name mocks base method.
@@ -258,20 +228,6 @@ func (m *MockEC2Instance) Os() string {
 func (mr *MockEC2InstanceMockRecorder) Os() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Os", reflect.TypeOf((*MockEC2Instance)(nil).Os))
-}
-
-// PrimaryENISecurityGroups mocks base method.
-func (m *MockEC2Instance) PrimaryENISecurityGroups() []string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PrimaryENISecurityGroups")
-	ret0, _ := ret[0].([]string)
-	return ret0
-}
-
-// PrimaryENISecurityGroups indicates an expected call of PrimaryENISecurityGroups.
-func (mr *MockEC2InstanceMockRecorder) PrimaryENISecurityGroups() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryENISecurityGroups", reflect.TypeOf((*MockEC2Instance)(nil).PrimaryENISecurityGroups))
 }
 
 // PrimaryNetworkInterfaceID mocks base method.

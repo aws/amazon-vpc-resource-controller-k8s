@@ -159,12 +159,27 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	// A hydrated instance was rebuilt from the CNINode snapshot, so rebuild the
-	// trunk from that snapshot and pod annotations without EC2; otherwise take
-	// the EC2 discovery path.
+	// A hydrated instance was rebuilt from the reinit checkpoint, so rebuild the
+	// trunk from that checkpoint + pod annotations with zero EC2; otherwise take
+	// the EC2 discovery path. If the reconstructed ledger is structurally invalid,
+	// discard the candidate trunk, re-derive authoritative instance details from
+	// EC2, and rebuild the trunk on a clean slate. No partially reconstructed
+	// state can leak into the EC2 path (LoadDetails fully re-defines the instance;
+	// a fresh trunk is used for InitTrunk).
+	ec2Path := !instance.IsHydrated()
 	var initErr error
 	if instance.IsHydrated() {
 		initErr = trunkENI.InitFromSnapshot(instance.HydratedTrunkID(), podList)
+		if errors.Is(initErr, trunk.ErrInvalidCheckpointLedger) {
+			log.Info("reinit checkpoint ledger is invalid, falling back to authoritative EC2 init")
+			if err := instance.LoadDetails(b.apiWrapper.EC2API); err != nil {
+				branchProviderOperationsErrCount.WithLabelValues("init").Inc()
+				return fmt.Errorf("loading instance details for EC2 fallback, %w", err)
+			}
+			trunkENI = trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API)
+			ec2Path = true
+			initErr = trunkENI.InitTrunk(instance, podList)
+		}
 	} else {
 		initErr = trunkENI.InitTrunk(instance, podList)
 	}
@@ -195,11 +210,11 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return fmt.Errorf("initializing trunk, %w", initErr)
 	}
 
-	// Persist the trunk skeleton to the CNINode after an EC2-path init so a future
-	// restart can hydrate from it without EC2. A hydrated init already came from
-	// the snapshot. Best-effort: a failure only degrades the next restart to the
-	// EC2 path, so it must not fail node initialization.
-	if !instance.IsHydrated() {
+	// Persist the reinit checkpoint after an EC2-path init so a future restart can
+	// hydrate from it without EC2. A successful hydrated init already came from the
+	// checkpoint. Best-effort: a failure only degrades the next restart to the EC2
+	// path, so it must not fail node initialization.
+	if ec2Path {
 		b.persistCNINodeStatus(instance, trunkENI)
 	}
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceSeconds(start))
@@ -222,50 +237,43 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	return nil
 }
 
-// persistCNINodeStatus writes the trunk skeleton (instance identity, trunk ENI
-// id/subnet, default security groups, connection tracking) to the node's CNINode
-// status subresource after an EC2-path init, so a later restart can rebuild
-// in-memory state from the CNINode instead of EC2. Best-effort: errors are logged
-// and swallowed, since the only consequence is that the next restart for this
-// node falls back to the EC2 discovery path.
+// persistCNINodeStatus writes the reinit checkpoint (the instance snapshot needed
+// to rebuild in-memory state without EC2) plus the observed trunk id/subnet to
+// the node's CNINode status subresource after an authoritative EC2-path init, so
+// a later restart can hydrate from it. Best-effort: errors are logged and
+// swallowed, since the only consequence is that the next restart for this node
+// falls back to the EC2 discovery path.
 func (b *branchENIProvider) persistCNINodeStatus(instance ec2.EC2Instance, trunkENI trunk.TrunkENI) {
 	nodeName := instance.Name()
 	cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
 	if err != nil {
-		b.log.Error(err, "failed to get CNINode to persist trunk skeleton", "node", nodeName)
+		b.log.Error(err, "failed to get CNINode to persist reinit checkpoint", "node", nodeName)
+		return
+	}
+	// The owning controller owns the object's status; never write into another
+	// controller's CNINode.
+	if !cniNode.IsManagedByVPCResourceController() {
+		b.log.Info("skipping reinit checkpoint persist, CNINode is managed by another controller",
+			"node", nodeName, "managedBy", cniNode.Spec.ManagedBy)
 		return
 	}
 	base := cniNode.DeepCopy()
 
-	tcp, udpStream, udp := instance.GetConnectionTrackingSpec()
-	var connectionTracking *rcv1alpha1.ConnectionTrackingConfig
-	if tcp != nil || udpStream != nil || udp != nil {
-		connectionTracking = &rcv1alpha1.ConnectionTrackingConfig{
-			TCPEstablishedTimeout: tcp,
-			UDPStreamTimeout:      udpStream,
-			UDPTimeout:            udp,
-		}
-	}
+	// Controller-private restart-recovery checkpoint: self-contained, so hydrate is
+	// zero-EC2 even for custom networking.
+	checkpoint := instance.BuildCheckpoint()
+	checkpoint.TrunkENIID = trunkENI.TrunkENIID()
+	cniNode.Status.ReinitCheckpoint = &checkpoint
 
-	// Persist the instance's source-of-truth values (its own subnet and primary
-	// ENI security groups), NOT the effective/derived ones: on hydrate these
-	// fields seed the same derivation LoadDetails uses, so custom-networking
-	// overrides are re-applied from the live ENIConfig rather than baked into
-	// the snapshot.
-	cniNode.Status.InstanceID = instance.InstanceID()
-	cniNode.Status.InstanceType = instance.Type()
-	cniNode.Status.SecurityGroups = instance.PrimaryENISecurityGroups()
-	cniNode.Status.ConnectionTracking = connectionTracking
+	// Observed-resource layer, shared with other status writers.
 	if cniNode.Status.TrunkInterface == nil {
 		cniNode.Status.TrunkInterface = &rcv1alpha1.TrunkInterface{}
 	}
 	cniNode.Status.TrunkInterface.ID = trunkENI.TrunkENIID()
-	cniNode.Status.TrunkInterface.SubnetID = instance.InstanceSubnetID()
-	cniNode.Status.TrunkInterface.SubnetCIDR = instance.InstanceSubnetCidrBlock()
-	cniNode.Status.TrunkInterface.SubnetV6CIDR = instance.InstanceSubnetV6CidrBlock()
+	cniNode.Status.TrunkInterface.SubnetID = instance.SubnetID()
 
 	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(base, cniNode); err != nil {
-		b.log.Error(err, "failed to persist trunk skeleton to CNINode status", "node", nodeName)
+		b.log.Error(err, "failed to persist reinit checkpoint to CNINode status", "node", nodeName)
 	}
 }
 
@@ -429,47 +437,76 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
 	}
 
+	// commitOwnership runs inside the trunk's recovery gate, so the pod annotation
+	// that makes this pod the ENI's owner is committed before a concurrent ledger
+	// resync can take its pod snapshot. Until it succeeds the ENIs are not owned by
+	// anyone, and the trunk releases them if it returns an error.
+	var jsonBytes []byte
+	// commitFailed keeps the failure events precise: a failed ownership commit has
+	// already reported itself, so it must not also surface as an allocation failure.
+	commitFailed := false
+	commitOwnership := func(branchENIs []*trunk.ENIDetails) error {
+		var err error
+		if jsonBytes, err = json.Marshal(branchENIs); err != nil {
+			commitFailed = true
+			branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
+			log.Error(err, "failed to marshal ENI details, releasing the ENIs", "ENI/s", branchENIs)
+			return err
+		}
+
+		annotateStart := time.Now()
+		if err = b.apiWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, pod.UID,
+			config.ResourceNamePodENI, string(jsonBytes)); err != nil {
+			commitFailed = true
+			branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
+			b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchENIAnnotationFailed,
+				fmt.Sprintf("failed to annotate pod with branch ENI details: %v", err), v1.EventTypeWarning)
+			log.Error(err, "failed to annotate the pod, releasing the ENIs", "ENI/s", branchENIs)
+			return err
+		}
+		branchProviderOperationLatency.WithLabelValues(operationAnnotateBranchENI, strconv.Itoa(resourceCount)).
+			Observe(timeSinceSeconds(annotateStart))
+		return nil
+	}
+
 	// Get the list of branch ENIs that will be allocated to the pod object
-	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
+	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount, commitOwnership)
+	// Runtime recovery: a checkpoint-hydrated ledger is only proven correct by use.
+	// A capacity error on a hydrated trunk means the reconstructed ledger says full,
+	// which EC2 may contradict, so rebuild this one trunk's ledger authoritatively
+	// and retry once. Only this trigger qualifies: association errors carry no
+	// reliable signal that the ledger is stale (throttling and other transient
+	// failures look identical), and resyncing on them would add EC2 load exactly
+	// when EC2 is already struggling. A successful resync clears the hydrated flag,
+	// so recovery happens at most once per trunk and cannot loop.
+	if err != nil && errors.Is(err, trunk.ErrCurrentlyAtMaxCapacity) && trunkENI.IsHydrated() {
+		log.Info("capacity exhausted on a checkpoint-hydrated trunk, resyncing its ledger from EC2 and retrying")
+		listPods := func() ([]v1.Pod, error) {
+			return b.apiWrapper.PodAPI.GetRunningPodsOnNode(pod.Spec.NodeName)
+		}
+		if resyncErr := trunkENI.ResyncTrunkLedgerFromEC2(listPods, "capacity"); resyncErr != nil {
+			log.Error(resyncErr, "trunk ledger resync failed, surfacing the original allocation error")
+		} else {
+			branchENIs, err = trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount, commitOwnership)
+		}
+	}
 	if err != nil {
-		if err == trunk.ErrCurrentlyAtMaxCapacity {
+		if errors.Is(err, trunk.ErrCurrentlyAtMaxCapacity) {
 			return ctrl.Result{RequeueAfter: cooldown.GetCoolDown().GetCoolDownPeriod(), Requeue: true}, nil
 		}
-		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
-			fmt.Sprintf("failed to allocate branch ENI to pod: %v", err), v1.EventTypeWarning)
+		if !commitFailed {
+			b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
+				fmt.Sprintf("failed to allocate branch ENI to pod: %v", err), v1.EventTypeWarning)
+		}
 		return ctrl.Result{}, err
 	}
 
 	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENI, strconv.Itoa(resourceCount)).
 		Observe(timeSinceSeconds(start))
 
-	jsonBytes, err := json.Marshal(branchENIs)
-	if err != nil {
-		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
-		b.log.Info("pushed the ENIs to the delete queue as failed to unmarshal ENI details", "ENI/s", branchENIs)
-		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
-		return ctrl.Result{}, err
-	}
-
-	start = time.Now()
-	// Annotate the pod with the created resources
-	err = b.apiWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, pod.UID,
-		config.ResourceNamePodENI, string(jsonBytes))
-	if err != nil {
-		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
-		b.log.Info("pushed the ENIs to the delete queue as failed to annotate the pod", "ENI/s", branchENIs)
-		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchENIAnnotationFailed,
-			fmt.Sprintf("failed to annotate pod with branch ENI details: %v", err), v1.EventTypeWarning)
-		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
-		return ctrl.Result{}, err
-	}
-
 	// Broadcast event to indicate the resource has been successfully created and annotated to the pod object
 	b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocated,
 		fmt.Sprintf("Allocated %s to the pod", string(jsonBytes)), v1.EventTypeNormal)
-
-	branchProviderOperationLatency.WithLabelValues(operationAnnotateBranchENI, strconv.Itoa(resourceCount)).
-		Observe(timeSinceSeconds(start))
 
 	log.Info("created and annotated branch interface/s successfully", "branches", branchENIs)
 

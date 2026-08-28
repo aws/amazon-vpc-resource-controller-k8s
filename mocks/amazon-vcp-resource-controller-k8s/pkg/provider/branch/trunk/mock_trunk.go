@@ -50,18 +50,18 @@ func (m *MockTrunkENI) EXPECT() *MockTrunkENIMockRecorder {
 }
 
 // CreateAndAssociateBranchENIs mocks base method.
-func (m *MockTrunkENI) CreateAndAssociateBranchENIs(arg0 *v1.Pod, arg1 []string, arg2 int) ([]*trunk.ENIDetails, error) {
+func (m *MockTrunkENI) CreateAndAssociateBranchENIs(arg0 *v1.Pod, arg1 []string, arg2 int, arg3 func([]*trunk.ENIDetails) error) ([]*trunk.ENIDetails, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateAndAssociateBranchENIs", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "CreateAndAssociateBranchENIs", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].([]*trunk.ENIDetails)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreateAndAssociateBranchENIs indicates an expected call of CreateAndAssociateBranchENIs.
-func (mr *MockTrunkENIMockRecorder) CreateAndAssociateBranchENIs(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockTrunkENIMockRecorder) CreateAndAssociateBranchENIs(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAndAssociateBranchENIs", reflect.TypeOf((*MockTrunkENI)(nil).CreateAndAssociateBranchENIs), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAndAssociateBranchENIs", reflect.TypeOf((*MockTrunkENI)(nil).CreateAndAssociateBranchENIs), arg0, arg1, arg2, arg3)
 }
 
 // DeleteCooledDownENIs mocks base method.
@@ -118,6 +118,20 @@ func (mr *MockTrunkENIMockRecorder) Introspect() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockTrunkENI)(nil).Introspect))
 }
 
+// IsHydrated mocks base method.
+func (m *MockTrunkENI) IsHydrated() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsHydrated")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsHydrated indicates an expected call of IsHydrated.
+func (mr *MockTrunkENIMockRecorder) IsHydrated() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsHydrated", reflect.TypeOf((*MockTrunkENI)(nil).IsHydrated))
+}
+
 // PushBranchENIsToCoolDownQueue mocks base method.
 func (m *MockTrunkENI) PushBranchENIsToCoolDownQueue(arg0 string) {
 	m.ctrl.T.Helper()
@@ -154,6 +168,20 @@ func (m *MockTrunkENI) Reconcile(arg0 []v1.Pod) bool {
 func (mr *MockTrunkENIMockRecorder) Reconcile(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reconcile", reflect.TypeOf((*MockTrunkENI)(nil).Reconcile), arg0)
+}
+
+// ResyncTrunkLedgerFromEC2 mocks base method.
+func (m *MockTrunkENI) ResyncTrunkLedgerFromEC2(arg0 func() ([]v1.Pod, error), arg1 string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResyncTrunkLedgerFromEC2", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ResyncTrunkLedgerFromEC2 indicates an expected call of ResyncTrunkLedgerFromEC2.
+func (mr *MockTrunkENIMockRecorder) ResyncTrunkLedgerFromEC2(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResyncTrunkLedgerFromEC2", reflect.TypeOf((*MockTrunkENI)(nil).ResyncTrunkLedgerFromEC2), arg0, arg1)
 }
 
 // TrunkENIID mocks base method.

@@ -120,7 +120,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// controller is responsible for the object's tags, finalizers, status, and
 	// resource cleanup; adding our finalizer here would block deletion since our
 	// finalizer routine never runs for these objects.
-	if cniNode.Spec.ManagedBy != "" && cniNode.Spec.ManagedBy != v1alpha1.ManagedByVPCResourceController {
+	if !cniNode.IsManagedByVPCResourceController() {
 		r.log.V(1).Info("skipping CNINode managed by another controller", "cniNode", cniNode.Name, "managedBy", cniNode.Spec.ManagedBy)
 		return ctrl.Result{}, nil
 	}

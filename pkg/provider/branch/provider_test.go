@@ -30,6 +30,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
@@ -69,6 +70,21 @@ var (
 	MockError = fmt.Errorf("mock error")
 	ctx       = context.TODO()
 )
+
+// allocateInvokingCommit makes the trunk mock behave like the real trunk: it runs
+// the provider's ownership commit (marshal + AnnotatePod) inside the allocation
+// call and propagates its error, which is where that work now lives so it is
+// covered by the recovery gate.
+func allocateInvokingCommit(enis []*trunk.ENIDetails) interface{} {
+	return func(_ *v1.Pod, _ []string, _ int, commitOwnership func([]*trunk.ENIDetails) error) ([]*trunk.ENIDetails, error) {
+		if commitOwnership != nil {
+			if err := commitOwnership(enis); err != nil {
+				return nil, err
+			}
+		}
+		return enis, nil
+	}
+}
 
 // getProviderAndMockK8sWrapperAndHelper returns the mock provider along with the k8s wrapper and helper
 func getProviderAndMocks(ctrl *gomock.Controller) (branchENIProvider, *mock_pod.MockPodClientAPIWrapper,
@@ -143,8 +159,9 @@ func TestBranchENIProvider_getTrunkFromCache_NotExist(t *testing.T) {
 	assert.Nil(t, trunkENI)
 }
 
-// TestBranchENIProvider_persistCNINodeStatus tests the trunk skeleton is written
-// to the CNINode status subresource with the expected fields after an EC2-path init.
+// TestBranchENIProvider_persistCNINodeStatus tests the reinit checkpoint and the
+// observed trunk fields are written to the CNINode status subresource after an
+// authoritative EC2-path init.
 func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -153,14 +170,17 @@ func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 
+	checkpoint := rcv1alpha1.ReinitCheckpoint{
+		InstanceID:                    "i-abc",
+		InstanceType:                  "t3.xlarge",
+		InstanceSubnetID:              "subnet-1",
+		CurrentSubnetID:               "subnet-1",
+		CurrentSubnetCIDRBlock:        "10.0.0.0/16",
+		CurrentInstanceSecurityGroups: []string{"sg-1"},
+	}
 	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
-	mockInstance.EXPECT().InstanceID().Return("i-abc").AnyTimes()
-	mockInstance.EXPECT().Type().Return("t3.xlarge").AnyTimes()
-	mockInstance.EXPECT().PrimaryENISecurityGroups().Return([]string{"sg-1"}).AnyTimes()
-	mockInstance.EXPECT().InstanceSubnetID().Return("subnet-1").AnyTimes()
-	mockInstance.EXPECT().InstanceSubnetCidrBlock().Return("10.0.0.0/16").AnyTimes()
-	mockInstance.EXPECT().InstanceSubnetV6CidrBlock().Return("").AnyTimes()
-	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil).AnyTimes()
+	mockInstance.EXPECT().BuildCheckpoint().Return(checkpoint).AnyTimes()
+	mockInstance.EXPECT().SubnetID().Return("subnet-1").AnyTimes()
 	mockTrunk.EXPECT().TrunkENIID().Return("eni-trunk").AnyTimes()
 
 	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(&rcv1alpha1.CNINode{}, nil)
@@ -174,13 +194,118 @@ func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 	provider.persistCNINodeStatus(mockInstance, mockTrunk)
 
 	assert.NotNil(t, written)
-	assert.Equal(t, "i-abc", written.Status.InstanceID)
-	assert.Equal(t, "t3.xlarge", written.Status.InstanceType)
-	assert.Equal(t, []string{"sg-1"}, written.Status.SecurityGroups)
+	assert.NotNil(t, written.Status.ReinitCheckpoint)
+	assert.Equal(t, "i-abc", written.Status.ReinitCheckpoint.InstanceID)
+	assert.Equal(t, "t3.xlarge", written.Status.ReinitCheckpoint.InstanceType)
+	assert.Equal(t, []string{"sg-1"}, written.Status.ReinitCheckpoint.CurrentInstanceSecurityGroups)
+	// The checkpoint is self-contained: it carries the trunk id it recovers against.
+	assert.Equal(t, "eni-trunk", written.Status.ReinitCheckpoint.TrunkENIID)
 	assert.NotNil(t, written.Status.TrunkInterface)
 	assert.Equal(t, "eni-trunk", written.Status.TrunkInterface.ID)
 	assert.Equal(t, "subnet-1", written.Status.TrunkInterface.SubnetID)
-	assert.Equal(t, "10.0.0.0/16", written.Status.TrunkInterface.SubnetCIDR)
+}
+
+// TestBranchENIProvider_CreateAndAnnotate_ResyncOnCapacity tests the runtime
+// escape hatch: a checkpoint-hydrated node whose reconstructed ledger reports
+// full capacity resyncs once from EC2 and retries the allocation, which then
+// succeeds (the local ledger was wrong; EC2 has capacity). This is the "local
+// capacity mismatch" scenario.
+func TestBranchENIProvider_CreateAndAnnotate_ResyncOnCapacity(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, mockSGPAPI, mockK8s := getProviderAndMocks(ctrl)
+	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = mockTrunk
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(gomock.Any(), MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8s.EXPECT().BroadcastEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return([]v1.Pod{*MockPod1}, nil)
+	mockPodAPI.EXPECT().AnnotatePod(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+
+	gomock.InOrder(
+		// First allocation: the reconstructed ledger says full.
+		mockTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, 1, gomock.Any()).Return(nil, trunk.ErrCurrentlyAtMaxCapacity),
+		mockTrunk.EXPECT().IsHydrated().Return(true),
+		// The provider hands the trunk a pod lister, not a pod list, so the snapshot
+		// is taken after the recovery gate has quiesced mutations.
+		mockTrunk.EXPECT().ResyncTrunkLedgerFromEC2(gomock.Any(), "capacity").
+			DoAndReturn(func(listPods func() ([]v1.Pod, error), _ string) error {
+				pods, err := listPods()
+				assert.NoError(t, err)
+				assert.Len(t, pods, 1)
+				return nil
+			}),
+		// Retry after resync succeeds against the now-authoritative ledger.
+		mockTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, 1, gomock.Any()).
+			DoAndReturn(allocateInvokingCommit(EniDetails)),
+	)
+
+	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
+	assert.NoError(t, err)
+}
+
+// TestBranchENIProvider_CreateAndAnnotate_NoResyncWhenNotHydrated tests that a
+// non-hydrated (already authoritative) node does not resync on a capacity error;
+// it just requeues, so healthy nodes never trigger the escape hatch.
+func TestBranchENIProvider_CreateAndAnnotate_NoResyncWhenNotHydrated(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, mockSGPAPI, mockK8s := getProviderAndMocks(ctrl)
+	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = mockTrunk
+
+	// The capacity path requeues after a cool-down; initialize the singleton.
+	mockK8s.EXPECT().GetConfigMap(gomock.Any(), gomock.Any()).Return(nil, MockError).AnyTimes()
+	cooldown.InitCoolDownPeriod(mockK8s, provider.log)
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(gomock.Any(), MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8s.EXPECT().BroadcastEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+
+	mockTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, 1, gomock.Any()).Return(nil, trunk.ErrCurrentlyAtMaxCapacity)
+	mockTrunk.EXPECT().IsHydrated().Return(false)
+	// No resync expected: the mock fails the test if it happens.
+
+	res, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
+	assert.NoError(t, err)
+	assert.True(t, res.Requeue)
+}
+
+// TestBranchENIProvider_CreateAndAnnotate_NoResyncOnTransientError tests that a
+// transient allocation failure (throttling, timeout, auth) on a hydrated trunk
+// does NOT trigger a resync. Association errors carry no reliable stale-ledger
+// signal, so resyncing on them would add EC2 describes exactly when EC2 is
+// already failing.
+func TestBranchENIProvider_CreateAndAnnotate_NoResyncOnTransientError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	for _, transient := range []error{
+		fmt.Errorf("associating branch to trunk, %w", fmt.Errorf("RequestLimitExceeded: Request limit exceeded")),
+		fmt.Errorf("associating branch to trunk, %w", fmt.Errorf("UnauthorizedOperation: not authorized")),
+		fmt.Errorf("creating network interface, %w", MockError),
+	} {
+		provider, mockPodAPI, mockSGPAPI, mockK8s := getProviderAndMocks(ctrl)
+		mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+		provider.trunkENICache[NodeName] = mockTrunk
+
+		mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+		mockPodAPI.EXPECT().GetPodFromAPIServer(gomock.Any(), MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+		mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+		mockK8s.EXPECT().BroadcastEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+
+		mockTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, 1, gomock.Any()).Return(nil, transient)
+		// Neither IsHydrated nor a resync is consulted: the error is not a
+		// contradiction trigger, so the failure surfaces for the normal retry.
+
+		_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
+		assert.Error(t, err)
+	}
 }
 
 // TestBranchENIProvider_removeTrunkFromCache tests that once trunk ENI is removed from cache it's actually removed from
@@ -376,7 +501,8 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
-	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
+	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount, gomock.Any()).
+		DoAndReturn(allocateInvokingCommit(EniDetails))
 	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1, config.ResourceNamePodENI,
 		string(expectedAnnotation)).Return(nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
@@ -507,11 +633,12 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
-	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
+	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount, gomock.Any()).
+		DoAndReturn(allocateInvokingCommit(EniDetails))
 	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1,
 		config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchENIAnnotationFailed, gomock.Any(), v1.EventTypeWarning)
-	fakeTrunk.EXPECT().PushENIsToFrontOfDeleteQueue(MockPod1, EniDetails)
+	// The trunk releases the ENIs under its recovery gate now, not the provider.
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
@@ -668,4 +795,24 @@ func TestUnSupportedNodeEvents_Windows(t *testing.T) {
 
 	supported := provider.IsInstanceSupported(mockInstance)
 	assert.False(t, supported)
+}
+
+// TestBranchENIProvider_persistCNINodeStatus_ManagedByOtherController tests that no
+// checkpoint is written into a CNINode owned by another controller: that controller
+// owns the object's status.
+func TestBranchENIProvider_persistCNINodeStatus_ManagedByOtherController(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+
+	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
+	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(&rcv1alpha1.CNINode{
+		Spec: rcv1alpha1.CNINodeSpec{ManagedBy: rcv1alpha1.ManagedByEKSAutoMode},
+	}, nil)
+	// No UpdateCNINodeStatus expectation: the mock fails the test if we write.
+
+	provider.persistCNINodeStatus(mockInstance, mockTrunk)
 }
