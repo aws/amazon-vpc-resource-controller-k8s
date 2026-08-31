@@ -48,6 +48,8 @@ type node struct {
 	managed bool
 	// instance stores the ec2 instance details that is shared by all the providers
 	instance ec2.EC2Instance
+	// instanceType is captured from the Kubernetes Node used to create this object.
+	instanceType string
 	// node has reference to k8s APIs
 	k8sAPI k8s.K8sWrapper
 	// node has reference to EC2 APIs
@@ -62,39 +64,39 @@ const (
 	MaxNodeReconciliationInterval = 15 * time.Minute
 	NodeInitialCleanupInterval    = 1 * time.Minute
 
-	// CNINode status fast-path (zero-EC2 restart hydrate) metric label values.
-	fastPathResultHit  = "hit"
-	fastPathResultMiss = "miss"
+	// NodeNetworkState restoration metric label values.
+	restoreResultHit  = "hit"
+	restoreResultMiss = "miss"
 
-	fastPathReasonNoCheckpoint         = "no_checkpoint"
-	fastPathReasonNotManaged           = "not_managed_by_controller"
-	fastPathReasonMissingField         = "missing_field"
-	fastPathReasonInvalidCIDR          = "invalid_cidr"
-	fastPathReasonInstanceIDMismatch   = "instance_id_mismatch"
-	fastPathReasonTrunkIDMismatch      = "trunk_id_mismatch"
-	fastPathReasonSubnetMismatch       = "subnet_mismatch"
-	fastPathReasonInstanceTypeMismatch = "instance_type_mismatch"
-	fastPathReasonUnsupportedType      = "unsupported_type"
+	restoreReasonNoState              = "no_state"
+	restoreReasonNotManaged           = "not_managed_by_controller"
+	restoreReasonMissingField         = "missing_field"
+	restoreReasonInvalidCIDR          = "invalid_cidr"
+	restoreReasonInstanceIDMismatch   = "instance_id_mismatch"
+	restoreReasonSubnetMismatch       = "subnet_mismatch"
+	restoreReasonSubnetLookupFailed   = "subnet_lookup_failed"
+	restoreReasonInstanceTypeMismatch = "instance_type_mismatch"
+	restoreReasonUnsupportedType      = "unsupported_type"
 
 	// node_init_duration_seconds label values.
-	initPathHydrated = "hydrated"
+	initPathRestored = "restored"
 	initPathEC2      = "ec2"
 	initResultOK     = "success"
 	initResultError  = "error"
 )
 
 var (
-	cniNodeStatusFastPathCount = prometheus.NewCounterVec(
+	cniNodeNetworkStateRestoreCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "cninode_status_fast_path_total",
-			Help: "Number of trunk re-init attempts served from the CNINode status snapshot (result=hit, zero EC2) or fallen back to EC2 discovery (result=miss), labeled by miss reason",
+			Name: "cninode_node_network_state_restore_total",
+			Help: "Number of NodeNetworkState restoration attempts by result and miss reason",
 		},
 		[]string{"result", "reason"},
 	)
 	nodeInitDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name: "node_init_duration_seconds",
-			Help: "Duration of a single node's InitResources, from the manager's Init job entering until instance details, trunk, and providers are ready. Excludes controller startup and worker queue wait. path=hydrated|ec2 compares the snapshot fast path against EC2 discovery",
+			Help: "Duration of a node's InitResources call by restoration or EC2 path and result",
 		},
 		[]string{"path", "result"},
 	)
@@ -103,7 +105,7 @@ var (
 
 func registerNodeMetrics() {
 	registerMetricsOnce.Do(func() {
-		metrics.Registry.MustRegister(cniNodeStatusFastPathCount, nodeInitDuration)
+		metrics.Registry.MustRegister(cniNodeNetworkStateRestoreCount, nodeInitDuration)
 	})
 }
 
@@ -138,13 +140,14 @@ type Node interface {
 }
 
 // NewManagedNode returns node managed by the controller
-func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
+func NewManagedNode(log logr.Logger, nodeName, instanceID, instanceType, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
 	registerNodeMetrics()
 	return &node{
 		managed: true,
 		log: log.WithName("node resource handler").
 			WithValues("node name", nodeName),
 		instance:               ec2.NewEC2Instance(nodeName, instanceID, os, log.WithName("ec2instance")),
+		instanceType:           instanceType,
 		k8sAPI:                 k8sAPI,
 		ec2API:                 ec2API,
 		reconciliationInterval: NodeInitialCleanupInterval,
@@ -211,10 +214,9 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 		nodeInitDuration.WithLabelValues(initPath, initResult).Observe(time.Since(start).Seconds())
 	}()
 
-	// Prefer the zero-EC2 fast path: rebuild instance details from the reinit
-	// checkpoint. On any miss, fall back to EC2 discovery.
-	if n.tryHydrateFromCheckpoint() {
-		initPath = initPathHydrated
+	// Restore local state first. Any miss falls back to EC2 discovery.
+	if n.tryRestoreFromNodeNetworkState() {
+		initPath = initPathRestored
 	} else {
 		err := n.instance.LoadDetails(n.ec2API)
 		if err != nil {
@@ -263,119 +265,101 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	return errInit
 }
 
-// validateCheckpoint reports whether the reinit checkpoint may be hydrated for the
-// given live node, returning "" when it may be and the miss reason otherwise. It is
-// pure and Kubernetes-local: no EC2 call, and deliberately no EC2 freshness check.
+// validateNodeNetworkState validates persisted state against the instance
+// identity and type captured from the Kubernetes Node. It does not check EC2
+// freshness.
 //
-// It asks three questions, and nothing else:
-//
-//  1. identity - does this checkpoint belong to this node? (instance id, and the
-//     observed trunk it claims to recover against)
-//  2. configuration compatibility - are its topology/capacity assumptions still
-//     true? (instance type)
-//  3. structural sanity - is the checkpoint itself a legal, representable state?
-//     (required fields present, CIDRs parse)
-//
-// The branch ledger's own structural invariants (VLAN range, no duplicate ENI or
-// VLAN owner) are checked where that ledger is rebuilt, in InitFromSnapshot.
-func validateCheckpoint(observed *rcv1alpha1.TrunkInterface, cp *rcv1alpha1.ReinitCheckpoint,
+// Validation covers node identity, instance-type compatibility, required fields,
+// and CIDR syntax. Branch ledger invariants are validated later by
+// InitFromNodeNetworkState.
+func validateNodeNetworkState(observed *rcv1alpha1.TrunkInterface, state *rcv1alpha1.NodeNetworkState,
 	instanceID, nodeInstanceType string,
 ) string {
-	if cp == nil {
-		return fastPathReasonNoCheckpoint
+	if state == nil {
+		return restoreReasonNoState
 	}
 
-	// Structural sanity: every field hydrate installs, or a later re-derivation
-	// reads, has to be present. The V6 CIDRs stay optional.
+	// IPv6 remains optional because not every subnet has an IPv6 CIDR.
 	switch {
-	case cp.TrunkENIID == "", cp.InstanceID == "", cp.InstanceType == "",
-		cp.InstanceSubnetID == "", cp.InstanceSubnetCIDRBlock == "",
-		len(cp.PrimaryNetworkInterfaceSecurityGroups) == 0,
-		cp.CurrentSubnetID == "", cp.CurrentSubnetCIDRBlock == "",
-		len(cp.CurrentInstanceSecurityGroups) == 0:
-		return fastPathReasonMissingField
+	case observed == nil, observed.ID == "", state.InstanceID == "",
+		state.InstanceType == "", state.InstanceSubnetID == "",
+		state.InstanceSubnetCIDRBlock == "",
+		len(state.PrimaryNetworkInterfaceSecurityGroups) == 0:
+		return restoreReasonMissingField
 	}
 	for _, cidr := range []string{
-		cp.InstanceSubnetCIDRBlock, cp.InstanceSubnetV6CIDRBlock,
-		cp.CurrentSubnetCIDRBlock, cp.CurrentSubnetV6CIDRBlock,
+		state.InstanceSubnetCIDRBlock, state.InstanceSubnetV6CIDRBlock,
 	} {
 		if cidr == "" {
 			continue
 		}
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return fastPathReasonInvalidCIDR
+			return restoreReasonInvalidCIDR
 		}
 	}
 
 	// Identity: a CNINode name can be reused by a new instance.
-	if cp.InstanceID != instanceID {
-		return fastPathReasonInstanceIDMismatch
-	}
-	// Identity: the observed trunk is the resource this checkpoint claims to
-	// recover against. If another status writer has moved it on, or it is absent,
-	// the checkpoint may describe a trunk that is no longer the node's, so serving
-	// allocations against it is unsafe. EC2 can tell us; the checkpoint cannot.
-	if observed == nil || observed.ID != cp.TrunkENIID {
-		return fastPathReasonTrunkIDMismatch
-	}
-	if observed.SubnetID != cp.CurrentSubnetID {
-		return fastPathReasonSubnetMismatch
+	if state.InstanceID != instanceID {
+		return restoreReasonInstanceIDMismatch
 	}
 
-	// Configuration compatibility: the instance type sets branch capacity, so a
-	// checkpoint written for a different or unsupported type cannot be trusted.
-	if nodeInstanceType != "" && nodeInstanceType != cp.InstanceType {
-		return fastPathReasonInstanceTypeMismatch
+	// Instance type determines branch ENI capacity.
+	if nodeInstanceType != "" && nodeInstanceType != state.InstanceType {
+		return restoreReasonInstanceTypeMismatch
 	}
-	if _, ok := vpc.Limits[cp.InstanceType]; !ok {
-		return fastPathReasonUnsupportedType
+	if _, ok := vpc.Limits[state.InstanceType]; !ok {
+		return restoreReasonUnsupportedType
 	}
 	return ""
 }
 
-// tryHydrateFromCheckpoint rebuilds the instance details from the node's reinit
-// checkpoint without any EC2 call, returning true on success. On any miss it
-// leaves the instance untouched (so the EC2 LoadDetails fallback runs on a
-// pristine instance) and records the reason on cninode_status_fast_path_total.
-func (n *node) tryHydrateFromCheckpoint() bool {
+// tryRestoreFromNodeNetworkState restores instance details from CNINode status.
+// Custom networking requires one subnet lookup because ENIConfig does not
+// contain a CIDR. A failed lookup makes restoration a miss, allowing EC2
+// initialization to rebuild the full state.
+func (n *node) tryRestoreFromNodeNetworkState() bool {
 	nodeName := n.instance.Name()
 
 	cniNode, err := n.k8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
 	if err != nil {
-		cniNodeStatusFastPathCount.WithLabelValues(fastPathResultMiss, fastPathReasonNoCheckpoint).Inc()
+		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonNoState).Inc()
 		return false
 	}
 
-	// The owning controller owns the object's status, so a checkpoint on someone
-	// else's CNINode is not ours to trust.
+	// Only the owning controller may consume or update this status.
 	if !cniNode.IsManagedByVPCResourceController() {
 		n.log.Info("CNINode is managed by another controller, falling back to EC2",
 			"managedBy", cniNode.Spec.ManagedBy)
-		cniNodeStatusFastPathCount.WithLabelValues(fastPathResultMiss, fastPathReasonNotManaged).Inc()
+		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonNotManaged).Inc()
 		return false
 	}
 
-	// Best-effort Kubernetes Node instance-type label (cache read, no EC2), used
-	// only when present to catch a checkpoint that belongs to a different type.
-	nodeInstanceType := ""
-	if k8sNode, err := n.k8sAPI.GetNode(nodeName); err == nil && k8sNode != nil {
-		if nodeInstanceType = k8sNode.Labels[v1.LabelInstanceTypeStable]; nodeInstanceType == "" {
-			nodeInstanceType = k8sNode.Labels[v1.LabelInstanceType]
-		}
-	}
-
-	checkpoint := cniNode.Status.ReinitCheckpoint
-	if reason := validateCheckpoint(cniNode.Status.TrunkInterface, checkpoint,
-		n.instance.InstanceID(), nodeInstanceType); reason != "" {
-		n.log.Info("reinit checkpoint unusable, falling back to EC2", "reason", reason,
-			"nodeInstanceID", n.instance.InstanceID(), "nodeInstanceType", nodeInstanceType)
-		cniNodeStatusFastPathCount.WithLabelValues(fastPathResultMiss, reason).Inc()
+	state := cniNode.Status.NodeNetworkState
+	if reason := validateNodeNetworkState(cniNode.Status.TrunkInterface, state,
+		n.instance.InstanceID(), n.instanceType); reason != "" {
+		n.log.Info("NodeNetworkState is unusable, falling back to EC2", "reason", reason,
+			"nodeInstanceID", n.instance.InstanceID(), "nodeInstanceType", n.instanceType)
+		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, reason).Inc()
 		return false
 	}
 
-	n.instance.LoadFromCheckpoint(*checkpoint)
-	cniNodeStatusFastPathCount.WithLabelValues(fastPathResultHit, "").Inc()
-	n.log.Info("rebuilt instance details from reinit checkpoint without EC2", "trunk", checkpoint.TrunkENIID)
+	trunkENIID := cniNode.Status.TrunkInterface.ID
+	n.instance.LoadFromNodeNetworkState(*state, trunkENIID)
+	if err := n.instance.UpdateCurrentSubnetAndCidrBlock(n.ec2API); err != nil {
+		n.log.Error(err, "failed to derive network state during restoration")
+		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonSubnetLookupFailed).Inc()
+		return false
+	}
+	if cniNode.Status.TrunkInterface.SubnetID != n.instance.SubnetID() {
+		n.log.Info("restored subnet does not match the observed trunk, falling back to EC2",
+			"restoredSubnetID", n.instance.SubnetID(),
+			"trunkSubnetID", cniNode.Status.TrunkInterface.SubnetID)
+		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonSubnetMismatch).Inc()
+		return false
+	}
+
+	cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultHit, "").Inc()
+	n.log.Info("restored instance details from NodeNetworkState", "trunk", trunkENIID)
 	return true
 }
 

@@ -48,18 +48,18 @@ func (m *MockEC2Instance) EXPECT() *MockEC2InstanceMockRecorder {
 	return m.recorder
 }
 
-// BuildCheckpoint mocks base method.
-func (m *MockEC2Instance) BuildCheckpoint() v1alpha1.ReinitCheckpoint {
+// BuildNodeNetworkState mocks base method.
+func (m *MockEC2Instance) BuildNodeNetworkState() v1alpha1.NodeNetworkState {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BuildCheckpoint")
-	ret0, _ := ret[0].(v1alpha1.ReinitCheckpoint)
+	ret := m.ctrl.Call(m, "BuildNodeNetworkState")
+	ret0, _ := ret[0].(v1alpha1.NodeNetworkState)
 	return ret0
 }
 
-// BuildCheckpoint indicates an expected call of BuildCheckpoint.
-func (mr *MockEC2InstanceMockRecorder) BuildCheckpoint() *gomock.Call {
+// BuildNodeNetworkState indicates an expected call of BuildNodeNetworkState.
+func (mr *MockEC2InstanceMockRecorder) BuildNodeNetworkState() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildCheckpoint", reflect.TypeOf((*MockEC2Instance)(nil).BuildCheckpoint))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildNodeNetworkState", reflect.TypeOf((*MockEC2Instance)(nil).BuildNodeNetworkState))
 }
 
 // CurrentInstanceSecurityGroups mocks base method.
@@ -134,20 +134,6 @@ func (mr *MockEC2InstanceMockRecorder) GetHighestUnusedDeviceIndex() *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHighestUnusedDeviceIndex", reflect.TypeOf((*MockEC2Instance)(nil).GetHighestUnusedDeviceIndex))
 }
 
-// HydratedTrunkID mocks base method.
-func (m *MockEC2Instance) HydratedTrunkID() string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HydratedTrunkID")
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// HydratedTrunkID indicates an expected call of HydratedTrunkID.
-func (mr *MockEC2InstanceMockRecorder) HydratedTrunkID() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HydratedTrunkID", reflect.TypeOf((*MockEC2Instance)(nil).HydratedTrunkID))
-}
-
 // InstanceID mocks base method.
 func (m *MockEC2Instance) InstanceID() string {
 	m.ctrl.T.Helper()
@@ -162,18 +148,18 @@ func (mr *MockEC2InstanceMockRecorder) InstanceID() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceID", reflect.TypeOf((*MockEC2Instance)(nil).InstanceID))
 }
 
-// IsHydrated mocks base method.
-func (m *MockEC2Instance) IsHydrated() bool {
+// IsRestoredFromNodeNetworkState mocks base method.
+func (m *MockEC2Instance) IsRestoredFromNodeNetworkState() bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IsHydrated")
+	ret := m.ctrl.Call(m, "IsRestoredFromNodeNetworkState")
 	ret0, _ := ret[0].(bool)
 	return ret0
 }
 
-// IsHydrated indicates an expected call of IsHydrated.
-func (mr *MockEC2InstanceMockRecorder) IsHydrated() *gomock.Call {
+// IsRestoredFromNodeNetworkState indicates an expected call of IsRestoredFromNodeNetworkState.
+func (mr *MockEC2InstanceMockRecorder) IsRestoredFromNodeNetworkState() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsHydrated", reflect.TypeOf((*MockEC2Instance)(nil).IsHydrated))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRestoredFromNodeNetworkState", reflect.TypeOf((*MockEC2Instance)(nil).IsRestoredFromNodeNetworkState))
 }
 
 // LoadDetails mocks base method.
@@ -190,16 +176,16 @@ func (mr *MockEC2InstanceMockRecorder) LoadDetails(arg0 interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadDetails", reflect.TypeOf((*MockEC2Instance)(nil).LoadDetails), arg0)
 }
 
-// LoadFromCheckpoint mocks base method.
-func (m *MockEC2Instance) LoadFromCheckpoint(arg0 v1alpha1.ReinitCheckpoint) {
+// LoadFromNodeNetworkState mocks base method.
+func (m *MockEC2Instance) LoadFromNodeNetworkState(arg0 v1alpha1.NodeNetworkState, arg1 string) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "LoadFromCheckpoint", arg0)
+	m.ctrl.Call(m, "LoadFromNodeNetworkState", arg0, arg1)
 }
 
-// LoadFromCheckpoint indicates an expected call of LoadFromCheckpoint.
-func (mr *MockEC2InstanceMockRecorder) LoadFromCheckpoint(arg0 interface{}) *gomock.Call {
+// LoadFromNodeNetworkState indicates an expected call of LoadFromNodeNetworkState.
+func (mr *MockEC2InstanceMockRecorder) LoadFromNodeNetworkState(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadFromCheckpoint", reflect.TypeOf((*MockEC2Instance)(nil).LoadFromCheckpoint), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadFromNodeNetworkState", reflect.TypeOf((*MockEC2Instance)(nil).LoadFromNodeNetworkState), arg0, arg1)
 }
 
 // Name mocks base method.
@@ -242,6 +228,20 @@ func (m *MockEC2Instance) PrimaryNetworkInterfaceID() string {
 func (mr *MockEC2InstanceMockRecorder) PrimaryNetworkInterfaceID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryNetworkInterfaceID", reflect.TypeOf((*MockEC2Instance)(nil).PrimaryNetworkInterfaceID))
+}
+
+// RestoredTrunkENIID mocks base method.
+func (m *MockEC2Instance) RestoredTrunkENIID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RestoredTrunkENIID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// RestoredTrunkENIID indicates an expected call of RestoredTrunkENIID.
+func (mr *MockEC2InstanceMockRecorder) RestoredTrunkENIID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RestoredTrunkENIID", reflect.TypeOf((*MockEC2Instance)(nil).RestoredTrunkENIID))
 }
 
 // SetNewCustomNetworkingSpec mocks base method.

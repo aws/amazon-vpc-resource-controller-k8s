@@ -220,9 +220,8 @@ func TestK8sWrapper_CreateCNINode_NoError(t *testing.T) {
 	assert.Equal(t, mockNode.Name, cniNode.Name)
 }
 
-// TestK8sWrapper_UpdateCNINodeStatus tests the status merge patch persists the
-// checkpoint and, since a merge patch carries no resourceVersion precondition,
-// succeeds even when a concurrent writer changed the object after it was read.
+// TestK8sWrapper_UpdateCNINodeStatus tests that the status merge patch preserves
+// a concurrent object update.
 func TestK8sWrapper_UpdateCNINodeStatus(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = v1.AddToScheme(scheme)
@@ -244,9 +243,8 @@ func TestK8sWrapper_UpdateCNINodeStatus(t *testing.T) {
 	assert.NoError(t, k8sClient.Update(context.Background(), concurrent))
 
 	modified := base.DeepCopy()
-	modified.Status.ReinitCheckpoint = &v1alpha1.ReinitCheckpoint{
+	modified.Status.NodeNetworkState = &v1alpha1.NodeNetworkState{
 		InstanceID: "i-00000000000000000",
-		TrunkENIID: "eni-trunk",
 	}
 	modified.Status.TrunkInterface = &v1alpha1.TrunkInterface{ID: "eni-trunk", SubnetID: "subnet-0123456789abcdef0"}
 
@@ -254,8 +252,8 @@ func TestK8sWrapper_UpdateCNINodeStatus(t *testing.T) {
 
 	stored := &v1alpha1.CNINode{}
 	assert.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: nodeName}, stored))
-	assert.NotNil(t, stored.Status.ReinitCheckpoint)
-	assert.Equal(t, "i-00000000000000000", stored.Status.ReinitCheckpoint.InstanceID)
+	assert.NotNil(t, stored.Status.NodeNetworkState)
+	assert.Equal(t, "i-00000000000000000", stored.Status.NodeNetworkState.InstanceID)
 	assert.Equal(t, "eni-trunk", stored.Status.TrunkInterface.ID)
 	// The concurrent writer's change is preserved by the merge patch.
 	assert.Equal(t, "true", stored.Labels["touched"])

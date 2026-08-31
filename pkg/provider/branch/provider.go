@@ -159,19 +159,15 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	// A hydrated instance was rebuilt from the reinit checkpoint, so rebuild the
-	// trunk from that checkpoint + pod annotations with zero EC2; otherwise take
-	// the EC2 discovery path. If the reconstructed ledger is structurally invalid,
-	// discard the candidate trunk, re-derive authoritative instance details from
-	// EC2, and rebuild the trunk on a clean slate. No partially reconstructed
-	// state can leak into the EC2 path (LoadDetails fully re-defines the instance;
-	// a fresh trunk is used for InitTrunk).
-	ec2Path := !instance.IsHydrated()
+	// Restored instances rebuild the trunk ledger from the observed trunk ID and
+	// pod annotations. An invalid ledger falls back to authoritative EC2
+	// initialization with a fresh trunk object.
+	ec2Path := !instance.IsRestoredFromNodeNetworkState()
 	var initErr error
-	if instance.IsHydrated() {
-		initErr = trunkENI.InitFromSnapshot(instance.HydratedTrunkID(), podList)
-		if errors.Is(initErr, trunk.ErrInvalidCheckpointLedger) {
-			log.Info("reinit checkpoint ledger is invalid, falling back to authoritative EC2 init")
+	if instance.IsRestoredFromNodeNetworkState() {
+		initErr = trunkENI.InitFromNodeNetworkState(instance.RestoredTrunkENIID(), podList)
+		if errors.Is(initErr, trunk.ErrInvalidRestoredLedger) {
+			log.Info("restored trunk ledger is invalid, falling back to authoritative EC2 initialization")
 			if err := instance.LoadDetails(b.apiWrapper.EC2API); err != nil {
 				branchProviderOperationsErrCount.WithLabelValues("init").Inc()
 				return fmt.Errorf("loading instance details for EC2 fallback, %w", err)
@@ -210,10 +206,8 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return fmt.Errorf("initializing trunk, %w", initErr)
 	}
 
-	// Persist the reinit checkpoint after an EC2-path init so a future restart can
-	// hydrate from it without EC2. A successful hydrated init already came from the
-	// checkpoint. Best-effort: a failure only degrades the next restart to the EC2
-	// path, so it must not fail node initialization.
+	// Persist NodeNetworkState after EC2 initialization. This is best-effort
+	// because a write failure only makes the next restart use EC2 again.
 	if ec2Path {
 		b.persistCNINodeStatus(instance, trunkENI)
 	}
@@ -237,33 +231,27 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	return nil
 }
 
-// persistCNINodeStatus writes the reinit checkpoint (the instance snapshot needed
-// to rebuild in-memory state without EC2) plus the observed trunk id/subnet to
-// the node's CNINode status subresource after an authoritative EC2-path init, so
-// a later restart can hydrate from it. Best-effort: errors are logged and
-// swallowed, since the only consequence is that the next restart for this node
-// falls back to the EC2 discovery path.
+// persistCNINodeStatus writes NodeNetworkState and the observed trunk attributes
+// after authoritative EC2 initialization. Failures are logged and ignored
+// because the next restart can use EC2 discovery.
 func (b *branchENIProvider) persistCNINodeStatus(instance ec2.EC2Instance, trunkENI trunk.TrunkENI) {
 	nodeName := instance.Name()
 	cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
 	if err != nil {
-		b.log.Error(err, "failed to get CNINode to persist reinit checkpoint", "node", nodeName)
+		b.log.Error(err, "failed to get CNINode before persisting NodeNetworkState", "node", nodeName)
 		return
 	}
 	// The owning controller owns the object's status; never write into another
 	// controller's CNINode.
 	if !cniNode.IsManagedByVPCResourceController() {
-		b.log.Info("skipping reinit checkpoint persist, CNINode is managed by another controller",
+		b.log.Info("skipping NodeNetworkState persistence because another controller manages the CNINode",
 			"node", nodeName, "managedBy", cniNode.Spec.ManagedBy)
 		return
 	}
 	base := cniNode.DeepCopy()
 
-	// Controller-private restart-recovery checkpoint: self-contained, so hydrate is
-	// zero-EC2 even for custom networking.
-	checkpoint := instance.BuildCheckpoint()
-	checkpoint.TrunkENIID = trunkENI.TrunkENIID()
-	cniNode.Status.ReinitCheckpoint = &checkpoint
+	state := instance.BuildNodeNetworkState()
+	cniNode.Status.NodeNetworkState = &state
 
 	// Observed-resource layer, shared with other status writers.
 	if cniNode.Status.TrunkInterface == nil {
@@ -273,7 +261,7 @@ func (b *branchENIProvider) persistCNINodeStatus(instance ec2.EC2Instance, trunk
 	cniNode.Status.TrunkInterface.SubnetID = instance.SubnetID()
 
 	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(base, cniNode); err != nil {
-		b.log.Error(err, "failed to persist reinit checkpoint to CNINode status", "node", nodeName)
+		b.log.Error(err, "failed to persist NodeNetworkState to CNINode status", "node", nodeName)
 	}
 }
 
@@ -439,8 +427,8 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 
 	// commitOwnership runs inside the trunk's recovery gate, so the pod annotation
 	// that makes this pod the ENI's owner is committed before a concurrent ledger
-	// resync can take its pod snapshot. Until it succeeds the ENIs are not owned by
-	// anyone, and the trunk releases them if it returns an error.
+	// resync can read the current pod list. The ENIs remain unowned until the
+	// annotation succeeds, and the trunk releases them if it returns an error.
 	var jsonBytes []byte
 	// commitFailed keeps the failure events precise: a failed ownership commit has
 	// already reported itself, so it must not also surface as an allocation failure.
@@ -471,16 +459,13 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 
 	// Get the list of branch ENIs that will be allocated to the pod object
 	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount, commitOwnership)
-	// Runtime recovery: a checkpoint-hydrated ledger is only proven correct by use.
-	// A capacity error on a hydrated trunk means the reconstructed ledger says full,
-	// which EC2 may contradict, so rebuild this one trunk's ledger authoritatively
-	// and retry once. Only this trigger qualifies: association errors carry no
-	// reliable signal that the ledger is stale (throttling and other transient
-	// failures look identical), and resyncing on them would add EC2 load exactly
-	// when EC2 is already struggling. A successful resync clears the hydrated flag,
-	// so recovery happens at most once per trunk and cannot loop.
-	if err != nil && errors.Is(err, trunk.ErrCurrentlyAtMaxCapacity) && trunkENI.IsHydrated() {
-		log.Info("capacity exhausted on a checkpoint-hydrated trunk, resyncing its ledger from EC2 and retrying")
+	// A capacity error can prove that a restored ledger is stale. Rebuild that
+	// trunk from EC2 and retry once. Association errors do not qualify because
+	// throttling and other transient failures are indistinguishable from stale
+	// state. A successful resync makes the ledger authoritative, preventing
+	// repeated recovery.
+	if err != nil && errors.Is(err, trunk.ErrCurrentlyAtMaxCapacity) && trunkENI.IsRestoredFromNodeNetworkState() {
+		log.Info("capacity exhausted on a restored trunk, resyncing its ledger from EC2 and retrying")
 		listPods := func() ([]v1.Pod, error) {
 			return b.apiWrapper.PodAPI.GetRunningPodsOnNode(pod.Spec.NodeName)
 		}

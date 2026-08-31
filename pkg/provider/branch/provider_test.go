@@ -159,9 +159,8 @@ func TestBranchENIProvider_getTrunkFromCache_NotExist(t *testing.T) {
 	assert.Nil(t, trunkENI)
 }
 
-// TestBranchENIProvider_persistCNINodeStatus tests the reinit checkpoint and the
-// observed trunk fields are written to the CNINode status subresource after an
-// authoritative EC2-path init.
+// TestBranchENIProvider_persistCNINodeStatus tests that EC2 source values and
+// observed trunk fields are persisted after authoritative initialization.
 func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -170,16 +169,15 @@ func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 
-	checkpoint := rcv1alpha1.ReinitCheckpoint{
-		InstanceID:                    "i-abc",
-		InstanceType:                  "t3.xlarge",
-		InstanceSubnetID:              "subnet-1",
-		CurrentSubnetID:               "subnet-1",
-		CurrentSubnetCIDRBlock:        "10.0.0.0/16",
-		CurrentInstanceSecurityGroups: []string{"sg-1"},
+	state := rcv1alpha1.NodeNetworkState{
+		InstanceID:                            "i-abc",
+		InstanceType:                          "t3.xlarge",
+		InstanceSubnetID:                      "subnet-1",
+		InstanceSubnetCIDRBlock:               "10.0.0.0/16",
+		PrimaryNetworkInterfaceSecurityGroups: []string{"sg-1"},
 	}
 	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
-	mockInstance.EXPECT().BuildCheckpoint().Return(checkpoint).AnyTimes()
+	mockInstance.EXPECT().BuildNodeNetworkState().Return(state).AnyTimes()
 	mockInstance.EXPECT().SubnetID().Return("subnet-1").AnyTimes()
 	mockTrunk.EXPECT().TrunkENIID().Return("eni-trunk").AnyTimes()
 
@@ -194,22 +192,18 @@ func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 	provider.persistCNINodeStatus(mockInstance, mockTrunk)
 
 	assert.NotNil(t, written)
-	assert.NotNil(t, written.Status.ReinitCheckpoint)
-	assert.Equal(t, "i-abc", written.Status.ReinitCheckpoint.InstanceID)
-	assert.Equal(t, "t3.xlarge", written.Status.ReinitCheckpoint.InstanceType)
-	assert.Equal(t, []string{"sg-1"}, written.Status.ReinitCheckpoint.CurrentInstanceSecurityGroups)
-	// The checkpoint is self-contained: it carries the trunk id it recovers against.
-	assert.Equal(t, "eni-trunk", written.Status.ReinitCheckpoint.TrunkENIID)
+	assert.NotNil(t, written.Status.NodeNetworkState)
+	assert.Equal(t, "i-abc", written.Status.NodeNetworkState.InstanceID)
+	assert.Equal(t, "t3.xlarge", written.Status.NodeNetworkState.InstanceType)
+	assert.Equal(t, []string{"sg-1"}, written.Status.NodeNetworkState.PrimaryNetworkInterfaceSecurityGroups)
 	assert.NotNil(t, written.Status.TrunkInterface)
 	assert.Equal(t, "eni-trunk", written.Status.TrunkInterface.ID)
 	assert.Equal(t, "subnet-1", written.Status.TrunkInterface.SubnetID)
 }
 
-// TestBranchENIProvider_CreateAndAnnotate_ResyncOnCapacity tests the runtime
-// escape hatch: a checkpoint-hydrated node whose reconstructed ledger reports
-// full capacity resyncs once from EC2 and retries the allocation, which then
-// succeeds (the local ledger was wrong; EC2 has capacity). This is the "local
-// capacity mismatch" scenario.
+// TestBranchENIProvider_CreateAndAnnotate_ResyncOnCapacity verifies that a
+// restored ledger reporting full capacity is resynced once from EC2 before the
+// allocation is retried.
 func TestBranchENIProvider_CreateAndAnnotate_ResyncOnCapacity(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -228,9 +222,9 @@ func TestBranchENIProvider_CreateAndAnnotate_ResyncOnCapacity(t *testing.T) {
 	gomock.InOrder(
 		// First allocation: the reconstructed ledger says full.
 		mockTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, 1, gomock.Any()).Return(nil, trunk.ErrCurrentlyAtMaxCapacity),
-		mockTrunk.EXPECT().IsHydrated().Return(true),
-		// The provider hands the trunk a pod lister, not a pod list, so the snapshot
-		// is taken after the recovery gate has quiesced mutations.
+		mockTrunk.EXPECT().IsRestoredFromNodeNetworkState().Return(true),
+		// The provider hands the trunk a pod lister so pods are read after the
+		// recovery gate has quiesced mutations.
 		mockTrunk.EXPECT().ResyncTrunkLedgerFromEC2(gomock.Any(), "capacity").
 			DoAndReturn(func(listPods func() ([]v1.Pod, error), _ string) error {
 				pods, err := listPods()
@@ -247,10 +241,9 @@ func TestBranchENIProvider_CreateAndAnnotate_ResyncOnCapacity(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestBranchENIProvider_CreateAndAnnotate_NoResyncWhenNotHydrated tests that a
-// non-hydrated (already authoritative) node does not resync on a capacity error;
-// it just requeues, so healthy nodes never trigger the escape hatch.
-func TestBranchENIProvider_CreateAndAnnotate_NoResyncWhenNotHydrated(t *testing.T) {
+// TestBranchENIProvider_CreateAndAnnotate_NoResyncWhenNotRestored verifies that
+// an authoritative ledger requeues a capacity error without resyncing.
+func TestBranchENIProvider_CreateAndAnnotate_NoResyncWhenNotRestored(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -268,7 +261,7 @@ func TestBranchENIProvider_CreateAndAnnotate_NoResyncWhenNotHydrated(t *testing.
 	mockK8s.EXPECT().BroadcastEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 
 	mockTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, 1, gomock.Any()).Return(nil, trunk.ErrCurrentlyAtMaxCapacity)
-	mockTrunk.EXPECT().IsHydrated().Return(false)
+	mockTrunk.EXPECT().IsRestoredFromNodeNetworkState().Return(false)
 	// No resync expected: the mock fails the test if it happens.
 
 	res, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
@@ -277,10 +270,10 @@ func TestBranchENIProvider_CreateAndAnnotate_NoResyncWhenNotHydrated(t *testing.
 }
 
 // TestBranchENIProvider_CreateAndAnnotate_NoResyncOnTransientError tests that a
-// transient allocation failure (throttling, timeout, auth) on a hydrated trunk
-// does NOT trigger a resync. Association errors carry no reliable stale-ledger
-// signal, so resyncing on them would add EC2 describes exactly when EC2 is
-// already failing.
+// transient allocation failure (throttling, timeout, or authorization) on a
+// restored trunk does not trigger a resync. Association errors do not reliably
+// identify a stale ledger, so resyncing would add EC2 calls while EC2 is already
+// failing.
 func TestBranchENIProvider_CreateAndAnnotate_NoResyncOnTransientError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -300,8 +293,8 @@ func TestBranchENIProvider_CreateAndAnnotate_NoResyncOnTransientError(t *testing
 		mockK8s.EXPECT().BroadcastEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 
 		mockTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, 1, gomock.Any()).Return(nil, transient)
-		// Neither IsHydrated nor a resync is consulted: the error is not a
-		// contradiction trigger, so the failure surfaces for the normal retry.
+		// This error is not a contradiction trigger, so restoration state is not
+		// checked and the failure follows the normal retry path.
 
 		_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
 		assert.Error(t, err)
@@ -798,7 +791,7 @@ func TestUnSupportedNodeEvents_Windows(t *testing.T) {
 }
 
 // TestBranchENIProvider_persistCNINodeStatus_ManagedByOtherController tests that no
-// checkpoint is written into a CNINode owned by another controller: that controller
+// state is written into a CNINode owned by another controller: that controller
 // owns the object's status.
 func TestBranchENIProvider_persistCNINodeStatus_ManagedByOtherController(t *testing.T) {
 	ctrl := gomock.NewController(t)

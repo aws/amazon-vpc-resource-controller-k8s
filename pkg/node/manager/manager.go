@@ -200,7 +200,7 @@ func (m *manager) AddNode(nodeName string) error {
 
 	if shouldManage {
 		newNode = node.NewManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
-			GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
+			GetNodeInstanceType(k8sNode), GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
 		err := m.updateSubnetIfUsingENIConfig(newNode, k8sNode)
 		if err != nil {
 			return err
@@ -271,7 +271,8 @@ func (m *manager) UpdateNode(nodeName string) error {
 	case UnManagedToManaged:
 		log.Info("node was previously un-managed, will be added as managed node now")
 		cachedNode = node.NewManagedNode(m.Log, k8sNode.Name,
-			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
+			GetNodeInstanceID(k8sNode), GetNodeInstanceType(k8sNode), GetNodeOS(k8sNode),
+			m.wrapper.K8sAPI, m.wrapper.EC2API)
 		// Update the Subnet if the node has custom networking configured
 		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
 		if err != nil {
@@ -498,7 +499,17 @@ func GetNodeInstanceID(node *v1.Node) string {
 	return instanceID
 }
 
-// getNodeOS returns the operating system of a node.
+// GetNodeInstanceType returns the instance type from the stable label, falling
+// back to the beta label used by older Kubernetes versions.
+func GetNodeInstanceType(node *v1.Node) string {
+	instanceType := node.Labels[v1.LabelInstanceTypeStable]
+	if instanceType == "" {
+		instanceType = node.Labels[v1.LabelInstanceType]
+	}
+	return instanceType
+}
+
+// GetNodeOS returns the operating system of a node.
 func GetNodeOS(node *v1.Node) string {
 	labels := node.GetLabels()
 	os := labels[config.NodeLabelOS]

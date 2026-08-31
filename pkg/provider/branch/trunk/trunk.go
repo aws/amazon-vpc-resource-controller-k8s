@@ -58,15 +58,12 @@ var (
 var ErrCurrentlyAtMaxCapacity = fmt.Errorf("cannot create more branches at this point as used branches plus the " +
 	"delete queue is at max capacity")
 
-// ErrInvalidCheckpointLedger is returned by InitFromSnapshot when the branch
-// ledger reconstructed from pod annotations is structurally inconsistent (an
-// out-of-range VLAN, a branch ENI claimed by two pods, or two pods claiming the
-// same VLAN). The caller discards the candidate trunk and falls back to the
-// authoritative EC2 init path.
-var ErrInvalidCheckpointLedger = fmt.Errorf("reinit checkpoint pod-annotation ledger is structurally invalid")
+// ErrInvalidRestoredLedger indicates that pod annotations cannot produce a
+// valid branch ENI and VLAN ledger.
+var ErrInvalidRestoredLedger = fmt.Errorf("restored pod-annotation ledger is structurally invalid")
 
 // ErrTrunkChangedDuringResync means the authoritative rebuild did not land on the
-// trunk the ledger was hydrated against (e.g. the trunk no longer exists). That is
+// trunk used for restoration (e.g. the trunk no longer exists). That is
 // outside the runtime ledger-resync boundary, so recovery fails without replacing
 // the live state.
 var ErrTrunkChangedDuringResync = fmt.Errorf("trunk changed during ledger resync")
@@ -100,22 +97,25 @@ var (
 		},
 		[]string{"operation"},
 	)
-	// trunkReinitCount makes the zero-EC2 restart re-init observable. path="snapshot"
-	// counts trunks rebuilt from the reinit checkpoint + pod annotations (result=
-	// "success", zero EC2, or "ledger_invalid" when the reconstructed ledger is
-	// structurally inconsistent and the node falls back to EC2); path="ec2" counts
-	// trunks rebuilt via the authoritative EC2 discovery path (InitTrunk).
+	// branchENIOrphanReclaimCount records each reclaim attempt and its outcome.
+	branchENIOrphanReclaimCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "branch_eni_orphan_reclaim_total",
+			Help: "The number of orphan branch ENI reclaim outcomes on associate failure",
+		},
+		[]string{"result"},
+	)
+	// trunkReinitCount records whether trunk initialization restored local state
+	// or used authoritative EC2 discovery.
 	trunkReinitCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "trunk_reinit_total",
-			Help: "The number of trunk re-initializations by path (snapshot|ec2) and result",
+			Help: "The number of trunk re-initializations by path (restored|ec2) and result",
 		},
 		[]string{"path", "result"},
 	)
-	// trunkResyncCount counts the runtime escape-hatch resyncs: a checkpoint-
-	// hydrated node whose reconstructed state was proven inconsistent during
-	// allocation performs exactly one authoritative EC2 resync, labeled by the
-	// trigger that detected the contradiction.
+	// trunkResyncCount records authoritative EC2 resyncs after restored state is
+	// found to be inconsistent at runtime.
 	trunkResyncCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "trunk_reinit_resync_total",
@@ -140,13 +140,16 @@ type TrunkENI interface {
 	Reconcile(pods []v1.Pod) bool
 	// PushENIsToFrontOfDeleteQueue pushes the eni network interfaces to the front of the delete queue
 	PushENIsToFrontOfDeleteQueue(*v1.Pod, []*ENIDetails)
-	// InitFromSnapshot rebuilds trunk state from a reinit checkpoint (trunk id) and pod annotations, without any EC2 call
-	InitFromSnapshot(trunkENIID string, pods []v1.Pod) error
-	// IsHydrated reports whether the trunk was rebuilt from a checkpoint and has not yet been resynced from EC2
-	IsHydrated() bool
-	// ResyncTrunkLedgerFromEC2 rebuilds the branch/VLAN ledger authoritatively from EC2; listPods is read after mutations quiesce, trigger labels the resync metric
+	// InitFromNodeNetworkState rebuilds trunk state from its ID and pod
+	// annotations without calling EC2.
+	InitFromNodeNetworkState(trunkENIID string, pods []v1.Pod) error
+	// IsRestoredFromNodeNetworkState reports whether the trunk state came from
+	// NodeNetworkState.
+	IsRestoredFromNodeNetworkState() bool
+	// ResyncTrunkLedgerFromEC2 rebuilds the branch/VLAN ledger from EC2.
+	// It reads listPods after mutations quiesce and uses trigger as a metric label.
 	ResyncTrunkLedgerFromEC2(listPods func() ([]v1.Pod, error), trigger string) error
-	// TrunkENIID returns the trunk ENI id
+	// TrunkENIID returns the trunk ENI ID.
 	TrunkENIID() string
 	// Introspect returns the state of the Trunk ENI
 	Introspect() IntrospectResponse
@@ -168,15 +171,16 @@ type trunkENI struct {
 	usedVlanIds []bool
 	// branchENIs is the list of BranchENIs associated with the trunk
 	uidToBranchENIMap map[string][]*ENIDetails
+	// inFlightENIs contains ENIs that exist in EC2 but have not reached the
+	// ownership cache or delete queue.
+	inFlightENIs map[string]struct{}
 	// deleteQueue is the queue of ENIs that are being cooled down before being deleted
 	deleteQueue []*ENIDetails
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
 	nodeIDTag []ec2types.Tag
-	// hydrated is true when this trunk's ledger was rebuilt from a reinit
-	// checkpoint (InitFromSnapshot) and has not yet been proven wrong and
-	// resynced from EC2. Only a still-hydrated trunk resyncs on a contradiction,
-	// so recovery runs at most once per trunk and cannot loop.
-	hydrated bool
+	// restoredFromNodeNetworkState records whether NodeNetworkState remains the
+	// source of the live ledger.
+	restoredFromNodeNetworkState bool
 	// recoveryGate serializes trunk mutations against an authoritative ledger
 	// resync: mutating operations hold it shared for their whole duration, the
 	// resync holds it exclusively, so no allocation, delete or reconcile can race
@@ -186,6 +190,8 @@ type trunkENI struct {
 	// resyncGroup coalesces concurrent runtime resyncs for this trunk into a
 	// single authoritative EC2 rebuild.
 	resyncGroup singleflight.Group
+	// reclaimGroup coalesces concurrent orphan-reclaim describes for this trunk.
+	reclaimGroup singleflight.Group
 }
 
 // getConnectionTrackingSpec builds a ConnectionTrackingSpecificationRequest from the
@@ -258,6 +264,7 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 		ec2ApiHelper:      helper,
 		instance:          instance,
 		uidToBranchENIMap: make(map[string][]*ENIDetails),
+		inFlightENIs:      make(map[string]struct{}),
 		nodeIDTag: []ec2types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -273,6 +280,7 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(unreconciledTrunkENICount)
 		metrics.Registry.MustRegister(branchENIOperationsSuccessCount)
 		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
+		metrics.Registry.MustRegister(branchENIOrphanReclaimCount)
 		metrics.Registry.MustRegister(trunkReinitCount)
 		metrics.Registry.MustRegister(trunkResyncCount)
 
@@ -280,8 +288,8 @@ func PrometheusRegister() {
 	}
 }
 
-// InitTrunk initializes the trunk network interface and all it's associated branch network interfaces by making calls
-// to EC2 API
+// InitTrunk initializes the trunk and its associated branch network interfaces
+// from EC2.
 func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	instanceID := t.instance.InstanceID()
 	log := t.log.WithValues("request", "initialize", "instance ID", instanceID)
@@ -382,8 +390,8 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	}
 
 	// vlanOwner keeps the rebuilt ledger structurally sound. This path is the
-	// authoritative fallback for a rejected checkpoint, so it must not reproduce the
-	// shapes the checkpoint was rejected for: an out-of-range VLAN that never gets
+	// authoritative fallback for a rejected state, so it must not reproduce the
+	// shapes the state was rejected for: an out-of-range VLAN that never gets
 	// reserved, or two ENIs recorded on one VLAN.
 	//
 	// The VLAN value itself comes from the pod annotation. Both it and the ENI's
@@ -504,26 +512,21 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	return nil
 }
 
-// InitFromSnapshot rebuilds the trunk's branch/VLAN ledger from the checkpoint
-// trunk id plus pod annotations, with no EC2 call.
+// InitFromNodeNetworkState rebuilds the trunk's branch and VLAN ledger from the
+// observed trunk id and pod annotations without calling EC2.
 //
-// The candidate ledger is built into local maps and structurally validated before
-// anything is committed, so a bad snapshot leaves the trunk untouched for the
-// authoritative EC2 path. Validated invariants: VLAN id within the ledger range,
-// one branch ENI owned by at most one pod, one VLAN owned by at most one pod.
-// Detecting these needs no EC2 call. On success the trunk is hydrated, which arms
-// the runtime recovery path.
-//
-// Runs during single-threaded init.
-func (t *trunkENI) InitFromSnapshot(trunkENIID string, podList []v1.Pod) error {
+// The candidate ledger is validated before it replaces live state. Validation
+// requires each VLAN to be in range and each branch ENI and VLAN to have at most
+// one pod owner.
+func (t *trunkENI) InitFromNodeNetworkState(trunkENIID string, podList []v1.Pod) error {
 	candidateMap := make(map[string][]*ENIDetails)
 	vlanOwner := make(map[int]string)   // vlan id -> pod uid
 	eniOwner := make(map[string]string) // branch eni id -> pod uid
 
 	reject := func(msg string, kv ...interface{}) error {
-		trunkReinitCount.WithLabelValues("snapshot", "ledger_invalid").Inc()
-		t.log.Error(ErrInvalidCheckpointLedger, msg, kv...)
-		return ErrInvalidCheckpointLedger
+		trunkReinitCount.WithLabelValues("restored", "ledger_invalid").Inc()
+		t.log.Error(ErrInvalidRestoredLedger, msg, kv...)
+		return ErrInvalidRestoredLedger
 	}
 
 	for _, pod := range podList {
@@ -531,8 +534,7 @@ func (t *trunkENI) InitFromSnapshot(trunkENIID string, podList []v1.Pod) error {
 		uid := string(pod.UID)
 		eniList, usable := t.decodeBranchInterfacesUsedByPod(&pod)
 		if !usable {
-			// The pod may own an ENI we cannot see. Hydrating would record it as
-			// unowned, so fall back to EC2, which can attribute it.
+			// The EC2 fallback preserves ENIs whose ownership cannot be decoded.
 			return reject("pod branch eni annotation is unusable", "pod", uid)
 		}
 		if len(eniList) == 0 {
@@ -560,47 +562,44 @@ func (t *trunkENI) InitFromSnapshot(trunkENIID string, podList []v1.Pod) error {
 		candidateMap[uid] = eniList
 	}
 
-	// Candidate ledger is valid: commit it in one shot.
+	// Commit the validated ledger under one lock.
 	t.lock.Lock()
 	t.trunkENIId = trunkENIID
 	t.uidToBranchENIMap = candidateMap
 	for vlanID := range vlanOwner {
 		t.usedVlanIds[vlanID] = true
 	}
-	t.hydrated = true
+	t.restoredFromNodeNetworkState = true
 	t.lock.Unlock()
 
-	trunkReinitCount.WithLabelValues("snapshot", "success").Inc()
-	t.log.Info("initialized trunk from reinit checkpoint without EC2",
+	trunkReinitCount.WithLabelValues("restored", "success").Inc()
+	t.log.Info("restored trunk ledger from NodeNetworkState",
 		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
 	return nil
 }
 
-// IsHydrated reports whether this trunk's ledger came from a checkpoint and has
-// not yet been resynced from EC2.
-func (t *trunkENI) IsHydrated() bool {
+// IsRestoredFromNodeNetworkState reports whether this ledger was restored from
+// NodeNetworkState and has not been resynced from EC2.
+func (t *trunkENI) IsRestoredFromNodeNetworkState() bool {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
-	return t.hydrated
+	return t.restoredFromNodeNetworkState
 }
 
 // ResyncTrunkLedgerFromEC2 rebuilds this trunk's branch/VLAN ledger from EC2 when
-// a checkpoint-hydrated trunk is proven inconsistent at runtime, reusing InitTrunk
-// rather than a second reconstruction. Its recovery boundary is exactly that: a
-// checkpoint-derived branch/trunk ledger mismatch. It does not reload instance
-// details and cannot recover a destroyed trunk - if the rebuild does not land on
-// the same trunk ENI it returns ErrTrunkChangedDuringResync and leaves the live
-// state untouched.
+// a restored trunk is proven inconsistent at runtime. It reuses InitTrunk
+// without reloading instance details. If the rebuilt state refers to a different
+// trunk ENI, it returns ErrTrunkChangedDuringResync and leaves the live state
+// untouched.
 //
 // Ordering matters: the exclusive recovery gate is taken first so in-flight trunk
-// mutations drain, and only then is the pod snapshot read. Reading pods earlier
-// would rebuild from a snapshot that races concurrent allocations, so a pod that
-// got an ENI mid-rebuild could be dropped from the ledger by the swap. listPods is
-// a cache read, so taking it late is cheap.
+// mutations drain before the pod list is read. Reading pods earlier would race
+// concurrent allocations and could omit a newly allocated ENI from the rebuilt
+// ledger. listPods is a cache read, so taking it late is cheap.
 //
 // resyncGroup coalesces concurrent detections into one rebuild, and a successful
-// resync clears the hydrated flag so recovery cannot repeat or loop.
+// resync clears the restoration flag so recovery cannot repeat or loop.
 func (t *trunkENI) ResyncTrunkLedgerFromEC2(listPods func() ([]v1.Pod, error), trigger string) error {
 	_, err, _ := t.resyncGroup.Do(t.instance.InstanceID(), func() (interface{}, error) {
 		// Quiesce trunk mutations for the whole rebuild+swap.
@@ -608,7 +607,7 @@ func (t *trunkENI) ResyncTrunkLedgerFromEC2(listPods func() ([]v1.Pod, error), t
 		defer t.recoveryGate.Unlock()
 
 		// A concurrent resync may already have made this trunk authoritative.
-		if !t.IsHydrated() {
+		if !t.IsRestoredFromNodeNetworkState() {
 			return nil, nil
 		}
 		existingTrunkID := t.TrunkENIID()
@@ -616,7 +615,7 @@ func (t *trunkENI) ResyncTrunkLedgerFromEC2(listPods func() ([]v1.Pod, error), t
 		t.log.Info("resyncing trunk ledger from EC2 after a runtime contradiction",
 			"trunk", existingTrunkID, "trigger", trigger)
 
-		// Fresh pod snapshot, taken only after mutations have drained.
+		// Read pods only after mutations have drained.
 		podList, err := listPods()
 		if err != nil {
 			return nil, err
@@ -626,8 +625,7 @@ func (t *trunkENI) ResyncTrunkLedgerFromEC2(listPods func() ([]v1.Pod, error), t
 		// rebuild on a scratch trunk and swap the result in atomically.
 		scratch := NewTrunkENI(t.log, t.instance, t.ec2ApiHelper).(*trunkENI)
 		if err := scratch.InitTrunk(t.instance, podList); err != nil {
-			// Live ledger was never mutated; stay hydrated so a later contradiction
-			// can retry.
+			// Keep the restored ledger so a later contradiction can retry.
 			return nil, err
 		}
 		if scratch.trunkENIId != existingTrunkID {
@@ -639,14 +637,14 @@ func (t *trunkENI) ResyncTrunkLedgerFromEC2(listPods func() ([]v1.Pod, error), t
 		t.uidToBranchENIMap = scratch.uidToBranchENIMap
 		t.usedVlanIds = scratch.usedVlanIds
 		t.deleteQueue = scratch.deleteQueue
-		t.hydrated = false
+		t.restoredFromNodeNetworkState = false
 		t.lock.Unlock()
 		return nil, nil
 	})
 	return err
 }
 
-// TrunkENIID returns the trunk ENI id.
+// TrunkENIID returns the trunk ENI ID.
 func (t *trunkENI) TrunkENIID() string {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
@@ -689,15 +687,13 @@ func (t *trunkENI) Reconcile(pods []v1.Pod) bool {
 	return leakedENIs > 0
 }
 
-// CreateAndAssociateBranchENIs creates branch network interfaces, associates them
-// with the trunk, and commits pod ownership through commitOwnership (the pod
-// annotation) before returning. It returns a Json convertible structure which has
-// all the required details of the branch ENI.
+// CreateAndAssociateBranchENIs creates branch network interfaces, associates
+// them with the trunk, and commits pod ownership before returning.
 //
 // The whole sequence runs under the shared recovery gate. That boundary has to
 // include commitOwnership: between association and the pod annotation the ENI
 // exists in EC2 but no pod claims it, and InitTrunk classifies exactly that as
-// unowned and queues it for deletion. A resync taking its pod snapshot in that
+// unowned and queues it for deletion. A resync reading pods in that
 // window would reap a live pod's ENI. If commitOwnership fails, the ENIs are
 // released under the same gate, so the ledger never holds an uncommitted
 // attachment.
@@ -748,6 +744,11 @@ func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 	var nwInterface *ec2types.NetworkInterface
 	var vlanID int
 
+	var createdENIIDs []string
+	defer func() {
+		t.clearENIsInFlight(createdENIIDs)
+	}()
+
 	for i := 0; i < eniCount; i++ {
 		// Assign VLAN
 		vlanID, err = t.assignVlanId()
@@ -782,6 +783,9 @@ func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 			branchENIOperationsSuccessCount.WithLabelValues("created_branch_eni_succeeded").Inc()
 		}
 
+		t.markENIInFlight(*nwInterface.NetworkInterfaceId)
+		createdENIIDs = append(createdENIIDs, *nwInterface.NetworkInterfaceId)
+
 		// Branch ENI can have an IPv4 address, IPv6 address, or both
 		var v4Addr, v6Addr string
 		if nwInterface.PrivateIpAddress != nil {
@@ -803,6 +807,7 @@ func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		if err != nil {
 			err = fmt.Errorf("associating branch to trunk, %w", err)
 			trunkENIOperationsErrCount.WithLabelValues("associate_branch").Inc()
+			t.reclaimOrphansOnAssociateFailure()
 			break
 		}
 		newENI.AssociationID = *associationOutput.InterfaceAssociation.AssociationId
@@ -837,6 +842,73 @@ func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		"security group used", securityGroups)
 
 	return newENIs, nil
+}
+
+// reclaimOrphansOnAssociateFailure runs at most one describe for concurrent
+// association failures on the same trunk.
+func (t *trunkENI) reclaimOrphansOnAssociateFailure() {
+	_, _, _ = t.reclaimGroup.Do(t.trunkENIId, func() (interface{}, error) {
+		t.reclaimOrphans()
+		return nil, nil
+	})
+}
+
+// reclaimOrphans queues attached branch ENIs that have no local owner.
+func (t *trunkENI) reclaimOrphans() {
+	branchENIOrphanReclaimCount.WithLabelValues("triggered").Inc()
+	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(
+		&t.trunkENIId, aws.String(t.instance.SubnetID()))
+	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("reclaim_orphans_describe").Inc()
+		t.log.Error(err, "failed to list branch ENIs for orphan reclaim")
+		return
+	}
+
+	t.lock.RLock()
+	owned := make(map[string]struct{})
+	for _, enis := range t.uidToBranchENIMap {
+		for _, eni := range enis {
+			owned[eni.ID] = struct{}{}
+		}
+	}
+	for _, eni := range t.deleteQueue {
+		owned[eni.ID] = struct{}{}
+	}
+	inFlight := make(map[string]struct{}, len(t.inFlightENIs))
+	for id := range t.inFlightENIs {
+		inFlight[id] = struct{}{}
+	}
+	t.lock.RUnlock()
+
+	for _, branchInterface := range branchInterfaces {
+		if branchInterface.NetworkInterfaceId == nil {
+			continue
+		}
+		id := *branchInterface.NetworkInterfaceId
+		if _, ok := owned[id]; ok {
+			continue
+		}
+		if _, ok := inFlight[id]; ok {
+			branchENIOrphanReclaimCount.WithLabelValues("skipped_in_flight").Inc()
+			t.log.Info("skipping in-flight branch eni during orphan reclaim, create in progress", "eni", id)
+			continue
+		}
+
+		vlanID, err := t.getVlanIdFromTag(branchInterface.TagSet)
+		if err != nil || vlanID <= 0 || vlanID >= MaxAllocatableVlanIds {
+			t.log.Info("skipping orphan branch eni with unusable vlan tag", "eni", id, "vlanID", vlanID)
+			continue
+		}
+
+		t.log.Info("reclaiming orphan branch eni owned by no pod", "eni", id, "vlanID", vlanID)
+		branchENIOrphanReclaimCount.WithLabelValues("reclaimed").Inc()
+		t.markVlanAssigned(vlanID)
+		t.pushENIToDeleteQueue(&ENIDetails{
+			ID:                id,
+			VlanID:            vlanID,
+			deletionTimeStamp: time.Now(),
+		})
+	}
 }
 
 // DeleteBranchNetworkInterface deletes the branch network interface and returns an error in case of failure to delete
@@ -1038,6 +1110,28 @@ func (t *trunkENI) getBranchFromCache(UID string) (branchENIs []*ENIDetails, isP
 
 	branchENIs, isPresent = t.uidToBranchENIMap[UID]
 	return
+}
+
+func (t *trunkENI) markENIInFlight(id string) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if t.inFlightENIs == nil {
+		t.inFlightENIs = make(map[string]struct{})
+	}
+	t.inFlightENIs[id] = struct{}{}
+}
+
+func (t *trunkENI) clearENIsInFlight(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	for _, id := range ids {
+		delete(t.inFlightENIs, id)
+	}
 }
 
 // assignVlanId assigns a free vlan id from the list of available vlan ids. In the future this can be changed to LL

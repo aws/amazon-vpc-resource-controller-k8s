@@ -76,27 +76,18 @@ type CNINodeStatus struct {
 	// Branches); it retains its original observed-resource semantics.
 	// +optional
 	TrunkInterface *TrunkInterface `json:"trunkInterface,omitempty"`
-	// ReinitCheckpoint is the vpc-resource-controller-private restart-recovery
-	// checkpoint: the instance fields needed to rebuild in-memory state on a
-	// controller restart or leader change without synchronous EC2 describes.
+	// NodeNetworkState contains the EC2 data that the vpc-resource-controller
+	// needs to restore the node's in-memory network state after a restart.
 	// +optional
-	ReinitCheckpoint *ReinitCheckpoint `json:"reinitCheckpoint,omitempty"`
+	NodeNetworkState *NodeNetworkState `json:"nodeNetworkState,omitempty"`
 }
 
-// ReinitCheckpoint is the controller-private snapshot used by the zero-EC2
-// re-init (hydrate) path. It is self-contained: it carries the trunk ENI id
-// plus the instance's source-of-truth values (its own subnet, primary ENI
-// security groups) and the derived effective (current*) values, so a restart
-// restores the full in-memory state with no EC2 call, including for custom
-// networking nodes. EC2 remains the source of truth: any missing or invalid
-// field is a checkpoint miss and the controller falls back to describing the
-// instance from EC2.
-type ReinitCheckpoint struct {
-	// TrunkENIID is the trunk ENI the branch ledger is rebuilt against.
-	// +optional
-	TrunkENIID string `json:"trunkENIID,omitempty"`
-	// InstanceID is the EC2 instance id this checkpoint belongs to; hydrate
-	// rejects the checkpoint if it does not match the live node (a reused name).
+// NodeNetworkState stores the EC2 values needed to restore a node after a
+// controller restart. Effective subnet and security group values are derived
+// from this state and the current ENIConfig during restoration.
+type NodeNetworkState struct {
+	// InstanceID is the EC2 instance ID this state belongs to. The controller
+	// rejects the state if the node name now refers to another instance.
 	// +optional
 	// +kubebuilder:validation:MaxLength=19
 	// +kubebuilder:validation:Pattern=`^i-([0-9a-f]{8}|[0-9a-f]{17})$`
@@ -104,7 +95,7 @@ type ReinitCheckpoint struct {
 	// InstanceType is the EC2 instance type of the node, used to size branch ENI capacity.
 	// +optional
 	InstanceType string `json:"instanceType,omitempty"`
-	// InstanceSubnetID is the id of the instance's own subnet.
+	// InstanceSubnetID is the ID of the instance's own subnet.
 	// +optional
 	InstanceSubnetID string `json:"instanceSubnetID,omitempty"`
 	// InstanceSubnetCIDRBlock is the IPv4 CIDR block of the instance's own subnet.
@@ -113,23 +104,8 @@ type ReinitCheckpoint struct {
 	// InstanceSubnetV6CIDRBlock is the IPv6 CIDR block of the instance's own subnet, if present.
 	// +optional
 	InstanceSubnetV6CIDRBlock string `json:"instanceSubnetV6CIDRBlock,omitempty"`
-	// CurrentSubnetID is the effective subnet id used for branch ENIs (the
-	// instance subnet, or the ENIConfig subnet under custom networking).
-	// +optional
-	CurrentSubnetID string `json:"currentSubnetID,omitempty"`
-	// CurrentSubnetCIDRBlock is the effective IPv4 CIDR block for branch ENIs.
-	// +optional
-	CurrentSubnetCIDRBlock string `json:"currentSubnetCIDRBlock,omitempty"`
-	// CurrentSubnetV6CIDRBlock is the effective IPv6 CIDR block for branch ENIs.
-	// +optional
-	CurrentSubnetV6CIDRBlock string `json:"currentSubnetV6CIDRBlock,omitempty"`
-	// CurrentInstanceSecurityGroups are the effective default security groups
-	// applied to a branch ENI when the pod does not specify its own.
-	// +optional
-	// +listType=atomic
-	CurrentInstanceSecurityGroups []string `json:"currentInstanceSecurityGroups,omitempty"`
 	// PrimaryNetworkInterfaceSecurityGroups are the security groups of the
-	// instance's primary ENI (the source-of-truth value).
+	// instance's primary ENI.
 	// +optional
 	// +listType=atomic
 	PrimaryNetworkInterfaceSecurityGroups []string `json:"primaryNetworkInterfaceSecurityGroups,omitempty"`
@@ -161,9 +137,7 @@ type TrunkInterface struct {
 	// ID is the EC2 network interface id of the trunk ENI.
 	// +kubebuilder:validation:MinLength=1
 	ID string `json:"id"`
-	// SubnetID is the id of the subnet the trunk ENI belongs to. The
-	// vpc-resource-controller's hydrate path validates it against the
-	// checkpoint's effective subnet to reject a stale snapshot.
+	// SubnetID is the ID of the subnet that contains the trunk ENI.
 	// +optional
 	// +kubebuilder:validation:MaxLength=24
 	// +kubebuilder:validation:Pattern=`^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`

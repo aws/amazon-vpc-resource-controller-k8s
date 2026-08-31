@@ -76,18 +76,18 @@ func (mr *MockTrunkENIMockRecorder) DeleteCooledDownENIs() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteCooledDownENIs", reflect.TypeOf((*MockTrunkENI)(nil).DeleteCooledDownENIs))
 }
 
-// InitFromSnapshot mocks base method.
-func (m *MockTrunkENI) InitFromSnapshot(arg0 string, arg1 []v1.Pod) error {
+// InitFromNodeNetworkState mocks base method.
+func (m *MockTrunkENI) InitFromNodeNetworkState(arg0 string, arg1 []v1.Pod) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InitFromSnapshot", arg0, arg1)
+	ret := m.ctrl.Call(m, "InitFromNodeNetworkState", arg0, arg1)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// InitFromSnapshot indicates an expected call of InitFromSnapshot.
-func (mr *MockTrunkENIMockRecorder) InitFromSnapshot(arg0, arg1 interface{}) *gomock.Call {
+// InitFromNodeNetworkState indicates an expected call of InitFromNodeNetworkState.
+func (mr *MockTrunkENIMockRecorder) InitFromNodeNetworkState(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitFromSnapshot", reflect.TypeOf((*MockTrunkENI)(nil).InitFromSnapshot), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitFromNodeNetworkState", reflect.TypeOf((*MockTrunkENI)(nil).InitFromNodeNetworkState), arg0, arg1)
 }
 
 // InitTrunk mocks base method.
@@ -118,18 +118,18 @@ func (mr *MockTrunkENIMockRecorder) Introspect() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockTrunkENI)(nil).Introspect))
 }
 
-// IsHydrated mocks base method.
-func (m *MockTrunkENI) IsHydrated() bool {
+// IsRestoredFromNodeNetworkState mocks base method.
+func (m *MockTrunkENI) IsRestoredFromNodeNetworkState() bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IsHydrated")
+	ret := m.ctrl.Call(m, "IsRestoredFromNodeNetworkState")
 	ret0, _ := ret[0].(bool)
 	return ret0
 }
 
-// IsHydrated indicates an expected call of IsHydrated.
-func (mr *MockTrunkENIMockRecorder) IsHydrated() *gomock.Call {
+// IsRestoredFromNodeNetworkState indicates an expected call of IsRestoredFromNodeNetworkState.
+func (mr *MockTrunkENIMockRecorder) IsRestoredFromNodeNetworkState() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsHydrated", reflect.TypeOf((*MockTrunkENI)(nil).IsHydrated))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRestoredFromNodeNetworkState", reflect.TypeOf((*MockTrunkENI)(nil).IsRestoredFromNodeNetworkState))
 }
 
 // PushBranchENIsToCoolDownQueue mocks base method.

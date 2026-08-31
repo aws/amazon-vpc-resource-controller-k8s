@@ -91,11 +91,10 @@ spec:
           status:
             description: CNINodeStatus defines the managed VPC resources.
             properties:
-              reinitCheckpoint:
+              nodeNetworkState:
                 description: |-
-                  ReinitCheckpoint is the vpc-resource-controller-private restart-recovery
-                  checkpoint: the instance fields needed to rebuild in-memory state on a
-                  controller restart or leader change without synchronous EC2 describes.
+                  NodeNetworkState contains the EC2 data that the vpc-resource-controller
+                  needs to restore the node's in-memory network state after a restart.
                 properties:
                   connectionTracking:
                     description: |-
@@ -118,31 +117,10 @@ spec:
                         format: int32
                         type: integer
                     type: object
-                  currentInstanceSecurityGroups:
-                    description: |-
-                      CurrentInstanceSecurityGroups are the effective default security groups
-                      applied to a branch ENI when the pod does not specify its own.
-                    items:
-                      type: string
-                    type: array
-                    x-kubernetes-list-type: atomic
-                  currentSubnetCIDRBlock:
-                    description: CurrentSubnetCIDRBlock is the effective IPv4 CIDR
-                      block for branch ENIs.
-                    type: string
-                  currentSubnetID:
-                    description: |-
-                      CurrentSubnetID is the effective subnet id used for branch ENIs (the
-                      instance subnet, or the ENIConfig subnet under custom networking).
-                    type: string
-                  currentSubnetV6CIDRBlock:
-                    description: CurrentSubnetV6CIDRBlock is the effective IPv6 CIDR
-                      block for branch ENIs.
-                    type: string
                   instanceID:
                     description: |-
-                      InstanceID is the EC2 instance id this checkpoint belongs to; hydrate
-                      rejects the checkpoint if it does not match the live node (a reused name).
+                      InstanceID is the EC2 instance ID this state belongs to. The controller
+                      rejects the state if the node name now refers to another instance.
                     maxLength: 19
                     pattern: ^i-([0-9a-f]{8}|[0-9a-f]{17})$
                     type: string
@@ -151,7 +129,7 @@ spec:
                       the instance's own subnet.
                     type: string
                   instanceSubnetID:
-                    description: InstanceSubnetID is the id of the instance's own
+                    description: InstanceSubnetID is the ID of the instance's own
                       subnet.
                     type: string
                   instanceSubnetV6CIDRBlock:
@@ -165,15 +143,11 @@ spec:
                   primaryNetworkInterfaceSecurityGroups:
                     description: |-
                       PrimaryNetworkInterfaceSecurityGroups are the security groups of the
-                      instance's primary ENI (the source-of-truth value).
+                      instance's primary ENI.
                     items:
                       type: string
                     type: array
                     x-kubernetes-list-type: atomic
-                  trunkENIID:
-                    description: TrunkENIID is the trunk ENI the branch ledger is
-                      rebuilt against.
-                    type: string
                 type: object
               trunkInterface:
                 description: |-
@@ -263,10 +237,8 @@ spec:
                     description: MacAddress is the MAC address of the trunk ENI.
                     type: string
                   subnetID:
-                    description: |-
-                      SubnetID is the id of the subnet the trunk ENI belongs to. The
-                      vpc-resource-controller's hydrate path validates it against the
-                      checkpoint's effective subnet to reject a stale snapshot.
+                    description: SubnetID is the ID of the subnet that contains the
+                      trunk ENI.
                     maxLength: 24
                     pattern: ^subnet-([0-9a-f]{8}|[0-9a-f]{17})$
                     type: string

@@ -267,6 +267,7 @@ func getMockTrunk() trunkENI {
 		log:               log,
 		usedVlanIds:       make([]bool, MaxAllocatableVlanIds),
 		uidToBranchENIMap: map[string][]*ENIDetails{},
+		inFlightENIs:      map[string]struct{}{},
 		nodeIDTag: []awsEc2Types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -281,16 +282,168 @@ func TestNewTrunkENI(t *testing.T) {
 	assert.NotNil(t, trunkENI)
 }
 
-// TestTrunkENI_InitFromSnapshot tests the trunk ledger is rebuilt from the trunk
-// id and pod annotations with zero EC2 calls (no mock expectations are set, so
-// gomock fails the test if any EC2 API is invoked).
-func TestTrunkENI_InitFromSnapshot(t *testing.T) {
+func TestTrunkENI_reclaimOrphansOnAssociateFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
+		Return([]*awsEc2Types.NetworkInterface{branchENIWithVlanTag(Branch1Id, VlanId1)}, nil)
+
+	triggeredBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))
+	reclaimedBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("reclaimed"))
+
+	trunkENI.reclaimOrphansOnAssociateFailure()
+
+	assert.Equal(t, []string{Branch1Id}, queuedENIIDs(trunkENI))
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+	assertAllQueuedENIsStamped(t, trunkENI)
+	assert.Equal(t, 1.0,
+		testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))-triggeredBefore)
+	assert.Equal(t, 1.0,
+		testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("reclaimed"))-reclaimedBefore)
+}
+
+func TestTrunkENI_reclaimOrphans_SkipsInFlightENI(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	trunkENI.markENIInFlight(Branch2Id)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
+		Return([]*awsEc2Types.NetworkInterface{
+			branchENIWithVlanTag(Branch1Id, VlanId1),
+			branchENIWithVlanTag(Branch2Id, VlanId2),
+		}, nil)
+
+	triggeredBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))
+	reclaimedBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("reclaimed"))
+	skippedBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("skipped_in_flight"))
+
+	trunkENI.reclaimOrphansOnAssociateFailure()
+
+	assert.Equal(t, []string{Branch1Id}, queuedENIIDs(trunkENI))
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+	assert.False(t, trunkENI.usedVlanIds[VlanId2])
+	assert.Equal(t, 1.0,
+		testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))-triggeredBefore)
+	assert.Equal(t, 1.0,
+		testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("reclaimed"))-reclaimedBefore)
+	assert.Equal(t, 1.0,
+		testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("skipped_in_flight"))-skippedBefore)
+}
+
+func TestTrunkENI_reclaimOrphans_DescribeError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, MockError)
+
+	triggeredBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))
+	errorsBefore := testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("reclaim_orphans_describe"))
+
+	trunkENI.reclaimOrphansOnAssociateFailure()
+
+	assert.Empty(t, trunkENI.deleteQueue)
+	assert.Equal(t, 1.0,
+		testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))-triggeredBefore)
+	assert.Equal(t, 1.0,
+		testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("reclaim_orphans_describe"))-errorsBefore)
+}
+
+func TestTrunkENI_reclaimOrphans_ConcurrentCallsShareDescribe(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+
+	describeStarted := make(chan struct{})
+	releaseDescribe := make(chan struct{})
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
+		DoAndReturn(func(*string, *string) ([]*awsEc2Types.NetworkInterface, error) {
+			close(describeStarted)
+			<-releaseDescribe
+			return nil, nil
+		})
+
+	const callers = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			trunkENI.reclaimOrphansOnAssociateFailure()
+		}()
+	}
+
+	close(start)
+	<-describeStarted
+	time.Sleep(50 * time.Millisecond)
+	close(releaseDescribe)
+	wg.Wait()
+}
+
+func TestTrunkENI_reclaimOrphans_ConcurrentInFlight(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	const inFlightID = "eni-in-flight"
+	const orphanID = "eni-orphan"
+	trunkENI.markENIInFlight(inFlightID)
+
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
+		Return([]*awsEc2Types.NetworkInterface{
+			branchENIWithVlanTag(inFlightID, 5),
+			branchENIWithVlanTag(orphanID, 6),
+		}, nil).AnyTimes()
+
+	var wg sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(2)
+		go func(worker int) {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				id := fmt.Sprintf("eni-%d-%d", worker, i)
+				trunkENI.markENIInFlight(id)
+				trunkENI.clearENIsInFlight([]string{id})
+			}
+		}(worker)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				trunkENI.reclaimOrphansOnAssociateFailure()
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.NotContains(t, queuedENIIDs(trunkENI), inFlightID)
+	assert.Contains(t, queuedENIIDs(trunkENI), orphanID)
+}
+
+// TestTrunkENI_InitFromNodeNetworkState verifies that the ledger is rebuilt from
+// the observed trunk ID and pod annotations without calling EC2.
+func TestTrunkENI_InitFromNodeNetworkState(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	trunkENI, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
 
-	err := trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod1})
+	err := trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{*MockPod1})
 	assert.NoError(t, err)
 
 	assert.Equal(t, trunkId, trunkENI.trunkENIId)
@@ -300,21 +453,21 @@ func TestTrunkENI_InitFromSnapshot(t *testing.T) {
 	assert.True(t, trunkENI.usedVlanIds[2])
 }
 
-// TestTrunkENI_InitFromSnapshot_SetsHydrated tests a successful snapshot init
-// marks the trunk hydrated, arming the runtime escape hatch.
-func TestTrunkENI_InitFromSnapshot_SetsHydrated(t *testing.T) {
+// TestTrunkENI_InitFromNodeNetworkState_SetsRestored verifies that restoration
+// enables runtime resync.
+func TestTrunkENI_InitFromNodeNetworkState_SetsRestored(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	trunkENI, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
-	assert.False(t, trunkENI.IsHydrated())
+	assert.False(t, trunkENI.IsRestoredFromNodeNetworkState())
 
-	assert.NoError(t, trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod1}))
-	assert.True(t, trunkENI.IsHydrated())
+	assert.NoError(t, trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{*MockPod1}))
+	assert.True(t, trunkENI.IsRestoredFromNodeNetworkState())
 }
 
 // podWithBranches builds a pod whose pod-eni annotation carries the given branch
-// ENIs, for exercising the InitFromSnapshot ledger validation.
+// ENIs, for exercising the InitFromNodeNetworkState ledger validation.
 func podWithBranches(uid string, enis []*ENIDetails) v1.Pod {
 	raw, _ := json.Marshal(enis)
 	return v1.Pod{
@@ -328,10 +481,10 @@ func podWithBranches(uid string, enis []*ENIDetails) v1.Pod {
 	}
 }
 
-// TestTrunkENI_InitFromSnapshot_DuplicateBranchENI tests that a branch ENI id
+// TestTrunkENI_InitFromNodeNetworkState_DuplicateBranchENI tests that a branch ENI id
 // claimed by two pods is rejected without committing any state, so the caller
 // falls back to the authoritative EC2 path.
-func TestTrunkENI_InitFromSnapshot_DuplicateBranchENI(t *testing.T) {
+func TestTrunkENI_InitFromNodeNetworkState_DuplicateBranchENI(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -340,16 +493,16 @@ func TestTrunkENI_InitFromSnapshot_DuplicateBranchENI(t *testing.T) {
 	podA := podWithBranches("uid-a", []*ENIDetails{{ID: "eni-dup", VlanID: 1}})
 	podB := podWithBranches("uid-b", []*ENIDetails{{ID: "eni-dup", VlanID: 3}})
 
-	err := trunkENI.InitFromSnapshot(trunkId, []v1.Pod{podA, podB})
-	assert.ErrorIs(t, err, ErrInvalidCheckpointLedger)
-	assert.False(t, trunkENI.IsHydrated())
+	err := trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{podA, podB})
+	assert.ErrorIs(t, err, ErrInvalidRestoredLedger)
+	assert.False(t, trunkENI.IsRestoredFromNodeNetworkState())
 	assert.Empty(t, trunkENI.uidToBranchENIMap)
 	assert.Empty(t, trunkENI.trunkENIId)
 }
 
-// TestTrunkENI_InitFromSnapshot_ConflictingVlan tests that two pods claiming the
+// TestTrunkENI_InitFromNodeNetworkState_ConflictingVlan tests that two pods claiming the
 // same VLAN id is rejected as a structurally invalid ledger.
-func TestTrunkENI_InitFromSnapshot_ConflictingVlan(t *testing.T) {
+func TestTrunkENI_InitFromNodeNetworkState_ConflictingVlan(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -358,16 +511,16 @@ func TestTrunkENI_InitFromSnapshot_ConflictingVlan(t *testing.T) {
 	podA := podWithBranches("uid-a", []*ENIDetails{{ID: "eni-1", VlanID: 7}})
 	podB := podWithBranches("uid-b", []*ENIDetails{{ID: "eni-2", VlanID: 7}})
 
-	err := trunkENI.InitFromSnapshot(trunkId, []v1.Pod{podA, podB})
-	assert.ErrorIs(t, err, ErrInvalidCheckpointLedger)
-	assert.False(t, trunkENI.IsHydrated())
+	err := trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{podA, podB})
+	assert.ErrorIs(t, err, ErrInvalidRestoredLedger)
+	assert.False(t, trunkENI.IsRestoredFromNodeNetworkState())
 	assert.Empty(t, trunkENI.uidToBranchENIMap)
 }
 
-// TestTrunkENI_InitFromSnapshot_OutOfRangeVlan tests that an out-of-range VLAN in
+// TestTrunkENI_InitFromNodeNetworkState_OutOfRangeVlan tests that an out-of-range VLAN in
 // a pod annotation (corrupted/tampered) is rejected as a structurally invalid
 // ledger rather than reaching the fixed-size VLAN ledger.
-func TestTrunkENI_InitFromSnapshot_OutOfRangeVlan(t *testing.T) {
+func TestTrunkENI_InitFromNodeNetworkState_OutOfRangeVlan(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -375,16 +528,16 @@ func TestTrunkENI_InitFromSnapshot_OutOfRangeVlan(t *testing.T) {
 
 	pod := podWithBranches("uid-a", []*ENIDetails{{ID: "eni-1", VlanID: MaxAllocatableVlanIds}})
 
-	err := trunkENI.InitFromSnapshot(trunkId, []v1.Pod{pod})
-	assert.ErrorIs(t, err, ErrInvalidCheckpointLedger)
-	assert.False(t, trunkENI.IsHydrated())
+	err := trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{pod})
+	assert.ErrorIs(t, err, ErrInvalidRestoredLedger)
+	assert.False(t, trunkENI.IsRestoredFromNodeNetworkState())
 }
 
-// TestTrunkENI_InitFromSnapshot_VlanZeroIsInvalid tests that VLAN 0 in a pod
+// TestTrunkENI_InitFromNodeNetworkState_VlanZeroIsInvalid tests that VLAN 0 in a pod
 // annotation is rejected, matching the allocation path: NewTrunkENI pre-marks
 // index 0 used and the delete path treats 0 as "no vlan", so 0 is never an
 // assigned id and its presence means the annotation is corrupt.
-func TestTrunkENI_InitFromSnapshot_VlanZeroIsInvalid(t *testing.T) {
+func TestTrunkENI_InitFromNodeNetworkState_VlanZeroIsInvalid(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -392,9 +545,9 @@ func TestTrunkENI_InitFromSnapshot_VlanZeroIsInvalid(t *testing.T) {
 
 	pod := podWithBranches("uid-a", []*ENIDetails{{ID: "eni-vlan0", VlanID: 0}})
 
-	err := trunkENI.InitFromSnapshot(trunkId, []v1.Pod{pod})
-	assert.ErrorIs(t, err, ErrInvalidCheckpointLedger)
-	assert.False(t, trunkENI.IsHydrated())
+	err := trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{pod})
+	assert.ErrorIs(t, err, ErrInvalidRestoredLedger)
+	assert.False(t, trunkENI.IsRestoredFromNodeNetworkState())
 	assert.Empty(t, trunkENI.uidToBranchENIMap)
 }
 
@@ -417,16 +570,16 @@ func podLister(pods ...v1.Pod) func() ([]v1.Pod, error) {
 }
 
 // TestTrunkENI_ResyncTrunkLedgerFromEC2 tests the ledger is rebuilt authoritatively
-// from EC2 (reusing InitTrunk), the hydrated flag is cleared, and the resync is
+// from EC2 (reusing InitTrunk), the ledger becomes authoritative, and resync is
 // recorded with its trigger.
 func TestTrunkENI_ResyncTrunkLedgerFromEC2(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	// Start from a hydrated ledger that (wrongly) has no branches.
-	assert.NoError(t, trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod2}))
-	assert.True(t, trunkENI.IsHydrated())
+	// Start from a restored ledger that (wrongly) has no branches.
+	assert.NoError(t, trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{*MockPod2}))
+	assert.True(t, trunkENI.IsRestoredFromNodeNetworkState())
 	assert.Empty(t, trunkENI.uidToBranchENIMap)
 
 	expectResyncEC2(mockHelper, mockInstance)
@@ -435,8 +588,8 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2(t *testing.T) {
 	assert.NoError(t, trunkENI.ResyncTrunkLedgerFromEC2(podLister(*MockPod1, *MockPod2), "capacity"))
 
 	// State is authoritative: the two branches from EC2 are now tracked and the
-	// trunk is no longer hydrated (so it cannot resync again).
-	assert.False(t, trunkENI.IsHydrated())
+	// trunk is no longer restored (so it cannot resync again).
+	assert.False(t, trunkENI.IsRestoredFromNodeNetworkState())
 	assert.Equal(t, trunkId, trunkENI.trunkENIId)
 	assert.Len(t, trunkENI.uidToBranchENIMap[PodUID], 2)
 	assert.True(t, trunkENI.usedVlanIds[VlanId1])
@@ -445,30 +598,30 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2(t *testing.T) {
 }
 
 // TestTrunkENI_ResyncTrunkLedgerFromEC2_PodsListedAfterQuiesce proves the pod
-// snapshot is taken inside the resync (after the recovery gate quiesced
-// mutations), not passed in from before the wait.
+// pod list is read inside the resync after the recovery gate has quiesced
+// mutations.
 func TestTrunkENI_ResyncTrunkLedgerFromEC2_PodsListedAfterQuiesce(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	assert.NoError(t, trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod2}))
+	assert.NoError(t, trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{*MockPod2}))
 	expectResyncEC2(mockHelper, mockInstance)
 
 	listed := false
 	listPods := func() ([]v1.Pod, error) {
 		// By the time the ledger is read, the gate is already held exclusively.
-		assert.True(t, trunkENI.IsHydrated())
+		assert.True(t, trunkENI.IsRestoredFromNodeNetworkState())
 		listed = true
 		return []v1.Pod{*MockPod1, *MockPod2}, nil
 	}
 
 	assert.NoError(t, trunkENI.ResyncTrunkLedgerFromEC2(listPods, "capacity"))
-	assert.True(t, listed, "resync must read the pod snapshot itself")
+	assert.True(t, listed, "resync must read the pod list itself")
 }
 
 // TestTrunkENI_ResyncTrunkLedgerFromEC2_ListPodsError tests a pod-list failure
-// aborts the resync without touching the live ledger, leaving it hydrated so a
+// aborts the resync without touching the live ledger, leaving it restored so a
 // later contradiction can retry.
 func TestTrunkENI_ResyncTrunkLedgerFromEC2_ListPodsError(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -476,11 +629,11 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_ListPodsError(t *testing.T) {
 
 	trunkENI, _, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 	mockInstance.EXPECT().InstanceID().Return(InstanceId).AnyTimes()
-	assert.NoError(t, trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod1}))
+	assert.NoError(t, trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{*MockPod1}))
 
 	err := trunkENI.ResyncTrunkLedgerFromEC2(func() ([]v1.Pod, error) { return nil, MockError }, "capacity")
 	assert.Error(t, err)
-	assert.True(t, trunkENI.IsHydrated())
+	assert.True(t, trunkENI.IsRestoredFromNodeNetworkState())
 	assert.Len(t, trunkENI.uidToBranchENIMap[PodUID], 2)
 }
 
@@ -493,10 +646,10 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_TrunkMissing(t *testing.T) {
 	defer ctrl.Finish()
 
 	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	assert.NoError(t, trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod1}))
+	assert.NoError(t, trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{*MockPod1}))
 
-	// EC2 reports no trunk on the instance, and a hydrated instance has no device
-	// indexes to attach a new one with.
+	// EC2 reports no trunk on the instance. Restoration does not load the device
+	// indexes needed to create one.
 	newTrunkID := "eni-brand-new-trunk"
 	freeIndex := int32(2)
 	mockInstance.EXPECT().InstanceID().Return(InstanceId).AnyTimes()
@@ -510,8 +663,8 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_TrunkMissing(t *testing.T) {
 
 	err := trunkENI.ResyncTrunkLedgerFromEC2(podLister(*MockPod1), "capacity")
 	assert.ErrorIs(t, err, ErrTrunkChangedDuringResync)
-	// Live state untouched and still hydrated.
-	assert.True(t, trunkENI.IsHydrated())
+	// Live state remains untouched and eligible for another resync.
+	assert.True(t, trunkENI.IsRestoredFromNodeNetworkState())
 	assert.Equal(t, trunkId, trunkENI.trunkENIId)
 	assert.Len(t, trunkENI.uidToBranchENIMap[PodUID], 2)
 }
@@ -524,11 +677,11 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_TerminatesAfterSuccess(t *testing.T) 
 	defer ctrl.Finish()
 
 	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	assert.NoError(t, trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod2}))
+	assert.NoError(t, trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{*MockPod2}))
 
 	expectResyncEC2(mockHelper, mockInstance) // Times(1): the second resync must not call EC2.
 	assert.NoError(t, trunkENI.ResyncTrunkLedgerFromEC2(podLister(*MockPod1), "capacity"))
-	assert.False(t, trunkENI.IsHydrated())
+	assert.False(t, trunkENI.IsRestoredFromNodeNetworkState())
 
 	// Second attempt: trunk is authoritative now, so this is a no-op.
 	assert.NoError(t, trunkENI.ResyncTrunkLedgerFromEC2(podLister(*MockPod1), "capacity"))
@@ -543,7 +696,7 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_Concurrent(t *testing.T) {
 	defer ctrl.Finish()
 
 	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	assert.NoError(t, trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod2}))
+	assert.NoError(t, trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{*MockPod2}))
 
 	expectResyncEC2(mockHelper, mockInstance)
 	before := testutil.ToFloat64(trunkResyncCount.WithLabelValues("capacity"))
@@ -558,7 +711,7 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	assert.False(t, trunkENI.IsHydrated())
+	assert.False(t, trunkENI.IsRestoredFromNodeNetworkState())
 	assert.Len(t, trunkENI.uidToBranchENIMap[PodUID], 2)
 	// Exactly one resync ran despite 16 concurrent detections.
 	assert.Equal(t, 1.0, testutil.ToFloat64(trunkResyncCount.WithLabelValues("capacity"))-before)
@@ -567,7 +720,7 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_Concurrent(t *testing.T) {
 // TestTrunkENI_ResyncTrunkLedgerFromEC2_ConcurrentWriterNotLost is the recovery
 // gate's real test (run with -race): a concurrent allocation runs while a resync
 // rebuilds and swaps the ledger. The gate must order them, so the new pod's ENI
-// either lands before the recovery snapshot is taken (and is therefore rebuilt
+// either lands before pods are read for recovery (and is therefore rebuilt
 // from EC2) or is applied after the swap - it must never be silently dropped by
 // the swap.
 //
@@ -578,7 +731,7 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_ConcurrentWriterNotLost(t *testing.T)
 	defer ctrl.Finish()
 
 	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	assert.NoError(t, trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod2}))
+	assert.NoError(t, trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{*MockPod2}))
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId).AnyTimes()
 	mockInstance.EXPECT().Type().Return(InstanceType).AnyTimes()
@@ -642,7 +795,7 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_ConcurrentWriterNotLost(t *testing.T)
 	// The writer ran after the swap, so its ENI is in the authoritative ledger.
 	trunkENI.lock.RLock()
 	defer trunkENI.lock.RUnlock()
-	assert.False(t, trunkENI.hydrated)
+	assert.False(t, trunkENI.restoredFromNodeNetworkState)
 	writerENIs, ok := trunkENI.uidToBranchENIMap[PodUID2]
 	assert.True(t, ok, "the concurrent writer's pod must still own its ENI after the swap")
 	assert.Len(t, writerENIs, 1)
@@ -656,14 +809,14 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_ConcurrentWriterNotLost(t *testing.T)
 // annotation the ENI exists in EC2 but no pod claims it, and InitTrunk classifies
 // exactly that as unowned and queues it for deletion. This test blocks the
 // ownership commit (the annotation) after association and starts a resync
-// concurrently: the resync must not read its pod snapshot until the annotation
+// concurrently: the resync must not read pods until the annotation
 // transaction has finished, so the new ENI can never be reaped.
 func TestTrunkENI_ResyncTrunkLedgerFromEC2_WaitsForOwnershipCommit(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	assert.NoError(t, trunkENI.InitFromSnapshot(trunkId, []v1.Pod{*MockPod2}))
+	assert.NoError(t, trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{*MockPod2}))
 
 	mockInstance.EXPECT().InstanceID().Return(InstanceId).AnyTimes()
 	mockInstance.EXPECT().Type().Return(InstanceType).AnyTimes()
@@ -723,11 +876,11 @@ func TestTrunkENI_ResyncTrunkLedgerFromEC2_WaitsForOwnershipCommit(t *testing.T)
 		defer wg.Done()
 		close(resyncStarted)
 		_ = trunkENI.ResyncTrunkLedgerFromEC2(func() ([]v1.Pod, error) {
-			// If the gate works, ownership is committed before the snapshot is read.
+			// The gate ensures ownership is committed before pods are read.
 			select {
 			case <-commitDone:
 			default:
-				t.Error("resync read its pod snapshot before the ownership commit finished")
+				t.Error("resync read pods before the ownership commit finished")
 			}
 			// The annotation is now durable, so the rebuild sees the pod owning it.
 			owner := MockPod2.DeepCopy()
@@ -1383,8 +1536,8 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 	}
 }
 
-// TestTrunkENI_CreateAndAssociateBranchENIs test branch is created and associated with the trunk and valid eni details
-// are returned
+// TestTrunkENI_CreateAndAssociateBranchENIs verifies successful creation,
+// association, and ownership tracking.
 func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1416,6 +1569,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	// The returned content is as expected
 	assert.Equal(t, expectedENIDetails, eniDetails)
 	assert.Equal(t, expectedENIDetails, trunkENI.uidToBranchENIMap[PodUID2])
+	assert.Empty(t, trunkENI.inFlightENIs)
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup test branch is created and with instance security group
@@ -1452,10 +1606,11 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.
 	// The returned content is as expected
 	assert.Equal(t, expectedENIDetails, eniDetails)
 	assert.Equal(t, expectedENIDetails, trunkENI.uidToBranchENIMap[PodUID2])
+	assert.Empty(t, trunkENI.inFlightENIs)
 }
 
-// TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate tests if error is returned on associate then the created interfaces
-// are pushed to the delete queue
+// TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate verifies that an
+// association failure queues every ENI created by the request.
 func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1478,19 +1633,55 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 			append(vlan2Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).Return(BranchInterface2, nil),
 		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(nil, MockError),
 	)
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, nil)
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2, nil)
 	assert.Error(t, err)
-	// An association failure is not a recovery trigger: it carries no reliable
-	// signal that the ledger is stale, so it must not be ErrCurrentlyAtMaxCapacity.
+	// Reactive reclaim does not turn the association error into a capacity error.
 	assert.NotErrorIs(t, err, ErrCurrentlyAtMaxCapacity)
 	assert.Equal(t, []string{EniDetails1.ID, ENIDetailsMissingAssociationID.ID}, queuedENIIDs(trunkENI))
 	// Stamped so they cool down and keep their capacity slots accounted for.
 	assertAllQueuedENIsStamped(t, trunkENI)
+	assert.Empty(t, trunkENI.inFlightENIs)
 }
 
-// TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate tests if error is returned on associate then the created interfaces
-// are pushed to the delete queue
+func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate_NoSelfDoubleEnqueue(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+
+	mockInstance.EXPECT().Type().Return(InstanceType)
+	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
+	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
+	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil)
+
+	gomock.InOrder(
+		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+			append(vlan1Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).Return(BranchInterface1, nil),
+		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil),
+		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+			append(vlan2Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).Return(BranchInterface2, nil),
+		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(nil, MockError),
+	)
+	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
+		Return([]*awsEc2Types.NetworkInterface{
+			branchENIWithVlanTag(Branch1Id, VlanId1),
+			branchENIWithVlanTag(Branch2Id, VlanId2),
+		}, nil)
+
+	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2, nil)
+
+	assert.Error(t, err)
+	assert.Equal(t, []string{EniDetails1.ID, ENIDetailsMissingAssociationID.ID}, queuedENIIDs(trunkENI))
+	assert.Empty(t, trunkENI.inFlightENIs)
+}
+
+// TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate verifies that a create
+// failure queues ENIs completed earlier in the request.
 func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1517,6 +1708,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 	assert.Error(t, MockError, err)
 	assert.Equal(t, []string{EniDetails1.ID}, queuedENIIDs(trunkENI))
 	assertAllQueuedENIsStamped(t, trunkENI)
+	assert.Empty(t, trunkENI.inFlightENIs)
 }
 
 func TestTrunkENI_Introspect(t *testing.T) {
@@ -1581,8 +1773,8 @@ func TestTrunkENI_getConnectionTrackingSpec_NilValues(t *testing.T) {
 	assert.Nil(t, spec)
 }
 
-// fillLedgerToLimitMinusOne seeds the hydrated ledger with limit-1 owned branch
-// ENIs, i.e. the state a checkpoint hydrate produces when EC2 actually holds one
+// fillLedgerToLimitMinusOne seeds the restored ledger with limit-1 owned branch
+// ENIs, matching restored state when EC2 actually holds one
 // more attachment that no pod annotation mentions (a hidden orphan).
 func fillLedgerToLimitMinusOne(trunkENI *trunkENI) int {
 	limit := vpc.Limits[InstanceType].BranchInterface
@@ -1595,10 +1787,10 @@ func fillLedgerToLimitMinusOne(trunkENI *trunkENI) int {
 }
 
 // TestTrunkENI_HiddenOrphan_ReachesCapacityError proves the capacity-only recovery
-// trigger covers the failure mode checkpoint hydration cannot see: EC2 holds an
+// trigger covers the failure mode state restoration cannot see: EC2 holds an
 // attachment that no pod annotation claims, so the reconstructed ledger undercounts.
 //
-//	local hydrated ledger = limit - 1
+//	local restored ledger = limit - 1
 //	EC2 actual            = limit          <- hidden orphan
 //
 // The first allocation believes capacity exists, association fails, and the failed
@@ -1610,7 +1802,7 @@ func TestTrunkENI_HiddenOrphan_ReachesCapacityError(t *testing.T) {
 
 	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.trunkENIId = trunkId
-	trunkENI.hydrated = true
+	trunkENI.restoredFromNodeNetworkState = true
 	limit := fillLedgerToLimitMinusOne(trunkENI)
 
 	mockInstance.EXPECT().Type().Return(InstanceType).AnyTimes()
@@ -1623,6 +1815,7 @@ func TestTrunkENI_HiddenOrphan_ReachesCapacityError(t *testing.T) {
 		gomock.Any(), gomock.Any(), gomock.Any()).Return(BranchInterface1, nil)
 	// EC2 is actually full because of the orphan, so the association is rejected.
 	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, gomock.Any()).Return(nil, MockError)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, nil)
 
 	// First attempt: the local ledger says there is room.
 	assert.True(t, trunkENI.canCreateMore())
@@ -1636,7 +1829,7 @@ func TestTrunkENI_HiddenOrphan_ReachesCapacityError(t *testing.T) {
 	assert.False(t, trunkENI.canCreateMore())
 	_, err = trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1, nil)
 	assert.ErrorIs(t, err, ErrCurrentlyAtMaxCapacity)
-	assert.True(t, trunkENI.IsHydrated(), "still hydrated, so the capacity error arms the resync")
+	assert.True(t, trunkENI.IsRestoredFromNodeNetworkState(), "restored state allows the capacity error to trigger resync")
 }
 
 // TestTrunkENI_HiddenOrphan_DeleteWorkerWinsRace covers the interleaving where the
@@ -1653,7 +1846,7 @@ func TestTrunkENI_HiddenOrphan_DeleteWorkerWinsRace(t *testing.T) {
 
 	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.trunkENIId = trunkId
-	trunkENI.hydrated = true
+	trunkENI.restoredFromNodeNetworkState = true
 	fillLedgerToLimitMinusOne(trunkENI)
 
 	mockInstance.EXPECT().Type().Return(InstanceType).AnyTimes()
@@ -1665,6 +1858,7 @@ func TestTrunkENI_HiddenOrphan_DeleteWorkerWinsRace(t *testing.T) {
 	mockHelper.EXPECT().CreateNetworkInterface(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
 		gomock.Any(), gomock.Any(), gomock.Any()).Return(BranchInterface1, nil).AnyTimes()
 	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, gomock.Any()).Return(nil, MockError).AnyTimes()
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, nil)
 	mockHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil).AnyTimes()
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1, nil)
@@ -1710,7 +1904,7 @@ func expectInitTrunkExistingTrunk(mockHelper *mock_api.MockEC2APIHelper, mockIns
 }
 
 // TestTrunkENI_InitTrunk_RejectsDuplicateVlanFromAnnotation is the authoritative-
-// fallback guarantee: this path runs precisely when a checkpoint was rejected, so it
+// fallback guarantee: this path runs after restored state was rejected, so it
 // must not rebuild a ledger with the shape that caused the rejection. Two ENIs whose
 // EC2 VLAN tags collide cannot both own that VLAN, so the second is left
 // unattributed and reclaimed instead of being recorded on top of the first.
@@ -1785,11 +1979,11 @@ func TestTrunkENI_InitTrunk_AnnotationWinsOverVlanTagDrift(t *testing.T) {
 	assert.Equal(t, 1.0, testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("branch_eni_vlan_tag_drift"))-before)
 }
 
-// TestTrunkENI_InitFromSnapshot_RejectsUnusableAnnotation tests that an annotation
+// TestTrunkENI_InitFromNodeNetworkState_RejectsUnusableAnnotation tests that an annotation
 // which cannot be decoded, or which decodes to an entry with no ENI id, is not
 // silently read as "this pod owns nothing". The pod may own an ENI we cannot see,
-// which hydration would record as unowned, so the node takes the EC2 fallback.
-func TestTrunkENI_InitFromSnapshot_RejectsUnusableAnnotation(t *testing.T) {
+// which restoration would record as unowned, so the node takes the EC2 fallback.
+func TestTrunkENI_InitFromNodeNetworkState_RejectsUnusableAnnotation(t *testing.T) {
 	for name, annotation := range map[string]string{
 		"malformed json": "{not-json",
 		"empty eni id":   `[{"eniId":"","vlanId":1}]`,
@@ -1804,9 +1998,9 @@ func TestTrunkENI_InitFromSnapshot_RejectsUnusableAnnotation(t *testing.T) {
 				Annotations: map[string]string{config.ResourceNamePodENI: annotation},
 			}}
 
-			err := trunkENI.InitFromSnapshot(trunkId, []v1.Pod{pod})
-			assert.ErrorIs(t, err, ErrInvalidCheckpointLedger)
-			assert.False(t, trunkENI.IsHydrated())
+			err := trunkENI.InitFromNodeNetworkState(trunkId, []v1.Pod{pod})
+			assert.ErrorIs(t, err, ErrInvalidRestoredLedger)
+			assert.False(t, trunkENI.IsRestoredFromNodeNetworkState())
 			assert.Empty(t, trunkENI.uidToBranchENIMap)
 		})
 	}
@@ -1844,6 +2038,7 @@ func TestTrunkENI_DeleteCooledDownENIs_FailedAllocationDoesNotBlockQueue(t *test
 	mockHelper.EXPECT().CreateNetworkInterface(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
 		gomock.Any(), gomock.Any(), gomock.Any()).Return(BranchInterface1, nil)
 	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, gomock.Any()).Return(nil, MockError)
+	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, nil)
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1, nil)
 	assert.Error(t, err)
