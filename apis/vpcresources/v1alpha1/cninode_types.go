@@ -73,6 +73,43 @@ type CNINodeStatus struct {
 	// managing controller (see spec.managedBy) for visibility and recovery.
 	// +optional
 	TrunkInterface *TrunkInterface `json:"trunkInterface,omitempty"`
+	// Supports EC2-free controller restart recovery.
+	// +optional
+	NodeNetworkState *NodeNetworkState `json:"nodeNetworkState,omitempty"`
+}
+
+// NodeNetworkState is the persisted input for EC2-free restart recovery.
+type NodeNetworkState struct {
+	// +required
+	// +kubebuilder:validation:MaxLength=19
+	// +kubebuilder:validation:Pattern=`^i-([0-9a-f]{8}|[0-9a-f]{17})$`
+	InstanceID string `json:"instanceID"`
+	// May differ from the trunk subnet with ENIConfig.
+	// +required
+	// +kubebuilder:validation:MaxLength=24
+	// +kubebuilder:validation:Pattern=`^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`
+	SubnetID string `json:"subnetID"`
+	// +required
+	SubnetCIDRBlock string `json:"subnetCIDRBlock"`
+	// +optional
+	SubnetV6CIDRBlock string `json:"subnetV6CIDRBlock,omitempty"`
+	// +required
+	// +kubebuilder:validation:MinItems=1
+	// +listType=atomic
+	PrimaryNetworkInterfaceSecurityGroups []string `json:"primaryNetworkInterfaceSecurityGroups"`
+	// Preserves primary ENI settings for new branch ENIs.
+	// +optional
+	ConnectionTracking *ConnectionTrackingConfig `json:"connectionTracking,omitempty"`
+}
+
+// ConnectionTrackingConfig is applied to newly created branch ENIs.
+type ConnectionTrackingConfig struct {
+	// +optional
+	TCPEstablishedTimeout *int32 `json:"tcpEstablishedTimeout,omitempty"`
+	// +optional
+	UDPStreamTimeout *int32 `json:"udpStreamTimeout,omitempty"`
+	// +optional
+	UDPTimeout *int32 `json:"udpTimeout,omitempty"`
 }
 
 // TrunkInterface describes a trunk ENI and its associated branch ENIs.
