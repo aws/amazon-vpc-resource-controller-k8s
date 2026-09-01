@@ -1195,7 +1195,7 @@ func GetCommandToTestHostConnectivity(host string, port int32, retries int, slee
 // Install and start the dot net web server, it's light weight so starts pretty quick
 func GetCommandToStartHttpServer() string {
 	return "Add-WindowsFeature Web-Server; Invoke-WebRequest " +
-		"-Uri 'https://dotnetbinaries.blob.core.windows.net/servicemonitor/2.0.1.6/ServiceMonitor.exe'" +
+		"-Uri 'https://github.com/microsoft/IIS.ServiceMonitor/releases/download/v2.0.1.10/ServiceMonitor.exe'" +
 		" -OutFile 'C:\\ServiceMonitor.exe'; " +
 		"echo 'ok' > C:\\inetpub\\wwwroot\\default.html; " + "C:\\ServiceMonitor.exe 'w3svc'; "
 }

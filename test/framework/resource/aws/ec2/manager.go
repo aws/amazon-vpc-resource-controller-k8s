@@ -64,16 +64,45 @@ func (d *Manager) GetInstanceDetails(instanceID string) (*ec2types.Instance, err
 	return &describeInstanceOutput.Reservations[0].Instances[0], nil
 }
 
+// getVPCIpRanges returns the IPv4 CIDR block(s) associated with the VPC,
+// usually 192.168.0.0/16 for the eksctl created clusters.
+func (d *Manager) getVPCIpRanges() ([]ec2types.IpRange, error) {
+	output, err := d.ec2Client.DescribeVpcs(context.TODO(), &ec2.DescribeVpcsInput{
+		VpcIds: []string{d.vpcID},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(output.Vpcs) == 0 {
+		return nil, fmt.Errorf("no VPC found for ID %s", d.vpcID)
+	}
+
+	var ipRanges []ec2types.IpRange
+	for _, association := range output.Vpcs[0].CidrBlockAssociationSet {
+		if association.CidrBlock != nil {
+			ipRanges = append(ipRanges, ec2types.IpRange{CidrIp: association.CidrBlock})
+		}
+	}
+	if len(ipRanges) == 0 {
+		return nil, fmt.Errorf("no IPv4 CIDR blocks found for VPC %s", d.vpcID)
+	}
+	return ipRanges, nil
+}
+
 func (d *Manager) AuthorizeSecurityGroupIngress(securityGroupID string, port int,
 	protocol string,
 ) error {
-	_, err := d.ec2Client.AuthorizeSecurityGroupIngress(context.TODO(), &ec2.AuthorizeSecurityGroupIngressInput{
+	ipRanges, err := d.getVPCIpRanges()
+	if err != nil {
+		return err
+	}
+	_, err = d.ec2Client.AuthorizeSecurityGroupIngress(context.TODO(), &ec2.AuthorizeSecurityGroupIngressInput{
 		GroupId: &securityGroupID,
 		IpPermissions: []ec2types.IpPermission{
 			{
 				FromPort:   aws.Int32(int32(port)),
 				IpProtocol: aws.String(protocol),
-				IpRanges:   []ec2types.IpRange{{CidrIp: aws.String("0.0.0.0/0")}},
+				IpRanges:   ipRanges,
 				ToPort:     aws.Int32(int32(port)),
 			},
 		},
@@ -101,13 +130,17 @@ func (d *Manager) AuthorizeSecurityGroupEgress(securityGroupID string, port int,
 func (d *Manager) RevokeSecurityGroupIngress(securityGroupID string, port int,
 	protocol string,
 ) error {
-	_, err := d.ec2Client.RevokeSecurityGroupIngress(context.TODO(), &ec2.RevokeSecurityGroupIngressInput{
+	ipRanges, err := d.getVPCIpRanges()
+	if err != nil {
+		return err
+	}
+	_, err = d.ec2Client.RevokeSecurityGroupIngress(context.TODO(), &ec2.RevokeSecurityGroupIngressInput{
 		GroupId: aws.String(securityGroupID),
 		IpPermissions: []ec2types.IpPermission{
 			{
 				FromPort:   aws.Int32(int32(port)),
 				IpProtocol: aws.String(protocol),
-				IpRanges:   []ec2types.IpRange{{CidrIp: aws.String("0.0.0.0/0")}},
+				IpRanges:   ipRanges,
 				ToPort:     aws.Int32(int32(port)),
 			},
 		},
