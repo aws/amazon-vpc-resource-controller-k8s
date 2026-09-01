@@ -91,6 +91,49 @@ spec:
           status:
             description: CNINodeStatus defines the managed VPC resources.
             properties:
+              nodeNetworkState:
+                description: Supports EC2-free controller restart recovery.
+                properties:
+                  connectionTracking:
+                    description: Preserves primary ENI settings for new branch ENIs.
+                    properties:
+                      tcpEstablishedTimeout:
+                        format: int32
+                        type: integer
+                      udpStreamTimeout:
+                        format: int32
+                        type: integer
+                      udpTimeout:
+                        format: int32
+                        type: integer
+                    type: object
+                  instanceID:
+                    maxLength: 19
+                    pattern: ^i-([0-9a-f]{8}|[0-9a-f]{17})$
+                    type: string
+                  primaryNetworkInterfaceSecurityGroups:
+                    items:
+                      maxLength: 20
+                      pattern: ^sg-([0-9a-f]{8}|[0-9a-f]{17})$
+                      type: string
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  subnetCIDRBlock:
+                    type: string
+                  subnetID:
+                    description: May differ from the trunk subnet with ENIConfig.
+                    maxLength: 24
+                    pattern: ^subnet-([0-9a-f]{8}|[0-9a-f]{17})$
+                    type: string
+                  subnetV6CIDRBlock:
+                    type: string
+                required:
+                - instanceID
+                - primaryNetworkInterfaceSecurityGroups
+                - subnetCIDRBlock
+                - subnetID
+                type: object
               trunkInterface:
                 description: |-
                   TrunkInterface describes the trunk network interface attached to the

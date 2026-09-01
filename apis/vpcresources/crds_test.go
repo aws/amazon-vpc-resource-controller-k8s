@@ -84,6 +84,56 @@ func TestTrunkInterfaceSubnetIDSchema(t *testing.T) {
 	}
 }
 
+func TestNodeNetworkStateSchema(t *testing.T) {
+	require.Len(t, CNINodeCRD.Spec.Versions, 1)
+	status := CNINodeCRD.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["status"]
+	state, ok := status.Properties["nodeNetworkState"]
+	require.True(t, ok, "status.nodeNetworkState must be in the schema")
+
+	assert.NotContains(t, status.Required, "nodeNetworkState")
+	assert.ElementsMatch(t, []string{
+		"instanceID",
+		"subnetID",
+		"subnetCIDRBlock",
+		"primaryNetworkInterfaceSecurityGroups",
+	}, state.Required)
+
+	expectedFields := []string{
+		"instanceID",
+		"subnetID",
+		"subnetCIDRBlock",
+		"subnetV6CIDRBlock",
+		"primaryNetworkInterfaceSecurityGroups",
+		"connectionTracking",
+	}
+	assert.Len(t, state.Properties, len(expectedFields))
+	for _, field := range expectedFields {
+		assert.Contains(t, state.Properties, field)
+	}
+
+	instanceID := state.Properties["instanceID"]
+	assert.Equal(t, `^i-([0-9a-f]{8}|[0-9a-f]{17})$`, instanceID.Pattern)
+	require.NotNil(t, instanceID.MaxLength)
+	assert.EqualValues(t, 19, *instanceID.MaxLength)
+
+	subnetID := state.Properties["subnetID"]
+	assert.Equal(t, `^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`, subnetID.Pattern)
+	require.NotNil(t, subnetID.MaxLength)
+	assert.EqualValues(t, 24, *subnetID.MaxLength)
+
+	securityGroups := state.Properties["primaryNetworkInterfaceSecurityGroups"]
+	assert.Equal(t, "array", securityGroups.Type)
+	require.NotNil(t, securityGroups.MinItems)
+	assert.EqualValues(t, 1, *securityGroups.MinItems)
+	require.NotNil(t, securityGroups.XListType)
+	assert.Equal(t, "atomic", *securityGroups.XListType)
+
+	connectionTracking := state.Properties["connectionTracking"]
+	assert.Contains(t, connectionTracking.Properties, "tcpEstablishedTimeout")
+	assert.Contains(t, connectionTracking.Properties, "udpStreamTimeout")
+	assert.Contains(t, connectionTracking.Properties, "udpTimeout")
+}
+
 // TestEmbeddedCRDsMatchGenerated fails if the embedded copies drift from the
 // controller-gen output in config/crd/bases (make verify keeps them in sync).
 func TestEmbeddedCRDsMatchGenerated(t *testing.T) {
