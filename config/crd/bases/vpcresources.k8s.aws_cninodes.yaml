@@ -113,6 +113,8 @@ spec:
                     type: string
                   primaryNetworkInterfaceSecurityGroups:
                     items:
+                      maxLength: 20
+                      pattern: ^sg-([0-9a-f]{8}|[0-9a-f]{17})$
                       type: string
                     minItems: 1
                     type: array

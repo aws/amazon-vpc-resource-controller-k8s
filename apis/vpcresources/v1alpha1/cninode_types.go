@@ -95,6 +95,8 @@ type NodeNetworkState struct {
 	SubnetV6CIDRBlock string `json:"subnetV6CIDRBlock,omitempty"`
 	// +required
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:items:MaxLength=20
+	// +kubebuilder:validation:items:Pattern=`^sg-([0-9a-f]{8}|[0-9a-f]{17})$`
 	// +listType=atomic
 	PrimaryNetworkInterfaceSecurityGroups []string `json:"primaryNetworkInterfaceSecurityGroups"`
 	// Preserves primary ENI settings for new branch ENIs.
