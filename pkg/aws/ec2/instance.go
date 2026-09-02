@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
@@ -71,6 +72,13 @@ type ec2Instance struct {
 	tcpEstablishedTimeout *int32
 	udpStreamTimeout      *int32
 	udpTimeout            *int32
+
+	// restoredFromNodeNetworkState records whether instance details came from
+	// NodeNetworkState instead of DescribeInstances.
+	restoredFromNodeNetworkState bool
+	// restoredTrunkENIID identifies the trunk whose ledger is restored from pod
+	// annotations. It is empty on the EC2 initialization path.
+	restoredTrunkENIID string
 }
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
@@ -93,6 +101,10 @@ type EC2Instance interface {
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
+	LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, instanceType string, trunkENIID string)
+	BuildNodeNetworkState() rcv1alpha1.NodeNetworkState
+	IsRestoredFromNodeNetworkState() bool
+	RestoredTrunkENIID() string
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -117,6 +129,23 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	if instance == nil || instance.SubnetId == nil {
 		return fmt.Errorf("failed to find instance %s details from EC2 API", i.instanceID)
 	}
+
+	// Clear conditionally populated and derived values before rebuilding from
+	// EC2. primaryENISecurityGroups gates the primary-ENI block below, and
+	// currentSubnetID controls whether the custom-networking subnet is queried.
+	i.instanceSubnetV6CidrBlock = ""
+	i.subnetV6Mask = ""
+	i.primaryENISecurityGroups = nil
+	i.primaryENIID = ""
+	i.tcpEstablishedTimeout = nil
+	i.udpStreamTimeout = nil
+	i.udpTimeout = nil
+	i.currentSubnetID = ""
+	i.currentSubnetCIDRBlock = ""
+	i.currentSubnetV6CIDRBlock = ""
+	i.currentInstanceSecurityGroups = nil
+	i.restoredFromNodeNetworkState = false
+	i.restoredTrunkENIID = ""
 
 	// Set instance subnet and cidr during node initialization
 	i.instanceSubnetID = *instance.SubnetId
@@ -306,8 +335,7 @@ func (i *ec2Instance) UpdateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHel
 // updateCurrentSubnetAndCidrBlock updates subnet details and security group if the node is
 // using custom networking
 func (i *ec2Instance) updateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHelper) error {
-	// Custom networking is being used on node, point the current subnet ID, CIDR block and
-	// instance security group to the one's present in the Custom networking spec
+	// Custom networking uses the subnet and security groups from ENIConfig.
 	if i.newCustomNetworkingSubnetID != "" {
 		if i.newCustomNetworkingSecurityGroups != nil && len(i.newCustomNetworkingSecurityGroups) > 0 {
 			i.currentInstanceSecurityGroups = i.newCustomNetworkingSecurityGroups
@@ -352,4 +380,88 @@ func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, ud
 	defer i.lock.RUnlock()
 
 	return i.tcpEstablishedTimeout, i.udpStreamTimeout, i.udpTimeout
+}
+
+// prefixLengthFromCIDR returns the prefix length from a CIDR, such as "16" for
+// "10.0.0.0/16". It returns an empty string for empty or malformed input.
+func prefixLengthFromCIDR(cidr string) string {
+	if parts := strings.Split(cidr, "/"); len(parts) == 2 {
+		return parts[1]
+	}
+	return ""
+}
+
+// LoadFromNodeNetworkState loads the persisted EC2 values needed to restore the
+// instance. Effective subnet and security group values are derived separately
+// from the current ENIConfig. Device indexes and the primary ENI id remain
+// unset because restored nodes already have a trunk, and Windows nodes do not
+// use this restoration path.
+func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, instanceType string, trunkENIID string) {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	i.instanceType = instanceType
+	i.instanceSubnetID = state.SubnetID
+	i.instanceSubnetCidrBlock = state.SubnetCIDRBlock
+	i.instanceSubnetV6CidrBlock = state.SubnetV6CIDRBlock
+	i.currentSubnetID = ""
+	i.currentSubnetCIDRBlock = ""
+	i.currentSubnetV6CIDRBlock = ""
+	i.currentInstanceSecurityGroups = nil
+	i.subnetMask = prefixLengthFromCIDR(state.SubnetCIDRBlock)
+	i.subnetV6Mask = prefixLengthFromCIDR(state.SubnetV6CIDRBlock)
+	i.primaryENISecurityGroups = state.PrimaryNetworkInterfaceSecurityGroups
+	if ct := state.ConnectionTracking; ct != nil {
+		i.tcpEstablishedTimeout = ct.TCPEstablishedTimeout
+		i.udpStreamTimeout = ct.UDPStreamTimeout
+		i.udpTimeout = ct.UDPTimeout
+	} else {
+		i.tcpEstablishedTimeout = nil
+		i.udpStreamTimeout = nil
+		i.udpTimeout = nil
+	}
+
+	i.restoredTrunkENIID = trunkENIID
+	i.restoredFromNodeNetworkState = true
+}
+
+// BuildNodeNetworkState returns the EC2 values needed to restore this instance.
+// It is called after authoritative EC2 initialization.
+func (i *ec2Instance) BuildNodeNetworkState() rcv1alpha1.NodeNetworkState {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	var connectionTracking *rcv1alpha1.ConnectionTrackingConfig
+	if i.tcpEstablishedTimeout != nil || i.udpStreamTimeout != nil || i.udpTimeout != nil {
+		connectionTracking = &rcv1alpha1.ConnectionTrackingConfig{
+			TCPEstablishedTimeout: i.tcpEstablishedTimeout,
+			UDPStreamTimeout:      i.udpStreamTimeout,
+			UDPTimeout:            i.udpTimeout,
+		}
+	}
+	return rcv1alpha1.NodeNetworkState{
+		InstanceID:                            i.instanceID,
+		SubnetID:                              i.instanceSubnetID,
+		SubnetCIDRBlock:                       i.instanceSubnetCidrBlock,
+		SubnetV6CIDRBlock:                     i.instanceSubnetV6CidrBlock,
+		PrimaryNetworkInterfaceSecurityGroups: i.primaryENISecurityGroups,
+		ConnectionTracking:                    connectionTracking,
+	}
+}
+
+// IsRestoredFromNodeNetworkState reports whether the instance details were
+// restored from NodeNetworkState.
+func (i *ec2Instance) IsRestoredFromNodeNetworkState() bool {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.restoredFromNodeNetworkState
+}
+
+// RestoredTrunkENIID returns the trunk ENI ID selected for restoration.
+func (i *ec2Instance) RestoredTrunkENIID() string {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.restoredTrunkENIID
 }

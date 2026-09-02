@@ -20,6 +20,7 @@ package mock_ec2
 import (
 	reflect "reflect"
 
+	v1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -45,6 +46,20 @@ func NewMockEC2Instance(ctrl *gomock.Controller) *MockEC2Instance {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockEC2Instance) EXPECT() *MockEC2InstanceMockRecorder {
 	return m.recorder
+}
+
+// BuildNodeNetworkState mocks base method.
+func (m *MockEC2Instance) BuildNodeNetworkState() v1alpha1.NodeNetworkState {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BuildNodeNetworkState")
+	ret0, _ := ret[0].(v1alpha1.NodeNetworkState)
+	return ret0
+}
+
+// BuildNodeNetworkState indicates an expected call of BuildNodeNetworkState.
+func (mr *MockEC2InstanceMockRecorder) BuildNodeNetworkState() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildNodeNetworkState", reflect.TypeOf((*MockEC2Instance)(nil).BuildNodeNetworkState))
 }
 
 // CurrentInstanceSecurityGroups mocks base method.
@@ -133,6 +148,20 @@ func (mr *MockEC2InstanceMockRecorder) InstanceID() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceID", reflect.TypeOf((*MockEC2Instance)(nil).InstanceID))
 }
 
+// IsRestoredFromNodeNetworkState mocks base method.
+func (m *MockEC2Instance) IsRestoredFromNodeNetworkState() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsRestoredFromNodeNetworkState")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsRestoredFromNodeNetworkState indicates an expected call of IsRestoredFromNodeNetworkState.
+func (mr *MockEC2InstanceMockRecorder) IsRestoredFromNodeNetworkState() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRestoredFromNodeNetworkState", reflect.TypeOf((*MockEC2Instance)(nil).IsRestoredFromNodeNetworkState))
+}
+
 // LoadDetails mocks base method.
 func (m *MockEC2Instance) LoadDetails(arg0 api.EC2APIHelper) error {
 	m.ctrl.T.Helper()
@@ -145,6 +174,18 @@ func (m *MockEC2Instance) LoadDetails(arg0 api.EC2APIHelper) error {
 func (mr *MockEC2InstanceMockRecorder) LoadDetails(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadDetails", reflect.TypeOf((*MockEC2Instance)(nil).LoadDetails), arg0)
+}
+
+// LoadFromNodeNetworkState mocks base method.
+func (m *MockEC2Instance) LoadFromNodeNetworkState(arg0 v1alpha1.NodeNetworkState, arg1, arg2 string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "LoadFromNodeNetworkState", arg0, arg1, arg2)
+}
+
+// LoadFromNodeNetworkState indicates an expected call of LoadFromNodeNetworkState.
+func (mr *MockEC2InstanceMockRecorder) LoadFromNodeNetworkState(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadFromNodeNetworkState", reflect.TypeOf((*MockEC2Instance)(nil).LoadFromNodeNetworkState), arg0, arg1, arg2)
 }
 
 // Name mocks base method.
@@ -187,6 +228,20 @@ func (m *MockEC2Instance) PrimaryNetworkInterfaceID() string {
 func (mr *MockEC2InstanceMockRecorder) PrimaryNetworkInterfaceID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrimaryNetworkInterfaceID", reflect.TypeOf((*MockEC2Instance)(nil).PrimaryNetworkInterfaceID))
+}
+
+// RestoredTrunkENIID mocks base method.
+func (m *MockEC2Instance) RestoredTrunkENIID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RestoredTrunkENIID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// RestoredTrunkENIID indicates an expected call of RestoredTrunkENIID.
+func (mr *MockEC2InstanceMockRecorder) RestoredTrunkENIID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RestoredTrunkENIID", reflect.TypeOf((*MockEC2Instance)(nil).RestoredTrunkENIID))
 }
 
 // SetNewCustomNetworkingSpec mocks base method.

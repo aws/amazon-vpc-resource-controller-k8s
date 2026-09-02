@@ -91,7 +91,7 @@ var (
 	mockError = fmt.Errorf("mock error")
 
 	unManagedNode = node.NewUnManagedNode(zap.New(), nodeName, instanceID, config.OSLinux)
-	managedNode   = node.NewManagedNode(zap.New(), nodeName, instanceID, config.OSLinux, nil, nil)
+	managedNode   = node.NewManagedNode(zap.New(), nodeName, instanceID, "t3.xlarge", config.OSLinux, nil, nil)
 
 	healthzHandler = healthz.NewHealthzHandler(5)
 )
@@ -802,6 +802,17 @@ func Test_isWindowsNode_Linux(t *testing.T) {
 func Test_getNodeInstanceID(t *testing.T) {
 	id := GetNodeInstanceID(v1Node)
 	assert.Equal(t, instanceID, id)
+}
+
+func TestGetNodeInstanceType(t *testing.T) {
+	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+		v1.LabelInstanceTypeStable: "m5.large",
+		v1.LabelInstanceType:       "m4.large",
+	}}}
+	assert.Equal(t, "m5.large", GetNodeInstanceType(node))
+
+	delete(node.Labels, v1.LabelInstanceTypeStable)
+	assert.Equal(t, "m4.large", GetNodeInstanceType(node))
 }
 
 // Test_getNodeOS tests that is OS label is set then the correct os is returned

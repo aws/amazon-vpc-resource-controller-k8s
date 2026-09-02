@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
@@ -41,6 +42,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -157,17 +159,37 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	if err := trunkENI.InitTrunk(instance, podList); err != nil {
+	// Restored instances rebuild the trunk ledger from the observed trunk ID and
+	// pod annotations. An invalid ledger falls back to authoritative EC2
+	// initialization with a fresh trunk object.
+	ec2Path := !instance.IsRestoredFromNodeNetworkState()
+	var initErr error
+	if instance.IsRestoredFromNodeNetworkState() {
+		initErr = trunkENI.InitFromNodeNetworkState(instance.RestoredTrunkENIID(), podList)
+		if errors.Is(initErr, trunk.ErrInvalidRestoredLedger) {
+			log.Info("restored trunk ledger is invalid, falling back to authoritative EC2 initialization")
+			if err := instance.LoadDetails(b.apiWrapper.EC2API); err != nil {
+				branchProviderOperationsErrCount.WithLabelValues("init").Inc()
+				return fmt.Errorf("loading instance details for EC2 fallback, %w", err)
+			}
+			trunkENI = trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API)
+			ec2Path = true
+			initErr = trunkENI.InitTrunk(instance, podList)
+		}
+	} else {
+		initErr = trunkENI.InitTrunk(instance, podList)
+	}
+	if initErr != nil {
 		// If it's an AWS Error, get the exit code without the error message to avoid
 		// broadcasting multiple different messaged events
 
 		var apiErr smithy.APIError
 
-		if errors.As(err, &apiErr) {
+		if errors.As(initErr, &apiErr) {
 
 			node, errGetNode := b.apiWrapper.K8sAPI.GetNode(instance.Name())
 			if errGetNode != nil {
-				return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, err)
+				return fmt.Errorf("failed to get node for event advertisment: %v: %v", errGetNode, initErr)
 			}
 			eventMessage := fmt.Sprintf("Failed to create trunk interface: "+
 				"Error Code: %s", apiErr.ErrorCode())
@@ -181,7 +203,13 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 
 		utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkFailedInitializationReason, "The node failed initializing trunk interface", v1.EventTypeNormal, b.log)
 		branchProviderOperationsErrCount.WithLabelValues("init").Inc()
-		return fmt.Errorf("initializing trunk, %w", err)
+		return fmt.Errorf("initializing trunk, %w", initErr)
+	}
+
+	// Persist NodeNetworkState after EC2 initialization. This is best-effort
+	// because a write failure only makes the next restart use EC2 again.
+	if ec2Path {
+		b.persistCNINodeStatus(instance, trunkENI)
 	}
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceSeconds(start))
 
@@ -201,6 +229,40 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkInitiatedReason, "The node has trunk interface initialized successfully", v1.EventTypeNormal, b.log)
 
 	return nil
+}
+
+// persistCNINodeStatus writes NodeNetworkState and the observed trunk attributes
+// after authoritative EC2 initialization. Failures are logged and ignored
+// because the next restart can use EC2 discovery.
+func (b *branchENIProvider) persistCNINodeStatus(instance ec2.EC2Instance, trunkENI trunk.TrunkENI) {
+	nodeName := instance.Name()
+	cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
+	if err != nil {
+		b.log.Error(err, "failed to get CNINode before persisting NodeNetworkState", "node", nodeName)
+		return
+	}
+	// The owning controller owns the object's status; never write into another
+	// controller's CNINode.
+	if !cniNode.IsManagedByVPCResourceController() {
+		b.log.Info("skipping NodeNetworkState persistence because another controller manages the CNINode",
+			"node", nodeName, "managedBy", cniNode.Spec.ManagedBy)
+		return
+	}
+	base := cniNode.DeepCopy()
+
+	state := instance.BuildNodeNetworkState()
+	cniNode.Status.NodeNetworkState = &state
+
+	// Observed-resource layer, shared with other status writers.
+	if cniNode.Status.TrunkInterface == nil {
+		cniNode.Status.TrunkInterface = &rcv1alpha1.TrunkInterface{}
+	}
+	cniNode.Status.TrunkInterface.ID = trunkENI.TrunkENIID()
+	cniNode.Status.TrunkInterface.SubnetID = instance.SubnetID()
+
+	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(base, cniNode); err != nil {
+		b.log.Error(err, "failed to persist NodeNetworkState to CNINode status", "node", nodeName)
+	}
 }
 
 // DeInitResources adds a an asynchronous delete job to the worker which will execute after a certain period.
@@ -363,47 +425,56 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
 	}
 
+	// The trunk records successfully associated ENIs in its local ledger before
+	// this callback writes the pod annotation. If annotation fails, the trunk
+	// atomically removes that ledger entry and queues the ENIs for deletion.
+	var jsonBytes []byte
+	// commitFailed keeps the failure events precise: a failed ownership commit has
+	// already reported itself, so it must not also surface as an allocation failure.
+	commitFailed := false
+	commitOwnership := func(branchENIs []*trunk.ENIDetails) error {
+		var err error
+		if jsonBytes, err = json.Marshal(branchENIs); err != nil {
+			commitFailed = true
+			branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
+			log.Error(err, "failed to marshal ENI details, releasing the ENIs", "ENI/s", branchENIs)
+			return err
+		}
+
+		annotateStart := time.Now()
+		if err = b.apiWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, pod.UID,
+			config.ResourceNamePodENI, string(jsonBytes)); err != nil {
+			commitFailed = true
+			branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
+			b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchENIAnnotationFailed,
+				fmt.Sprintf("failed to annotate pod with branch ENI details: %v", err), v1.EventTypeWarning)
+			log.Error(err, "failed to annotate the pod, releasing the ENIs", "ENI/s", branchENIs)
+			return err
+		}
+		branchProviderOperationLatency.WithLabelValues(operationAnnotateBranchENI, strconv.Itoa(resourceCount)).
+			Observe(timeSinceSeconds(annotateStart))
+		return nil
+	}
+
 	// Get the list of branch ENIs that will be allocated to the pod object
-	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
+	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount, commitOwnership)
 	if err != nil {
-		if err == trunk.ErrCurrentlyAtMaxCapacity {
+		if errors.Is(err, trunk.ErrCurrentlyAtMaxCapacity) {
 			return ctrl.Result{RequeueAfter: cooldown.GetCoolDown().GetCoolDownPeriod(), Requeue: true}, nil
 		}
-		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
-			fmt.Sprintf("failed to allocate branch ENI to pod: %v", err), v1.EventTypeWarning)
+		if !commitFailed {
+			b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
+				fmt.Sprintf("failed to allocate branch ENI to pod: %v", err), v1.EventTypeWarning)
+		}
 		return ctrl.Result{}, err
 	}
 
 	branchProviderOperationLatency.WithLabelValues(operationCreateBranchENI, strconv.Itoa(resourceCount)).
 		Observe(timeSinceSeconds(start))
 
-	jsonBytes, err := json.Marshal(branchENIs)
-	if err != nil {
-		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
-		b.log.Info("pushed the ENIs to the delete queue as failed to unmarshal ENI details", "ENI/s", branchENIs)
-		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
-		return ctrl.Result{}, err
-	}
-
-	start = time.Now()
-	// Annotate the pod with the created resources
-	err = b.apiWrapper.PodAPI.AnnotatePod(pod.Namespace, pod.Name, pod.UID,
-		config.ResourceNamePodENI, string(jsonBytes))
-	if err != nil {
-		trunkENI.PushENIsToFrontOfDeleteQueue(pod, branchENIs)
-		b.log.Info("pushed the ENIs to the delete queue as failed to annotate the pod", "ENI/s", branchENIs)
-		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchENIAnnotationFailed,
-			fmt.Sprintf("failed to annotate pod with branch ENI details: %v", err), v1.EventTypeWarning)
-		branchProviderOperationsErrCount.WithLabelValues("annotate_branch_eni").Inc()
-		return ctrl.Result{}, err
-	}
-
 	// Broadcast event to indicate the resource has been successfully created and annotated to the pod object
 	b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonResourceAllocated,
 		fmt.Sprintf("Allocated %s to the pod", string(jsonBytes)), v1.EventTypeNormal)
-
-	branchProviderOperationLatency.WithLabelValues(operationAnnotateBranchENI, strconv.Itoa(resourceCount)).
-		Observe(timeSinceSeconds(start))
 
 	log.Info("created and annotated branch interface/s successfully", "branches", branchENIs)
 

@@ -200,6 +200,14 @@ type CNINodeList struct {
 	Items           []CNINode `json:"items"`
 }
 
+// IsManagedByVPCResourceController reports whether this CNINode, including its
+// status, is owned by the vpc-resource-controller. An empty managedBy means yes,
+// for objects created before the field existed. Exactly one controller owns an
+// object's status, so anything else must be left alone.
+func (c *CNINode) IsManagedByVPCResourceController() bool {
+	return c.Spec.ManagedBy == "" || c.Spec.ManagedBy == ManagedByVPCResourceController
+}
+
 func init() {
 	SchemeBuilder.Register(&CNINode{}, &CNINodeList{})
 }

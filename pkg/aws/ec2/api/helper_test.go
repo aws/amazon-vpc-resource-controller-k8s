@@ -172,10 +172,12 @@ var (
 
 	networkInterface1 = ec2types.NetworkInterface{
 		NetworkInterfaceId: &branchInterfaceId,
+		Status:             ec2types.NetworkInterfaceStatusInUse,
 		TagSet:             branchTag1,
 	}
 	networkInterface2 = ec2types.NetworkInterface{
 		NetworkInterfaceId: &branchInterfaceId2,
+		Status:             ec2types.NetworkInterfaceStatusAvailable,
 		TagSet:             branchTag2,
 	}
 
