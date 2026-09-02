@@ -16,18 +16,24 @@ package node
 import (
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
-	v1 "k8s.io/api/core/v1"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 type node struct {
@@ -42,6 +48,8 @@ type node struct {
 	managed bool
 	// instance stores the ec2 instance details that is shared by all the providers
 	instance ec2.EC2Instance
+	// instanceType is captured from the Kubernetes Node used to create this object.
+	instanceType string
 	// node has reference to k8s APIs
 	k8sAPI k8s.K8sWrapper
 	// node has reference to EC2 APIs
@@ -55,7 +63,48 @@ type node struct {
 const (
 	MaxNodeReconciliationInterval = 15 * time.Minute
 	NodeInitialCleanupInterval    = 1 * time.Minute
+
+	// NodeNetworkState restoration metric label values.
+	restoreResultHit  = "hit"
+	restoreResultMiss = "miss"
+
+	restoreReasonNoState            = "no_state"
+	restoreReasonNotManaged         = "not_managed_by_controller"
+	restoreReasonMissingField       = "missing_field"
+	restoreReasonInvalidCIDR        = "invalid_cidr"
+	restoreReasonInstanceIDMismatch = "instance_id_mismatch"
+	restoreReasonSubnetMismatch     = "subnet_mismatch"
+	restoreReasonSubnetLookupFailed = "subnet_lookup_failed"
+	restoreReasonUnsupportedType    = "unsupported_type"
+
+	// node_init_duration_seconds label values.
+	initResultOK    = "success"
+	initResultError = "error"
 )
+
+var (
+	cniNodeNetworkStateRestoreCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cninode_node_network_state_restore_total",
+			Help: "Number of NodeNetworkState restoration attempts by result and miss reason",
+		},
+		[]string{"result", "reason"},
+	)
+	nodeInitDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "node_init_duration_seconds",
+			Help: "Duration of a node's InitResources call by result",
+		},
+		[]string{"result"},
+	)
+	registerMetricsOnce sync.Once
+)
+
+func registerNodeMetrics() {
+	registerMetricsOnce.Do(func() {
+		metrics.Registry.MustRegister(cniNodeNetworkStateRestoreCount, nodeInitDuration)
+	})
+}
 
 // ErrInitResources to wrap error messages for all errors encountered
 // during node initialization so the node can be de-registered on failure
@@ -88,12 +137,14 @@ type Node interface {
 }
 
 // NewManagedNode returns node managed by the controller
-func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
+func NewManagedNode(log logr.Logger, nodeName, instanceID, instanceType, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
+	registerNodeMetrics()
 	return &node{
 		managed: true,
 		log: log.WithName("node resource handler").
 			WithValues("node name", nodeName),
 		instance:               ec2.NewEC2Instance(nodeName, instanceID, os, log.WithName("ec2instance")),
+		instanceType:           instanceType,
 		k8sAPI:                 k8sAPI,
 		ec2API:                 ec2API,
 		reconciliationInterval: NodeInitialCleanupInterval,
@@ -152,16 +203,26 @@ func (n *node) UpdateResources(resourceManager resource.ResourceManager) error {
 func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
-	err := n.instance.LoadDetails(n.ec2API)
-	if err != nil {
-		if errors.Is(err, utils.ErrNotFound) {
-			// Send a node event for users' visibility
-			msg := fmt.Sprintf("The instance type %s is not supported yet by the vpc resource controller", n.instance.Type())
-			utils.SendNodeEventWithNodeName(n.k8sAPI, n.instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, n.log)
-		}
-		return &ErrInitResources{
-			Message: "failed to load instance details",
-			Err:     err,
+
+	start := time.Now()
+	initResult := initResultError
+	defer func() {
+		nodeInitDuration.WithLabelValues(initResult).Observe(time.Since(start).Seconds())
+	}()
+
+	// Restore local state first. Any miss falls back to EC2 discovery.
+	if !n.tryRestoreFromNodeNetworkState() {
+		err := n.instance.LoadDetails(n.ec2API)
+		if err != nil {
+			if errors.Is(err, utils.ErrNotFound) {
+				// Send a node event for users' visibility
+				msg := fmt.Sprintf("The instance type %s is not supported yet by the vpc resource controller", n.instance.Type())
+				utils.SendNodeEventWithNodeName(n.k8sAPI, n.instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, n.log)
+			}
+			return &ErrInitResources{
+				Message: "failed to load instance details",
+				Err:     err,
+			}
 		}
 	}
 
@@ -194,7 +255,106 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	}
 
 	n.ready = true
+	initResult = initResultOK
 	return errInit
+}
+
+// validateNodeNetworkState validates persisted state against the instance
+// identity and type captured from the Kubernetes Node. It does not check EC2
+// freshness.
+//
+// Validation covers node identity, instance-type compatibility, required fields,
+// and CIDR syntax. Branch ledger invariants are validated later by
+// InitFromNodeNetworkState.
+func validateNodeNetworkState(observed *rcv1alpha1.TrunkInterface, state *rcv1alpha1.NodeNetworkState,
+	instanceID, nodeInstanceType string,
+) string {
+	if state == nil {
+		return restoreReasonNoState
+	}
+
+	// IPv6 remains optional because not every subnet has an IPv6 CIDR.
+	switch {
+	case observed == nil, observed.ID == "", state.InstanceID == "",
+		state.SubnetID == "", state.SubnetCIDRBlock == "",
+		len(state.PrimaryNetworkInterfaceSecurityGroups) == 0:
+		return restoreReasonMissingField
+	}
+	for _, cidr := range []string{
+		state.SubnetCIDRBlock, state.SubnetV6CIDRBlock,
+	} {
+		if cidr == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return restoreReasonInvalidCIDR
+		}
+	}
+
+	// Identity: a CNINode name can be reused by a new instance.
+	if state.InstanceID != instanceID {
+		return restoreReasonInstanceIDMismatch
+	}
+
+	// Instance type determines branch ENI capacity. It is read from the
+	// Kubernetes Node label and is no longer persisted in the checkpoint.
+	if nodeInstanceType == "" {
+		return restoreReasonMissingField
+	}
+	if _, ok := vpc.Limits[nodeInstanceType]; !ok {
+		return restoreReasonUnsupportedType
+	}
+	return ""
+}
+
+// tryRestoreFromNodeNetworkState restores instance details from CNINode status.
+// Custom networking requires one subnet lookup because ENIConfig does not
+// contain a CIDR. A failed lookup makes restoration a miss, allowing EC2
+// initialization to rebuild the full state.
+func (n *node) tryRestoreFromNodeNetworkState() bool {
+	nodeName := n.instance.Name()
+
+	cniNode, err := n.k8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
+	if err != nil {
+		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonNoState).Inc()
+		return false
+	}
+
+	// Only the owning controller may consume or update this status.
+	if !cniNode.IsManagedByVPCResourceController() {
+		n.log.Info("CNINode is managed by another controller, falling back to EC2",
+			"managedBy", cniNode.Spec.ManagedBy)
+		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonNotManaged).Inc()
+		return false
+	}
+
+	state := cniNode.Status.NodeNetworkState
+	if reason := validateNodeNetworkState(cniNode.Status.TrunkInterface, state,
+		n.instance.InstanceID(), n.instanceType); reason != "" {
+		n.log.Info("NodeNetworkState is unusable, falling back to EC2", "reason", reason,
+			"nodeInstanceID", n.instance.InstanceID(), "nodeInstanceType", n.instanceType)
+		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, reason).Inc()
+		return false
+	}
+
+	trunkENIID := cniNode.Status.TrunkInterface.ID
+	n.instance.LoadFromNodeNetworkState(*state, n.instanceType, trunkENIID)
+	if err := n.instance.UpdateCurrentSubnetAndCidrBlock(n.ec2API); err != nil {
+		n.log.Error(err, "failed to derive network state during restoration")
+		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonSubnetLookupFailed).Inc()
+		return false
+	}
+	if cniNode.Status.TrunkInterface.SubnetID != n.instance.SubnetID() {
+		n.log.Info("restored subnet does not match the observed trunk, falling back to EC2",
+			"restoredSubnetID", n.instance.SubnetID(),
+			"trunkSubnetID", cniNode.Status.TrunkInterface.SubnetID)
+		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonSubnetMismatch).Inc()
+		return false
+	}
+
+	cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultHit, "").Inc()
+	n.log.Info("restored instance details from NodeNetworkState", "trunk", trunkENIID)
+	return true
 }
 
 // DeleteResources performs clean up of all the resource pools and provider of the nodes

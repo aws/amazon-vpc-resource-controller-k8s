@@ -105,6 +105,7 @@ func NewCNINodeReconciler(
 }
 
 //+kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=cninodes,verbs=get;list;watch;create;update;patch;
+//+kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=cninodes/status,verbs=get;update;patch
 
 // Reconcile handles CNINode create/update/delete events
 // Reconciler will add the finalizer and cluster name tag if it does not exist and finalize on CNINode on deletion to clean up leaked resource on node
@@ -119,7 +120,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// controller is responsible for the object's tags, finalizers, status, and
 	// resource cleanup; adding our finalizer here would block deletion since our
 	// finalizer routine never runs for these objects.
-	if cniNode.Spec.ManagedBy != "" && cniNode.Spec.ManagedBy != v1alpha1.ManagedByVPCResourceController {
+	if !cniNode.IsManagedByVPCResourceController() {
 		r.log.V(1).Info("skipping CNINode managed by another controller", "cniNode", cniNode.Name, "managedBy", cniNode.Spec.ManagedBy)
 		return ctrl.Result{}, nil
 	}
