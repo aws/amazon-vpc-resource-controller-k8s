@@ -601,6 +601,7 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*
 			// Only attach the required details to avoid consuming extra memory
 			nwInterfaces = append(nwInterfaces, &ec2types.NetworkInterface{
 				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
+				Status:             nwInterface.Status,
 				TagSet:             nwInterface.TagSet,
 			})
 		}

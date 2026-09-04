@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_pod "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
@@ -68,6 +69,21 @@ var (
 	MockError = fmt.Errorf("mock error")
 	ctx       = context.TODO()
 )
+
+// allocateInvokingCommit makes the trunk mock behave like the real trunk: it runs
+// the provider's ownership commit (marshal + AnnotatePod) inside the allocation
+// call and propagates its error, which is where that work now lives so it is
+// covered by the recovery gate.
+func allocateInvokingCommit(enis []*trunk.ENIDetails) interface{} {
+	return func(_ *v1.Pod, _ []string, _ int, commitOwnership func([]*trunk.ENIDetails) error) ([]*trunk.ENIDetails, error) {
+		if commitOwnership != nil {
+			if err := commitOwnership(enis); err != nil {
+				return nil, err
+			}
+		}
+		return enis, nil
+	}
+}
 
 // getProviderAndMockK8sWrapperAndHelper returns the mock provider along with the k8s wrapper and helper
 func getProviderAndMocks(ctrl *gomock.Controller) (branchENIProvider, *mock_pod.MockPodClientAPIWrapper,
@@ -140,6 +156,46 @@ func TestBranchENIProvider_getTrunkFromCache_NotExist(t *testing.T) {
 	trunkENI, present := provider.getTrunkFromCache(NodeName)
 	assert.False(t, present)
 	assert.Nil(t, trunkENI)
+}
+
+// TestBranchENIProvider_persistCNINodeStatus tests that EC2 source values and
+// observed trunk fields are persisted after authoritative initialization.
+func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+
+	state := rcv1alpha1.NodeNetworkState{
+		InstanceID:                            "i-abc",
+		SubnetID:                              "subnet-1",
+		SubnetCIDRBlock:                       "10.0.0.0/16",
+		PrimaryNetworkInterfaceSecurityGroups: []string{"sg-1"},
+	}
+	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
+	mockInstance.EXPECT().BuildNodeNetworkState().Return(state).AnyTimes()
+	mockInstance.EXPECT().SubnetID().Return("subnet-1").AnyTimes()
+	mockTrunk.EXPECT().TrunkENIID().Return("eni-trunk").AnyTimes()
+
+	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(&rcv1alpha1.CNINode{}, nil)
+
+	var written *rcv1alpha1.CNINode
+	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any(), gomock.Any()).DoAndReturn(func(base, cniNode *rcv1alpha1.CNINode) error {
+		written = cniNode
+		return nil
+	})
+
+	provider.persistCNINodeStatus(mockInstance, mockTrunk)
+
+	assert.NotNil(t, written)
+	assert.NotNil(t, written.Status.NodeNetworkState)
+	assert.Equal(t, "i-abc", written.Status.NodeNetworkState.InstanceID)
+	assert.Equal(t, []string{"sg-1"}, written.Status.NodeNetworkState.PrimaryNetworkInterfaceSecurityGroups)
+	assert.NotNil(t, written.Status.TrunkInterface)
+	assert.Equal(t, "eni-trunk", written.Status.TrunkInterface.ID)
+	assert.Equal(t, "subnet-1", written.Status.TrunkInterface.SubnetID)
 }
 
 // TestBranchENIProvider_removeTrunkFromCache tests that once trunk ENI is removed from cache it's actually removed from
@@ -318,7 +374,7 @@ func TestBranchENIProvider_Supported_LabelNode(t *testing.T) {
 }
 
 // TestBranchENIProvider_CreateAndAnnotateResources tests that create is invoked equal to the number of resources to
-// be created
+// be created.
 func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -335,7 +391,8 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
-	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
+	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount, gomock.Any()).
+		DoAndReturn(allocateInvokingCommit(EniDetails))
 	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1, config.ResourceNamePodENI,
 		string(expectedAnnotation)).Return(nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
@@ -466,11 +523,12 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
-	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
+	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount, gomock.Any()).
+		DoAndReturn(allocateInvokingCommit(EniDetails))
 	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1,
 		config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchENIAnnotationFailed, gomock.Any(), v1.EventTypeWarning)
-	fakeTrunk.EXPECT().PushENIsToFrontOfDeleteQueue(MockPod1, EniDetails)
+	// The trunk releases the ENIs under its recovery gate now, not the provider.
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
@@ -627,4 +685,24 @@ func TestUnSupportedNodeEvents_Windows(t *testing.T) {
 
 	supported := provider.IsInstanceSupported(mockInstance)
 	assert.False(t, supported)
+}
+
+// TestBranchENIProvider_persistCNINodeStatus_ManagedByOtherController tests that no
+// state is written into a CNINode owned by another controller: that controller
+// owns the object's status.
+func TestBranchENIProvider_persistCNINodeStatus_ManagedByOtherController(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+
+	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
+	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(&rcv1alpha1.CNINode{
+		Spec: rcv1alpha1.CNINodeSpec{ManagedBy: rcv1alpha1.ManagedByEKSAutoMode},
+	}, nil)
+	// No UpdateCNINodeStatus expectation: the mock fails the test if we write.
+
+	provider.persistCNINodeStatus(mockInstance, mockTrunk)
 }
