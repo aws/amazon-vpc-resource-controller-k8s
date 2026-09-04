@@ -349,6 +349,113 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_NoReclaimAtCapacity(t *testing.T)
 	assert.False(t, trunkENI.isOrphanCheckCompleted())
 }
 
+func TestTrunkENI_canCreateMoreIncludesPendingCreates(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	mockInstance.EXPECT().Type().Return(InstanceType).Times(3)
+
+	limit := vpc.Limits[InstanceType].BranchInterface
+	for i := 0; i < limit-1; i++ {
+		trunkENI.deleteQueue = append(trunkENI.deleteQueue, &ENIDetails{
+			ID: fmt.Sprintf("eni-capacity-%d", i),
+		})
+	}
+
+	assert.True(t, trunkENI.canCreateMore(1))
+	assert.False(t, trunkENI.canCreateMore(1))
+
+	trunkENI.lock.Lock()
+	trunkENI.pendingCreate--
+	trunkENI.lock.Unlock()
+
+	assert.True(t, trunkENI.canCreateMore(1))
+}
+
+func TestTrunkENI_canCreateMoreIsAtomic(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	limit := vpc.Limits[InstanceType].BranchInterface
+	mockInstance.EXPECT().Type().Return(InstanceType).Times(limit * 2)
+
+	var wg sync.WaitGroup
+	results := make(chan bool, limit*2)
+	for i := 0; i < limit*2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- trunkENI.canCreateMore(1)
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	reserved := 0
+	for result := range results {
+		if result {
+			reserved++
+		}
+	}
+	assert.Equal(t, limit, reserved)
+	assert.Equal(t, limit, trunkENI.pendingCreate)
+}
+
+func TestTrunkENI_CreateAndAssociateBranchENIs_ReservesCapacityBeforeEC2Create(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+
+	limit := vpc.Limits[InstanceType].BranchInterface
+	for i := 0; i < limit-1; i++ {
+		trunkENI.deleteQueue = append(trunkENI.deleteQueue, &ENIDetails{
+			ID: fmt.Sprintf("eni-capacity-%d", i),
+		})
+	}
+
+	mockInstance.EXPECT().Type().Return(InstanceType).Times(2)
+	mockInstance.EXPECT().InstanceID().Return(InstanceId)
+	mockInstance.EXPECT().SubnetID().Return(SubnetId)
+	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock)
+	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock)
+	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil)
+
+	createStarted := make(chan struct{})
+	allowCreate := make(chan struct{})
+	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
+		append(vlan1Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).
+		DoAndReturn(func(*string, *string, []string, []awsEc2Types.Tag, *config.IPResourceCount, *string,
+			*awsEc2Types.ConnectionTrackingSpecificationRequest,
+		) (*awsEc2Types.NetworkInterface, error) {
+			close(createStarted)
+			<-allowCreate
+			return BranchInterface1, nil
+		})
+	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).
+		Return(mockAssociationOutput1, nil)
+
+	firstDone := make(chan error)
+	go func() {
+		_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1, nil)
+		firstDone <- err
+	}()
+	<-createStarted
+
+	secondPod := MockPod2.DeepCopy()
+	secondPod.UID = types.UID("uid-3")
+	_, err := trunkENI.CreateAndAssociateBranchENIs(secondPod, SecurityGroups, 1, nil)
+	assert.ErrorIs(t, err, ErrCurrentlyAtMaxCapacity)
+
+	close(allowCreate)
+	assert.NoError(t, <-firstDone)
+	assert.Zero(t, trunkENI.pendingCreate)
+	assert.Equal(t, []*ENIDetails{EniDetails1}, trunkENI.uidToBranchENIMap[PodUID2])
+}
+
 // TestTrunkENI_reclaimOrphans_SkipsUnassociatedENI verifies reclaim never
 // touches an ENI that is not associated to the trunk: it holds no VLAN, and it
 // may be a concurrent create whose RPC response has not returned yet.
@@ -1346,6 +1453,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs(t *testing.T) {
 	// The returned content is as expected
 	assert.Equal(t, expectedENIDetails, eniDetails)
 	assert.Equal(t, expectedENIDetails, trunkENI.uidToBranchENIMap[PodUID2])
+	assert.Zero(t, trunkENI.pendingCreate)
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs_LedgerBeforeAnnotation verifies the
@@ -1552,6 +1660,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 	assert.Equal(t, []string{EniDetails1.ID, ENIDetailsMissingAssociationID.ID}, queuedENIIDs(trunkENI))
 	assert.True(t, trunkENI.deleteQueue[0].deletionTimeStamp.IsZero())
 	assert.True(t, trunkENI.deleteQueue[1].deletionTimeStamp.IsZero())
+	assert.Zero(t, trunkENI.pendingCreate)
 }
 
 func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate_NoSelfDoubleEnqueue(t *testing.T) {
@@ -1620,6 +1729,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 	assert.Error(t, MockError, err)
 	assert.Equal(t, []string{EniDetails1.ID}, queuedENIIDs(trunkENI))
 	assert.True(t, trunkENI.deleteQueue[0].deletionTimeStamp.IsZero())
+	assert.Zero(t, trunkENI.pendingCreate)
 }
 
 func TestTrunkENI_Introspect(t *testing.T) {

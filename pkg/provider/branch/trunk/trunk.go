@@ -154,6 +154,10 @@ type trunkENI struct {
 	uidToBranchENIMap map[string][]*ENIDetails
 	// deleteQueue is the queue of ENIs that are being cooled down before being deleted
 	deleteQueue []*ENIDetails
+	// pendingCreate is the number of branch ENI capacity slots reserved by
+	// allocations that have not yet been committed to the pod ledger or moved
+	// to the delete queue. It is protected by lock.
+	pendingCreate int
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
 	nodeIDTag []ec2types.Tag
 	// cleanupGate lets normal allocation and deletion work proceed concurrently
@@ -608,7 +612,7 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		return nil, err
 	}
 
-	t.addBranchENIsToLedger(string(pod.UID), newENIs)
+	t.commitReservedBranchENIsToLedger(string(pod.UID), newENIs, eniCount)
 	if commitOwnership != nil {
 		if err := commitOwnership(newENIs); err != nil {
 			t.moveLedgerEntryToDeleteQueue(string(pod.UID), newENIs)
@@ -631,7 +635,7 @@ func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		return nil, fmt.Errorf("cannot create new eni entry already exist, older entry : %v", branchENI)
 	}
 
-	if !t.canCreateMore() {
+	if !t.canCreateMore(eniCount) {
 		return nil, ErrCurrentlyAtMaxCapacity
 	}
 
@@ -713,7 +717,7 @@ func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 		// Failed allocations are not a warm pool and no longer arm a
 		// capacity-triggered ledger resync, so make them immediately eligible for
 		// asynchronous deletion.
-		t.pushENIsToFrontOfDeleteQueue(nil, newENIs)
+		t.moveReservedBranchENIsToDeleteQueue(eniCount, newENIs)
 		return nil, err
 	}
 
@@ -1055,12 +1059,37 @@ func (t *trunkENI) addBranchENIsToLedger(UID string, branchENIs []*ENIDetails) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	t.addBranchENIsToLedgerLocked(UID, branchENIs)
+}
+
+func (t *trunkENI) addBranchENIsToLedgerLocked(UID string, branchENIs []*ENIDetails) {
 	if _, ok := t.uidToBranchENIMap[UID]; ok {
 		t.log.Info("branch eni already exist not adding again", "request", branchENIs)
 		return
 	}
 
 	t.uidToBranchENIMap[UID] = branchENIs
+}
+
+// commitReservedBranchENIsToLedger atomically converts pending-create capacity
+// into pod-owned ENIs so another allocation cannot observe an unaccounted gap.
+func (t *trunkENI) commitReservedBranchENIsToLedger(UID string, branchENIs []*ENIDetails, reserved int) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.pendingCreate -= reserved
+	t.addBranchENIsToLedgerLocked(UID, branchENIs)
+}
+
+// moveReservedBranchENIsToDeleteQueue atomically releases the request's
+// pending-create reservation and accounts for any ENIs that need cleanup.
+func (t *trunkENI) moveReservedBranchENIsToDeleteQueue(reserved int, eniList []*ENIDetails) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.pendingCreate -= reserved
+	t.log.Info("pushing ENIs to delete queue", "ENIs", eniList)
+	t.deleteQueue = append(eniList, t.deleteQueue...)
 }
 
 // moveLedgerEntryToDeleteQueue rolls back a failed pod annotation without
@@ -1188,19 +1217,23 @@ func (t *trunkENI) getVlanIdFromTag(tags []ec2types.Tag) (int, error) {
 	return 0, fmt.Errorf("failed to find vlan tag from the list of tags")
 }
 
-func (t *trunkENI) canCreateMore() bool {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
+// canCreateMore atomically checks local trunk capacity and reserves eniCount
+// pending-create slots when it returns true.
+func (t *trunkENI) canCreateMore(eniCount int) bool {
+	t.lock.Lock()
+	defer t.lock.Unlock()
 
 	var usedBranches int
 	for _, branches := range t.uidToBranchENIMap {
 		usedBranches += len(branches)
 	}
 
-	if usedBranches+len(t.deleteQueue) < vpc.Limits[t.instance.Type()].BranchInterface {
-		return true
+	if usedBranches+len(t.deleteQueue)+t.pendingCreate+eniCount >
+		vpc.Limits[t.instance.Type()].BranchInterface {
+		return false
 	}
-	return false
+	t.pendingCreate += eniCount
+	return true
 }
 
 func (t *trunkENI) Introspect() IntrospectResponse {
