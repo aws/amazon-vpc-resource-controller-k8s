@@ -145,8 +145,11 @@ func (c *CustomController) Start(ctx context.Context) error {
 		c.log.Info("starting custom controller")
 		go coreController.Run(ctx.Done())
 
-		// Wait till cache sync
-		c.WaitForCacheSync(coreController)
+		// Wait till cache sync. Workers must not start against a partially
+		// populated data store.
+		if err := c.WaitForCacheSync(ctx, coreController); err != nil {
+			return err
+		}
 
 		c.log.Info("Starting Workers", "worker count",
 			c.options.MaxConcurrentReconciles)
@@ -165,16 +168,24 @@ func (c *CustomController) Start(ctx context.Context) error {
 	return nil
 }
 
-// WaitForCacheSync tills the cache has synced, this must be done under
-// mutex lock to prevent other controllers from starting at same time
-func (c *CustomController) WaitForCacheSync(controller cache.Controller) {
-	for !controller.HasSynced() && controller.LastSyncResourceVersion() == "" {
-		c.log.Info("waiting for controller to sync")
-		time.Sleep(time.Second * 1)
+// WaitForCacheSync blocks until the entire initial list has been drained into
+// the pod data store, then flips the sync condition other controllers gate on.
+//
+// HasSynced is the only correct signal here: DeltaFIFO reports it true only once
+// initialPopulationCount has drained to zero, and because Pop holds the FIFO lock
+// across our Process func, that cannot be observed until the data store write for
+// the final item has returned
+
+func (c *CustomController) WaitForCacheSync(ctx context.Context, controller cache.Controller) error {
+	start := time.Now()
+	c.log.Info("start sync wait for pod controller")
+	if !cache.WaitForNamedCacheSync(c.options.Name, ctx.Done(), controller.HasSynced) {
+		return fmt.Errorf("%s: pod data store did not sync before shutdown", c.options.Name)
 	}
 	c.conditions.SetPodDataStoreSyncStatus(true)
 
-	c.log.Info("cache has synced successfully")
+	c.log.Info("cache has synced successfully", "duration", time.Since(start))
+	return nil
 }
 
 // newOptimizedListWatcher returns a list watcher with a custom list function that converts the
