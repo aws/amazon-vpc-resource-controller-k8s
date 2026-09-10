@@ -73,7 +73,6 @@ const (
 	restoreReasonMissingField       = "missing_field"
 	restoreReasonInvalidCIDR        = "invalid_cidr"
 	restoreReasonInstanceIDMismatch = "instance_id_mismatch"
-	restoreReasonSubnetMismatch     = "subnet_mismatch"
 	restoreReasonSubnetLookupFailed = "subnet_lookup_failed"
 	restoreReasonUnsupportedType    = "unsupported_type"
 
@@ -308,9 +307,8 @@ func validateNodeNetworkState(observed *rcv1alpha1.TrunkInterface, state *rcv1al
 }
 
 // tryRestoreFromNodeNetworkState restores instance details from CNINode status.
-// Custom networking requires one subnet lookup because ENIConfig does not
-// contain a CIDR. A failed lookup makes restoration a miss, allowing EC2
-// initialization to rebuild the full state.
+// Custom networking resolves its effective subnet CIDR through the process-wide
+// subnet cache, so EC2 calls scale with unique ENIConfig subnets rather than nodes.
 func (n *node) tryRestoreFromNodeNetworkState() bool {
 	nodeName := n.instance.Name()
 
@@ -342,13 +340,6 @@ func (n *node) tryRestoreFromNodeNetworkState() bool {
 	if err := n.instance.UpdateCurrentSubnetAndCidrBlock(n.ec2API); err != nil {
 		n.log.Error(err, "failed to derive network state during restoration")
 		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonSubnetLookupFailed).Inc()
-		return false
-	}
-	if cniNode.Status.TrunkInterface.SubnetID != n.instance.SubnetID() {
-		n.log.Info("restored subnet does not match the observed trunk, falling back to EC2",
-			"restoredSubnetID", n.instance.SubnetID(),
-			"trunkSubnetID", cniNode.Status.TrunkInterface.SubnetID)
-		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonSubnetMismatch).Inc()
 		return false
 	}
 

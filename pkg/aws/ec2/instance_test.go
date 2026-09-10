@@ -181,14 +181,15 @@ func TestEc2Instance_LoadFromNodeNetworkState_CustomNetworking(t *testing.T) {
 
 	instance.SetNewCustomNetworkingSpec(customSubnetID, []string{securityGroup3})
 	instance.LoadFromNodeNetworkState(state, string(instanceType), "eni-trunk")
-	mockEC2API.EXPECT().GetSubnet(&customSubnetID).
-		Return(&ec2types.Subnet{CidrBlock: &customCidr}, nil).
+	mockEC2API.EXPECT().GetSubnetCIDR(&customSubnetID).
+		Return(customCidr, nil).
 		Times(1)
 	assert.NoError(t, instance.UpdateCurrentSubnetAndCidrBlock(mockEC2API))
 
 	assert.Equal(t, customSubnetID, instance.SubnetID())
 	assert.Equal(t, customCidr, instance.SubnetCidrBlock())
 	assert.Equal(t, []string{securityGroup3}, instance.CurrentInstanceSecurityGroups())
+
 }
 
 // TestEc2Instance_BuildNodeNetworkState tests that persisted EC2 values can
@@ -410,11 +411,9 @@ func TestEc2Instance_LoadDetails_SubnetPreLoaded(t *testing.T) {
 	ec2Instance.newCustomNetworkingSubnetID = customNWSubnetID
 	ec2Instance.newCustomNetworkingSecurityGroups = customNWSecurityGroups
 
-	customSubnet := &ec2types.Subnet{CidrBlock: &customNWSubnetCidr}
-
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
 	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil)
-	mockEC2ApiHelper.EXPECT().GetSubnet(&customNWSubnetID).Return(customSubnet, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnetCIDR(&customNWSubnetID).Return(customNWSubnetCidr, nil)
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NoError(t, err)
@@ -562,11 +561,9 @@ func TestEc2Instance_LoadDetails_InvalidCustomNetworkingConfiguration(t *testing
 	ec2Instance.newCustomNetworkingSecurityGroups = []string{}
 
 	customNWSubnetCidr := "192.2.0.0/24"
-	customSubnet := &ec2types.Subnet{CidrBlock: &customNWSubnetCidr}
-
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
 	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil)
-	mockEC2ApiHelper.EXPECT().GetSubnet(&customNWSubnetID).Return(customSubnet, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnetCIDR(&customNWSubnetID).Return(customNWSubnetCidr, nil)
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NoError(t, err)
@@ -595,14 +592,14 @@ func TestEc2Instance_LoadDetails_CustomNetworking_AfterRestore(t *testing.T) {
 		SubnetCIDRBlock:                       subnetCidrBlock,
 		PrimaryNetworkInterfaceSecurityGroups: []string{securityGroup1, securityGroup2},
 	}, string(instanceType), "eni-trunk")
-	mockEC2ApiHelper.EXPECT().GetSubnet(&customSubnetID).
-		Return(&ec2types.Subnet{CidrBlock: &staleCidr}, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnetCIDR(&customSubnetID).
+		Return(staleCidr, nil)
 	assert.NoError(t, ec2Instance.UpdateCurrentSubnetAndCidrBlock(mockEC2ApiHelper))
 	assert.Equal(t, staleCidr, ec2Instance.SubnetCidrBlock())
 
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
 	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil)
-	mockEC2ApiHelper.EXPECT().GetSubnet(&customSubnetID).Return(&ec2types.Subnet{CidrBlock: &freshCidr}, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnetCIDR(&customSubnetID).Return(freshCidr, nil)
 
 	assert.NoError(t, ec2Instance.LoadDetails(mockEC2ApiHelper))
 

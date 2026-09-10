@@ -345,15 +345,12 @@ func (i *ec2Instance) updateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHel
 		}
 		// Only get the subnet CIDR block again if the subnet ID has changed
 		if i.newCustomNetworkingSubnetID != i.current.subnetID {
-			customSubnet, err := ec2APIHelper.GetSubnet(&i.newCustomNetworkingSubnetID)
+			customSubnetCIDR, err := ec2APIHelper.GetSubnetCIDR(&i.newCustomNetworkingSubnetID)
 			if err != nil {
 				return err
 			}
-			if customSubnet == nil || customSubnet.CidrBlock == nil {
-				return fmt.Errorf("failed to find subnet %s", i.newCustomNetworkingSubnetID)
-			}
 			i.current.subnetID = i.newCustomNetworkingSubnetID
-			i.current.subnetCIDRBlock = *customSubnet.CidrBlock
+			i.current.subnetCIDRBlock = customSubnetCIDR
 			// NOTE: IPv6 does not support custom networking
 		}
 	} else {

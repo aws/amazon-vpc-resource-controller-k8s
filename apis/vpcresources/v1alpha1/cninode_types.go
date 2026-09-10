@@ -125,11 +125,9 @@ type TrunkInterface struct {
 	// DeviceIndex is the attachment device index of the trunk ENI on the instance.
 	// +optional
 	DeviceIndex int32 `json:"deviceIndex,omitempty"`
-	// SubnetID is the id of the EC2 subnet the trunk ENI resides in, which is
-	// also the subnet its branch ENIs are created in. Persisted with the trunk
-	// so a controller can create a branch ENI straight from the CNINode,
-	// without a DescribeNetworkInterfaces call on the pod path, and so the
-	// value survives a controller restart that drops in-memory node state.
+	// SubnetID is the id of the EC2 subnet the observed trunk ENI resides in.
+	// It can differ from the effective subnet used for new branch ENIs after
+	// the node's ENIConfig changes.
 	// +optional
 	// +kubebuilder:validation:MaxLength=24
 	// +kubebuilder:validation:Pattern=`^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`

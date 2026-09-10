@@ -176,7 +176,7 @@ func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 	}
 	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
 	mockInstance.EXPECT().BuildNodeNetworkState().Return(state).AnyTimes()
-	mockInstance.EXPECT().SubnetID().Return("subnet-1").AnyTimes()
+	mockTrunk.EXPECT().TrunkSubnetID().Return("subnet-observed").AnyTimes()
 	mockTrunk.EXPECT().TrunkENIID().Return("eni-trunk").AnyTimes()
 
 	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(&rcv1alpha1.CNINode{}, nil)
@@ -195,7 +195,7 @@ func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 	assert.Equal(t, []string{"sg-1"}, written.Status.NodeNetworkState.PrimaryNetworkInterfaceSecurityGroups)
 	assert.NotNil(t, written.Status.TrunkInterface)
 	assert.Equal(t, "eni-trunk", written.Status.TrunkInterface.ID)
-	assert.Equal(t, "subnet-1", written.Status.TrunkInterface.SubnetID)
+	assert.Equal(t, "subnet-observed", written.Status.TrunkInterface.SubnetID)
 }
 
 // TestBranchENIProvider_removeTrunkFromCache tests that once trunk ENI is removed from cache it's actually removed from

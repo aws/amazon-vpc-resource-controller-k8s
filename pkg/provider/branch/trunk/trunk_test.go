@@ -160,6 +160,7 @@ var (
 	trunkInterface = &awsEc2Types.NetworkInterface{
 		InterfaceType:      awsEc2Types.NetworkInterfaceTypeTrunk,
 		NetworkInterfaceId: &trunkId,
+		SubnetId:           &SubnetId,
 		Attachment: &awsEc2Types.NetworkInterfaceAttachment{
 			Status: awsEc2Types.AttachmentStatusAttached,
 		},
@@ -184,6 +185,7 @@ var (
 		{
 			InterfaceType:      aws.String("trunk"),
 			NetworkInterfaceId: &trunkId,
+			SubnetId:           &SubnetId,
 		},
 	}
 
@@ -1289,6 +1291,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			wantErr: false,
 			asserts: func(f *fields) {
 				assert.Equal(t, trunkId, f.trunkENI.trunkENIId)
+				assert.Equal(t, SubnetId, f.trunkENI.TrunkSubnetID())
 			},
 		},
 		{
@@ -1351,6 +1354,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 				// Assert no entry for pod that didn't have a branch ENI
 				_, isPresent = f.trunkENI.uidToBranchENIMap[MockNamespacedName2]
 				assert.False(t, isPresent)
+				assert.Equal(t, SubnetId, f.trunkENI.TrunkSubnetID())
 			},
 		},
 		{

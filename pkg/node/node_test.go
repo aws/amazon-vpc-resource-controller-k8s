@@ -158,7 +158,6 @@ func TestNode_tryRestoreFromNodeNetworkState_Hit(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
 	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(*cniNode.Status.NodeNetworkState, nitroInstanceType, "eni-trunk")
 	mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.NodeWithMock.ec2API).Return(nil)
-	mock.MockInstance.EXPECT().SubnetID().Return("subnet-1")
 
 	assert.True(t, mock.NodeWithMock.tryRestoreFromNodeNetworkState())
 }
@@ -198,7 +197,6 @@ func TestNode_InitResources_RecordsSuccessResult(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
 	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(*cniNode.Status.NodeNetworkState, nitroInstanceType, "eni-trunk")
 	mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.NodeWithMock.ec2API).Return(nil)
-	mock.MockInstance.EXPECT().SubnetID().Return("subnet-1")
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
 	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
 	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
@@ -225,7 +223,6 @@ func TestNode_InitResources_RecordsErrorResult(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
 	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(*cniNode.Status.NodeNetworkState, nitroInstanceType, "eni-trunk")
 	mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.NodeWithMock.ec2API).Return(nil)
-	mock.MockInstance.EXPECT().SubnetID().Return("subnet-1")
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
 	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
 	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(mockError)
@@ -642,12 +639,11 @@ func TestNode_tryRestoreFromNodeNetworkState_UsesObservedTrunkID(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
 	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(*cniNode.Status.NodeNetworkState, nitroInstanceType, "eni-current-trunk")
 	mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.NodeWithMock.ec2API).Return(nil)
-	mock.MockInstance.EXPECT().SubnetID().Return("subnet-1")
 
 	assert.True(t, mock.NodeWithMock.tryRestoreFromNodeNetworkState())
 }
 
-func TestNode_tryRestoreFromNodeNetworkState_ObservedSubnetMismatch(t *testing.T) {
+func TestNode_tryRestoreFromNodeNetworkState_ObservedTrunkSubnetCanDiffer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -660,9 +656,8 @@ func TestNode_tryRestoreFromNodeNetworkState_ObservedSubnetMismatch(t *testing.T
 	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
 	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(*cniNode.Status.NodeNetworkState, nitroInstanceType, "eni-trunk")
 	mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.NodeWithMock.ec2API).Return(nil)
-	mock.MockInstance.EXPECT().SubnetID().Return("subnet-1").Times(2)
 
-	assert.False(t, mock.NodeWithMock.tryRestoreFromNodeNetworkState())
+	assert.True(t, mock.NodeWithMock.tryRestoreFromNodeNetworkState())
 }
 
 // TestNode_tryRestoreFromNodeNetworkState_ManagedByOtherController tests that a CNINode
@@ -700,7 +695,6 @@ func TestNode_tryRestoreFromNodeNetworkState_EmptyManagedByIsOurs(t *testing.T) 
 	mock.MockK8sAPI.EXPECT().GetCNINode(gomock.Any()).Return(cniNode, nil)
 	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(*cniNode.Status.NodeNetworkState, nitroInstanceType, "eni-trunk")
 	mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.NodeWithMock.ec2API).Return(nil)
-	mock.MockInstance.EXPECT().SubnetID().Return("subnet-1")
 
 	assert.True(t, mock.NodeWithMock.tryRestoreFromNodeNetworkState())
 }

@@ -15,6 +15,7 @@ package api
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,7 +112,7 @@ var (
 		SubnetIds: []string{subnetId},
 	}
 
-	describeSubnetOutput = &ec2.DescribeSubnetsOutput{Subnets: []ec2types.Subnet{{SubnetId: &subnetId}}}
+	describeSubnetOutput = &ec2.DescribeSubnetsOutput{Subnets: []ec2types.Subnet{{SubnetId: &subnetId, CidrBlock: aws.String("192.168.0.0/24")}}}
 
 	describeNetworkInterfaceInputUsingInstanceId = &ec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceId},
@@ -631,6 +632,58 @@ func TestEc2APIHelper_GetSubnet(t *testing.T) {
 	subnet, err := ec2ApiHelper.GetSubnet(&subnetId)
 	assert.NoError(t, err)
 	assert.Equal(t, subnetId, *subnet.SubnetId)
+}
+
+// TestEc2APIHelper_GetSubnetCIDR_Cached verifies repeated lookups for one
+// custom-networking subnet share one DescribeSubnets result.
+func TestEc2APIHelper_GetSubnetCIDR_Cached(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+	mockWrapper.EXPECT().DescribeSubnets(describeSubnetInput).Return(describeSubnetOutput, nil).Times(1)
+
+	first, err := ec2ApiHelper.GetSubnetCIDR(&subnetId)
+	assert.NoError(t, err)
+	second, err := ec2ApiHelper.GetSubnetCIDR(&subnetId)
+	assert.NoError(t, err)
+	assert.Equal(t, first, second)
+	assert.Equal(t, *describeSubnetOutput.Subnets[0].CidrBlock, first)
+}
+
+func TestEc2APIHelper_GetSubnetCIDR_ConcurrentLookupsShareDescribe(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+	mockWrapper.EXPECT().DescribeSubnets(describeSubnetInput).Return(describeSubnetOutput, nil).Times(1)
+
+	const callers = 20
+	start := make(chan struct{})
+	results := make(chan string, callers)
+	errors := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			cidr, err := ec2ApiHelper.GetSubnetCIDR(&subnetId)
+			results <- cidr
+			errors <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errors)
+
+	for err := range errors {
+		assert.NoError(t, err)
+	}
+	for cidr := range results {
+		assert.Equal(t, *describeSubnetOutput.Subnets[0].CidrBlock, cidr)
+	}
 }
 
 // TestEc2APIHelper_GetSubnet_NoSubnetReturned tests that in case the ec2 api call response returns empty response

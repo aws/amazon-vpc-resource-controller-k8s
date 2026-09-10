@@ -132,6 +132,8 @@ type TrunkENI interface {
 	InitFromNodeNetworkState(trunkENIID string, pods []v1.Pod) error
 	// TrunkENIID returns the trunk ENI ID.
 	TrunkENIID() string
+	// TrunkSubnetID returns the subnet observed on the trunk ENI.
+	TrunkSubnetID() string
 	// Introspect returns the state of the Trunk ENI
 	Introspect() IntrospectResponse
 }
@@ -146,6 +148,8 @@ type trunkENI struct {
 	ec2ApiHelper api.EC2APIHelper
 	// trunkENIId is the interface id of the trunk network interface
 	trunkENIId string
+	// trunkSubnetID is the subnet observed on the trunk network interface.
+	trunkSubnetID string
 	// instance is the pointer to the instance details
 	instance ec2.EC2Instance
 	// usedVlanIds is the list of boolean value representing the used vlan ids
@@ -287,6 +291,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 			// Check that the trunkENI is in attached state before adding to cache
 			if err = t.ec2ApiHelper.WaitForNetworkInterfaceStatusChange(nwInterface.NetworkInterfaceId, string(ec2types.AttachmentStatusAttached)); err == nil {
 				t.trunkENIId = *nwInterface.NetworkInterfaceId
+				t.trunkSubnetID = lo.FromPtr(nwInterface.SubnetId)
 			} else {
 				return fmt.Errorf("failed to verify network interface status attached for %v", *nwInterface.NetworkInterfaceId)
 			}
@@ -311,6 +316,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 		}
 
 		t.trunkENIId = *trunk.NetworkInterfaceId
+		t.trunkSubnetID = lo.FromPtr(trunk.SubnetId)
 		log.Info("created a new trunk interface", "trunk id", t.trunkENIId)
 
 		t.setOrphanCheckCompleted(true)
@@ -561,6 +567,14 @@ func (t *trunkENI) TrunkENIID() string {
 	defer t.lock.RUnlock()
 
 	return t.trunkENIId
+}
+
+// TrunkSubnetID returns the subnet observed on the trunk ENI.
+func (t *trunkENI) TrunkSubnetID() string {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return t.trunkSubnetID
 }
 
 // Reconcile reconciles the state from the API Server to the internal cache of EC2 Branch Interfaces, if the controller

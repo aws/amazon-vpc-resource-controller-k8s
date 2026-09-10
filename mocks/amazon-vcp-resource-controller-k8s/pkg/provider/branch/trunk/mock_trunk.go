@@ -169,3 +169,17 @@ func (mr *MockTrunkENIMockRecorder) TrunkENIID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TrunkENIID", reflect.TypeOf((*MockTrunkENI)(nil).TrunkENIID))
 }
+
+// TrunkSubnetID mocks base method.
+func (m *MockTrunkENI) TrunkSubnetID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TrunkSubnetID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// TrunkSubnetID indicates an expected call of TrunkSubnetID.
+func (mr *MockTrunkENIMockRecorder) TrunkSubnetID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TrunkSubnetID", reflect.TypeOf((*MockTrunkENI)(nil).TrunkSubnetID))
+}

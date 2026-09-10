@@ -258,7 +258,7 @@ func (b *branchENIProvider) persistCNINodeStatus(instance ec2.EC2Instance, trunk
 		cniNode.Status.TrunkInterface = &rcv1alpha1.TrunkInterface{}
 	}
 	cniNode.Status.TrunkInterface.ID = trunkENI.TrunkENIID()
-	cniNode.Status.TrunkInterface.SubnetID = instance.SubnetID()
+	cniNode.Status.TrunkInterface.SubnetID = trunkENI.TrunkSubnetID()
 
 	if err := b.apiWrapper.K8sAPI.UpdateCNINodeStatus(base, cniNode); err != nil {
 		b.log.Error(err, "failed to persist NodeNetworkState to CNINode status", "node", nodeName)
