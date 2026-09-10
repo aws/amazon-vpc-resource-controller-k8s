@@ -141,13 +141,17 @@ var _ = Describe("Security Group Per Pod", func() {
 				var jobList []*batchV1.Job
 				for j := 0; j < numJobs; j++ {
 					// The Job Pod tests HTTP connection to server Pod which
-					// acts as a High Level check for SGP Pod Networking
+					// acts as a High Level check for SGP Pod Networking.
+					// Retry for up to 180s: when a batch of Pods starts at once,
+					// the branch ENI network path is not always usable the moment
+					// the container starts, and a Pod that exits non-zero fails
+					// the whole Job. --max-time applies per attempt.
 					jobContainer := manifest.NewBusyBoxContainerBuilder().
 						Image("curlimages/curl").
 						Command([]string{"/bin/sh"}).
 						Args([]string{"-c",
 							fmt.Sprintf(
-								"set -e; curl --fail --max-time 7 --retry 3 %s; sleep %d;",
+								"set -e; curl --fail --max-time 7 --retry 60 --retry-delay 5 --retry-max-time 180 --retry-all-errors %s; sleep %d;",
 								serverPod.Status.PodIP, jobSleepSeconds)}).
 						Build()
 
