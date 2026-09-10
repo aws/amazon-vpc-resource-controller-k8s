@@ -63,8 +63,7 @@ var (
 
 type ec2APIHelper struct {
 	ec2Wrapper            EC2Wrapper
-	subnetCIDRCacheLock   sync.RWMutex
-	subnetCIDRCache       map[string]string
+	subnetCIDRCache       sync.Map
 	subnetCIDRLookupGroup singleflight.Group
 }
 
@@ -75,10 +74,7 @@ func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
 		Key:   aws.String(fmt.Sprintf(config.VPCRCClusterNameTagKeyFormat, clusterName)),
 		Value: aws.String(config.VPCRCClusterNameTagValue),
 	}
-	return &ec2APIHelper{
-		ec2Wrapper:      ec2Wrapper,
-		subnetCIDRCache: make(map[string]string),
-	}
+	return &ec2APIHelper{ec2Wrapper: ec2Wrapper}
 }
 
 type EC2APIHelper interface {
@@ -220,19 +216,15 @@ func (h *ec2APIHelper) GetSubnetCIDR(subnetId *string) (string, error) {
 	}
 	id := *subnetId
 
-	h.subnetCIDRCacheLock.RLock()
-	cidr, ok := h.subnetCIDRCache[id]
-	h.subnetCIDRCacheLock.RUnlock()
+	cidr, ok := h.subnetCIDRCache.Load(id)
 	if ok {
-		return cidr, nil
+		return cidr.(string), nil
 	}
 
 	value, err, _ := h.subnetCIDRLookupGroup.Do(id, func() (interface{}, error) {
-		h.subnetCIDRCacheLock.RLock()
-		cachedCIDR, cached := h.subnetCIDRCache[id]
-		h.subnetCIDRCacheLock.RUnlock()
+		cachedCIDR, cached := h.subnetCIDRCache.Load(id)
 		if cached {
-			return cachedCIDR, nil
+			return cachedCIDR.(string), nil
 		}
 
 		subnet, err := h.GetSubnet(&id)
@@ -244,9 +236,7 @@ func (h *ec2APIHelper) GetSubnetCIDR(subnetId *string) (string, error) {
 		}
 
 		resolvedCIDR := *subnet.CidrBlock
-		h.subnetCIDRCacheLock.Lock()
-		h.subnetCIDRCache[id] = resolvedCIDR
-		h.subnetCIDRCacheLock.Unlock()
+		h.subnetCIDRCache.Store(id, resolvedCIDR)
 		return resolvedCIDR, nil
 	})
 	if err != nil {
