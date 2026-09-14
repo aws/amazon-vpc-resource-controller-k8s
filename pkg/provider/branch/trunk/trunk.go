@@ -110,7 +110,7 @@ var (
 		},
 		[]string{"path", "result"},
 	)
-	prometheusRegistered = false
+	prometheusRegisterOnce sync.Once
 )
 
 type TrunkENI interface {
@@ -256,15 +256,14 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 }
 
 func PrometheusRegister() {
-	if !prometheusRegistered {
+	prometheusRegisterOnce.Do(func() {
 		metrics.Registry.MustRegister(trunkENIOperationsErrCount)
 		metrics.Registry.MustRegister(unreconciledTrunkENICount)
 		metrics.Registry.MustRegister(branchENIOperationsSuccessCount)
 		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
 		metrics.Registry.MustRegister(branchENIOrphanReclaimCount)
 		metrics.Registry.MustRegister(trunkReinitCount)
-		prometheusRegistered = true
-	}
+	})
 }
 
 // InitTrunk initializes the trunk and its associated branch network interfaces

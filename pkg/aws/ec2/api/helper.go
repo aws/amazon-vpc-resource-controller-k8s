@@ -208,35 +208,43 @@ func (h *ec2APIHelper) GetSubnet(subnetId *string) (*ec2types.Subnet, error) {
 	return &describeSubnetOutput.Subnets[0], nil
 }
 
+func (h *ec2APIHelper) loadCachedSubnetCIDR(subnetID string) (string, bool) {
+	value, ok := h.subnetCIDRCache.Load(subnetID)
+	if !ok {
+		return "", false
+	}
+	return value.(string), true
+}
+
 // GetSubnetCIDR returns the IPv4 CIDR for a subnet. Results are cached for the
 // lifetime of the controller process because a subnet's CIDR is immutable.
 func (h *ec2APIHelper) GetSubnetCIDR(subnetId *string) (string, error) {
 	if subnetId == nil || *subnetId == "" {
 		return "", fmt.Errorf("subnet id is empty")
 	}
-	id := *subnetId
 
-	cidr, ok := h.subnetCIDRCache.Load(id)
-	if ok {
-		return cidr.(string), nil
+	// Fast path: avoid singleflight bookkeeping for a warm cache.
+	if cidr, ok := h.loadCachedSubnetCIDR(*subnetId); ok {
+		return cidr, nil
 	}
 
-	value, err, _ := h.subnetCIDRLookupGroup.Do(id, func() (interface{}, error) {
-		cachedCIDR, cached := h.subnetCIDRCache.Load(id)
-		if cached {
-			return cachedCIDR.(string), nil
+	value, err, _ := h.subnetCIDRLookupGroup.Do(*subnetId, func() (interface{}, error) {
+		// Another flight may have populated the cache after the fast-path miss
+		// but before this caller became the flight leader.
+		if cidr, ok := h.loadCachedSubnetCIDR(*subnetId); ok {
+			return cidr, nil
 		}
 
-		subnet, err := h.GetSubnet(&id)
+		subnet, err := h.GetSubnet(subnetId)
 		if err != nil {
 			return "", err
 		}
 		if subnet.CidrBlock == nil || *subnet.CidrBlock == "" {
-			return "", fmt.Errorf("subnet %s has no IPv4 CIDR", id)
+			return "", fmt.Errorf("subnet %s has no IPv4 CIDR", *subnetId)
 		}
 
 		resolvedCIDR := *subnet.CidrBlock
-		h.subnetCIDRCache.Store(id, resolvedCIDR)
+		h.subnetCIDRCache.Store(*subnetId, resolvedCIDR)
 		return resolvedCIDR, nil
 	})
 	if err != nil {

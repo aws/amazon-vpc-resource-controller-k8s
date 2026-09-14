@@ -23,7 +23,6 @@ import (
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
@@ -60,25 +59,31 @@ type node struct {
 	reconciliationInterval time.Duration
 }
 
+type restoreResult string
+
+type restoreReason string
+
+type initResult string
+
 const (
 	MaxNodeReconciliationInterval = 15 * time.Minute
 	NodeInitialCleanupInterval    = 1 * time.Minute
 
 	// NodeNetworkState restoration metric label values.
-	restoreResultHit  = "hit"
-	restoreResultMiss = "miss"
+	restoreResultHit  restoreResult = "hit"
+	restoreResultMiss restoreResult = "miss"
 
-	restoreReasonNoState            = "no_state"
-	restoreReasonNotManaged         = "not_managed_by_controller"
-	restoreReasonMissingField       = "missing_field"
-	restoreReasonInvalidCIDR        = "invalid_cidr"
-	restoreReasonInstanceIDMismatch = "instance_id_mismatch"
-	restoreReasonSubnetLookupFailed = "subnet_lookup_failed"
-	restoreReasonUnsupportedType    = "unsupported_type"
+	restoreReasonNone               restoreReason = ""
+	restoreReasonNoState            restoreReason = "no_state"
+	restoreReasonMissingField       restoreReason = "missing_field"
+	restoreReasonInvalidCIDR        restoreReason = "invalid_cidr"
+	restoreReasonInstanceIDMismatch restoreReason = "instance_id_mismatch"
+	restoreReasonSubnetLookupFailed restoreReason = "subnet_lookup_failed"
+	restoreReasonUnsupportedType    restoreReason = "unsupported_type"
 
 	// node_init_duration_seconds label values.
-	initResultOK    = "success"
-	initResultError = "error"
+	initResultOK    initResult = "success"
+	initResultError initResult = "error"
 )
 
 var (
@@ -103,6 +108,10 @@ func registerNodeMetrics() {
 	registerMetricsOnce.Do(func() {
 		metrics.Registry.MustRegister(cniNodeNetworkStateRestoreCount, nodeInitDuration)
 	})
+}
+
+func recordNodeNetworkStateRestore(result restoreResult, reason restoreReason) {
+	cniNodeNetworkStateRestoreCount.WithLabelValues(string(result), string(reason)).Inc()
 }
 
 // ErrInitResources to wrap error messages for all errors encountered
@@ -206,7 +215,7 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	start := time.Now()
 	initResult := initResultError
 	defer func() {
-		nodeInitDuration.WithLabelValues(initResult).Observe(time.Since(start).Seconds())
+		nodeInitDuration.WithLabelValues(string(initResult)).Observe(time.Since(start).Seconds())
 	}()
 
 	// Restore local state first. Any miss falls back to EC2 discovery.
@@ -267,7 +276,7 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 // InitFromNodeNetworkState.
 func validateNodeNetworkState(observed *rcv1alpha1.TrunkInterface, state *rcv1alpha1.NodeNetworkState,
 	instanceID, nodeInstanceType string,
-) string {
+) restoreReason {
 	if state == nil {
 		return restoreReasonNoState
 	}
@@ -300,10 +309,10 @@ func validateNodeNetworkState(observed *rcv1alpha1.TrunkInterface, state *rcv1al
 	if nodeInstanceType == "" {
 		return restoreReasonMissingField
 	}
-	if _, ok := vpc.Limits[nodeInstanceType]; !ok {
+	if !utils.HasInstanceTypeLimits(nodeInstanceType) {
 		return restoreReasonUnsupportedType
 	}
-	return ""
+	return restoreReasonNone
 }
 
 // tryRestoreFromNodeNetworkState restores instance details from CNINode status.
@@ -314,7 +323,7 @@ func (n *node) tryRestoreFromNodeNetworkState() bool {
 
 	cniNode, err := n.k8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
 	if err != nil {
-		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonNoState).Inc()
+		recordNodeNetworkStateRestore(restoreResultMiss, restoreReasonNoState)
 		return false
 	}
 
@@ -322,16 +331,15 @@ func (n *node) tryRestoreFromNodeNetworkState() bool {
 	if !cniNode.IsManagedByVPCResourceController() {
 		n.log.Info("CNINode is managed by another controller, falling back to EC2",
 			"managedBy", cniNode.Spec.ManagedBy)
-		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonNotManaged).Inc()
 		return false
 	}
 
 	state := cniNode.Status.NodeNetworkState
 	if reason := validateNodeNetworkState(cniNode.Status.TrunkInterface, state,
-		n.instance.InstanceID(), n.instanceType); reason != "" {
+		n.instance.InstanceID(), n.instanceType); reason != restoreReasonNone {
 		n.log.Info("NodeNetworkState is unusable, falling back to EC2", "reason", reason,
 			"nodeInstanceID", n.instance.InstanceID(), "nodeInstanceType", n.instanceType)
-		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, reason).Inc()
+		recordNodeNetworkStateRestore(restoreResultMiss, reason)
 		return false
 	}
 
@@ -339,11 +347,11 @@ func (n *node) tryRestoreFromNodeNetworkState() bool {
 	n.instance.LoadFromNodeNetworkState(*state, n.instanceType, trunkENIID)
 	if err := n.instance.UpdateCurrentSubnetAndCidrBlock(n.ec2API); err != nil {
 		n.log.Error(err, "failed to derive network state during restoration")
-		cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultMiss, restoreReasonSubnetLookupFailed).Inc()
+		recordNodeNetworkStateRestore(restoreResultMiss, restoreReasonSubnetLookupFailed)
 		return false
 	}
 
-	cniNodeNetworkStateRestoreCount.WithLabelValues(restoreResultHit, "").Inc()
+	recordNodeNetworkStateRestore(restoreResultHit, restoreReasonNone)
 	n.log.Info("restored instance details from NodeNetworkState", "trunk", trunkENIID)
 	return true
 }

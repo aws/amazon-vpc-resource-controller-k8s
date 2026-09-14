@@ -201,7 +201,7 @@ func TestNode_InitResources_RecordsSuccessResult(t *testing.T) {
 	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
 	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
 
-	metric := nodeInitDuration.WithLabelValues(initResultOK)
+	metric := nodeInitDuration.WithLabelValues(string(initResultOK))
 	before := histogramSampleCount(t, metric)
 
 	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
@@ -227,7 +227,7 @@ func TestNode_InitResources_RecordsErrorResult(t *testing.T) {
 	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
 	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(mockError)
 
-	metric := nodeInitDuration.WithLabelValues(initResultError)
+	metric := nodeInitDuration.WithLabelValues(string(initResultError))
 	before := histogramSampleCount(t, metric)
 
 	assert.Error(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
@@ -365,7 +365,7 @@ func TestNode_tryRestoreFromNodeNetworkState_UnsupportedType(t *testing.T) {
 	mock := NewMock(ctrl, 0)
 	instID := "i-abc"
 	cniNode := validNodeNetworkStateCNINode(instID, "dummy.large")
-	mock.NodeWithMock.instanceType = ""
+	mock.NodeWithMock.instanceType = "dummy.large"
 
 	mock.MockInstance.EXPECT().Name().Return(nodeName).AnyTimes()
 	mock.MockInstance.EXPECT().InstanceID().Return(instID).AnyTimes()

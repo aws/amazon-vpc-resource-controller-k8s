@@ -284,6 +284,25 @@ func getMockTrunk() trunkENI {
 	}
 }
 
+func TestPrometheusRegisterConcurrent(t *testing.T) {
+	const callers = 32
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(callers)
+
+	for i := 0; i < callers; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			PrometheusRegister()
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+}
+
 func TestNewTrunkENI(t *testing.T) {
 	trunkENI := NewTrunkENI(zap.New(), FakeInstance, nil)
 	assert.NotNil(t, trunkENI)
