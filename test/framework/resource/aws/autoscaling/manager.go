@@ -25,7 +25,7 @@ import (
 type Manager interface {
 	DescribeAutoScalingGroup(autoScalingGroupName string) ([]autoscalingtypes.AutoScalingGroup, error)
 	UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int32) error
-	StartInstanceRefresh(asgName string) (string, error)
+	StartInstanceRefresh(asgName string, preferences *autoscalingtypes.RefreshPreferences) (string, error)
 	DescribeInstanceRefresh(asgName string, instanceRefreshId string) (autoscalingtypes.InstanceRefresh, error)
 }
 
@@ -65,12 +65,16 @@ func (d defaultManager) UpdateAutoScalingGroup(asgName string, desiredSize, minS
 	return err
 }
 
-func (d defaultManager) StartInstanceRefresh(asgName string) (string, error) {
+func (d defaultManager) StartInstanceRefresh(asgName string, preferences *autoscalingtypes.RefreshPreferences) (string, error) {
 	in := &autoscaling.StartInstanceRefreshInput{
 		AutoScalingGroupName: aws.String(asgName),
+		Preferences:          preferences,
 	}
 	out, err := d.AutoScalingAPI.StartInstanceRefresh(context.TODO(), in)
-	return *out.InstanceRefreshId, err
+	if err != nil {
+		return "", err
+	}
+	return *out.InstanceRefreshId, nil
 }
 
 func (d defaultManager) DescribeInstanceRefresh(asgName, instanceRefreshId string) (autoscalingtypes.InstanceRefresh, error) {
@@ -78,5 +82,11 @@ func (d defaultManager) DescribeInstanceRefresh(asgName, instanceRefreshId strin
 		AutoScalingGroupName: aws.String(asgName),
 		InstanceRefreshIds:   []string{instanceRefreshId},
 	})
-	return out.InstanceRefreshes[0], err
+	if err != nil {
+		return autoscalingtypes.InstanceRefresh{}, err
+	}
+	if len(out.InstanceRefreshes) == 0 {
+		return autoscalingtypes.InstanceRefresh{}, fmt.Errorf("no instance refresh %s found for asg %s", instanceRefreshId, asgName)
+	}
+	return out.InstanceRefreshes[0], nil
 }

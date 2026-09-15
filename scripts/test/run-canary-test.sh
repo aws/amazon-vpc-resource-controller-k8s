@@ -108,7 +108,8 @@ function run_canary_tests() {
   # For each component, we want to cover the most important test cases. We also don't want to take more than 30 minutes
   # per repository as these tests are run sequentially along with tests from other repositories
   # Currently the overall execution time is ~50 minutes and we will reduce it in future
-  (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 10m $GINKGO_TEST_BUILD_DIR/perpodsg.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
+  # 25m: BeforeSuite recycles the linux nodes via an ASG instance refresh.
+  (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 25m $GINKGO_TEST_BUILD_DIR/perpodsg.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
   if [[ -z "${SKIP_WINDOWS_TEST}" ]]; then
     (CGO_ENABLED=0 ginkgo --no-color --focus="CANARY" $EXTRA_GINKGO_FLAGS -v --timeout 35m $GINKGO_TEST_BUILD_DIR/windows.test -- --cluster-kubeconfig=$KUBE_CONFIG_PATH --cluster-name=$CLUSTER_NAME --aws-region=$REGION --aws-vpc-id=$VPC_ID)
   else

@@ -34,6 +34,10 @@ func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResou
 			By("checking nodes have capacity present")
 			observedNodeList, err = manager.GetNodesWithOS(os)
 			Expect(err).ToNot(HaveOccurred())
+			// An empty list (e.g. mid node-recycle) must not count as success.
+			if len(observedNodeList.Items) == 0 {
+				return false, nil
+			}
 			for _, node := range observedNodeList.Items {
 				_, found := node.Status.Allocatable[v1.ResourceName(expectedResource)]
 				if !found {
