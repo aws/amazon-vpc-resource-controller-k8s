@@ -15,7 +15,8 @@ package ec2
 
 import (
 	"fmt"
-	"strings"
+	"net/netip"
+	"strconv"
 	"sync"
 
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -155,13 +156,23 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		return fmt.Errorf("failed to find subnet or CIDR block for subnet %s for instance %s",
 			i.source.subnetID, i.instanceID)
 	}
-	i.source.subnetCIDRBlock = *instanceSubnet.CidrBlock
-	i.source.subnetMask = strings.Split(i.source.subnetCIDRBlock, "/")[1]
+	subnetCIDRBlock := *instanceSubnet.CidrBlock
+	subnetMask := prefixLengthFromCIDR(subnetCIDRBlock)
+	if subnetMask == "" {
+		return fmt.Errorf("invalid IPv4 CIDR block %q for subnet %s", subnetCIDRBlock, i.source.subnetID)
+	}
+	i.source.subnetCIDRBlock = subnetCIDRBlock
+	i.source.subnetMask = subnetMask
 	// Cache IPv6 CIDR block if one is present
 	for _, v6CidrBlock := range instanceSubnet.Ipv6CidrBlockAssociationSet {
 		if v6CidrBlock.Ipv6CidrBlock != nil {
-			i.source.subnetV6CIDRBlock = *v6CidrBlock.Ipv6CidrBlock
-			i.source.subnetV6Mask = strings.Split(i.source.subnetV6CIDRBlock, "/")[1]
+			subnetV6CIDRBlock := *v6CidrBlock.Ipv6CidrBlock
+			subnetV6Mask := prefixLengthFromCIDR(subnetV6CIDRBlock)
+			if subnetV6Mask == "" {
+				return fmt.Errorf("invalid IPv6 CIDR block %q for subnet %s", subnetV6CIDRBlock, i.source.subnetID)
+			}
+			i.source.subnetV6CIDRBlock = subnetV6CIDRBlock
+			i.source.subnetV6Mask = subnetV6Mask
 			break
 		}
 	}
@@ -386,10 +397,11 @@ func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, ud
 // prefixLengthFromCIDR returns the prefix length from a CIDR, such as "16" for
 // "10.0.0.0/16". It returns an empty string for empty or malformed input.
 func prefixLengthFromCIDR(cidr string) string {
-	if parts := strings.Split(cidr, "/"); len(parts) == 2 {
-		return parts[1]
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return ""
 	}
-	return ""
+	return strconv.Itoa(prefix.Bits())
 }
 
 // LoadFromNodeNetworkState loads the persisted EC2 values needed to restore the
@@ -398,9 +410,6 @@ func prefixLengthFromCIDR(cidr string) string {
 // unset because restored nodes already have a trunk, and Windows nodes do not
 // use this restoration path.
 func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, instanceType string, trunkENIID string) {
-	i.lock.Lock()
-	defer i.lock.Unlock()
-
 	source := instanceSourceState{
 		instanceType:          instanceType,
 		subnetID:              state.SubnetID,
@@ -429,9 +438,6 @@ func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState
 // BuildNodeNetworkState returns the EC2 values needed to restore this instance.
 // It is called after authoritative EC2 initialization.
 func (i *ec2Instance) BuildNodeNetworkState() rcv1alpha1.NodeNetworkState {
-	i.lock.RLock()
-	defer i.lock.RUnlock()
-
 	var connectionTracking *rcv1alpha1.ConnectionTrackingConfig
 	if i.source.connectionTracking.tcpEstablishedTimeout != nil ||
 		i.source.connectionTracking.udpStreamTimeout != nil ||
@@ -455,16 +461,10 @@ func (i *ec2Instance) BuildNodeNetworkState() rcv1alpha1.NodeNetworkState {
 // IsRestoredFromNodeNetworkState reports whether the instance details were
 // restored from NodeNetworkState.
 func (i *ec2Instance) IsRestoredFromNodeNetworkState() bool {
-	i.lock.RLock()
-	defer i.lock.RUnlock()
-
 	return i.restore.fromNodeNetworkState
 }
 
 // RestoredTrunkENIID returns the trunk ENI ID selected for restoration.
 func (i *ec2Instance) RestoredTrunkENIID() string {
-	i.lock.RLock()
-	defer i.lock.RUnlock()
-
 	return i.restore.trunkENIID
 }

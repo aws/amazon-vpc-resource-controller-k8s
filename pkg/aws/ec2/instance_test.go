@@ -276,6 +276,49 @@ func TestEc2Instance_LoadDetails(t *testing.T) {
 	assert.Equal(t, connectionTrackingState{}, ec2Instance.source.connectionTracking)
 }
 
+func TestEc2Instance_LoadDetails_InvalidSubnetCIDR(t *testing.T) {
+	invalidIPv4CIDR := "192.168.0.0"
+	invalidIPv6CIDR := "2600:1f13::"
+
+	tests := []struct {
+		name       string
+		subnet     ec2types.Subnet
+		wantErrMsg string
+	}{
+		{
+			name: "invalid IPv4 CIDR",
+			subnet: ec2types.Subnet{
+				CidrBlock: &invalidIPv4CIDR,
+			},
+			wantErrMsg: "invalid IPv4 CIDR block",
+		},
+		{
+			name: "invalid IPv6 CIDR",
+			subnet: ec2types.Subnet{
+				CidrBlock: &subnetCidrBlock,
+				Ipv6CidrBlockAssociationSet: []ec2types.SubnetIpv6CidrBlockAssociation{
+					{Ipv6CidrBlock: &invalidIPv6CIDR},
+				},
+			},
+			wantErrMsg: "invalid IPv6 CIDR block",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+			mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
+			mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&test.subnet, nil)
+
+			err := ec2Instance.LoadDetails(mockEC2ApiHelper)
+			assert.ErrorContains(t, err, test.wantErrMsg)
+		})
+	}
+}
+
 // TestEc2Instance_LoadDetails_WithConnectionTracking tests that connection tracking config
 // from the primary ENI is loaded correctly
 func TestEc2Instance_LoadDetails_WithConnectionTracking(t *testing.T) {
