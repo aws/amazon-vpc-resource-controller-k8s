@@ -44,8 +44,8 @@ func node(name string, ready bool, deleting bool, capacity string) v1.Node {
 
 func TestReadyNodesWithResource(t *testing.T) {
 	nodes := &v1.NodeList{Items: []v1.Node{
-		node("ready", true, false, "18"),         // kept
-		node("not-ready", false, false, "18"),    // excluded: NotReady
+		node("ready", true, false, "18"),          // kept
+		node("not-ready", false, false, "18"),     // excluded: NotReady
 		node("deleting", true, true, "18"),        // excluded: being deleted
 		node("zero-capacity", true, false, "0"),   // excluded: no positive capacity
 		node("missing-resource", true, false, ""), // excluded: resource absent
