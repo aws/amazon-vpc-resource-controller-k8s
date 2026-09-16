@@ -26,64 +26,88 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResource string) *v1.NodeList {
-	observedNodeList := &v1.NodeList{}
-	var err error
-	err = wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.ResourceOperationTimeout, true,
+// GetNodeAndWaitTillCapacityPresent waits until at least expectedNodeCount nodes
+// are non-deleting, Ready, and advertise positive expectedResource capacity, then
+// returns that ready set. Pass expectedNodeCount <= 0 to only require a non-empty set.
+func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResource string, expectedNodeCount int) *v1.NodeList {
+	readyNodeList := &v1.NodeList{}
+	err := wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.ResourceOperationTimeout, true,
 		func(ctx context.Context) (bool, error) {
 			By("checking nodes have capacity present")
-			observedNodeList, err = manager.GetNodesWithOS(os)
+			observedNodeList, err := manager.GetNodesWithOS(os)
 			Expect(err).ToNot(HaveOccurred())
-			// An empty list (e.g. mid node-recycle) must not count as success.
-			if len(observedNodeList.Items) == 0 {
+			ready := readyNodesWithResource(observedNodeList, expectedResource)
+			if len(ready.Items) == 0 {
 				return false, nil
 			}
-			for _, node := range observedNodeList.Items {
-				_, found := node.Status.Allocatable[v1.ResourceName(expectedResource)]
-				if !found {
+			// Reject a partial fleet when we know how many nodes to expect.
+			if expectedNodeCount > 0 && len(ready.Items) < expectedNodeCount {
+				return false, nil
+			}
+			readyNodeList = ready
+			return true, nil
+		})
+	Expect(err).ToNot(HaveOccurred())
+	return readyNodeList
+}
+
+// readyNodesWithResource returns non-deleting, Ready nodes advertising a positive
+// quantity of the given allocatable resource.
+func readyNodesWithResource(nodes *v1.NodeList, resource string) *v1.NodeList {
+	ready := &v1.NodeList{}
+	for i := range nodes.Items {
+		node := nodes.Items[i]
+		if node.DeletionTimestamp != nil || !isNodeReady(&node) {
+			continue
+		}
+		if q, ok := node.Status.Allocatable[v1.ResourceName(resource)]; !ok || q.CmpInt64(0) <= 0 {
+			continue
+		}
+		ready.Items = append(ready.Items, node)
+	}
+	return ready
+}
+
+func isNodeReady(node *v1.Node) bool {
+	for _, c := range node.Status.Conditions {
+		if c.Type == v1.NodeReady {
+			return c.Status == v1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// VerifyCNINode polls for an exact 1:1 name mapping between Node and CNINode objects.
+func VerifyCNINode(manager Manager) error {
+	By("checking CNINode set matches node set")
+	err := wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.PollTimeout, true,
+		func(ctx context.Context) (bool, error) {
+			cniNodeList, err := manager.GetCNINodeList()
+			if err != nil {
+				return false, nil
+			}
+			nodeList, err := manager.GetNodeList()
+			if err != nil {
+				return false, nil
+			}
+			nodeNames := lo.SliceToMap(nodeList.Items, func(n v1.Node) (string, struct{}) {
+				return n.Name, struct{}{}
+			})
+			cniNodeNames := lo.SliceToMap(cniNodeList.Items, func(c cninode.CNINode) (string, struct{}) {
+				return c.Name, struct{}{}
+			})
+			if len(nodeNames) != len(cniNodeNames) {
+				return false, nil
+			}
+			for name := range nodeNames {
+				if _, ok := cniNodeNames[name]; !ok {
 					return false, nil
 				}
 			}
 			return true, nil
 		})
-	Expect(err).ToNot(HaveOccurred())
-	return observedNodeList
-}
-
-// VerifyCNINode checks if the number of CNINodes is equal to number of nodes in the cluster, and verifies 1:1 mapping between CNINode and Node objects
-// Returns nil if count and 1:1 mapping exists, else returns error
-func VerifyCNINode(manager Manager) error {
-	var cniNodeList *cninode.CNINodeList
-	var nodeList *v1.NodeList
-	var err error
-	By("checking number of CNINodes match number of nodes in the cluster")
-	err = wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.PollTimeout, true,
-		func(ctx context.Context) (bool, error) {
-			if cniNodeList, err = manager.GetCNINodeList(); err != nil {
-				return false, nil
-			}
-			if nodeList, err = manager.GetNodeList(); err != nil {
-				return false, nil
-			}
-			if len(nodeList.Items) != len(cniNodeList.Items) {
-				return false, nil
-			}
-			return true, nil
-		})
 	if err != nil {
-		return fmt.Errorf("number of CNINodes does not match number of nodes in the cluster")
-	}
-	By("checking CNINode list matches node list")
-	nameMatched := true
-	for _, node := range nodeList.Items {
-		if !lo.ContainsBy(cniNodeList.Items, func(cniNode cninode.CNINode) bool {
-			return cniNode.Name == node.Name
-		}) {
-			nameMatched = false
-		}
-	}
-	if !nameMatched {
-		return fmt.Errorf("CNINode list does not match node list")
+		return fmt.Errorf("CNINode set does not match node set")
 	}
 	return nil
 }
