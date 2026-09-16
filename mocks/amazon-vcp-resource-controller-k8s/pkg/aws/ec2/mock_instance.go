@@ -177,15 +177,15 @@ func (mr *MockEC2InstanceMockRecorder) LoadDetails(arg0 interface{}) *gomock.Cal
 }
 
 // LoadFromNodeNetworkState mocks base method.
-func (m *MockEC2Instance) LoadFromNodeNetworkState(arg0 v1alpha1.NodeNetworkState, arg1, arg2 string) {
+func (m *MockEC2Instance) LoadFromNodeNetworkState(arg0 v1alpha1.NodeNetworkState, arg1 string) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "LoadFromNodeNetworkState", arg0, arg1, arg2)
+	m.ctrl.Call(m, "LoadFromNodeNetworkState", arg0, arg1)
 }
 
 // LoadFromNodeNetworkState indicates an expected call of LoadFromNodeNetworkState.
-func (mr *MockEC2InstanceMockRecorder) LoadFromNodeNetworkState(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockEC2InstanceMockRecorder) LoadFromNodeNetworkState(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadFromNodeNetworkState", reflect.TypeOf((*MockEC2Instance)(nil).LoadFromNodeNetworkState), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LoadFromNodeNetworkState", reflect.TypeOf((*MockEC2Instance)(nil).LoadFromNodeNetworkState), arg0, arg1)
 }
 
 // Name mocks base method.

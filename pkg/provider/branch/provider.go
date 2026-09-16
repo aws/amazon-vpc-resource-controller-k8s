@@ -37,6 +37,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/smithy-go"
 
 	"github.com/go-logr/logr"
@@ -81,7 +82,8 @@ var (
 		[]string{operationLabel, resourceCountLabel},
 	)
 
-	deleteQueueRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
+	deleteQueueRequeueRequest   = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
+	orphanCleanupRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
 
 	// NodeDeleteRequeueRequestDelay represents the time after which the resources belonging to a node will be cleaned
 	// up after receiving the actual node delete event.
@@ -297,6 +299,8 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 		return b.DeleteBranchUsedByPods(onDemandJob.NodeName, onDemandJob.UID)
 	case worker.OperationProcessDeleteQueue:
 		return b.ProcessDeleteQueue(onDemandJob.NodeName)
+	case worker.OperationProcessOrphanCleanupQueue:
+		return b.ProcessOrphanCleanupQueue(onDemandJob.NodeName)
 	case worker.OperationDeleteNode:
 		return b.DeleteNode(onDemandJob.NodeName)
 	}
@@ -370,6 +374,78 @@ func (b *branchENIProvider) ProcessDeleteQueue(nodeName string) (ctrl.Result, er
 	}
 	trunkENI.DeleteCooledDownENIs()
 	return deleteQueueRequeueRequest, nil
+}
+
+// ProcessOrphanCleanupQueue reconciles VLANs quarantined by failed allocations.
+// Errors use timed requeue so cleanup continues beyond the worker's finite
+// error-retry budget.
+func (b *branchENIProvider) ProcessOrphanCleanupQueue(nodeName string) (ctrl.Result, error) {
+	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
+	if !isPresent {
+		b.log.Info("stopping the orphan cleanup queue job", "node", nodeName)
+		return ctrl.Result{}, nil
+	}
+	trunkENIID := trunkENI.TrunkENIID()
+	log := b.log.WithValues("node", nodeName, "trunkENI", trunkENIID)
+	pendingCleanup := trunkENI.SnapshotOrphanCleanup()
+	if len(pendingCleanup) == 0 {
+		return ctrl.Result{}, nil
+	}
+
+	podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
+	if err != nil {
+		log.Error(err, "failed to list pods for orphan cleanup, will retry")
+		return orphanCleanupRequeueRequest, nil
+	}
+	ownedENIIDs, err := branchENIIDsOwnedByPods(podList.Items)
+	if err != nil {
+		log.Error(err, "cannot safely determine branch ENI ownership, will retry")
+		return orphanCleanupRequeueRequest, nil
+	}
+
+	branchInterfaces, err := b.apiWrapper.EC2API.GetBranchNetworkInterface(
+		aws.String(trunkENIID), aws.String(trunkENI.TrunkSubnetID()))
+	if err != nil {
+		branchProviderOperationsErrCount.WithLabelValues("orphan_cleanup_describe").Inc()
+		log.Error(err, "failed to list branch ENIs for orphan cleanup, will retry")
+		return orphanCleanupRequeueRequest, nil
+	}
+
+	pending, err := trunkENI.ReconcileOrphanCleanup(pendingCleanup, branchInterfaces, ownedENIIDs)
+	if err != nil {
+		log.Error(err, "failed to process orphan cleanup queue, will retry")
+		return orphanCleanupRequeueRequest, nil
+	}
+	if pending {
+		return orphanCleanupRequeueRequest, nil
+	}
+	return ctrl.Result{}, nil
+}
+
+// branchENIIDsOwnedByPods builds the authoritative ownership set used by
+// orphan cleanup. An unreadable annotation makes the snapshot unsafe: treating
+// it as empty could delete an ENI still serving a pod.
+func branchENIIDsOwnedByPods(pods []v1.Pod) (map[string]struct{}, error) {
+	ownedENIIDs := make(map[string]struct{})
+	for i := range pods {
+		annotation, present := pods[i].Annotations[config.ResourceNamePodENI]
+		if !present {
+			continue
+		}
+		var eniDetails []*trunk.ENIDetails
+		if err := json.Unmarshal([]byte(annotation), &eniDetails); err != nil {
+			return nil, fmt.Errorf("decoding branch ENI annotation for pod %s/%s: %w",
+				pods[i].Namespace, pods[i].Name, err)
+		}
+		for _, eni := range eniDetails {
+			if eni == nil || eni.ID == "" {
+				return nil, fmt.Errorf("pod %s/%s has branch ENI annotation without an ENI ID",
+					pods[i].Namespace, pods[i].Name)
+			}
+			ownedENIIDs[eni.ID] = struct{}{}
+		}
+	}
+	return ownedENIIDs, nil
 }
 
 // CreateAndAnnotateResources creates resource for the pod, the function can run concurrently for different pods without
@@ -459,6 +535,9 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	// Get the list of branch ENIs that will be allocated to the pod object
 	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount, commitOwnership)
 	if err != nil {
+		if !commitFailed && trunkENI.HasPendingOrphanCleanup() {
+			b.SubmitAsyncJob(worker.NewOnDemandProcessOrphanCleanupQueueJob(pod.Spec.NodeName))
+		}
 		if errors.Is(err, trunk.ErrCurrentlyAtMaxCapacity) {
 			return ctrl.Result{RequeueAfter: cooldown.GetCoolDown().GetCoolDownPeriod(), Requeue: true}, nil
 		}

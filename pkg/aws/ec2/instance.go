@@ -111,7 +111,7 @@ type EC2Instance interface {
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
-	LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, instanceType string, trunkENIID string)
+	LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, trunkENIID string)
 	BuildNodeNetworkState() rcv1alpha1.NodeNetworkState
 	IsRestoredFromNodeNetworkState() bool
 	RestoredTrunkENIID() string
@@ -409,9 +409,9 @@ func prefixLengthFromCIDR(cidr string) string {
 // from the current ENIConfig. Device indexes and the primary ENI id remain
 // unset because restored nodes already have a trunk, and Windows nodes do not
 // use this restoration path.
-func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, instanceType string, trunkENIID string) {
+func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, trunkENIID string) {
 	source := instanceSourceState{
-		instanceType:          instanceType,
+		instanceType:          state.InstanceType,
 		subnetID:              state.SubnetID,
 		subnetCIDRBlock:       state.SubnetCIDRBlock,
 		subnetV6CIDRBlock:     state.SubnetV6CIDRBlock,
@@ -450,6 +450,7 @@ func (i *ec2Instance) BuildNodeNetworkState() rcv1alpha1.NodeNetworkState {
 	}
 	return rcv1alpha1.NodeNetworkState{
 		InstanceID:                            i.instanceID,
+		InstanceType:                          i.source.instanceType,
 		SubnetID:                              i.source.subnetID,
 		SubnetCIDRBlock:                       i.source.subnetCIDRBlock,
 		SubnetV6CIDRBlock:                     i.source.subnetV6CIDRBlock,

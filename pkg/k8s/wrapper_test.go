@@ -244,7 +244,8 @@ func TestK8sWrapper_UpdateCNINodeStatus(t *testing.T) {
 
 	modified := base.DeepCopy()
 	modified.Status.NodeNetworkState = &v1alpha1.NodeNetworkState{
-		InstanceID: "i-00000000000000000",
+		InstanceID:   "i-00000000000000000",
+		InstanceType: "m5.large",
 	}
 	modified.Status.TrunkInterface = &v1alpha1.TrunkInterface{ID: "eni-trunk", SubnetID: "subnet-0123456789abcdef0"}
 

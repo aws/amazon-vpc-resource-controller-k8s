@@ -47,8 +47,6 @@ type node struct {
 	managed bool
 	// instance stores the ec2 instance details that is shared by all the providers
 	instance ec2.EC2Instance
-	// instanceType is captured from the Kubernetes Node used to create this object.
-	instanceType string
 	// node has reference to k8s APIs
 	k8sAPI k8s.K8sWrapper
 	// node has reference to EC2 APIs
@@ -77,9 +75,11 @@ const (
 	restoreReasonNoState            restoreReason = "no_state"
 	restoreReasonMissingField       restoreReason = "missing_field"
 	restoreReasonInvalidCIDR        restoreReason = "invalid_cidr"
-	restoreReasonInstanceIDMismatch restoreReason = "instance_id_mismatch"
 	restoreReasonSubnetLookupFailed restoreReason = "subnet_lookup_failed"
 	restoreReasonUnsupportedType    restoreReason = "unsupported_type"
+
+	// Identity mismatch is a node lifecycle event rather than a restore miss.
+	restoreReasonInstanceIDMismatch restoreReason = "instance_id_mismatch"
 
 	// node_init_duration_seconds label values.
 	initResultOK    initResult = "success"
@@ -94,6 +94,12 @@ var (
 		},
 		[]string{"result", "reason"},
 	)
+	nodeInstanceIDMismatchCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "node_instance_id_mismatch_total",
+			Help: "Number of instance ID mismatches observed between a Kubernetes Node and persisted or cached controller state",
+		},
+	)
 	nodeInitDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name: "node_init_duration_seconds",
@@ -106,12 +112,19 @@ var (
 
 func registerNodeMetrics() {
 	registerMetricsOnce.Do(func() {
-		metrics.Registry.MustRegister(cniNodeNetworkStateRestoreCount, nodeInitDuration)
+		metrics.Registry.MustRegister(cniNodeNetworkStateRestoreCount, nodeInstanceIDMismatchCount, nodeInitDuration)
 	})
 }
 
 func recordNodeNetworkStateRestore(result restoreResult, reason restoreReason) {
 	cniNodeNetworkStateRestoreCount.WithLabelValues(string(result), string(reason)).Inc()
+}
+
+// RecordInstanceIDMismatch records an instance identity mismatch detected from
+// either persisted CNINode state or the live node manager cache.
+func RecordInstanceIDMismatch() {
+	registerNodeMetrics()
+	nodeInstanceIDMismatchCount.Inc()
 }
 
 // ErrInitResources to wrap error messages for all errors encountered
@@ -145,14 +158,13 @@ type Node interface {
 }
 
 // NewManagedNode returns node managed by the controller
-func NewManagedNode(log logr.Logger, nodeName, instanceID, instanceType, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
+func NewManagedNode(log logr.Logger, nodeName, instanceID, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
 	registerNodeMetrics()
 	return &node{
 		managed: true,
 		log: log.WithName("node resource handler").
 			WithValues("node name", nodeName),
 		instance:               ec2.NewEC2Instance(nodeName, instanceID, os, log.WithName("ec2instance")),
-		instanceType:           instanceType,
 		k8sAPI:                 k8sAPI,
 		ec2API:                 ec2API,
 		reconciliationInterval: NodeInitialCleanupInterval,
@@ -275,7 +287,7 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 // and CIDR syntax. Branch ledger invariants are validated later by
 // InitFromNodeNetworkState.
 func validateNodeNetworkState(observed *rcv1alpha1.TrunkInterface, state *rcv1alpha1.NodeNetworkState,
-	instanceID, nodeInstanceType string,
+	instanceID string,
 ) restoreReason {
 	if state == nil {
 		return restoreReasonNoState
@@ -283,7 +295,7 @@ func validateNodeNetworkState(observed *rcv1alpha1.TrunkInterface, state *rcv1al
 
 	// IPv6 remains optional because not every subnet has an IPv6 CIDR.
 	switch {
-	case observed == nil, observed.ID == "", state.InstanceID == "",
+	case observed == nil, observed.ID == "", state.InstanceID == "", state.InstanceType == "",
 		state.SubnetID == "", state.SubnetCIDRBlock == "",
 		len(state.PrimaryNetworkInterfaceSecurityGroups) == 0:
 		return restoreReasonMissingField
@@ -304,12 +316,8 @@ func validateNodeNetworkState(observed *rcv1alpha1.TrunkInterface, state *rcv1al
 		return restoreReasonInstanceIDMismatch
 	}
 
-	// Instance type determines branch ENI capacity. It is read from the
-	// Kubernetes Node label and is no longer persisted in the checkpoint.
-	if nodeInstanceType == "" {
-		return restoreReasonMissingField
-	}
-	if !utils.HasInstanceTypeLimits(nodeInstanceType) {
+	// Instance type determines branch ENI capacity.
+	if !utils.HasInstanceTypeLimits(state.InstanceType) {
 		return restoreReasonUnsupportedType
 	}
 	return restoreReasonNone
@@ -336,15 +344,26 @@ func (n *node) tryRestoreFromNodeNetworkState() bool {
 
 	state := cniNode.Status.NodeNetworkState
 	if reason := validateNodeNetworkState(cniNode.Status.TrunkInterface, state,
-		n.instance.InstanceID(), n.instanceType); reason != restoreReasonNone {
+		n.instance.InstanceID()); reason != restoreReasonNone {
+		stateInstanceID := ""
+		stateInstanceType := ""
+		if state != nil {
+			stateInstanceID = state.InstanceID
+			stateInstanceType = state.InstanceType
+		}
 		n.log.Info("NodeNetworkState is unusable, falling back to EC2", "reason", reason,
-			"nodeInstanceID", n.instance.InstanceID(), "nodeInstanceType", n.instanceType)
-		recordNodeNetworkStateRestore(restoreResultMiss, reason)
+			"nodeInstanceID", n.instance.InstanceID(), "stateInstanceID", stateInstanceID,
+			"stateInstanceType", stateInstanceType)
+		if reason == restoreReasonInstanceIDMismatch {
+			RecordInstanceIDMismatch()
+		} else {
+			recordNodeNetworkStateRestore(restoreResultMiss, reason)
+		}
 		return false
 	}
 
 	trunkENIID := cniNode.Status.TrunkInterface.ID
-	n.instance.LoadFromNodeNetworkState(*state, n.instanceType, trunkENIID)
+	n.instance.LoadFromNodeNetworkState(*state, trunkENIID)
 	if err := n.instance.UpdateCurrentSubnetAndCidrBlock(n.ec2API); err != nil {
 		n.log.Error(err, "failed to derive network state during restoration")
 		recordNodeNetworkStateRestore(restoreResultMiss, restoreReasonSubnetLookupFailed)

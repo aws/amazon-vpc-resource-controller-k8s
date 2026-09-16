@@ -272,9 +272,11 @@ func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *m
 func getMockTrunk() trunkENI {
 	log := zap.New(zap.UseDevMode(true)).WithName("node manager")
 	return trunkENI{
-		log:               log,
-		usedVlanIds:       make([]bool, MaxAllocatableVlanIds),
-		uidToBranchENIMap: map[string][]*ENIDetails{},
+		log:                            log,
+		usedVlanIds:                    make([]bool, MaxAllocatableVlanIds),
+		uidToBranchENIMap:              map[string][]*ENIDetails{},
+		orphanCleanupQueue:             map[int]map[string]*ENIDetails{},
+		orphanCleanupEmptyObservations: map[int]int{},
 		nodeIDTag: []awsEc2Types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -308,22 +310,10 @@ func TestNewTrunkENI(t *testing.T) {
 	assert.NotNil(t, trunkENI)
 }
 
-// TestIsLedgerContradictionError verifies only the duplicate-VLAN code counts
-// as a contradiction; throttling and plain errors must not trigger reclaim.
-func TestIsLedgerContradictionError(t *testing.T) {
-	assert.True(t, isLedgerContradictionError(MockDuplicateVlanError))
-	assert.False(t, isLedgerContradictionError(MockError))
-	assert.False(t, isLedgerContradictionError(fmt.Errorf("wrap: %w",
-		&smithy.GenericAPIError{Code: "RequestLimitExceeded", Message: "Request limit exceeded."})))
-	assert.False(t, isLedgerContradictionError(fmt.Errorf("wrap: %w",
-		&smithy.GenericAPIError{Code: "UnauthorizedOperation", Message: "not authorized"})))
-	assert.False(t, isLedgerContradictionError(nil))
-}
-
-// TestTrunkENI_CreateAndAssociateBranchENIs_NoReclaimOnThrottle verifies a
-// throttled association does not spend a describe: no GetBranchNetworkInterface
-// expectation is registered, so a reclaim attempt would fail the mock.
-func TestTrunkENI_CreateAndAssociateBranchENIs_NoReclaimOnThrottle(t *testing.T) {
+// TestTrunkENI_CreateAndAssociateBranchENIs_QuarantinesFailedVLAN verifies an
+// association error returns immediately without a Describe and leaves the VLAN
+// unavailable until the asynchronous cleanup worker reconciles it.
+func TestTrunkENI_CreateAndAssociateBranchENIs_QuarantinesFailedVLAN(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -346,6 +336,10 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_NoReclaimOnThrottle(t *testing.T)
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1, nil)
 	assert.Error(t, err)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+	assert.True(t, trunkENI.HasPendingOrphanCleanup())
+	assert.Contains(t, trunkENI.orphanCleanupQueue[VlanId1], Branch1Id)
+	assert.Empty(t, trunkENI.deleteQueue)
 }
 
 func TestTrunkENI_CreateAndAssociateBranchENIs_NoReclaimAtCapacity(t *testing.T) {
@@ -367,7 +361,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_NoReclaimAtCapacity(t *testing.T)
 	// signal, not a reason to Describe or rebuild the trunk ledger.
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1, nil)
 	assert.ErrorIs(t, err, ErrCurrentlyAtMaxCapacity)
-	assert.False(t, trunkENI.isOrphanCheckCompleted())
+	assert.False(t, trunkENI.HasPendingOrphanCleanup())
 }
 
 func TestTrunkENI_canCreateMoreIncludesPendingCreates(t *testing.T) {
@@ -477,31 +471,6 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ReservesCapacityBeforeEC2Create(t
 	assert.Equal(t, []*ENIDetails{EniDetails1}, trunkENI.uidToBranchENIMap[PodUID2])
 }
 
-// TestTrunkENI_reclaimOrphans_SkipsUnassociatedENI verifies reclaim never
-// touches an ENI that is not associated to the trunk: it holds no VLAN, and it
-// may be a concurrent create whose RPC response has not returned yet.
-func TestTrunkENI_reclaimOrphans_SkipsUnassociatedENI(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	trunkENI.trunkENIId = trunkId
-	mockInstance.EXPECT().SubnetID().Return(SubnetId)
-
-	creating := branchENIWithVlanTag(Branch1Id, VlanId1)
-	creating.Status = awsEc2Types.NetworkInterfaceStatusAvailable
-	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
-		Return([]*awsEc2Types.NetworkInterface{creating}, nil)
-
-	reclaimedBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("reclaimed"))
-	trunkENI.reclaimOrphansOnAssociateFailure()
-
-	assert.Empty(t, trunkENI.deleteQueue)
-	assert.False(t, trunkENI.usedVlanIds[VlanId1])
-	assert.Equal(t, float64(0),
-		testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("reclaimed"))-reclaimedBefore)
-}
-
 // TestTrunkENI_DeleteCooledDownENIs_SkipsOwnedENI verifies the pre-delete
 // ownership recheck: an ENI that is (or became) pod-owned is dropped from the
 // delete queue without an EC2 delete call.
@@ -525,147 +494,161 @@ func TestTrunkENI_DeleteCooledDownENIs_SkipsOwnedENI(t *testing.T) {
 	assert.Len(t, trunkENI.uidToBranchENIMap[PodUID], 1)
 }
 
-// TestTrunkENI_DeleteCooledDownENIs_SerializesOrphanReclaim verifies reactive
-// reclaim cannot requeue an ENI after the delete worker pops it but before the
-// EC2 delete completes.
-func TestTrunkENI_DeleteCooledDownENIs_SerializesOrphanReclaim(t *testing.T) {
+func TestTrunkENI_ReconcileOrphanCleanup_DeletesThenConfirmsBeforeRelease(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI, mockHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.trunkENIId = trunkId
 	trunkENI.usedVlanIds[VlanId1] = true
-	trunkENI.deleteQueue = []*ENIDetails{{ID: Branch1Id, VlanID: VlanId1}}
-
-	deleteStarted := make(chan struct{})
-	allowDelete := make(chan struct{})
-	deleteDone := make(chan struct{})
-	reclaimDone := make(chan struct{})
-	mockHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).DoAndReturn(func(*string) error {
-		close(deleteStarted)
-		<-allowDelete
-		return nil
-	})
-	mockInstance.EXPECT().SubnetID().Return(SubnetId)
-	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
-		Return([]*awsEc2Types.NetworkInterface{}, nil)
-
-	go func() {
-		trunkENI.DeleteCooledDownENIs()
-		close(deleteDone)
-	}()
-
-	<-deleteStarted
-	go func() {
-		trunkENI.reclaimOrphans()
-		close(reclaimDone)
-	}()
-
-	select {
-	case <-reclaimDone:
-		t.Fatal("orphan reclaim must wait for the active delete")
-	default:
+	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{
+		Branch1Id: {ID: Branch1Id, VlanID: VlanId1},
 	}
 
-	close(allowDelete)
-	<-deleteDone
-	<-reclaimDone
+	mockHelper.EXPECT().DescribeTrunkInterfaceAssociation(&trunkId).Return(
+		[]awsEc2Types.TrunkInterfaceAssociation{
+			{
+				AssociationId:     &MockAssociationID1,
+				BranchInterfaceId: &Branch1Id,
+			},
+			{
+				AssociationId:     &MockAssociationID2,
+				BranchInterfaceId: &Branch2Id,
+			},
+		}, nil)
+	mockHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
+	mockHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil)
+	mockHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID2).Return(nil)
+	mockHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
 
-	assert.Empty(t, trunkENI.deleteQueue)
+	pending, err := trunkENI.ReconcileOrphanCleanup(trunkENI.SnapshotOrphanCleanup(),
+		[]*awsEc2Types.NetworkInterface{
+			branchENIWithVlanTag(Branch1Id, VlanId1),
+			branchENIWithVlanTag(Branch2Id, VlanId1),
+		}, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.True(t, pending)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+
+	pending, err = trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.True(t, pending)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+
+	pending, err = trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.False(t, pending)
 	assert.False(t, trunkENI.usedVlanIds[VlanId1])
 }
 
-func TestTrunkENI_reclaimOrphansOnAssociateFailure(t *testing.T) {
+func TestTrunkENI_ReconcileOrphanCleanup_RetriesWhenAssociationCannotBeResolved(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI, mockHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.trunkENIId = trunkId
-	mockInstance.EXPECT().SubnetID().Return(SubnetId)
-	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
-		Return([]*awsEc2Types.NetworkInterface{branchENIWithVlanTag(Branch1Id, VlanId1)}, nil)
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{}
 
-	triggeredBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))
-	reclaimedBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("reclaimed"))
+	mockHelper.EXPECT().DescribeTrunkInterfaceAssociation(&trunkId).Return(nil, nil)
 
-	trunkENI.reclaimOrphansOnAssociateFailure()
+	pending, err := trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(),
+		[]*awsEc2Types.NetworkInterface{branchENIWithVlanTag(Branch1Id, VlanId1)},
+		map[string]struct{}{})
 
-	assert.Equal(t, []string{Branch1Id}, queuedENIIDs(trunkENI))
+	assert.Error(t, err)
+	assert.True(t, pending)
 	assert.True(t, trunkENI.usedVlanIds[VlanId1])
-	assert.True(t, trunkENI.isOrphanCheckCompleted())
-	assertAllQueuedENIsStamped(t, trunkENI)
-	assert.Equal(t, 1.0,
-		testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))-triggeredBefore)
-	assert.Equal(t, 1.0,
-		testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("reclaimed"))-reclaimedBefore)
-
-	// A successful check is not repeated until this process restores the trunk
-	// again. No second Describe expectation is registered.
-	trunkENI.reclaimOrphansOnAssociateFailure()
 }
 
-func TestTrunkENI_reclaimOrphans_DescribeErrorCanRetry(t *testing.T) {
+func TestTrunkENI_ReconcileOrphanCleanup_RequiresConsecutiveEmptyObservations(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.trunkENIId = trunkId
-	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
-	gomock.InOrder(
-		mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, MockError),
-		mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, nil),
-	)
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{}
 
-	triggeredBefore := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))
-	errorsBefore := testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("reclaim_orphans_describe"))
+	pending, err := trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.True(t, pending)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
 
-	trunkENI.reclaimOrphansOnAssociateFailure()
-
-	assert.Empty(t, trunkENI.deleteQueue)
-	assert.False(t, trunkENI.isOrphanCheckCompleted())
-	assert.Equal(t, 1.0,
-		testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("triggered"))-triggeredBefore)
-	assert.Equal(t, 1.0,
-		testutil.ToFloat64(trunkENIOperationsErrCount.WithLabelValues("reclaim_orphans_describe"))-errorsBefore)
-
-	trunkENI.reclaimOrphansOnAssociateFailure()
-	assert.True(t, trunkENI.isOrphanCheckCompleted())
+	pending, err = trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.False(t, pending)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
 }
 
-func TestTrunkENI_reclaimOrphans_ConcurrentCallsShareDescribe(t *testing.T) {
+func TestTrunkENI_ReconcileOrphanCleanup_DoesNotApplyOldObservationToNewQuarantine(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{}
+	snapshot := trunkENI.SnapshotOrphanCleanup()
+
+	trunkENI.usedVlanIds[VlanId2] = true
+	trunkENI.orphanCleanupQueue[VlanId2] = map[string]*ENIDetails{}
+	trunkENI.orphanCleanupEmptyObservations[VlanId2] = 0
+
+	pending, err := trunkENI.ReconcileOrphanCleanup(snapshot, nil, map[string]struct{}{})
+
+	assert.NoError(t, err)
+	assert.True(t, pending)
+	assert.Equal(t, 1, trunkENI.orphanCleanupEmptyObservations[VlanId1])
+	assert.Equal(t, 0, trunkENI.orphanCleanupEmptyObservations[VlanId2])
+}
+
+func TestTrunkENI_ReconcileOrphanCleanup_OwnedCandidateDoesNotDropFailedDelete(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
 	trunkENI.trunkENIId = trunkId
-	mockInstance.EXPECT().SubnetID().Return(SubnetId)
-
-	describeStarted := make(chan struct{})
-	releaseDescribe := make(chan struct{})
-	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
-		DoAndReturn(func(*string, *string) ([]*awsEc2Types.NetworkInterface, error) {
-			close(describeStarted)
-			<-releaseDescribe
-			return nil, nil
-		})
-
-	const callers = 32
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(callers)
-	for i := 0; i < callers; i++ {
-		go func() {
-			defer wg.Done()
-			<-start
-			trunkENI.reclaimOrphansOnAssociateFailure()
-		}()
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{{ID: Branch1Id, VlanID: VlanId1}}
+	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{
+		Branch1Id: {ID: Branch1Id, VlanID: VlanId1},
+		Branch2Id: {ID: Branch2Id, VlanID: VlanId1},
 	}
 
-	close(start)
-	<-describeStarted
-	time.Sleep(50 * time.Millisecond)
-	close(releaseDescribe)
-	wg.Wait()
+	mockHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(MockError)
+
+	pending, err := trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+
+	assert.ErrorIs(t, err, MockError)
+	assert.True(t, pending)
+	assert.NotContains(t, trunkENI.orphanCleanupQueue[VlanId1], Branch1Id)
+	assert.Contains(t, trunkENI.orphanCleanupQueue[VlanId1], Branch2Id)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+}
+
+func TestTrunkENI_ReconcileOrphanCleanup_PreservesCandidateOwnedByObservedPod(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, _, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{
+		Branch1Id: {ID: Branch1Id, VlanID: VlanId1},
+	}
+
+	pending, err := trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{Branch1Id: {}})
+
+	assert.NoError(t, err)
+	assert.False(t, pending)
+	assert.NotContains(t, trunkENI.orphanCleanupQueue, VlanId1)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
 }
 
 // TestTrunkENI_InitFromNodeNetworkState verifies that the ledger is rebuilt from
@@ -684,7 +667,6 @@ func TestTrunkENI_InitFromNodeNetworkState(t *testing.T) {
 	assert.Len(t, trunkENI.uidToBranchENIMap[PodUID], 2)
 	assert.True(t, trunkENI.usedVlanIds[1])
 	assert.True(t, trunkENI.usedVlanIds[2])
-	assert.False(t, trunkENI.isOrphanCheckCompleted())
 }
 
 // podWithBranches builds a pod whose pod-eni annotation carries the given branch
@@ -1429,13 +1411,6 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			}
 			err := f.trunkENI.InitTrunk(tt.args.instance, tt.args.podList)
 			assert.Equal(t, err != nil, tt.wantErr)
-			if !tt.wantErr {
-				assert.True(t, f.trunkENI.isOrphanCheckCompleted(),
-					"EC2 initialization already verified the trunk")
-				// No Describe expectation is registered: EC2-initialized trunks
-				// must ignore later duplicate-triggered check requests.
-				f.trunkENI.reclaimOrphansOnAssociateFailure()
-			}
 			if tt.asserts != nil {
 				tt.asserts(&f)
 			}
@@ -1517,67 +1492,6 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_LedgerBeforeAnnotation(t *testing
 	assert.Equal(t, []*ENIDetails{EniDetails1}, trunkENI.uidToBranchENIMap[PodUID2])
 }
 
-func TestTrunkENI_ReactiveOrphanCheckWaitsForAllocationCommit(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunkENI, mockHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	trunkENI.trunkENIId = trunkId
-
-	mockInstance.EXPECT().Type().Return(InstanceType)
-	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockInstance.EXPECT().SubnetID().Return(SubnetId).Times(2)
-	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock)
-	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil)
-	mockHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
-		append(vlan1Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).Return(BranchInterface1, nil)
-	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).
-		Return(mockAssociationOutput1, nil)
-
-	commitStarted := make(chan struct{})
-	allowCommit := make(chan struct{})
-	allocationDone := make(chan error)
-	go func() {
-		_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1,
-			func([]*ENIDetails) error {
-				close(commitStarted)
-				<-allowCommit
-				return nil
-			})
-		allocationDone <- err
-	}()
-	<-commitStarted
-
-	describeStarted := make(chan struct{})
-	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
-		DoAndReturn(func(*string, *string) ([]*awsEc2Types.NetworkInterface, error) {
-			close(describeStarted)
-			return []*awsEc2Types.NetworkInterface{
-				branchENIWithVlanTag(Branch1Id, VlanId1),
-			}, nil
-		})
-	reclaimDone := make(chan struct{})
-	go func() {
-		trunkENI.reclaimOrphansOnAssociateFailure()
-		close(reclaimDone)
-	}()
-
-	select {
-	case <-describeStarted:
-		t.Fatal("orphan check must wait until annotation commit releases the allocation reader")
-	default:
-	}
-
-	close(allowCommit)
-	assert.NoError(t, <-allocationDone)
-	<-describeStarted
-	<-reclaimDone
-
-	assert.Equal(t, []*ENIDetails{EniDetails1}, trunkENI.uidToBranchENIMap[PodUID2])
-	assert.Empty(t, trunkENI.deleteQueue)
-}
-
 // TestTrunkENI_CreateAndAssociateBranchENIs_AnnotationFailureHandoff verifies an
 // annotation failure observes ledger ownership, then atomically moves the ENI
 // from the ledger to deleteQueue.
@@ -1651,7 +1565,7 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_InstanceSecurityGroup(t *testing.
 }
 
 // TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate verifies that an
-// association failure queues every ENI created by the request.
+// association failure quarantines every VLAN allocated by the request.
 func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1674,58 +1588,17 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate(t *testing.T) {
 			append(vlan2Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).Return(BranchInterface2, nil),
 		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(nil, MockDuplicateVlanError),
 	)
-	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, nil)
-
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2, nil)
 	assert.Error(t, err)
-	// Reactive reclaim does not turn the association error into a capacity error.
 	assert.NotErrorIs(t, err, ErrCurrentlyAtMaxCapacity)
-	assert.Equal(t, []string{EniDetails1.ID, ENIDetailsMissingAssociationID.ID}, queuedENIIDs(trunkENI))
-	assert.True(t, trunkENI.deleteQueue[0].deletionTimeStamp.IsZero())
-	assert.True(t, trunkENI.deleteQueue[1].deletionTimeStamp.IsZero())
+	assert.Contains(t, trunkENI.orphanCleanupQueue[VlanId1], EniDetails1.ID)
+	assert.Contains(t, trunkENI.orphanCleanupQueue[VlanId2], ENIDetailsMissingAssociationID.ID)
+	assert.Empty(t, trunkENI.deleteQueue)
 	assert.Zero(t, trunkENI.pendingCreate)
 }
 
-func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorAssociate_NoSelfDoubleEnqueue(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunkENI, mockEC2APIHelper, mockInstance := getMockHelperInstanceAndTrunkObject(ctrl)
-	trunkENI.trunkENIId = trunkId
-
-	mockInstance.EXPECT().Type().Return(InstanceType)
-	mockInstance.EXPECT().InstanceID().Return(InstanceId)
-	mockInstance.EXPECT().SubnetID().Return(SubnetId).AnyTimes()
-	mockInstance.EXPECT().SubnetCidrBlock().Return(SubnetCidrBlock).Times(2)
-	mockInstance.EXPECT().SubnetV6CidrBlock().Return(SubnetV6CidrBlock).Times(2)
-	mockInstance.EXPECT().GetConnectionTrackingSpec().Return(nil, nil, nil)
-
-	gomock.InOrder(
-		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
-			append(vlan1Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).Return(BranchInterface1, nil),
-		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, VlanId1).Return(mockAssociationOutput1, nil),
-		mockEC2APIHelper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, SecurityGroups,
-			append(vlan2Tag, trunkENI.nodeIDTag...), nil, nil, gomock.Any()).Return(BranchInterface2, nil),
-		mockEC2APIHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch2Id, VlanId2).Return(nil, MockDuplicateVlanError),
-	)
-	mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
-		DoAndReturn(func(*string, *string) ([]*awsEc2Types.NetworkInterface, error) {
-			assert.Equal(t, []string{EniDetails1.ID, ENIDetailsMissingAssociationID.ID},
-				queuedENIIDs(trunkENI), "failed allocation must enter deleteQueue before Describe")
-			return []*awsEc2Types.NetworkInterface{
-				branchENIWithVlanTag(Branch1Id, VlanId1),
-				branchENIWithVlanTag(Branch2Id, VlanId2),
-			}, nil
-		})
-
-	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2, nil)
-
-	assert.Error(t, err)
-	assert.Equal(t, []string{EniDetails1.ID, ENIDetailsMissingAssociationID.ID}, queuedENIIDs(trunkENI))
-}
-
 // TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate verifies that a create
-// failure queues ENIs completed earlier in the request.
+// failure quarantines ENIs completed earlier in the request.
 func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1750,8 +1623,11 @@ func TestTrunkENI_CreateAndAssociateBranchENIs_ErrorCreate(t *testing.T) {
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 2, nil)
 	assert.Error(t, MockError, err)
-	assert.Equal(t, []string{EniDetails1.ID}, queuedENIIDs(trunkENI))
-	assert.True(t, trunkENI.deleteQueue[0].deletionTimeStamp.IsZero())
+	assert.Contains(t, trunkENI.orphanCleanupQueue[VlanId1], EniDetails1.ID)
+	assert.Contains(t, trunkENI.orphanCleanupQueue, VlanId2)
+	assert.Empty(t, trunkENI.orphanCleanupQueue[VlanId2])
+	assert.True(t, trunkENI.usedVlanIds[VlanId2])
+	assert.Empty(t, trunkENI.deleteQueue)
 	assert.Zero(t, trunkENI.pendingCreate)
 }
 
@@ -1943,9 +1819,10 @@ func TestTrunkENI_InitFromNodeNetworkState_RejectsUnusableAnnotation(t *testing.
 	}
 }
 
-// TestTrunkENI_DeleteCooledDownENIs_FailedAllocationDeletesImmediately verifies
-// a failed allocation is cleanup work, not a warm-pool or recovery trigger.
-func TestTrunkENI_DeleteCooledDownENIs_FailedAllocationDeletesImmediately(t *testing.T) {
+// TestTrunkENI_FailedAllocationUsesOrphanCleanupQueue verifies failed
+// allocations bypass the cooldown queue. The regular delete worker can continue
+// deleting cooled ENIs while the orphan worker reconciles the quarantined VLAN.
+func TestTrunkENI_FailedAllocationUsesOrphanCleanupQueue(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -1972,18 +1849,39 @@ func TestTrunkENI_DeleteCooledDownENIs_FailedAllocationDeletesImmediately(t *tes
 	mockHelper.EXPECT().CreateNetworkInterface(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
 		gomock.Any(), gomock.Any(), gomock.Any()).Return(BranchInterface1, nil)
 	mockHelper.EXPECT().AssociateBranchToTrunk(&trunkId, &Branch1Id, gomock.Any()).Return(nil, MockDuplicateVlanError)
-	mockHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(nil, nil)
 
 	_, err := trunkENI.CreateAndAssociateBranchENIs(MockPod2, SecurityGroups, 1, nil)
 	assert.Error(t, err)
+	assert.Equal(t, []string{cooled.ID}, queuedENIIDs(trunkENI))
+	assert.True(t, trunkENI.HasPendingOrphanCleanup())
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
 
-	// The failed allocation is placed at the front with no cooldown, then the
-	// already-cooled item is deleted in the same pass.
-	mockHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil)
+	// The regular queue remains independent and deletes only the cooled ENI.
 	mockHelper.EXPECT().DeleteNetworkInterface(&cooled.ID).Return(nil)
 	trunkENI.DeleteCooledDownENIs()
-
 	assert.Empty(t, queuedENIIDs(trunkENI))
+
+	// The orphan queue deletes the failed ENI, then requires a subsequent
+	// successful Describe with no matching ENI before releasing the VLAN.
+	mockHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil)
+
+	pending, err := trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.True(t, pending)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+
+	pending, err = trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.True(t, pending)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+
+	pending, err = trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.False(t, pending)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
 }
 
 // TestTrunkENI_InitTrunk_UnusableAnnotationSkipsReclaim tests the destructive case

@@ -22,6 +22,7 @@ import (
 
 	ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	trunk "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
 )
@@ -76,6 +77,20 @@ func (mr *MockTrunkENIMockRecorder) DeleteCooledDownENIs() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteCooledDownENIs", reflect.TypeOf((*MockTrunkENI)(nil).DeleteCooledDownENIs))
 }
 
+// HasPendingOrphanCleanup mocks base method.
+func (m *MockTrunkENI) HasPendingOrphanCleanup() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasPendingOrphanCleanup")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// HasPendingOrphanCleanup indicates an expected call of HasPendingOrphanCleanup.
+func (mr *MockTrunkENIMockRecorder) HasPendingOrphanCleanup() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasPendingOrphanCleanup", reflect.TypeOf((*MockTrunkENI)(nil).HasPendingOrphanCleanup))
+}
+
 // InitFromNodeNetworkState mocks base method.
 func (m *MockTrunkENI) InitFromNodeNetworkState(trunkENIID string, pods []v1.Pod) error {
 	m.ctrl.T.Helper()
@@ -116,6 +131,35 @@ func (m *MockTrunkENI) Introspect() trunk.IntrospectResponse {
 func (mr *MockTrunkENIMockRecorder) Introspect() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Introspect", reflect.TypeOf((*MockTrunkENI)(nil).Introspect))
+}
+
+// ReconcileOrphanCleanup mocks base method.
+func (m *MockTrunkENI) ReconcileOrphanCleanup(pending map[int]map[string]*trunk.ENIDetails, branchInterfaces []*ec2types.NetworkInterface, ownedENIIDs map[string]struct{}) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReconcileOrphanCleanup", pending, branchInterfaces, ownedENIIDs)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReconcileOrphanCleanup indicates an expected call of ReconcileOrphanCleanup.
+func (mr *MockTrunkENIMockRecorder) ReconcileOrphanCleanup(pending, branchInterfaces, ownedENIIDs interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReconcileOrphanCleanup", reflect.TypeOf((*MockTrunkENI)(nil).ReconcileOrphanCleanup), pending, branchInterfaces, ownedENIIDs)
+}
+
+// SnapshotOrphanCleanup mocks base method.
+func (m *MockTrunkENI) SnapshotOrphanCleanup() map[int]map[string]*trunk.ENIDetails {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SnapshotOrphanCleanup")
+	ret0, _ := ret[0].(map[int]map[string]*trunk.ENIDetails)
+	return ret0
+}
+
+// SnapshotOrphanCleanup indicates an expected call of SnapshotOrphanCleanup.
+func (mr *MockTrunkENIMockRecorder) SnapshotOrphanCleanup() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SnapshotOrphanCleanup", reflect.TypeOf((*MockTrunkENI)(nil).SnapshotOrphanCleanup))
 }
 
 // PushBranchENIsToCoolDownQueue mocks base method.

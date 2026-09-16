@@ -22,6 +22,7 @@ import (
 
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	mock_ec2_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_pod "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
 	mock_trunk "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk"
@@ -32,6 +33,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -170,6 +172,7 @@ func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 
 	state := rcv1alpha1.NodeNetworkState{
 		InstanceID:                            "i-abc",
+		InstanceType:                          "c5.large",
 		SubnetID:                              "subnet-1",
 		SubnetCIDRBlock:                       "10.0.0.0/16",
 		PrimaryNetworkInterfaceSecurityGroups: []string{"sg-1"},
@@ -535,6 +538,33 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 	assert.Error(t, MockError, err)
 }
 
+func TestBranchENIProvider_CreateAndAnnotateResources_QueuesOrphanCleanup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	provider.workerPool = mockWorker
+
+	resCount := 1
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount, gomock.Any()).
+		Return(nil, MockError)
+	fakeTrunk.EXPECT().HasPendingOrphanCleanup().Return(true)
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessOrphanCleanupQueueJob(NodeName))
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchAllocationFailed, gomock.Any(), v1.EventTypeWarning)
+
+	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
+
+	assert.ErrorIs(t, err, MockError)
+}
+
 // TestBranchENIProvider_ReconcileNode tests that the reconcile job returns no error and returns right results (with requeue after)
 // when the trunk ENI is present in cache
 func TestBranchENIProvider_ReconcileNode_NoLeak(t *testing.T) {
@@ -610,6 +640,142 @@ func TestBranchENIProvider_ProcessDeleteQueue(t *testing.T) {
 	result, err := provider.ProcessDeleteQueue(NodeName)
 	assert.NoError(t, err)
 	assert.Equal(t, deleteQueueRequeueRequest, result)
+}
+
+func TestBranchENIProvider_ProcessOrphanCleanupQueue_TrunkENIDeleted(t *testing.T) {
+	provider := getProvider()
+
+	result, err := provider.ProcessOrphanCleanupQueue(NodeName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, k8sCtrl.Result{}, result)
+}
+
+func TestBranchENIProvider_ProcessOrphanCleanupQueue_Complete(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+	mockEC2API := mock_ec2_api.NewMockEC2APIHelper(ctrl)
+	provider.apiWrapper.EC2API = mockEC2API
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+	branchInterfaces := []*ec2types.NetworkInterface{}
+	pendingCleanup := map[int]map[string]*trunk.ENIDetails{1: {}}
+	fakeTrunk.EXPECT().TrunkENIID().Return("eni-trunk")
+	fakeTrunk.EXPECT().SnapshotOrphanCleanup().Return(pendingCleanup)
+	mockPodAPI.EXPECT().ListPods(NodeName).Return(&v1.PodList{}, nil)
+	fakeTrunk.EXPECT().TrunkSubnetID().Return("subnet-1")
+	mockEC2API.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).Return(branchInterfaces, nil)
+	fakeTrunk.EXPECT().ReconcileOrphanCleanup(
+		pendingCleanup, branchInterfaces, map[string]struct{}{}).Return(false, nil)
+
+	result, err := provider.ProcessOrphanCleanupQueue(NodeName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, k8sCtrl.Result{}, result)
+}
+
+func TestBranchENIProvider_ProcessOrphanCleanupQueue_RequeuesPendingOrError(t *testing.T) {
+	for name, cleanupError := range map[string]error{
+		"pending": nil,
+		"error":   MockError,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+			mockEC2API := mock_ec2_api.NewMockEC2APIHelper(ctrl)
+			provider.apiWrapper.EC2API = mockEC2API
+			fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+			provider.trunkENICache[NodeName] = fakeTrunk
+			branchInterfaces := []*ec2types.NetworkInterface{}
+			pendingCleanup := map[int]map[string]*trunk.ENIDetails{1: {}}
+			fakeTrunk.EXPECT().TrunkENIID().Return("eni-trunk")
+			fakeTrunk.EXPECT().SnapshotOrphanCleanup().Return(pendingCleanup)
+			mockPodAPI.EXPECT().ListPods(NodeName).Return(&v1.PodList{}, nil)
+			fakeTrunk.EXPECT().TrunkSubnetID().Return("subnet-1")
+			mockEC2API.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).Return(branchInterfaces, nil)
+			fakeTrunk.EXPECT().ReconcileOrphanCleanup(
+				pendingCleanup, branchInterfaces, map[string]struct{}{}).
+				Return(true, cleanupError)
+
+			result, err := provider.ProcessOrphanCleanupQueue(NodeName)
+
+			assert.NoError(t, err)
+			assert.Equal(t, orphanCleanupRequeueRequest, result)
+		})
+	}
+}
+
+func TestBranchENIProvider_ProcessOrphanCleanupQueue_RequeuesPodListError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+	fakeTrunk.EXPECT().TrunkENIID().Return("eni-trunk")
+	fakeTrunk.EXPECT().SnapshotOrphanCleanup().
+		Return(map[int]map[string]*trunk.ENIDetails{1: {}})
+	mockPodAPI.EXPECT().ListPods(NodeName).Return(nil, MockError)
+
+	result, err := provider.ProcessOrphanCleanupQueue(NodeName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, orphanCleanupRequeueRequest, result)
+}
+
+func TestBranchENIProvider_ProcessOrphanCleanupQueue_RequeuesDescribeError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+	mockEC2API := mock_ec2_api.NewMockEC2APIHelper(ctrl)
+	provider.apiWrapper.EC2API = mockEC2API
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+	fakeTrunk.EXPECT().TrunkENIID().Return("eni-trunk")
+	fakeTrunk.EXPECT().SnapshotOrphanCleanup().
+		Return(map[int]map[string]*trunk.ENIDetails{1: {}})
+	mockPodAPI.EXPECT().ListPods(NodeName).Return(&v1.PodList{}, nil)
+	fakeTrunk.EXPECT().TrunkSubnetID().Return("subnet-1")
+	mockEC2API.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).Return(nil, MockError)
+
+	result, err := provider.ProcessOrphanCleanupQueue(NodeName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, orphanCleanupRequeueRequest, result)
+}
+
+func TestBranchENIIDsOwnedByPods_RejectsUnusableAnnotation(t *testing.T) {
+	pods := []v1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "pod",
+			Namespace:   "namespace",
+			Annotations: map[string]string{config.ResourceNamePodENI: `[{]`},
+		},
+	}}
+
+	_, err := branchENIIDsOwnedByPods(pods)
+
+	assert.Error(t, err)
+}
+
+func TestBranchENIIDsOwnedByPods(t *testing.T) {
+	annotation, err := json.Marshal([]*trunk.ENIDetails{{ID: "eni-1"}, {ID: "eni-2"}})
+	assert.NoError(t, err)
+	pods := []v1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{config.ResourceNamePodENI: string(annotation)},
+		},
+	}}
+
+	ownedENIIDs, err := branchENIIDsOwnedByPods(pods)
+
+	assert.NoError(t, err)
+	assert.Equal(t, map[string]struct{}{"eni-1": {}, "eni-2": {}}, ownedENIIDs)
 }
 
 func TestBranchENIProvider_Introspect(t *testing.T) {

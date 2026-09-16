@@ -21,6 +21,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
+	nodepkg "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 
 	"github.com/go-logr/logr"
@@ -98,8 +99,16 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	var err error
 
-	_, found := r.Manager.GetNode(req.Name)
+	cachedNode, found := r.Manager.GetNode(req.Name)
 	if found {
+		currentInstanceID := manager.GetNodeInstanceID(node)
+		cachedInstanceID := cachedNode.GetNodeInstanceID()
+		if currentInstanceID != "" && cachedInstanceID != "" && currentInstanceID != cachedInstanceID {
+			nodepkg.RecordInstanceIDMismatch()
+			logger.Info("cached node instance ID does not match the current Kubernetes Node",
+				"cachedInstanceID", cachedInstanceID, "currentInstanceID", currentInstanceID)
+		}
+
 		logger.V(1).Info("updating node")
 		err = r.Manager.UpdateNode(req.Name)
 

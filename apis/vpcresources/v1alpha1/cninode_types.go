@@ -84,6 +84,12 @@ type NodeNetworkState struct {
 	// +kubebuilder:validation:MaxLength=19
 	// +kubebuilder:validation:Pattern=`^i-([0-9a-f]{8}|[0-9a-f]{17})$`
 	InstanceID string `json:"instanceID"`
+	// Determines branch ENI capacity when restoring without an EC2 instance
+	// describe.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	InstanceType string `json:"instanceType,omitempty"`
 	// May differ from the trunk subnet with ENIConfig.
 	// +required
 	// +kubebuilder:validation:MaxLength=24

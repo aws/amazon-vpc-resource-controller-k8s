@@ -111,6 +111,13 @@ spec:
                     maxLength: 19
                     pattern: ^i-([0-9a-f]{8}|[0-9a-f]{17})$
                     type: string
+                  instanceType:
+                    description: |-
+                      Determines branch ENI capacity when restoring without an EC2 instance
+                      describe.
+                    maxLength: 64
+                    minLength: 1
+                    type: string
                   primaryNetworkInterfaceSecurityGroups:
                     items:
                       maxLength: 20

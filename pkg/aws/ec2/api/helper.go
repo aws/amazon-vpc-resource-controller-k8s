@@ -300,7 +300,6 @@ func (h *ec2APIHelper) DescribeNetworkInterfaces(nwInterfaceIds []string) ([]ec2
 		*describeNetworkInterfacesInput)
 }
 
-// TODO: Not used currently as the API is not publicly available with assumed role
 // DescribeTrunkInterfaceAssociation describes all the association of the given trunk interface id
 func (h *ec2APIHelper) DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]ec2types.TrunkInterfaceAssociation, error) {
 	describeTrunkInterfaceAssociationInput := &ec2.DescribeTrunkInterfaceAssociationsInput{
