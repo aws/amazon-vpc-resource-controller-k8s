@@ -72,10 +72,9 @@ var _ = AfterSuite(func() {
 	Expect(frameWork.EC2Manager.DeleteSecurityGroup(ctx, securityGroupID2)).To(Succeed())
 })
 
-// recycleLinuxNodes replaces the linux nodes via an ASG instance refresh so a free
-// ENI slot is available for the trunk ENI. Nodes reused from the preceding CNI arm
-// can have every ENI attached (maxENI reached). No-op when the nodes are already
-// usable or aren't part of an ASG.
+// recycleLinuxNodes refreshes every ASG backing a linux node so each node comes
+// back with a free ENI slot for its trunk ENI. No-op when nodes already advertise
+// pod-eni or aren't part of an ASG.
 func recycleLinuxNodes() {
 	nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
 	Expect(err).ToNot(HaveOccurred())
@@ -83,42 +82,55 @@ func recycleLinuxNodes() {
 		return
 	}
 
-	instanceID := frameWork.NodeManager.GetInstanceID(&nodes.Items[0])
-	Expect(instanceID).ToNot(BeEmpty())
-	instance, err := frameWork.EC2Manager.GetInstanceDetails(instanceID)
-	Expect(err).ToNot(HaveOccurred())
-	asgName, ok := pkgUtils.GetTagKeyValueMap(instance.Tags)["aws:autoscaling:groupName"]
-	if !ok {
+	// Collect the distinct ASGs backing the linux nodes.
+	asgNames := map[string]struct{}{}
+	for i := range nodes.Items {
+		instanceID := frameWork.NodeManager.GetInstanceID(&nodes.Items[i])
+		Expect(instanceID).ToNot(BeEmpty())
+		instance, err := frameWork.EC2Manager.GetInstanceDetails(instanceID)
+		Expect(err).ToNot(HaveOccurred())
+		if asgName, ok := pkgUtils.GetTagKeyValueMap(instance.Tags)["aws:autoscaling:groupName"]; ok {
+			asgNames[asgName] = struct{}{}
+		}
+	}
+	if len(asgNames) == 0 {
 		By("skipping node recycle: linux nodes are not part of an autoscaling group")
 		return
 	}
 
+	// Start all refreshes first so they run concurrently, then wait for each.
 	By("recycling linux nodes via instance refresh")
-	// MinHealthyPercentage 0: the canary ASGs are tiny, so replace every node.
-	refreshID, err := frameWork.AutoScalingManager.StartInstanceRefresh(asgName, &autoscalingtypes.RefreshPreferences{
-		MinHealthyPercentage: aws.Int32(0),
-		InstanceWarmup:       aws.Int32(0),
-	})
-	Expect(err).ToNot(HaveOccurred())
+	refreshIDs := map[string]string{}
+	for asgName := range asgNames {
+		// MinHealthyPercentage 0: the canary ASGs are tiny, so replace every node.
+		refreshID, err := frameWork.AutoScalingManager.StartInstanceRefresh(asgName, &autoscalingtypes.RefreshPreferences{
+			MinHealthyPercentage: aws.Int32(0),
+			InstanceWarmup:       aws.Int32(0),
+		})
+		Expect(err).ToNot(HaveOccurred())
+		refreshIDs[asgName] = refreshID
+	}
 
-	Expect(wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalMedium, 15*time.Minute, true,
-		func(ctx context.Context) (bool, error) {
-			refresh, err := frameWork.AutoScalingManager.DescribeInstanceRefresh(asgName, refreshID)
-			if err != nil {
-				return false, nil
-			}
-			switch refresh.Status {
-			case autoscalingtypes.InstanceRefreshStatusSuccessful:
-				return true, nil
-			case autoscalingtypes.InstanceRefreshStatusFailed,
-				autoscalingtypes.InstanceRefreshStatusCancelled,
-				autoscalingtypes.InstanceRefreshStatusRollbackFailed,
-				autoscalingtypes.InstanceRefreshStatusRollbackSuccessful:
-				return false, fmt.Errorf("instance refresh %s ended in status %q", refreshID, refresh.Status)
-			default:
-				return false, nil
-			}
-		})).To(Succeed())
+	for asgName, refreshID := range refreshIDs {
+		Expect(wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalMedium, 15*time.Minute, true,
+			func(ctx context.Context) (bool, error) {
+				refresh, err := frameWork.AutoScalingManager.DescribeInstanceRefresh(asgName, refreshID)
+				if err != nil {
+					return false, nil
+				}
+				switch refresh.Status {
+				case autoscalingtypes.InstanceRefreshStatusSuccessful:
+					return true, nil
+				case autoscalingtypes.InstanceRefreshStatusFailed,
+					autoscalingtypes.InstanceRefreshStatusCancelled,
+					autoscalingtypes.InstanceRefreshStatusRollbackFailed,
+					autoscalingtypes.InstanceRefreshStatusRollbackSuccessful:
+					return false, fmt.Errorf("instance refresh %s for asg %s ended in status %q", refreshID, asgName, refresh.Status)
+				default:
+					return false, nil
+				}
+			})).To(Succeed())
+	}
 }
 
 // allNodesHaveResource reports whether every node advertises the given allocatable resource.
