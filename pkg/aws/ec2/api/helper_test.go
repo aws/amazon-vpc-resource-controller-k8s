@@ -590,22 +590,23 @@ func TestEc2APIHelper_DeleteNetworkInterface(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestEc2APIHelper_DeleteNetworkInterface_Error tests that delete is tried multiple times in case of error form
-// ec2 api call
+// TestEc2APIHelper_DeleteNetworkInterface_Error tests that synchronous callers
+// retain the existing helper-level retries.
 func TestEc2APIHelper_DeleteNetworkInterface_Error(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, errMock).Times(maxRetryOnError)
+	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).
+		Return(nil, errMock).Times(maxRetryOnError)
 
 	err := ec2ApiHelper.DeleteNetworkInterface(&branchInterfaceId)
 	assert.Error(t, errMock, err)
 }
 
-// TestEc2APIHelper_DeleteNetworkInterface_ErrorThenSuccess tests that if delete network call fails initially and
-// succeeds subsequently then no error is returned
+// TestEc2APIHelper_DeleteNetworkInterface_ErrorThenSuccess tests that helper
+// retries can recover a synchronous cleanup path.
 func TestEc2APIHelper_DeleteNetworkInterface_ErrorThenSuccess(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -614,11 +615,23 @@ func TestEc2APIHelper_DeleteNetworkInterface_ErrorThenSuccess(t *testing.T) {
 
 	gomock.InOrder(
 		mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, errMock).Times(2),
-		mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil).Times(1),
+		mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil),
 	)
 
 	err := ec2ApiHelper.DeleteNetworkInterface(&branchInterfaceId)
 	assert.NoError(t, err)
+}
+
+func TestEc2APIHelper_DeleteNetworkInterfaceOnce_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+
+	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, errMock)
+
+	err := ec2ApiHelper.DeleteNetworkInterfaceOnce(&branchInterfaceId)
+	assert.ErrorIs(t, err, errMock)
 }
 
 // TestEc2APIHelper_GetSubnet tests that get subnet call returns the expected response with no error

@@ -62,6 +62,10 @@ const (
 	ReasonBranchENIAnnotationFailed = "BranchENIAnnotationFailed"
 
 	ReasonTrunkENICreationFailed = "TrunkENICreationFailed"
+
+	// orphanCleanupFastRetryLimit bounds consecutive 30-second retries before
+	// persistent failures move to the slower retry interval.
+	orphanCleanupFastRetryLimit = 5
 )
 
 var (
@@ -82,8 +86,9 @@ var (
 		[]string{operationLabel, resourceCountLabel},
 	)
 
-	deleteQueueRequeueRequest   = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
-	orphanCleanupRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
+	deleteQueueRequeueRequest       = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
+	orphanCleanupRequeueRequest     = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
+	orphanCleanupSlowRequeueRequest = ctrl.Result{RequeueAfter: time.Minute * 5, Requeue: true}
 
 	// NodeDeleteRequeueRequestDelay represents the time after which the resources belonging to a node will be cleaned
 	// up after receiving the actual node delete event.
@@ -103,6 +108,9 @@ type branchENIProvider struct {
 	lock sync.RWMutex
 	// trunkENICache is the map of node name to the trunk ENI
 	trunkENICache map[string]trunk.TrunkENI
+	// orphanCleanupFailures tracks consecutive failed reconciliations per node.
+	// It is protected by lock and reset whenever reconciliation makes progress.
+	orphanCleanupFailures map[string]int
 	// workerPool is the worker pool and queue for submitting async job
 	workerPool worker.Worker
 	// apiWrapper
@@ -119,11 +127,12 @@ func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
 	trunk.PrometheusRegister()
 
 	provider := &branchENIProvider{
-		apiWrapper:    wrapper,
-		log:           logger,
-		workerPool:    worker,
-		trunkENICache: make(map[string]trunk.TrunkENI),
-		ctx:           ctx,
+		apiWrapper:            wrapper,
+		log:                   logger,
+		workerPool:            worker,
+		trunkENICache:         make(map[string]trunk.TrunkENI),
+		orphanCleanupFailures: make(map[string]int),
+		ctx:                   ctx,
 	}
 	provider.checker = provider.check()
 	return provider
@@ -376,12 +385,41 @@ func (b *branchENIProvider) ProcessDeleteQueue(nodeName string) (ctrl.Result, er
 	return deleteQueueRequeueRequest, nil
 }
 
+func (b *branchENIProvider) orphanCleanupFailureRequeue(nodeName string) ctrl.Result {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	if b.orphanCleanupFailures == nil {
+		b.orphanCleanupFailures = make(map[string]int)
+	}
+	b.orphanCleanupFailures[nodeName]++
+	failures := b.orphanCleanupFailures[nodeName]
+	if failures <= orphanCleanupFastRetryLimit {
+		return orphanCleanupRequeueRequest
+	}
+	if failures == orphanCleanupFastRetryLimit+1 {
+		b.log.Info("orphan cleanup entering slow retry",
+			"node", nodeName,
+			"consecutiveFailures", failures,
+			"retryAfter", orphanCleanupSlowRequeueRequest.RequeueAfter)
+	}
+	return orphanCleanupSlowRequeueRequest
+}
+
+func (b *branchENIProvider) resetOrphanCleanupFailures(nodeName string) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	delete(b.orphanCleanupFailures, nodeName)
+}
+
 // ProcessOrphanCleanupQueue reconciles VLANs quarantined by failed allocations.
 // Errors use timed requeue so cleanup continues beyond the worker's finite
 // error-retry budget.
 func (b *branchENIProvider) ProcessOrphanCleanupQueue(nodeName string) (ctrl.Result, error) {
 	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
 	if !isPresent {
+		b.resetOrphanCleanupFailures(nodeName)
 		b.log.Info("stopping the orphan cleanup queue job", "node", nodeName)
 		return ctrl.Result{}, nil
 	}
@@ -389,18 +427,19 @@ func (b *branchENIProvider) ProcessOrphanCleanupQueue(nodeName string) (ctrl.Res
 	log := b.log.WithValues("node", nodeName, "trunkENI", trunkENIID)
 	pendingCleanup := trunkENI.SnapshotOrphanCleanup()
 	if len(pendingCleanup) == 0 {
+		b.resetOrphanCleanupFailures(nodeName)
 		return ctrl.Result{}, nil
 	}
 
 	podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
 	if err != nil {
 		log.Error(err, "failed to list pods for orphan cleanup, will retry")
-		return orphanCleanupRequeueRequest, nil
+		return b.orphanCleanupFailureRequeue(nodeName), nil
 	}
 	ownedENIIDs, err := branchENIIDsOwnedByPods(podList.Items)
 	if err != nil {
 		log.Error(err, "cannot safely determine branch ENI ownership, will retry")
-		return orphanCleanupRequeueRequest, nil
+		return b.orphanCleanupFailureRequeue(nodeName), nil
 	}
 
 	branchInterfaces, err := b.apiWrapper.EC2API.GetBranchNetworkInterface(
@@ -408,14 +447,15 @@ func (b *branchENIProvider) ProcessOrphanCleanupQueue(nodeName string) (ctrl.Res
 	if err != nil {
 		branchProviderOperationsErrCount.WithLabelValues("orphan_cleanup_describe").Inc()
 		log.Error(err, "failed to list branch ENIs for orphan cleanup, will retry")
-		return orphanCleanupRequeueRequest, nil
+		return b.orphanCleanupFailureRequeue(nodeName), nil
 	}
 
 	pending, err := trunkENI.ReconcileOrphanCleanup(pendingCleanup, branchInterfaces, ownedENIIDs)
 	if err != nil {
 		log.Error(err, "failed to process orphan cleanup queue, will retry")
-		return orphanCleanupRequeueRequest, nil
+		return b.orphanCleanupFailureRequeue(nodeName), nil
 	}
+	b.resetOrphanCleanupFailures(nodeName)
 	if pending {
 		return orphanCleanupRequeueRequest, nil
 	}

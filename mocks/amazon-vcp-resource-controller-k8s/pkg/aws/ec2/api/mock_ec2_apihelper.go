@@ -138,6 +138,20 @@ func (mr *MockEC2APIHelperMockRecorder) DeleteNetworkInterface(arg0 interface{})
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteNetworkInterface", reflect.TypeOf((*MockEC2APIHelper)(nil).DeleteNetworkInterface), arg0)
 }
 
+// DeleteNetworkInterfaceOnce mocks base method.
+func (m *MockEC2APIHelper) DeleteNetworkInterfaceOnce(arg0 *string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteNetworkInterfaceOnce", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteNetworkInterfaceOnce indicates an expected call of DeleteNetworkInterfaceOnce.
+func (mr *MockEC2APIHelperMockRecorder) DeleteNetworkInterfaceOnce(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteNetworkInterfaceOnce", reflect.TypeOf((*MockEC2APIHelper)(nil).DeleteNetworkInterfaceOnce), arg0)
+}
+
 // DescribeNetworkInterfaces mocks base method.
 func (m *MockEC2APIHelper) DescribeNetworkInterfaces(arg0 []string) ([]types.NetworkInterface, error) {
 	m.ctrl.T.Helper()

@@ -32,7 +32,8 @@ import (
 const CreateENIDescriptionPrefix = "aws-k8s-"
 
 var (
-	// defaultBackOff is the default back off for retrying ec2 api calls.
+	// defaultBackOff is the default back off for retrying EC2 API calls in
+	// synchronous paths that do not have their own reconciliation queue.
 	defaultBackOff = wait.Backoff{
 		Duration: time.Millisecond * 100,
 		Factor:   3.0,
@@ -82,6 +83,7 @@ type EC2APIHelper interface {
 	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []ec2types.Tag,
 		ipResourceCount *config.IPResourceCount, interfaceType *string, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest) (*ec2types.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
+	DeleteNetworkInterfaceOnce(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2types.Subnet, error)
 	GetSubnetCIDR(subnetId *string) (string, error)
 	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error)
@@ -253,17 +255,23 @@ func (h *ec2APIHelper) GetSubnetCIDR(subnetId *string) (string, error) {
 	return value.(string), nil
 }
 
-// DeleteNetworkInterface deletes a network interface with retries with exponential back offs
+// DeleteNetworkInterface deletes a network interface with helper-level backoff
+// for synchronous callers that do not have their own reconciliation queue.
 func (h *ec2APIHelper) DeleteNetworkInterface(interfaceId *string) error {
+	return retry.OnError(defaultBackOff, func(err error) bool { return true }, func() error {
+		return h.DeleteNetworkInterfaceOnce(interfaceId)
+	})
+}
+
+// DeleteNetworkInterfaceOnce issues one SDK call. The SDK still performs its
+// configured transient retries; callers with a reconciliation queue own any
+// longer-lived retry schedule.
+func (h *ec2APIHelper) DeleteNetworkInterfaceOnce(interfaceId *string) error {
 	deleteNetworkInterface := &ec2.DeleteNetworkInterfaceInput{
 		NetworkInterfaceId: interfaceId,
 	}
 
-	err := retry.OnError(defaultBackOff, func(err error) bool { return true }, func() error {
-		_, err := h.ec2Wrapper.DeleteNetworkInterface(deleteNetworkInterface)
-		return err
-	})
-
+	_, err := h.ec2Wrapper.DeleteNetworkInterface(deleteNetworkInterface)
 	return err
 }
 

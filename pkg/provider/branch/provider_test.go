@@ -656,6 +656,7 @@ func TestBranchENIProvider_ProcessOrphanCleanupQueue_Complete(t *testing.T) {
 	defer ctrl.Finish()
 
 	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+	provider.orphanCleanupFailures = map[string]int{NodeName: orphanCleanupFastRetryLimit + 1}
 	mockEC2API := mock_ec2_api.NewMockEC2APIHelper(ctrl)
 	provider.apiWrapper.EC2API = mockEC2API
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
@@ -674,6 +675,22 @@ func TestBranchENIProvider_ProcessOrphanCleanupQueue_Complete(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, k8sCtrl.Result{}, result)
+	assert.NotContains(t, provider.orphanCleanupFailures, NodeName)
+}
+
+func TestBranchENIProvider_OrphanCleanupFailureRequeueTransitionsToSlowRetry(t *testing.T) {
+	provider := getProvider()
+
+	for retry := 0; retry < orphanCleanupFastRetryLimit; retry++ {
+		assert.Equal(t, orphanCleanupRequeueRequest,
+			provider.orphanCleanupFailureRequeue(NodeName))
+	}
+	assert.Equal(t, orphanCleanupSlowRequeueRequest,
+		provider.orphanCleanupFailureRequeue(NodeName))
+
+	provider.resetOrphanCleanupFailures(NodeName)
+	assert.Equal(t, orphanCleanupRequeueRequest,
+		provider.orphanCleanupFailureRequeue(NodeName))
 }
 
 func TestBranchENIProvider_ProcessOrphanCleanupQueue_RequeuesPendingOrError(t *testing.T) {

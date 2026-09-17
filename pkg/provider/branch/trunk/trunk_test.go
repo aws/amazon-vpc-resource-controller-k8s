@@ -265,6 +265,8 @@ func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *m
 	EniDetails2.deletionTimeStamp = time.Time{}
 	EniDetails1.deleteRetryCount = 0
 	EniDetails2.deleteRetryCount = 0
+	EniDetails1.orphanDeleteFailureCount = 0
+	EniDetails2.orphanDeleteFailureCount = 0
 
 	return &trunkENI, mockHelper, mockInstance
 }
@@ -502,24 +504,12 @@ func TestTrunkENI_ReconcileOrphanCleanup_DeletesThenConfirmsBeforeRelease(t *tes
 	trunkENI.trunkENIId = trunkId
 	trunkENI.usedVlanIds[VlanId1] = true
 	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{
-		Branch1Id: {ID: Branch1Id, VlanID: VlanId1},
+		Branch1Id: {ID: Branch1Id, VlanID: VlanId1, AssociationID: MockAssociationID1},
 	}
 
-	mockHelper.EXPECT().DescribeTrunkInterfaceAssociation(&trunkId).Return(
-		[]awsEc2Types.TrunkInterfaceAssociation{
-			{
-				AssociationId:     &MockAssociationID1,
-				BranchInterfaceId: &Branch1Id,
-			},
-			{
-				AssociationId:     &MockAssociationID2,
-				BranchInterfaceId: &Branch2Id,
-			},
-		}, nil)
 	mockHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID1).Return(nil)
-	mockHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil)
-	mockHelper.EXPECT().DisassociateTrunkInterface(&MockAssociationID2).Return(nil)
-	mockHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(nil)
+	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch1Id).Return(nil)
+	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch2Id).Return(nil)
 
 	pending, err := trunkENI.ReconcileOrphanCleanup(trunkENI.SnapshotOrphanCleanup(),
 		[]*awsEc2Types.NetworkInterface{
@@ -543,7 +533,67 @@ func TestTrunkENI_ReconcileOrphanCleanup_DeletesThenConfirmsBeforeRelease(t *tes
 	assert.False(t, trunkENI.usedVlanIds[VlanId1])
 }
 
-func TestTrunkENI_ReconcileOrphanCleanup_RetriesWhenAssociationCannotBeResolved(t *testing.T) {
+func TestTrunkENI_ReconcileOrphanCleanup_ManualDeleteIsConfirmedBeforeRelease(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{
+		Branch1Id: {ID: Branch1Id, VlanID: VlanId1},
+	}
+
+	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch1Id).
+		Return(fmt.Errorf("%s", ec2Errors.NotFoundInterfaceID))
+
+	pending, err := trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.True(t, pending)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+
+	pending, err = trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.True(t, pending)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+
+	pending, err = trunkENI.ReconcileOrphanCleanup(
+		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+	assert.NoError(t, err)
+	assert.False(t, pending)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
+}
+
+func TestTrunkENI_ReconcileOrphanCleanup_EmitsStalledDeleteMetricOnce(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunkENI, mockHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
+	trunkENI.trunkENIId = trunkId
+	trunkENI.usedVlanIds[VlanId1] = true
+	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{
+		Branch1Id: {ID: Branch1Id, VlanID: VlanId1},
+	}
+	attempts := orphanCleanupStalledDeleteThreshold + 1
+	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch1Id).Return(MockError).Times(attempts)
+	before := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("delete_stalled"))
+
+	for attempt := 0; attempt < attempts; attempt++ {
+		pending, err := trunkENI.ReconcileOrphanCleanup(
+			trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
+		assert.ErrorIs(t, err, MockError)
+		assert.True(t, pending)
+	}
+
+	after := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("delete_stalled"))
+	assert.Equal(t, 1.0, after-before)
+	assert.Equal(t, attempts,
+		trunkENI.orphanCleanupQueue[VlanId1][Branch1Id].orphanDeleteFailureCount)
+}
+
+func TestTrunkENI_ReconcileOrphanCleanup_DeletesDiscoveredInUseENIWithoutAssociationLookup(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -552,14 +602,14 @@ func TestTrunkENI_ReconcileOrphanCleanup_RetriesWhenAssociationCannotBeResolved(
 	trunkENI.usedVlanIds[VlanId1] = true
 	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{}
 
-	mockHelper.EXPECT().DescribeTrunkInterfaceAssociation(&trunkId).Return(nil, nil)
+	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch1Id).Return(nil)
 
 	pending, err := trunkENI.ReconcileOrphanCleanup(
 		trunkENI.SnapshotOrphanCleanup(),
 		[]*awsEc2Types.NetworkInterface{branchENIWithVlanTag(Branch1Id, VlanId1)},
 		map[string]struct{}{})
 
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	assert.True(t, pending)
 	assert.True(t, trunkENI.usedVlanIds[VlanId1])
 }
@@ -620,7 +670,7 @@ func TestTrunkENI_ReconcileOrphanCleanup_OwnedCandidateDoesNotDropFailedDelete(t
 		Branch2Id: {ID: Branch2Id, VlanID: VlanId1},
 	}
 
-	mockHelper.EXPECT().DeleteNetworkInterface(&Branch2Id).Return(MockError)
+	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch2Id).Return(MockError)
 
 	pending, err := trunkENI.ReconcileOrphanCleanup(
 		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
@@ -1863,7 +1913,7 @@ func TestTrunkENI_FailedAllocationUsesOrphanCleanupQueue(t *testing.T) {
 
 	// The orphan queue deletes the failed ENI, then requires a subsequent
 	// successful Describe with no matching ENI before releasing the VLAN.
-	mockHelper.EXPECT().DeleteNetworkInterface(&Branch1Id).Return(nil)
+	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch1Id).Return(nil)
 
 	pending, err := trunkENI.ReconcileOrphanCleanup(
 		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})

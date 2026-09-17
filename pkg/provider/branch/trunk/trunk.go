@@ -50,6 +50,9 @@ const (
 	// orphanCleanupRequiredEmptyObservations protects against delayed EC2
 	// visibility after an ambiguous CreateNetworkInterface result.
 	orphanCleanupRequiredEmptyObservations = 2
+	// orphanCleanupStalledDeleteThreshold emits one alarmable metric when the
+	// same orphan ENI has failed deletion across several reconciliation rounds.
+	orphanCleanupStalledDeleteThreshold = 5
 )
 
 var (
@@ -224,11 +227,11 @@ type ENIDetails struct {
 	deletionTimeStamp time.Time
 	// deleteRetryCount is the
 	deleteRetryCount int
+	// orphanDeleteFailureCount tracks consecutive orphan-cleanup reconciliation
+	// rounds in which this ENI could not be deleted.
+	orphanDeleteFailureCount int
 	// ID of association between branch and trunk ENI
 	AssociationID string `json:"associationID"`
-	// status is populated from EC2 during orphan cleanup. An in-use branch
-	// interface must be disassociated before it can be deleted.
-	status ec2types.NetworkInterfaceStatus
 }
 
 type IntrospectResponse struct {
@@ -750,8 +753,7 @@ func (t *trunkENI) newBranchENIDetails(nwInterface *ec2types.NetworkInterface, v
 
 // ReconcileOrphanCleanup reconciles only VLANs quarantined by failed
 // allocations. The provider supplies Branch ENI and Kubernetes ownership
-// snapshots; the trunk resolves missing association IDs and owns deletion and
-// allocation-ledger updates.
+// snapshots; the trunk owns deletion and allocation-ledger updates.
 func (t *trunkENI) ReconcileOrphanCleanup(pending map[int]map[string]*ENIDetails,
 	branchInterfaces []*ec2types.NetworkInterface, ownedENIIDs map[string]struct{},
 ) (bool, error) {
@@ -761,9 +763,6 @@ func (t *trunkENI) ReconcileOrphanCleanup(pending map[int]map[string]*ENIDetails
 
 	branchENIOrphanReclaimCount.WithLabelValues("triggered").Inc()
 	candidates := t.identifyOrphanCleanupCandidates(pending, branchInterfaces)
-	if err := t.resolveOrphanCleanupAssociations(candidates); err != nil {
-		return t.HasPendingOrphanCleanup(), err
-	}
 	result := t.deleteOrphanCleanupCandidates(candidates, ownedENIIDs)
 	t.updateOrphanCleanupQueue(result.sawCandidates, result.ownedVLANs,
 		result.failedDeletes, result.successfulDeletes)
@@ -799,48 +798,12 @@ func (t *trunkENI) addDescribedOrphanCandidate(candidates map[int]map[string]*EN
 		return
 	}
 	id := *branchInterface.NetworkInterfaceId
-	if known, exists := vlanCandidates[id]; exists {
-		known.status = branchInterface.Status
+	if _, exists := vlanCandidates[id]; exists {
 		return
 	}
 	vlanCandidates[id] = &ENIDetails{
-		ID: id, VlanID: vlanID, status: branchInterface.Status,
+		ID: id, VlanID: vlanID,
 	}
-}
-
-func (t *trunkENI) resolveOrphanCleanupAssociations(
-	candidates map[int]map[string]*ENIDetails,
-) error {
-	inUseWithoutAssociation := make(map[string]*ENIDetails)
-	for _, vlanCandidates := range candidates {
-		for id, eni := range vlanCandidates {
-			if eni.AssociationID == "" && eni.status == ec2types.NetworkInterfaceStatusInUse {
-				inUseWithoutAssociation[id] = eni
-			}
-		}
-	}
-	if len(inUseWithoutAssociation) == 0 {
-		return nil
-	}
-
-	associations, err := t.ec2ApiHelper.DescribeTrunkInterfaceAssociation(&t.trunkENIId)
-	if err != nil {
-		return fmt.Errorf("describing trunk interface associations: %w", err)
-	}
-	for _, association := range associations {
-		if association.BranchInterfaceId == nil || association.AssociationId == nil {
-			continue
-		}
-		if eni, exists := inUseWithoutAssociation[*association.BranchInterfaceId]; exists {
-			eni.AssociationID = *association.AssociationId
-			delete(inUseWithoutAssociation, *association.BranchInterfaceId)
-		}
-	}
-	if len(inUseWithoutAssociation) != 0 {
-		return fmt.Errorf("association ID not found for %d in-use orphan cleanup candidate(s)",
-			len(inUseWithoutAssociation))
-	}
-	return nil
 }
 
 type orphanCleanupResult struct {
@@ -904,8 +867,15 @@ func (t *trunkENI) deleteOrphanCleanupCandidate(id string, eni *ENIDetails,
 		t.log.Info("preserving orphan cleanup candidate now owned by a pod", "eni", id)
 		return true, true, nil
 	}
-	if err := t.deleteENI(eni); err != nil {
+	if err := t.deleteOrphanENI(eni); err != nil {
+		eni.orphanDeleteFailureCount++
 		branchENIOrphanReclaimCount.WithLabelValues("delete_error").Inc()
+		if eni.orphanDeleteFailureCount == orphanCleanupStalledDeleteThreshold {
+			branchENIOrphanReclaimCount.WithLabelValues("delete_stalled").Inc()
+			t.log.Error(err, "orphan cleanup delete is stalled",
+				"eni", id,
+				"consecutiveFailures", eni.orphanDeleteFailureCount)
+		}
 		return false, false, err
 	}
 	branchENIOrphanReclaimCount.WithLabelValues("deleted").Inc()
@@ -979,6 +949,17 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 // deleteENI deletes the provided ENI. Queue removal and conditional VLAN
 // release happen only after this call succeeds.
 func (t *trunkENI) deleteENI(eniDetail *ENIDetails) (err error) {
+	return t.deleteENIWith(eniDetail, t.ec2ApiHelper.DeleteNetworkInterface)
+}
+
+// deleteOrphanENI performs one helper-level delete attempt. The AWS SDK still
+// handles transient request retries, while the orphan cleanup queue owns the
+// longer-lived fast-to-slow retry schedule.
+func (t *trunkENI) deleteOrphanENI(eniDetail *ENIDetails) (err error) {
+	return t.deleteENIWith(eniDetail, t.ec2ApiHelper.DeleteNetworkInterfaceOnce)
+}
+
+func (t *trunkENI) deleteENIWith(eniDetail *ENIDetails, deleteNetworkInterface func(*string) error) (err error) {
 	// Disassociate branch ENI from trunk if association ID exists and delete branch network interface
 	if eniDetail.AssociationID != "" {
 		err = t.ec2ApiHelper.DisassociateTrunkInterface(&eniDetail.AssociationID)
@@ -992,7 +973,7 @@ func (t *trunkENI) deleteENI(eniDetail *ENIDetails) (err error) {
 			}
 		}
 	}
-	err = t.ec2ApiHelper.DeleteNetworkInterface(&eniDetail.ID)
+	err = deleteNetworkInterface(&eniDetail.ID)
 	if err != nil {
 		branchENIOperationsFailureCount.WithLabelValues("delete_branch_error").Inc()
 
