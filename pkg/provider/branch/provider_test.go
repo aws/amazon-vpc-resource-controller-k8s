@@ -669,7 +669,7 @@ func TestBranchENIProvider_ProcessOrphanCleanupQueue_Complete(t *testing.T) {
 	fakeTrunk.EXPECT().TrunkSubnetID().Return("subnet-1")
 	mockEC2API.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).Return(branchInterfaces, nil)
 	fakeTrunk.EXPECT().ReconcileOrphanCleanup(
-		pendingCleanup, branchInterfaces, map[string]struct{}{}).Return(false, nil)
+		pendingCleanup, branchInterfaces, map[string]struct{}{}).Return(false, true, nil)
 
 	result, err := provider.ProcessOrphanCleanupQueue(NodeName)
 
@@ -716,7 +716,7 @@ func TestBranchENIProvider_ProcessOrphanCleanupQueue_RequeuesPendingOrError(t *t
 			mockEC2API.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).Return(branchInterfaces, nil)
 			fakeTrunk.EXPECT().ReconcileOrphanCleanup(
 				pendingCleanup, branchInterfaces, map[string]struct{}{}).
-				Return(true, cleanupError)
+				Return(true, false, cleanupError)
 
 			result, err := provider.ProcessOrphanCleanupQueue(NodeName)
 
@@ -724,6 +724,36 @@ func TestBranchENIProvider_ProcessOrphanCleanupQueue_RequeuesPendingOrError(t *t
 			assert.Equal(t, orphanCleanupRequeueRequest, result)
 		})
 	}
+}
+
+func TestBranchENIProvider_ProcessOrphanCleanupQueue_ErrorWithProgressKeepsFastRetry(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+	provider.orphanCleanupFailures = map[string]int{NodeName: orphanCleanupFastRetryLimit + 1}
+	mockEC2API := mock_ec2_api.NewMockEC2APIHelper(ctrl)
+	provider.apiWrapper.EC2API = mockEC2API
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+	branchInterfaces := []*ec2types.NetworkInterface{}
+	pendingCleanup := map[int]map[string]*trunk.ENIDetails{
+		1: {"eni-deleted": {ID: "eni-deleted", VlanID: 1}},
+		2: {"eni-stalled": {ID: "eni-stalled", VlanID: 2}},
+	}
+	fakeTrunk.EXPECT().TrunkENIID().Return("eni-trunk")
+	fakeTrunk.EXPECT().SnapshotOrphanCleanup().Return(pendingCleanup)
+	mockPodAPI.EXPECT().ListPods(NodeName).Return(&v1.PodList{}, nil)
+	fakeTrunk.EXPECT().TrunkSubnetID().Return("subnet-1")
+	mockEC2API.EXPECT().GetBranchNetworkInterface(gomock.Any(), gomock.Any()).Return(branchInterfaces, nil)
+	fakeTrunk.EXPECT().ReconcileOrphanCleanup(
+		pendingCleanup, branchInterfaces, map[string]struct{}{}).Return(true, true, MockError)
+
+	result, err := provider.ProcessOrphanCleanupQueue(NodeName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, orphanCleanupRequeueRequest, result)
+	assert.NotContains(t, provider.orphanCleanupFailures, NodeName)
 }
 
 func TestBranchENIProvider_ProcessOrphanCleanupQueue_RequeuesPodListError(t *testing.T) {

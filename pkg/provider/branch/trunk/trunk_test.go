@@ -274,11 +274,10 @@ func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *m
 func getMockTrunk() trunkENI {
 	log := zap.New(zap.UseDevMode(true)).WithName("node manager")
 	return trunkENI{
-		log:                            log,
-		usedVlanIds:                    make([]bool, MaxAllocatableVlanIds),
-		uidToBranchENIMap:              map[string][]*ENIDetails{},
-		orphanCleanupQueue:             map[int]map[string]*ENIDetails{},
-		orphanCleanupEmptyObservations: map[int]int{},
+		log:                log,
+		usedVlanIds:        make([]bool, MaxAllocatableVlanIds),
+		uidToBranchENIMap:  map[string][]*ENIDetails{},
+		orphanCleanupQueue: map[int]map[string]*ENIDetails{},
 		nodeIDTag: []awsEc2Types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -496,7 +495,7 @@ func TestTrunkENI_DeleteCooledDownENIs_SkipsOwnedENI(t *testing.T) {
 	assert.Len(t, trunkENI.uidToBranchENIMap[PodUID], 1)
 }
 
-func TestTrunkENI_ReconcileOrphanCleanup_DeletesThenConfirmsBeforeRelease(t *testing.T) {
+func TestTrunkENI_ReconcileOrphanCleanup_DeletesAndReleasesImmediately(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -511,29 +510,17 @@ func TestTrunkENI_ReconcileOrphanCleanup_DeletesThenConfirmsBeforeRelease(t *tes
 	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch1Id).Return(nil)
 	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch2Id).Return(nil)
 
-	pending, err := trunkENI.ReconcileOrphanCleanup(trunkENI.SnapshotOrphanCleanup(),
+	pending, _, err := trunkENI.ReconcileOrphanCleanup(trunkENI.SnapshotOrphanCleanup(),
 		[]*awsEc2Types.NetworkInterface{
 			branchENIWithVlanTag(Branch1Id, VlanId1),
 			branchENIWithVlanTag(Branch2Id, VlanId1),
 		}, map[string]struct{}{})
 	assert.NoError(t, err)
-	assert.True(t, pending)
-	assert.True(t, trunkENI.usedVlanIds[VlanId1])
-
-	pending, err = trunkENI.ReconcileOrphanCleanup(
-		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
-	assert.NoError(t, err)
-	assert.True(t, pending)
-	assert.True(t, trunkENI.usedVlanIds[VlanId1])
-
-	pending, err = trunkENI.ReconcileOrphanCleanup(
-		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
-	assert.NoError(t, err)
 	assert.False(t, pending)
 	assert.False(t, trunkENI.usedVlanIds[VlanId1])
 }
 
-func TestTrunkENI_ReconcileOrphanCleanup_ManualDeleteIsConfirmedBeforeRelease(t *testing.T) {
+func TestTrunkENI_ReconcileOrphanCleanup_ManualDeleteReleasesImmediately(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -547,19 +534,7 @@ func TestTrunkENI_ReconcileOrphanCleanup_ManualDeleteIsConfirmedBeforeRelease(t 
 	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch1Id).
 		Return(fmt.Errorf("%s", ec2Errors.NotFoundInterfaceID))
 
-	pending, err := trunkENI.ReconcileOrphanCleanup(
-		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
-	assert.NoError(t, err)
-	assert.True(t, pending)
-	assert.True(t, trunkENI.usedVlanIds[VlanId1])
-
-	pending, err = trunkENI.ReconcileOrphanCleanup(
-		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
-	assert.NoError(t, err)
-	assert.True(t, pending)
-	assert.True(t, trunkENI.usedVlanIds[VlanId1])
-
-	pending, err = trunkENI.ReconcileOrphanCleanup(
+	pending, _, err := trunkENI.ReconcileOrphanCleanup(
 		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
 	assert.NoError(t, err)
 	assert.False(t, pending)
@@ -581,7 +556,7 @@ func TestTrunkENI_ReconcileOrphanCleanup_EmitsStalledDeleteMetricOnce(t *testing
 	before := testutil.ToFloat64(branchENIOrphanReclaimCount.WithLabelValues("delete_stalled"))
 
 	for attempt := 0; attempt < attempts; attempt++ {
-		pending, err := trunkENI.ReconcileOrphanCleanup(
+		pending, _, err := trunkENI.ReconcileOrphanCleanup(
 			trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
 		assert.ErrorIs(t, err, MockError)
 		assert.True(t, pending)
@@ -603,18 +578,21 @@ func TestTrunkENI_ReconcileOrphanCleanup_DeletesDiscoveredInUseENIWithoutAssocia
 	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{}
 
 	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch1Id).Return(nil)
+	discoveredBranchENI := branchENIWithVlanTag(Branch1Id, VlanId1)
+	discoveredBranchENI.Status = awsEc2Types.NetworkInterfaceStatusInUse
 
-	pending, err := trunkENI.ReconcileOrphanCleanup(
+	pending, progressed, err := trunkENI.ReconcileOrphanCleanup(
 		trunkENI.SnapshotOrphanCleanup(),
-		[]*awsEc2Types.NetworkInterface{branchENIWithVlanTag(Branch1Id, VlanId1)},
+		[]*awsEc2Types.NetworkInterface{discoveredBranchENI},
 		map[string]struct{}{})
 
 	assert.NoError(t, err)
-	assert.True(t, pending)
-	assert.True(t, trunkENI.usedVlanIds[VlanId1])
+	assert.False(t, pending)
+	assert.True(t, progressed)
+	assert.False(t, trunkENI.usedVlanIds[VlanId1])
 }
 
-func TestTrunkENI_ReconcileOrphanCleanup_RequiresConsecutiveEmptyObservations(t *testing.T) {
+func TestTrunkENI_ReconcileOrphanCleanup_ReleasesEmptyQuarantineImmediately(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -623,20 +601,15 @@ func TestTrunkENI_ReconcileOrphanCleanup_RequiresConsecutiveEmptyObservations(t 
 	trunkENI.usedVlanIds[VlanId1] = true
 	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{}
 
-	pending, err := trunkENI.ReconcileOrphanCleanup(
-		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
-	assert.NoError(t, err)
-	assert.True(t, pending)
-	assert.True(t, trunkENI.usedVlanIds[VlanId1])
-
-	pending, err = trunkENI.ReconcileOrphanCleanup(
+	pending, progressed, err := trunkENI.ReconcileOrphanCleanup(
 		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
 	assert.NoError(t, err)
 	assert.False(t, pending)
+	assert.True(t, progressed)
 	assert.False(t, trunkENI.usedVlanIds[VlanId1])
 }
 
-func TestTrunkENI_ReconcileOrphanCleanup_DoesNotApplyOldObservationToNewQuarantine(t *testing.T) {
+func TestTrunkENI_ReconcileOrphanCleanup_DoesNotReleaseCandidateAddedAfterSnapshot(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -645,16 +618,17 @@ func TestTrunkENI_ReconcileOrphanCleanup_DoesNotApplyOldObservationToNewQuaranti
 	trunkENI.orphanCleanupQueue[VlanId1] = map[string]*ENIDetails{}
 	snapshot := trunkENI.SnapshotOrphanCleanup()
 
-	trunkENI.usedVlanIds[VlanId2] = true
-	trunkENI.orphanCleanupQueue[VlanId2] = map[string]*ENIDetails{}
-	trunkENI.orphanCleanupEmptyObservations[VlanId2] = 0
+	trunkENI.orphanCleanupQueue[VlanId1][Branch1Id] = &ENIDetails{
+		ID: Branch1Id, VlanID: VlanId1,
+	}
 
-	pending, err := trunkENI.ReconcileOrphanCleanup(snapshot, nil, map[string]struct{}{})
+	pending, progressed, err := trunkENI.ReconcileOrphanCleanup(snapshot, nil, map[string]struct{}{})
 
 	assert.NoError(t, err)
 	assert.True(t, pending)
-	assert.Equal(t, 1, trunkENI.orphanCleanupEmptyObservations[VlanId1])
-	assert.Equal(t, 0, trunkENI.orphanCleanupEmptyObservations[VlanId2])
+	assert.False(t, progressed)
+	assert.Contains(t, trunkENI.orphanCleanupQueue[VlanId1], Branch1Id)
+	assert.True(t, trunkENI.usedVlanIds[VlanId1])
 }
 
 func TestTrunkENI_ReconcileOrphanCleanup_OwnedCandidateDoesNotDropFailedDelete(t *testing.T) {
@@ -672,11 +646,12 @@ func TestTrunkENI_ReconcileOrphanCleanup_OwnedCandidateDoesNotDropFailedDelete(t
 
 	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch2Id).Return(MockError)
 
-	pending, err := trunkENI.ReconcileOrphanCleanup(
+	pending, progressed, err := trunkENI.ReconcileOrphanCleanup(
 		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
 
 	assert.ErrorIs(t, err, MockError)
 	assert.True(t, pending)
+	assert.True(t, progressed)
 	assert.NotContains(t, trunkENI.orphanCleanupQueue[VlanId1], Branch1Id)
 	assert.Contains(t, trunkENI.orphanCleanupQueue[VlanId1], Branch2Id)
 	assert.True(t, trunkENI.usedVlanIds[VlanId1])
@@ -692,7 +667,7 @@ func TestTrunkENI_ReconcileOrphanCleanup_PreservesCandidateOwnedByObservedPod(t 
 		Branch1Id: {ID: Branch1Id, VlanID: VlanId1},
 	}
 
-	pending, err := trunkENI.ReconcileOrphanCleanup(
+	pending, _, err := trunkENI.ReconcileOrphanCleanup(
 		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{Branch1Id: {}})
 
 	assert.NoError(t, err)
@@ -1911,23 +1886,11 @@ func TestTrunkENI_FailedAllocationUsesOrphanCleanupQueue(t *testing.T) {
 	trunkENI.DeleteCooledDownENIs()
 	assert.Empty(t, queuedENIIDs(trunkENI))
 
-	// The orphan queue deletes the failed ENI, then requires a subsequent
-	// successful Describe with no matching ENI before releasing the VLAN.
+	// The orphan queue deletes the failed ENI and releases the VLAN in the same
+	// successful reconciliation.
 	mockHelper.EXPECT().DeleteNetworkInterfaceOnce(&Branch1Id).Return(nil)
 
-	pending, err := trunkENI.ReconcileOrphanCleanup(
-		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
-	assert.NoError(t, err)
-	assert.True(t, pending)
-	assert.True(t, trunkENI.usedVlanIds[VlanId1])
-
-	pending, err = trunkENI.ReconcileOrphanCleanup(
-		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
-	assert.NoError(t, err)
-	assert.True(t, pending)
-	assert.True(t, trunkENI.usedVlanIds[VlanId1])
-
-	pending, err = trunkENI.ReconcileOrphanCleanup(
+	pending, _, err := trunkENI.ReconcileOrphanCleanup(
 		trunkENI.SnapshotOrphanCleanup(), nil, map[string]struct{}{})
 	assert.NoError(t, err)
 	assert.False(t, pending)

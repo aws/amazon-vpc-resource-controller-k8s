@@ -134,12 +134,13 @@ func (mr *MockTrunkENIMockRecorder) Introspect() *gomock.Call {
 }
 
 // ReconcileOrphanCleanup mocks base method.
-func (m *MockTrunkENI) ReconcileOrphanCleanup(pending map[int]map[string]*trunk.ENIDetails, branchInterfaces []*ec2types.NetworkInterface, ownedENIIDs map[string]struct{}) (bool, error) {
+func (m *MockTrunkENI) ReconcileOrphanCleanup(pending map[int]map[string]*trunk.ENIDetails, branchInterfaces []*ec2types.NetworkInterface, ownedENIIDs map[string]struct{}) (bool, bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ReconcileOrphanCleanup", pending, branchInterfaces, ownedENIIDs)
 	ret0, _ := ret[0].(bool)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
 // ReconcileOrphanCleanup indicates an expected call of ReconcileOrphanCleanup.

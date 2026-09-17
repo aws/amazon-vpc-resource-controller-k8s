@@ -47,9 +47,6 @@ const (
 	MaxDeleteRetries    = 3
 	SubnetLabel         = "subnet"
 	SecurityGroupsLabel = "security_groups"
-	// orphanCleanupRequiredEmptyObservations protects against delayed EC2
-	// visibility after an ambiguous CreateNetworkInterface result.
-	orphanCleanupRequiredEmptyObservations = 2
 	// orphanCleanupStalledDeleteThreshold emits one alarmable metric when the
 	// same orphan ENI has failed deletion across several reconciliation rounds.
 	orphanCleanupStalledDeleteThreshold = 5
@@ -135,7 +132,7 @@ type TrunkENI interface {
 	// ReconcileOrphanCleanup reconciles quarantined VLANs against an EC2
 	// snapshot and the branch ENIs currently owned by pods.
 	ReconcileOrphanCleanup(pending map[int]map[string]*ENIDetails,
-		branchInterfaces []*ec2types.NetworkInterface, ownedENIIDs map[string]struct{}) (bool, error)
+		branchInterfaces []*ec2types.NetworkInterface, ownedENIIDs map[string]struct{}) (bool, bool, error)
 	// HasPendingOrphanCleanup reports whether a failed allocation queued
 	// asynchronous cleanup.
 	HasPendingOrphanCleanup() bool
@@ -179,12 +176,9 @@ type trunkENI struct {
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
 	nodeIDTag []ec2types.Tag
 	// orphanCleanupQueue contains ENIs from failed allocations grouped by their
-	// quarantined VLAN. A VLAN remains marked used until EC2 reconciliation
-	// confirms that no branch ENI with that VLAN remains.
+	// quarantined VLAN. A successful reconciliation releases the VLAN after all
+	// known and discovered unowned candidates are resolved.
 	orphanCleanupQueue map[int]map[string]*ENIDetails
-	// orphanCleanupEmptyObservations counts consecutive successful Describe
-	// results with no candidate on a quarantined VLAN.
-	orphanCleanupEmptyObservations map[int]int
 }
 
 // getConnectionTrackingSpec builds a ConnectionTrackingSpecificationRequest from the
@@ -255,13 +249,12 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 	availVlans[0] = true
 
 	return &trunkENI{
-		log:                            logger,
-		usedVlanIds:                    availVlans,
-		ec2ApiHelper:                   helper,
-		instance:                       instance,
-		uidToBranchENIMap:              make(map[string][]*ENIDetails),
-		orphanCleanupQueue:             make(map[int]map[string]*ENIDetails),
-		orphanCleanupEmptyObservations: make(map[int]int),
+		log:                logger,
+		usedVlanIds:        availVlans,
+		ec2ApiHelper:       helper,
+		instance:           instance,
+		uidToBranchENIMap:  make(map[string][]*ENIDetails),
+		orphanCleanupQueue: make(map[int]map[string]*ENIDetails),
 		nodeIDTag: []ec2types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -756,17 +749,17 @@ func (t *trunkENI) newBranchENIDetails(nwInterface *ec2types.NetworkInterface, v
 // snapshots; the trunk owns deletion and allocation-ledger updates.
 func (t *trunkENI) ReconcileOrphanCleanup(pending map[int]map[string]*ENIDetails,
 	branchInterfaces []*ec2types.NetworkInterface, ownedENIIDs map[string]struct{},
-) (bool, error) {
+) (bool, bool, error) {
 	if len(pending) == 0 {
-		return t.HasPendingOrphanCleanup(), nil
+		return t.HasPendingOrphanCleanup(), false, nil
 	}
 
 	branchENIOrphanReclaimCount.WithLabelValues("triggered").Inc()
 	candidates := t.identifyOrphanCleanupCandidates(pending, branchInterfaces)
 	result := t.deleteOrphanCleanupCandidates(candidates, ownedENIIDs)
-	t.updateOrphanCleanupQueue(result.sawCandidates, result.ownedVLANs,
+	progressed := t.updateOrphanCleanupQueue(result.reconciledVLANs, result.ownedVLANs,
 		result.failedDeletes, result.successfulDeletes)
-	return t.HasPendingOrphanCleanup(), errors.Join(result.cleanupErrors...)
+	return t.HasPendingOrphanCleanup(), progressed, errors.Join(result.cleanupErrors...)
 }
 
 func (t *trunkENI) identifyOrphanCleanupCandidates(
@@ -807,7 +800,7 @@ func (t *trunkENI) addDescribedOrphanCandidate(candidates map[int]map[string]*EN
 }
 
 type orphanCleanupResult struct {
-	sawCandidates     map[int]bool
+	reconciledVLANs   map[int]struct{}
 	ownedVLANs        map[int]bool
 	failedDeletes     map[int]map[string]*ENIDetails
 	successfulDeletes map[int]map[string]struct{}
@@ -819,13 +812,13 @@ func (t *trunkENI) deleteOrphanCleanupCandidates(
 	ownedENIIDs map[string]struct{},
 ) orphanCleanupResult {
 	result := orphanCleanupResult{
-		sawCandidates:     make(map[int]bool, len(candidates)),
+		reconciledVLANs:   make(map[int]struct{}, len(candidates)),
 		ownedVLANs:        make(map[int]bool),
 		failedDeletes:     make(map[int]map[string]*ENIDetails),
 		successfulDeletes: make(map[int]map[string]struct{}),
 	}
 	for vlanID := range candidates {
-		result.sawCandidates[vlanID] = len(candidates[vlanID]) > 0
+		result.reconciledVLANs[vlanID] = struct{}{}
 	}
 	for vlanID, vlanCandidates := range candidates {
 		for id, eni := range vlanCandidates {
@@ -1152,9 +1145,6 @@ func (t *trunkENI) moveReservedBranchENIsToOrphanCleanupQueue(reserved int, allo
 	if t.orphanCleanupQueue == nil {
 		t.orphanCleanupQueue = make(map[int]map[string]*ENIDetails)
 	}
-	if t.orphanCleanupEmptyObservations == nil {
-		t.orphanCleanupEmptyObservations = make(map[int]int)
-	}
 	for _, vlanID := range allocatedVlanIDs {
 		if vlanID <= 0 || vlanID >= MaxAllocatableVlanIds {
 			continue
@@ -1162,7 +1152,6 @@ func (t *trunkENI) moveReservedBranchENIsToOrphanCleanupQueue(reserved int, allo
 		if t.orphanCleanupQueue[vlanID] == nil {
 			t.orphanCleanupQueue[vlanID] = make(map[string]*ENIDetails)
 		}
-		t.orphanCleanupEmptyObservations[vlanID] = 0
 	}
 	for _, eni := range eniList {
 		if eni == nil || eni.ID == "" || eni.VlanID <= 0 || eni.VlanID >= MaxAllocatableVlanIds {
@@ -1303,30 +1292,32 @@ func (t *trunkENI) SnapshotOrphanCleanup() map[int]map[string]*ENIDetails {
 	return snapshot
 }
 
-func (t *trunkENI) updateOrphanCleanupQueue(sawCandidates map[int]bool,
+func (t *trunkENI) updateOrphanCleanupQueue(reconciledVLANs map[int]struct{},
 	ownedVLANs map[int]bool,
 	failedDeletes map[int]map[string]*ENIDetails,
 	successfulDeletes map[int]map[string]struct{},
-) {
+) bool {
 	t.lock.Lock()
 	defer t.lock.Unlock()
-	if t.orphanCleanupEmptyObservations == nil {
-		t.orphanCleanupEmptyObservations = make(map[int]int)
-	}
 
-	for vlanID, sawCandidate := range sawCandidates {
-		t.updateOrphanCleanupVLANLocked(vlanID, sawCandidate, ownedVLANs[vlanID],
-			failedDeletes[vlanID], successfulDeletes[vlanID])
+	progressed := false
+	for vlanID := range reconciledVLANs {
+		if t.updateOrphanCleanupVLANLocked(vlanID, ownedVLANs[vlanID],
+			failedDeletes[vlanID], successfulDeletes[vlanID]) {
+			progressed = true
+		}
 	}
+	return progressed
 }
 
-func (t *trunkENI) updateOrphanCleanupVLANLocked(vlanID int, sawCandidate bool, owned bool,
+func (t *trunkENI) updateOrphanCleanupVLANLocked(vlanID int, owned bool,
 	failedDeletes map[string]*ENIDetails, successfulDeletes map[string]struct{},
-) {
+) bool {
 	current, exists := t.orphanCleanupQueue[vlanID]
 	if !exists {
-		return
+		return false
 	}
+	progressed := len(successfulDeletes) > 0
 	for id := range successfulDeletes {
 		delete(current, id)
 	}
@@ -1334,29 +1325,19 @@ func (t *trunkENI) updateOrphanCleanupVLANLocked(vlanID int, sawCandidate bool, 
 		current[id] = eni
 	}
 	if len(current) > 0 {
-		t.orphanCleanupEmptyObservations[vlanID] = 0
-		return
+		return progressed
 	}
 	if owned {
 		delete(t.orphanCleanupQueue, vlanID)
-		delete(t.orphanCleanupEmptyObservations, vlanID)
 		t.log.Info("completed orphan cleanup for vlan owned by a pod", "vlanID", vlanID)
-		return
-	}
-	if sawCandidate {
-		t.orphanCleanupEmptyObservations[vlanID] = 0
-		return
-	}
-	t.orphanCleanupEmptyObservations[vlanID]++
-	if t.orphanCleanupEmptyObservations[vlanID] < orphanCleanupRequiredEmptyObservations {
-		return
+		return true
 	}
 
 	delete(t.orphanCleanupQueue, vlanID)
-	delete(t.orphanCleanupEmptyObservations, vlanID)
 	t.freeVlanIfUnreferencedLocked(vlanID)
 	branchENIOrphanReclaimCount.WithLabelValues("released_vlan").Inc()
 	t.log.Info("released quarantined vlan after orphan cleanup", "vlanID", vlanID)
+	return true
 }
 
 func (t *trunkENI) getVlanIdFromTag(tags []ec2types.Tag) (int, error) {

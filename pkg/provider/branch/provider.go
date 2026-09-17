@@ -450,9 +450,15 @@ func (b *branchENIProvider) ProcessOrphanCleanupQueue(nodeName string) (ctrl.Res
 		return b.orphanCleanupFailureRequeue(nodeName), nil
 	}
 
-	pending, err := trunkENI.ReconcileOrphanCleanup(pendingCleanup, branchInterfaces, ownedENIIDs)
+	pending, progressed, err := trunkENI.ReconcileOrphanCleanup(
+		pendingCleanup, branchInterfaces, ownedENIIDs)
 	if err != nil {
 		log.Error(err, "failed to process orphan cleanup queue, will retry")
+		if progressed {
+			b.resetOrphanCleanupFailures(nodeName)
+			log.Info("orphan cleanup made progress despite errors, keeping fast retry")
+			return orphanCleanupRequeueRequest, nil
+		}
 		return b.orphanCleanupFailureRequeue(nodeName), nil
 	}
 	b.resetOrphanCleanupFailures(nodeName)
