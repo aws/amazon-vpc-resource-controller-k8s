@@ -62,10 +62,10 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	// Reused nodes can have every ENI slot taken, leaving no room for a trunk ENI; recycle for fresh nodes.
-	expectedLinuxNodes := recycleLinuxNodes()
+	recycleLinuxNodes()
 
 	nodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "linux",
-		config.ResourceNamePodENI, expectedLinuxNodes)
+		config.ResourceNamePodENI)
 	err = node.VerifyCNINode(frameWork.NodeManager)
 	Expect(err).ToNot(HaveOccurred())
 })
@@ -76,21 +76,22 @@ var _ = AfterSuite(func() {
 })
 
 // recycleLinuxNodes refreshes every ASG backing a linux node so each comes back
-// with a free trunk-ENI slot, returning the pre-refresh node count. No-op when
-// nodes already advertise pod-eni or none are in an ASG.
-func recycleLinuxNodes() int {
+// with a free trunk-ENI slot. No-op when nodes already advertise pod-eni or none
+// are in an ASG.
+func recycleLinuxNodes() {
 	nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
 	Expect(err).ToNot(HaveOccurred())
-	expectedNodeCount := len(nodes.Items)
-	if expectedNodeCount == 0 || allNodesReadyWithResource(nodes, config.ResourceNamePodENI) {
-		return expectedNodeCount
+	if len(nodes.Items) == 0 || allNodesReadyWithResource(nodes, config.ResourceNamePodENI) {
+		return
 	}
 
 	asgNames := map[string]struct{}{}
+	oldInstanceIDs := map[string]struct{}{}
 	var nonASGNodes []string
 	for i := range nodes.Items {
 		instanceID := frameWork.NodeManager.GetInstanceID(&nodes.Items[i])
 		Expect(instanceID).ToNot(BeEmpty())
+		oldInstanceIDs[instanceID] = struct{}{}
 		instance, err := frameWork.EC2Manager.GetInstanceDetails(instanceID)
 		Expect(err).ToNot(HaveOccurred())
 		if asgName, ok := pkgUtils.GetTagKeyValueMap(instance.Tags)["aws:autoscaling:groupName"]; ok {
@@ -101,14 +102,57 @@ func recycleLinuxNodes() int {
 	}
 	if len(asgNames) == 0 {
 		By("skipping node recycle: linux nodes are not part of an autoscaling group")
-		return expectedNodeCount
+		return
 	}
 	Expect(nonASGNodes).To(BeEmpty(),
 		"linux nodes are not part of an autoscaling group and cannot be recycled: %v", nonASGNodes)
 
 	By("recycling linux nodes via instance refresh")
 	refreshInstanceGroups(asgNames)
-	return expectedNodeCount
+
+	By("waiting for the refreshed fleet: old instances gone, every ASG instance Ready with pod-eni")
+	waitForRefreshedFleet(oldInstanceIDs, asgNames)
+}
+
+// waitForRefreshedFleet blocks until no pre-refresh instance still backs a linux
+// Node and every current ASG instance has a Ready Node advertising positive
+// pod-eni, so a mixed old/new fleet can't be mistaken for a completed refresh.
+func waitForRefreshedFleet(oldInstanceIDs, asgNames map[string]struct{}) {
+	Expect(wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.ResourceOperationTimeout, true,
+		func(ctx context.Context) (bool, error) {
+			nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
+			if err != nil {
+				return false, nil
+			}
+			readyInstances := map[string]struct{}{}
+			for i := range nodes.Items {
+				n := nodes.Items[i]
+				id := frameWork.NodeManager.GetInstanceID(&n)
+				if _, isOld := oldInstanceIDs[id]; isOld {
+					return false, nil // a pre-refresh instance still backs a Node
+				}
+				if n.DeletionTimestamp != nil || !nodeReady(&n) {
+					continue
+				}
+				if q, ok := n.Status.Allocatable[v1.ResourceName(config.ResourceNamePodENI)]; !ok || q.CmpInt64(0) <= 0 {
+					continue
+				}
+				readyInstances[id] = struct{}{}
+			}
+			// Every current ASG instance must map to a Ready pod-eni Node.
+			for asgName := range asgNames {
+				groups, err := frameWork.AutoScalingManager.DescribeAutoScalingGroup(asgName)
+				if err != nil || len(groups) == 0 {
+					return false, nil
+				}
+				for _, inst := range groups[0].Instances {
+					if _, ok := readyInstances[aws.ToString(inst.InstanceId)]; !ok {
+						return false, nil
+					}
+				}
+			}
+			return true, nil
+		})).To(Succeed())
 }
 
 func refreshInstanceGroups(asgNames map[string]struct{}) {

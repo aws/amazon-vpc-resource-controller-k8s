@@ -229,7 +229,7 @@ var _ = Describe("Windows Integration Test", func() {
 
 		JustBeforeEach(func() {
 			windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "windows",
-				config.ResourceNameIPAddress, 0)
+				config.ResourceNameIPAddress)
 			instanceID = manager.GetNodeInstanceID(&windowsNodeList.Items[0])
 			nodeName = windowsNodeList.Items[0].Name
 
@@ -456,7 +456,7 @@ var _ = Describe("Windows Integration Test", func() {
 			bufferForCoolDown = time.Second * 30
 
 			windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "windows",
-				config.ResourceNameIPAddress, 0)
+				config.ResourceNameIPAddress)
 			instanceID = manager.GetNodeInstanceID(&windowsNodeList.Items[0])
 			nodeName = windowsNodeList.Items[0].Name
 

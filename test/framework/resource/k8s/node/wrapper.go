@@ -26,10 +26,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-// GetNodeAndWaitTillCapacityPresent waits until at least expectedNodeCount nodes
-// are non-deleting, Ready, and advertise positive expectedResource capacity, then
-// returns that ready set. Pass expectedNodeCount <= 0 to only require a non-empty set.
-func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResource string, expectedNodeCount int) *v1.NodeList {
+// GetNodeAndWaitTillCapacityPresent waits until a non-empty set of nodes is
+// non-deleting, Ready, and advertises positive expectedResource capacity, then
+// returns that ready set.
+func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResource string) *v1.NodeList {
 	readyNodeList := &v1.NodeList{}
 	err := wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.ResourceOperationTimeout, true,
 		func(ctx context.Context) (bool, error) {
@@ -38,10 +38,6 @@ func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResou
 			Expect(err).ToNot(HaveOccurred())
 			ready := readyNodesWithResource(observedNodeList, expectedResource)
 			if len(ready.Items) == 0 {
-				return false, nil
-			}
-			// Reject a partial fleet when we know how many nodes to expect.
-			if expectedNodeCount > 0 && len(ready.Items) < expectedNodeCount {
 				return false, nil
 			}
 			readyNodeList = ready
