@@ -270,6 +270,21 @@ func (mr *MockEC2APIHelperMockRecorder) GetSubnet(arg0 interface{}) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSubnet", reflect.TypeOf((*MockEC2APIHelper)(nil).GetSubnet), arg0)
 }
 
+// GetSubnetCIDR mocks base method.
+func (m *MockEC2APIHelper) GetSubnetCIDR(arg0 *string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSubnetCIDR", arg0)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetSubnetCIDR indicates an expected call of GetSubnetCIDR.
+func (mr *MockEC2APIHelperMockRecorder) GetSubnetCIDR(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSubnetCIDR", reflect.TypeOf((*MockEC2APIHelper)(nil).GetSubnetCIDR), arg0)
+}
+
 // SetDeleteOnTermination mocks base method.
 func (m *MockEC2APIHelper) SetDeleteOnTermination(arg0, arg1 *string) error {
 	m.ctrl.T.Helper()

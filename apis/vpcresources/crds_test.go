@@ -97,9 +97,11 @@ func TestNodeNetworkStateSchema(t *testing.T) {
 		"subnetCIDRBlock",
 		"primaryNetworkInterfaceSecurityGroups",
 	}, state.Required)
+	assert.NotContains(t, state.Required, "instanceType")
 
 	expectedFields := []string{
 		"instanceID",
+		"instanceType",
 		"subnetID",
 		"subnetCIDRBlock",
 		"subnetV6CIDRBlock",
@@ -115,6 +117,12 @@ func TestNodeNetworkStateSchema(t *testing.T) {
 	assert.Equal(t, `^i-([0-9a-f]{8}|[0-9a-f]{17})$`, instanceID.Pattern)
 	require.NotNil(t, instanceID.MaxLength)
 	assert.EqualValues(t, 19, *instanceID.MaxLength)
+
+	instanceType := state.Properties["instanceType"]
+	require.NotNil(t, instanceType.MinLength)
+	assert.EqualValues(t, 1, *instanceType.MinLength)
+	require.NotNil(t, instanceType.MaxLength)
+	assert.EqualValues(t, 64, *instanceType.MaxLength)
 
 	subnetID := state.Properties["subnetID"]
 	assert.Equal(t, `^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`, subnetID.Pattern)

@@ -15,11 +15,13 @@ package api
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"golang.org/x/sync/singleflight"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 
@@ -27,12 +29,11 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 )
 
-const (
-	CreateENIDescriptionPrefix = "aws-k8s-"
-)
+const CreateENIDescriptionPrefix = "aws-k8s-"
 
 var (
-	// defaultBackOff is the default back off for retrying ec2 api calls.
+	// defaultBackOff is the default back off for retrying EC2 API calls in
+	// synchronous paths that do not have their own reconciliation queue.
 	defaultBackOff = wait.Backoff{
 		Duration: time.Millisecond * 100,
 		Factor:   3.0,
@@ -62,7 +63,9 @@ var (
 )
 
 type ec2APIHelper struct {
-	ec2Wrapper EC2Wrapper
+	ec2Wrapper            EC2Wrapper
+	subnetCIDRCache       sync.Map
+	subnetCIDRLookupGroup singleflight.Group
 }
 
 func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
@@ -81,6 +84,7 @@ type EC2APIHelper interface {
 		ipResourceCount *config.IPResourceCount, interfaceType *string, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest) (*ec2types.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2types.Subnet, error)
+	GetSubnetCIDR(subnetId *string) (string, error)
 	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]ec2types.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []string) ([]ec2types.NetworkInterface, error)
@@ -185,8 +189,11 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 	return nwInterface, nil
 }
 
-// GetSubnet returns the subnet details of the given subnet
+// GetSubnet returns the subnet details of the given subnet.
 func (h *ec2APIHelper) GetSubnet(subnetId *string) (*ec2types.Subnet, error) {
+	if subnetId == nil || *subnetId == "" {
+		return nil, fmt.Errorf("subnet id is empty")
+	}
 	describeSubnetInput := &ec2.DescribeSubnetsInput{
 		SubnetIds: []string{*subnetId},
 	}
@@ -195,11 +202,56 @@ func (h *ec2APIHelper) GetSubnet(subnetId *string) (*ec2types.Subnet, error) {
 	if err != nil {
 		return nil, err
 	}
-	if describeSubnetOutput != nil && len(describeSubnetOutput.Subnets) == 0 {
+	if describeSubnetOutput == nil || len(describeSubnetOutput.Subnets) == 0 {
 		return nil, fmt.Errorf("subnet not found %s", *subnetId)
 	}
 
 	return &describeSubnetOutput.Subnets[0], nil
+}
+
+func (h *ec2APIHelper) loadCachedSubnetCIDR(subnetID string) (string, bool) {
+	value, ok := h.subnetCIDRCache.Load(subnetID)
+	if !ok {
+		return "", false
+	}
+	return value.(string), true
+}
+
+// GetSubnetCIDR returns the IPv4 CIDR for a subnet. Results are cached for the
+// lifetime of the controller process because a subnet's CIDR is immutable.
+func (h *ec2APIHelper) GetSubnetCIDR(subnetId *string) (string, error) {
+	if subnetId == nil || *subnetId == "" {
+		return "", fmt.Errorf("subnet id is empty")
+	}
+
+	// Fast path: avoid singleflight bookkeeping for a warm cache.
+	if cidr, ok := h.loadCachedSubnetCIDR(*subnetId); ok {
+		return cidr, nil
+	}
+
+	value, err, _ := h.subnetCIDRLookupGroup.Do(*subnetId, func() (interface{}, error) {
+		// Another flight may have populated the cache after the fast-path miss
+		// but before this caller became the flight leader.
+		if cidr, ok := h.loadCachedSubnetCIDR(*subnetId); ok {
+			return cidr, nil
+		}
+
+		subnet, err := h.GetSubnet(subnetId)
+		if err != nil {
+			return "", err
+		}
+		if subnet.CidrBlock == nil || *subnet.CidrBlock == "" {
+			return "", fmt.Errorf("subnet %s has no IPv4 CIDR", *subnetId)
+		}
+
+		resolvedCIDR := *subnet.CidrBlock
+		h.subnetCIDRCache.Store(*subnetId, resolvedCIDR)
+		return resolvedCIDR, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return value.(string), nil
 }
 
 // DeleteNetworkInterface deletes a network interface with retries with exponential back offs
@@ -249,7 +301,6 @@ func (h *ec2APIHelper) DescribeNetworkInterfaces(nwInterfaceIds []string) ([]ec2
 		*describeNetworkInterfacesInput)
 }
 
-// TODO: Not used currently as the API is not publicly available with assumed role
 // DescribeTrunkInterfaceAssociation describes all the association of the given trunk interface id
 func (h *ec2APIHelper) DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]ec2types.TrunkInterfaceAssociation, error) {
 	describeTrunkInterfaceAssociationInput := &ec2.DescribeTrunkInterfaceAssociationsInput{
@@ -576,10 +627,12 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*
 			Name:   aws.String("tag:" + config.TrunkENIIDTag),
 			Values: []string{*trunkID},
 		},
-		{
+	}
+	if subnetID != nil && *subnetID != "" {
+		filters = append(filters, ec2types.Filter{
 			Name:   aws.String("subnet-id"),
 			Values: []string{*subnetID},
-		},
+		})
 	}
 
 	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}
@@ -601,6 +654,7 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*
 			// Only attach the required details to avoid consuming extra memory
 			nwInterfaces = append(nwInterfaces, &ec2types.NetworkInterface{
 				NetworkInterfaceId: nwInterface.NetworkInterfaceId,
+				Status:             nwInterface.Status,
 				TagSet:             nwInterface.TagSet,
 			})
 		}

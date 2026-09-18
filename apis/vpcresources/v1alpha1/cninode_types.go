@@ -84,6 +84,12 @@ type NodeNetworkState struct {
 	// +kubebuilder:validation:MaxLength=19
 	// +kubebuilder:validation:Pattern=`^i-([0-9a-f]{8}|[0-9a-f]{17})$`
 	InstanceID string `json:"instanceID"`
+	// Determines branch ENI capacity when restoring without an EC2 instance
+	// describe.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	InstanceType string `json:"instanceType,omitempty"`
 	// May differ from the trunk subnet with ENIConfig.
 	// +required
 	// +kubebuilder:validation:MaxLength=24
@@ -125,11 +131,9 @@ type TrunkInterface struct {
 	// DeviceIndex is the attachment device index of the trunk ENI on the instance.
 	// +optional
 	DeviceIndex int32 `json:"deviceIndex,omitempty"`
-	// SubnetID is the id of the EC2 subnet the trunk ENI resides in, which is
-	// also the subnet its branch ENIs are created in. Persisted with the trunk
-	// so a controller can create a branch ENI straight from the CNINode,
-	// without a DescribeNetworkInterfaces call on the pod path, and so the
-	// value survives a controller restart that drops in-memory node state.
+	// SubnetID is the id of the EC2 subnet the observed trunk ENI resides in.
+	// It can differ from the effective subnet used for new branch ENIs after
+	// the node's ENIConfig changes.
 	// +optional
 	// +kubebuilder:validation:MaxLength=24
 	// +kubebuilder:validation:Pattern=`^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`
@@ -198,6 +202,14 @@ type CNINodeList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []CNINode `json:"items"`
+}
+
+// IsManagedByVPCResourceController reports whether this CNINode, including its
+// status, is owned by the vpc-resource-controller. An empty managedBy means yes,
+// for objects created before the field existed. Exactly one controller owns an
+// object's status, so anything else must be left alone.
+func (c *CNINode) IsManagedByVPCResourceController() bool {
+	return c.Spec.ManagedBy == "" || c.Spec.ManagedBy == ManagedByVPCResourceController
 }
 
 func init() {

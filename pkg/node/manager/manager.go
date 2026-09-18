@@ -271,7 +271,8 @@ func (m *manager) UpdateNode(nodeName string) error {
 	case UnManagedToManaged:
 		log.Info("node was previously un-managed, will be added as managed node now")
 		cachedNode = node.NewManagedNode(m.Log, k8sNode.Name,
-			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
+			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode),
+			m.wrapper.K8sAPI, m.wrapper.EC2API)
 		// Update the Subnet if the node has custom networking configured
 		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
 		if err != nil {
@@ -498,7 +499,7 @@ func GetNodeInstanceID(node *v1.Node) string {
 	return instanceID
 }
 
-// getNodeOS returns the operating system of a node.
+// GetNodeOS returns the operating system of a node.
 func GetNodeOS(node *v1.Node) string {
 	labels := node.GetLabels()
 	os := labels[config.NodeLabelOS]

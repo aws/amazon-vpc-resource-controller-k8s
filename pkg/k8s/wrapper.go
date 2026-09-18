@@ -84,6 +84,7 @@ type K8sWrapper interface {
 	CreateCNINode(node *v1.Node, clusterName string) error
 	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
 	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
+	UpdateCNINodeStatus(base, modified *rcv1alpha1.CNINode) error
 	DeleteCNINode(cniNode *rcv1alpha1.CNINode) error
 }
 
@@ -283,4 +284,20 @@ func (k *k8sWrapper) ListCNINodes() ([]*rcv1alpha1.CNINode, error) {
 
 func (k *k8sWrapper) PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error {
 	return k.cacheClient.Patch(k.context, newCNINode, client.MergeFromWithOptions(oldCNINode, client.MergeFromWithOptimisticLock{}))
+}
+
+// UpdateCNINodeStatus writes the CNINode status subresource as a merge patch of
+// the fields changed between base and modified. A merge patch carries no
+// resourceVersion, so concurrent writers of other CNINode fields (e.g. IPAMD
+// managing spec.features) cannot cause an optimistic-lock conflict. Transient
+// API errors are retried a few times with backoff; persistent failures (e.g. a
+// rollout-window RBAC 403) are returned to the caller, which degrades that node
+// to EC2 discovery on the next restart.
+func (k *k8sWrapper) UpdateCNINodeStatus(base, modified *rcv1alpha1.CNINode) error {
+	retriable := func(err error) bool {
+		return !errors.IsForbidden(err) && !errors.IsNotFound(err) && !errors.IsInvalid(err)
+	}
+	return retry.OnError(retry.DefaultBackoff, retriable, func() error {
+		return k.cacheClient.Status().Patch(k.context, modified, client.MergeFrom(base))
+	})
 }
