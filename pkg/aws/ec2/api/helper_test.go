@@ -622,18 +622,6 @@ func TestEc2APIHelper_DeleteNetworkInterface_ErrorThenSuccess(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestEc2APIHelper_DeleteNetworkInterfaceOnce_Error(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
-
-	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, errMock)
-
-	err := ec2ApiHelper.DeleteNetworkInterfaceOnce(&branchInterfaceId)
-	assert.ErrorIs(t, err, errMock)
-}
-
 // TestEc2APIHelper_GetSubnet tests that get subnet call returns the expected response with no error
 func TestEc2APIHelper_GetSubnet(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -1289,6 +1277,24 @@ func TestEc2APIHelper_GetBranchNetworkInterface(t *testing.T) {
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput).Return(describeTrunkInterfaceOutput, nil)
 
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
+	assert.NoError(t, err)
+	assert.ElementsMatch(t, []*ec2types.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
+}
+
+func TestEc2APIHelper_GetBranchNetworkInterfaceWithoutSubnetFilter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+	expectedInput := &ec2.DescribeNetworkInterfacesInput{
+		Filters: []ec2types.Filter{{
+			Name:   aws.String("tag:" + config.TrunkENIIDTag),
+			Values: []string{trunkInterfaceId},
+		}},
+	}
+	mockWrapper.EXPECT().DescribeNetworkInterfaces(expectedInput).Return(describeTrunkInterfaceOutput, nil)
+
+	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, nil)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []*ec2types.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
 }

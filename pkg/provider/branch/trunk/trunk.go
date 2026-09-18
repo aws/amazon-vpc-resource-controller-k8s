@@ -15,7 +15,6 @@ package trunk
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -47,9 +46,6 @@ const (
 	MaxDeleteRetries    = 3
 	SubnetLabel         = "subnet"
 	SecurityGroupsLabel = "security_groups"
-	// orphanCleanupStalledDeleteThreshold emits one alarmable metric when the
-	// same orphan ENI has failed deletion across several reconciliation rounds.
-	orphanCleanupStalledDeleteThreshold = 5
 )
 
 var (
@@ -60,6 +56,10 @@ var (
 
 var ErrCurrentlyAtMaxCapacity = fmt.Errorf("cannot create more branches at this point as used branches plus the " +
 	"delete queue is at max capacity")
+
+// ErrBranchStateNotVerified prevents allocation before EC2 branch state has
+// been recovered for a trunk restored from CNINode.
+var ErrBranchStateNotVerified = fmt.Errorf("branch state has not been verified")
 
 // ErrInvalidRestoredLedger indicates that pod annotations cannot produce a
 // valid branch ENI and VLAN ledger.
@@ -94,20 +94,12 @@ var (
 		},
 		[]string{"operation"},
 	)
-	// branchENIOrphanReclaimCount records each reclaim attempt and its outcome.
-	branchENIOrphanReclaimCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "branch_eni_orphan_reclaim_total",
-			Help: "The number of orphan branch ENI reclaim outcomes on associate failure",
-		},
-		[]string{"result"},
-	)
 	// trunkReinitCount records whether trunk initialization restored local state
 	// or used authoritative EC2 discovery.
 	trunkReinitCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "trunk_reinit_total",
-			Help: "The number of trunk re-initializations by path (restored|ec2) and result",
+			Help: "The number of trunk re-initializations by path (restored|ec2|recovered) and result",
 		},
 		[]string{"path", "result"},
 	)
@@ -126,16 +118,10 @@ type TrunkENI interface {
 	DeleteCooledDownENIs()
 	// Reconcile compares the cache state with the list of pods to identify events that were missed and clean up the dangling interfaces
 	Reconcile(pods []v1.Pod) bool
-	// SnapshotOrphanCleanup returns a copy of the quarantined VLANs and known
-	// failed ENIs to reconcile in one EC2 observation.
-	SnapshotOrphanCleanup() map[int]map[string]*ENIDetails
-	// ReconcileOrphanCleanup reconciles quarantined VLANs against an EC2
-	// snapshot and the branch ENIs currently owned by pods.
-	ReconcileOrphanCleanup(pending map[int]map[string]*ENIDetails,
-		branchInterfaces []*ec2types.NetworkInterface, ownedENIIDs map[string]struct{}) (bool, bool, error)
-	// HasPendingOrphanCleanup reports whether a failed allocation queued
-	// asynchronous cleanup.
-	HasPendingOrphanCleanup() bool
+	// RecoverBranchState verifies the complete branch ENI and VLAN ledger from
+	// EC2 before the first allocation on a restored trunk. Concurrent callers
+	// share the same per-trunk gate and only the first caller invokes listPods.
+	RecoverBranchState(listPods func() ([]v1.Pod, error)) error
 	// PushENIsToFrontOfDeleteQueue pushes the eni network interfaces to the front of the delete queue
 	PushENIsToFrontOfDeleteQueue(*v1.Pod, []*ENIDetails)
 	// InitFromNodeNetworkState rebuilds trunk state from its ID and pod
@@ -175,10 +161,12 @@ type trunkENI struct {
 	pendingCreate int
 	// nodeName tag is the tag added to trunk and branch ENIs created on the node
 	nodeIDTag []ec2types.Tag
-	// orphanCleanupQueue contains ENIs from failed allocations grouped by their
-	// quarantined VLAN. A successful reconciliation releases the VLAN after all
-	// known and discovered unowned candidates are resolved.
-	orphanCleanupQueue map[int]map[string]*ENIDetails
+	// branchStateGate blocks allocation and local branch-state mutation while a
+	// restored trunk is being verified against EC2.
+	branchStateGate sync.RWMutex
+	// branchStateVerified is false only for trunks restored from CNINode until
+	// their complete branch inventory has been recovered from EC2.
+	branchStateVerified bool
 }
 
 // getConnectionTrackingSpec builds a ConnectionTrackingSpecificationRequest from the
@@ -221,9 +209,6 @@ type ENIDetails struct {
 	deletionTimeStamp time.Time
 	// deleteRetryCount is the
 	deleteRetryCount int
-	// orphanDeleteFailureCount tracks consecutive orphan-cleanup reconciliation
-	// rounds in which this ENI could not be deleted.
-	orphanDeleteFailureCount int
 	// ID of association between branch and trunk ENI
 	AssociationID string `json:"associationID"`
 }
@@ -249,12 +234,11 @@ func NewTrunkENI(logger logr.Logger, instance ec2.EC2Instance, helper api.EC2API
 	availVlans[0] = true
 
 	return &trunkENI{
-		log:                logger,
-		usedVlanIds:        availVlans,
-		ec2ApiHelper:       helper,
-		instance:           instance,
-		uidToBranchENIMap:  make(map[string][]*ENIDetails),
-		orphanCleanupQueue: make(map[int]map[string]*ENIDetails),
+		log:               logger,
+		usedVlanIds:       availVlans,
+		ec2ApiHelper:      helper,
+		instance:          instance,
+		uidToBranchENIMap: make(map[string][]*ENIDetails),
 		nodeIDTag: []ec2types.Tag{
 			{
 				Key:   aws.String(config.NetworkInterfaceNodeIDKey),
@@ -270,7 +254,6 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(unreconciledTrunkENICount)
 		metrics.Registry.MustRegister(branchENIOperationsSuccessCount)
 		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
-		metrics.Registry.MustRegister(branchENIOrphanReclaimCount)
 		metrics.Registry.MustRegister(trunkReinitCount)
 	})
 }
@@ -325,6 +308,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 
 		t.trunkENIId = *trunk.NetworkInterfaceId
 		t.trunkSubnetID = lo.FromPtr(trunk.SubnetId)
+		t.branchStateVerified = true
 		log.Info("created a new trunk interface", "trunk id", t.trunkENIId)
 
 		trunkReinitCount.WithLabelValues("ec2", "success").Inc()
@@ -367,7 +351,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	}
 
 	// Get the list of branch ENIs
-	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&t.trunkENIId, aws.String(t.instance.SubnetID()))
+	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&t.trunkENIId, nil)
 	if err != nil {
 		return err
 	}
@@ -497,6 +481,7 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	log.V(1).Info("successfully initialized trunk with all associated branch interfaces",
 		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
 
+	t.branchStateVerified = true
 	trunkReinitCount.WithLabelValues("ec2", "success").Inc()
 	return nil
 }
@@ -508,6 +493,9 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 // requires each VLAN to be in range and each branch ENI and VLAN to have at most
 // one pod owner.
 func (t *trunkENI) InitFromNodeNetworkState(trunkENIID string, podList []v1.Pod) error {
+	t.trunkENIId = trunkENIID
+	t.branchStateVerified = false
+
 	candidateMap := make(map[string][]*ENIDetails)
 	vlanOwner := make(map[int]string)   // vlan id -> pod uid
 	eniOwner := make(map[string]string) // branch eni id -> pod uid
@@ -553,7 +541,6 @@ func (t *trunkENI) InitFromNodeNetworkState(trunkENIID string, podList []v1.Pod)
 
 	// Commit the validated ledger under one lock.
 	t.lock.Lock()
-	t.trunkENIId = trunkENIID
 	t.uidToBranchENIMap = candidateMap
 	for vlanID := range vlanOwner {
 		t.usedVlanIds[vlanID] = true
@@ -564,6 +551,156 @@ func (t *trunkENI) InitFromNodeNetworkState(trunkENIID string, podList []v1.Pod)
 	t.log.Info("restored trunk ledger from NodeNetworkState",
 		"trunk", t.trunkENIId, "branch interfaces", t.uidToBranchENIMap)
 	return nil
+}
+
+// RecoverBranchState verifies the complete branch inventory for a restored
+// trunk before allocation. The write gate coalesces concurrent Pod requests:
+// after the first successful recovery, later callers return without listing
+// Pods or calling EC2.
+func (t *trunkENI) RecoverBranchState(listPods func() ([]v1.Pod, error)) error {
+	t.branchStateGate.Lock()
+	defer t.branchStateGate.Unlock()
+
+	if t.branchStateVerified {
+		return nil
+	}
+
+	pods, err := listPods()
+	if err != nil {
+		return fmt.Errorf("listing pods before branch state recovery: %w", err)
+	}
+	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&t.trunkENIId, nil)
+	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("recover_branch_state").Inc()
+		return fmt.Errorf("describing branch ENIs before allocation: %w", err)
+	}
+
+	state, err := t.buildRecoveredBranchState(pods, branchInterfaces)
+	if err != nil {
+		trunkENIOperationsErrCount.WithLabelValues("recover_branch_state").Inc()
+		return err
+	}
+
+	t.lock.Lock()
+	t.uidToBranchENIMap = state.uidToBranchENIMap
+	t.deleteQueue = state.deleteQueue
+	t.usedVlanIds = state.usedVlanIDs
+	t.pendingCreate = 0
+	t.lock.Unlock()
+	t.branchStateVerified = true
+
+	trunkReinitCount.WithLabelValues("recovered", "success").Inc()
+	t.log.Info("recovered branch state from EC2 before allocation",
+		"trunk", t.trunkENIId,
+		"ownedPods", len(state.uidToBranchENIMap),
+		"unownedENIs", len(state.deleteQueue))
+	return nil
+}
+
+type recoveredBranchState struct {
+	uidToBranchENIMap map[string][]*ENIDetails
+	deleteQueue       []*ENIDetails
+	usedVlanIDs       []bool
+}
+
+func (t *trunkENI) buildRecoveredBranchState(pods []v1.Pod,
+	branchInterfaces []*ec2types.NetworkInterface,
+) (*recoveredBranchState, error) {
+	state := newRecoveredBranchState()
+	branchByID, vlanByENIID, err := t.reserveRecoveredBranchInterfaces(state, branchInterfaces)
+	if err != nil {
+		return nil, err
+	}
+
+	if !t.recoverPodOwnership(state, pods, branchByID, vlanByENIID) {
+		t.log.Info("preserving unowned branch ENIs because Pod ownership could not be read",
+			"branchENIs", len(branchByID))
+		return state, nil
+	}
+
+	for id := range branchByID {
+		state.deleteQueue = append(state.deleteQueue, &ENIDetails{
+			ID:                id,
+			VlanID:            vlanByENIID[id],
+			deletionTimeStamp: time.Now(),
+		})
+	}
+	return state, nil
+}
+
+func newRecoveredBranchState() *recoveredBranchState {
+	state := &recoveredBranchState{
+		uidToBranchENIMap: make(map[string][]*ENIDetails),
+		usedVlanIDs:       make([]bool, MaxAllocatableVlanIds),
+	}
+	state.usedVlanIDs[0] = true
+	return state
+}
+
+func (t *trunkENI) reserveRecoveredBranchInterfaces(state *recoveredBranchState,
+	branchInterfaces []*ec2types.NetworkInterface,
+) (map[string]*ec2types.NetworkInterface, map[string]int, error) {
+	branchByID := make(map[string]*ec2types.NetworkInterface, len(branchInterfaces))
+	vlanByENIID := make(map[string]int, len(branchInterfaces))
+	for _, branchInterface := range branchInterfaces {
+		if branchInterface == nil || branchInterface.NetworkInterfaceId == nil ||
+			*branchInterface.NetworkInterfaceId == "" {
+			return nil, nil, fmt.Errorf("EC2 returned a branch ENI without an interface ID")
+		}
+		id := *branchInterface.NetworkInterfaceId
+		vlanID, err := t.getVlanIdFromTag(branchInterface.TagSet)
+		if err != nil {
+			return nil, nil, fmt.Errorf("branch ENI %s has an unusable VLAN tag: %w", id, err)
+		}
+		if vlanID <= 0 || vlanID >= MaxAllocatableVlanIds {
+			return nil, nil, fmt.Errorf("branch ENI %s has VLAN %d outside the assignable range", id, vlanID)
+		}
+		branchByID[id] = branchInterface
+		vlanByENIID[id] = vlanID
+		state.usedVlanIDs[vlanID] = true
+	}
+	return branchByID, vlanByENIID, nil
+}
+
+func (t *trunkENI) recoverPodOwnership(state *recoveredBranchState, pods []v1.Pod,
+	branchByID map[string]*ec2types.NetworkInterface, vlanByENIID map[string]int,
+) bool {
+	ownershipComplete := true
+	ownedENIIDs := make(map[string]string)
+	for i := range pods {
+		eniList, usable := t.decodeBranchInterfacesUsedByPod(&pods[i])
+		if !usable {
+			ownershipComplete = false
+			continue
+		}
+		uid := string(pods[i].UID)
+		for _, eni := range eniList {
+			if _, found := branchByID[eni.ID]; !found {
+				continue
+			}
+			if owner, duplicate := ownedENIIDs[eni.ID]; duplicate {
+				ownershipComplete = false
+				t.log.Error(fmt.Errorf("branch ENI is claimed by multiple pods"),
+					"preserving branch ENI without destructive cleanup",
+					"eni", eni.ID, "pod", uid, "otherPod", owner)
+				continue
+			}
+
+			recovered := *eni
+			taggedVLAN := vlanByENIID[eni.ID]
+			if recovered.VlanID != taggedVLAN {
+				trunkENIOperationsErrCount.WithLabelValues("branch_eni_vlan_tag_drift").Inc()
+				t.log.Error(fmt.Errorf("vlan id tag disagrees with the pod annotation"),
+					"using the EC2 tag for the recovered ledger",
+					"eni", eni.ID, "annotationVlanID", recovered.VlanID, "tagVlanID", taggedVLAN)
+				recovered.VlanID = taggedVLAN
+			}
+			ownedENIIDs[eni.ID] = uid
+			state.uidToBranchENIMap[uid] = append(state.uidToBranchENIMap[uid], &recovered)
+			delete(branchByID, eni.ID)
+		}
+	}
+	return ownershipComplete
 }
 
 // TrunkENIID returns the trunk ENI ID.
@@ -590,6 +727,9 @@ func (t *trunkENI) TrunkSubnetID() string {
 // Reconcile reconciles the state from the API Server to the internal cache of EC2 Branch Interfaces, if the controller
 // missed some delete events the reconcile method will perform cleanup for the dangling interfaces
 func (t *trunkENI) Reconcile(pods []v1.Pod) bool {
+	t.branchStateGate.RLock()
+	defer t.branchStateGate.RUnlock()
+
 	// Perform under lock to block new pods being added/removed concurrently
 	t.lock.Lock()
 	defer t.lock.Unlock()
@@ -625,6 +765,12 @@ func (t *trunkENI) Reconcile(pods []v1.Pod) bool {
 func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int,
 	commitOwnership func([]*ENIDetails) error,
 ) ([]*ENIDetails, error) {
+	t.branchStateGate.RLock()
+	defer t.branchStateGate.RUnlock()
+	if !t.branchStateVerified {
+		return nil, ErrBranchStateNotVerified
+	}
+
 	newENIs, err := t.createAndAssociateBranchENIs(pod, securityGroups, eniCount)
 	if err != nil {
 		return nil, err
@@ -641,8 +787,8 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 }
 
 // createAndAssociateBranchENIs performs EC2 allocation. On failure, every ENI
-// already created by the request is quarantined for asynchronous cleanup before
-// return. The caller can retry the pod immediately with different VLANs.
+// already created by the request is moved to the regular asynchronous delete
+// queue before return.
 func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int) ([]*ENIDetails, error) {
 	log := t.log.WithValues("request", "create", "pod namespace", pod.Namespace, "pod name", pod.Name)
 
@@ -664,7 +810,6 @@ func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 	connectionTrackingSpec := t.getConnectionTrackingSpec()
 
 	var newENIs []*ENIDetails
-	var allocatedVlanIDs []int
 	var err error
 	var nwInterface *ec2types.NetworkInterface
 	var vlanID int
@@ -677,7 +822,6 @@ func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 			trunkENIOperationsErrCount.WithLabelValues("assign_vlan_id").Inc()
 			break
 		}
-		allocatedVlanIDs = append(allocatedVlanIDs, vlanID)
 
 		// Vlan ID tag workaround, as describe trunk association is not supported with assumed role
 		tags := []ec2types.Tag{
@@ -697,6 +841,7 @@ func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 			aws.String(t.instance.SubnetID()), securityGroups, tags, nil, nil, connectionTrackingSpec)
 		if err != nil {
 			err = fmt.Errorf("creating network interface, %w", err)
+			t.freeVlanId(vlanID)
 			branchENIOperationsFailureCount.WithLabelValues("creating_branch_eni_failed").Inc()
 			break
 		}
@@ -717,8 +862,8 @@ func (t *trunkENI) createAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 	}
 
 	if err != nil {
-		log.Error(err, "failed to create ENI, quarantining allocated VLANs for asynchronous cleanup")
-		t.moveReservedBranchENIsToOrphanCleanupQueue(eniCount, allocatedVlanIDs, newENIs)
+		log.Error(err, "failed to create ENI, moving created ENIs to the delete queue")
+		t.moveReservedBranchENIsToDeleteQueue(eniCount, newENIs)
 		return nil, err
 	}
 
@@ -744,139 +889,11 @@ func (t *trunkENI) newBranchENIDetails(nwInterface *ec2types.NetworkInterface, v
 	}
 }
 
-// ReconcileOrphanCleanup reconciles only VLANs quarantined by failed
-// allocations. The provider supplies Branch ENI and Kubernetes ownership
-// snapshots; the trunk owns deletion and allocation-ledger updates.
-func (t *trunkENI) ReconcileOrphanCleanup(pending map[int]map[string]*ENIDetails,
-	branchInterfaces []*ec2types.NetworkInterface, ownedENIIDs map[string]struct{},
-) (bool, bool, error) {
-	if len(pending) == 0 {
-		return t.HasPendingOrphanCleanup(), false, nil
-	}
-
-	branchENIOrphanReclaimCount.WithLabelValues("triggered").Inc()
-	candidates := t.identifyOrphanCleanupCandidates(pending, branchInterfaces)
-	result := t.deleteOrphanCleanupCandidates(candidates, ownedENIIDs)
-	progressed := t.updateOrphanCleanupQueue(result.reconciledVLANs, result.ownedVLANs,
-		result.failedDeletes, result.successfulDeletes)
-	return t.HasPendingOrphanCleanup(), progressed, errors.Join(result.cleanupErrors...)
-}
-
-func (t *trunkENI) identifyOrphanCleanupCandidates(
-	pending map[int]map[string]*ENIDetails,
-	branchInterfaces []*ec2types.NetworkInterface,
-) map[int]map[string]*ENIDetails {
-	candidates := make(map[int]map[string]*ENIDetails, len(pending))
-	for vlanID, enis := range pending {
-		candidates[vlanID] = enis
-	}
-	for _, branchInterface := range branchInterfaces {
-		t.addDescribedOrphanCandidate(candidates, branchInterface)
-	}
-	return candidates
-}
-
-func (t *trunkENI) addDescribedOrphanCandidate(candidates map[int]map[string]*ENIDetails,
-	branchInterface *ec2types.NetworkInterface,
-) {
-	if branchInterface.NetworkInterfaceId == nil {
-		return
-	}
-	vlanID, err := t.getVlanIdFromTag(branchInterface.TagSet)
-	if err != nil {
-		return
-	}
-	vlanCandidates, quarantined := candidates[vlanID]
-	if !quarantined {
-		return
-	}
-	id := *branchInterface.NetworkInterfaceId
-	if _, exists := vlanCandidates[id]; exists {
-		return
-	}
-	vlanCandidates[id] = &ENIDetails{
-		ID: id, VlanID: vlanID,
-	}
-}
-
-type orphanCleanupResult struct {
-	reconciledVLANs   map[int]struct{}
-	ownedVLANs        map[int]bool
-	failedDeletes     map[int]map[string]*ENIDetails
-	successfulDeletes map[int]map[string]struct{}
-	cleanupErrors     []error
-}
-
-func (t *trunkENI) deleteOrphanCleanupCandidates(
-	candidates map[int]map[string]*ENIDetails,
-	ownedENIIDs map[string]struct{},
-) orphanCleanupResult {
-	result := orphanCleanupResult{
-		reconciledVLANs:   make(map[int]struct{}, len(candidates)),
-		ownedVLANs:        make(map[int]bool),
-		failedDeletes:     make(map[int]map[string]*ENIDetails),
-		successfulDeletes: make(map[int]map[string]struct{}),
-	}
-	for vlanID := range candidates {
-		result.reconciledVLANs[vlanID] = struct{}{}
-	}
-	for vlanID, vlanCandidates := range candidates {
-		for id, eni := range vlanCandidates {
-			t.recordOrphanCleanupCandidate(&result, vlanID, id, eni, ownedENIIDs)
-		}
-	}
-	return result
-}
-
-func (t *trunkENI) recordOrphanCleanupCandidate(result *orphanCleanupResult, vlanID int, id string,
-	eni *ENIDetails, ownedENIIDs map[string]struct{},
-) {
-	resolved, owned, err := t.deleteOrphanCleanupCandidate(id, eni, ownedENIIDs)
-	if owned {
-		result.ownedVLANs[vlanID] = true
-	}
-	if err != nil {
-		result.cleanupErrors = append(result.cleanupErrors, err)
-		if result.failedDeletes[vlanID] == nil {
-			result.failedDeletes[vlanID] = make(map[string]*ENIDetails)
-		}
-		result.failedDeletes[vlanID][id] = eni
-		return
-	}
-	if !resolved {
-		return
-	}
-	if result.successfulDeletes[vlanID] == nil {
-		result.successfulDeletes[vlanID] = make(map[string]struct{})
-	}
-	result.successfulDeletes[vlanID][id] = struct{}{}
-}
-
-func (t *trunkENI) deleteOrphanCleanupCandidate(id string, eni *ENIDetails,
-	ownedENIIDs map[string]struct{},
-) (resolved bool, owned bool, err error) {
-	_, ownedByObservedPod := ownedENIIDs[id]
-	if ownedByObservedPod || t.isOwnedByPod(id) {
-		t.log.Info("preserving orphan cleanup candidate now owned by a pod", "eni", id)
-		return true, true, nil
-	}
-	if err := t.deleteOrphanENI(eni); err != nil {
-		eni.orphanDeleteFailureCount++
-		branchENIOrphanReclaimCount.WithLabelValues("delete_error").Inc()
-		if eni.orphanDeleteFailureCount == orphanCleanupStalledDeleteThreshold {
-			branchENIOrphanReclaimCount.WithLabelValues("delete_stalled").Inc()
-			t.log.Error(err, "orphan cleanup delete is stalled",
-				"eni", id,
-				"consecutiveFailures", eni.orphanDeleteFailureCount)
-		}
-		return false, false, err
-	}
-	branchENIOrphanReclaimCount.WithLabelValues("deleted").Inc()
-	return true, false, nil
-}
-
 // DeleteBranchNetworkInterface deletes the branch network interface and returns an error in case of failure to delete
 func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
+	t.branchStateGate.RLock()
+	defer t.branchStateGate.RUnlock()
+
 	// Lock is required as Reconciler is also performing operation concurrently
 	t.lock.Lock()
 	defer t.lock.Unlock()
@@ -901,6 +918,9 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 }
 
 func (t *trunkENI) DeleteCooledDownENIs() {
+	t.branchStateGate.RLock()
+	defer t.branchStateGate.RUnlock()
+
 	for eni, hasENI := t.peekENIFromDeleteQueue(); hasENI; eni, hasENI = t.peekENIFromDeleteQueue() {
 		if eni.deletionTimeStamp.IsZero() ||
 			time.Now().After(eni.deletionTimeStamp.Add(cooldown.GetCoolDown().GetCoolDownPeriod())) {
@@ -909,7 +929,6 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 			// owner is legitimately using it.
 			if t.isOwnedByPod(eni.ID) {
 				t.log.Info("dropping delete of branch eni now owned by a pod", "eni", eni.ID)
-				branchENIOrphanReclaimCount.WithLabelValues("delete_cancelled_owned").Inc()
 				t.removeENIFromDeleteQueue(eni, true)
 				continue
 			}
@@ -942,17 +961,6 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 // deleteENI deletes the provided ENI. Queue removal and conditional VLAN
 // release happen only after this call succeeds.
 func (t *trunkENI) deleteENI(eniDetail *ENIDetails) (err error) {
-	return t.deleteENIWith(eniDetail, t.ec2ApiHelper.DeleteNetworkInterface)
-}
-
-// deleteOrphanENI performs one helper-level delete attempt. The AWS SDK still
-// handles transient request retries, while the orphan cleanup queue owns the
-// longer-lived fast-to-slow retry schedule.
-func (t *trunkENI) deleteOrphanENI(eniDetail *ENIDetails) (err error) {
-	return t.deleteENIWith(eniDetail, t.ec2ApiHelper.DeleteNetworkInterfaceOnce)
-}
-
-func (t *trunkENI) deleteENIWith(eniDetail *ENIDetails, deleteNetworkInterface func(*string) error) (err error) {
 	// Disassociate branch ENI from trunk if association ID exists and delete branch network interface
 	if eniDetail.AssociationID != "" {
 		err = t.ec2ApiHelper.DisassociateTrunkInterface(&eniDetail.AssociationID)
@@ -966,7 +974,7 @@ func (t *trunkENI) deleteENIWith(eniDetail *ENIDetails, deleteNetworkInterface f
 			}
 		}
 	}
-	err = deleteNetworkInterface(&eniDetail.ID)
+	err = t.ec2ApiHelper.DeleteNetworkInterface(&eniDetail.ID)
 	if err != nil {
 		branchENIOperationsFailureCount.WithLabelValues("delete_branch_error").Inc()
 
@@ -1030,6 +1038,9 @@ func (t *trunkENI) pushENIToDeleteQueue(eni *ENIDetails) {
 
 // PushENIsToFrontOfDeleteQueue pushes the ENI list to the front of the delete queue
 func (t *trunkENI) PushENIsToFrontOfDeleteQueue(pod *v1.Pod, eniList []*ENIDetails) {
+	t.branchStateGate.RLock()
+	defer t.branchStateGate.RUnlock()
+
 	t.pushENIsToFrontOfDeleteQueue(pod, eniList)
 }
 
@@ -1132,37 +1143,15 @@ func (t *trunkENI) commitReservedBranchENIsToLedger(UID string, branchENIs []*EN
 	t.addBranchENIsToLedgerLocked(UID, branchENIs)
 }
 
-// moveReservedBranchENIsToOrphanCleanupQueue atomically releases the request's
-// pending-create reservation and quarantines every VLAN allocated by the failed
-// request. The ENIs are deleted by the asynchronous orphan-cleanup worker.
-func (t *trunkENI) moveReservedBranchENIsToOrphanCleanupQueue(reserved int, allocatedVlanIDs []int,
-	eniList []*ENIDetails,
-) {
+// moveReservedBranchENIsToDeleteQueue atomically releases the request's
+// pending-create reservation and accounts for any ENIs that need cleanup.
+func (t *trunkENI) moveReservedBranchENIsToDeleteQueue(reserved int, eniList []*ENIDetails) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
 	t.pendingCreate -= reserved
-	if t.orphanCleanupQueue == nil {
-		t.orphanCleanupQueue = make(map[int]map[string]*ENIDetails)
-	}
-	for _, vlanID := range allocatedVlanIDs {
-		if vlanID <= 0 || vlanID >= MaxAllocatableVlanIds {
-			continue
-		}
-		if t.orphanCleanupQueue[vlanID] == nil {
-			t.orphanCleanupQueue[vlanID] = make(map[string]*ENIDetails)
-		}
-	}
-	for _, eni := range eniList {
-		if eni == nil || eni.ID == "" || eni.VlanID <= 0 || eni.VlanID >= MaxAllocatableVlanIds {
-			continue
-		}
-		if t.orphanCleanupQueue[eni.VlanID] == nil {
-			t.orphanCleanupQueue[eni.VlanID] = make(map[string]*ENIDetails)
-		}
-		t.orphanCleanupQueue[eni.VlanID][eni.ID] = eni
-	}
-	t.log.Info("queued failed allocation for orphan cleanup", "ENIs", eniList)
+	t.log.Info("pushing ENIs to delete queue", "ENIs", eniList)
+	t.deleteQueue = append(eniList, t.deleteQueue...)
 }
 
 // moveLedgerEntryToDeleteQueue rolls back a failed pod annotation without
@@ -1259,9 +1248,6 @@ func (t *trunkENI) freeVlanIfUnreferencedLocked(vlanId int) {
 			return
 		}
 	}
-	if _, quarantined := t.orphanCleanupQueue[vlanId]; quarantined {
-		return
-	}
 	isUsed := t.usedVlanIds[vlanId]
 	if !isUsed {
 		trunkENIOperationsErrCount.WithLabelValues("free_unused_vlan_id").Inc()
@@ -1269,75 +1255,6 @@ func (t *trunkENI) freeVlanIfUnreferencedLocked(vlanId int) {
 		return
 	}
 	t.usedVlanIds[vlanId] = false
-}
-
-func (t *trunkENI) HasPendingOrphanCleanup() bool {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-	return len(t.orphanCleanupQueue) > 0
-}
-
-func (t *trunkENI) SnapshotOrphanCleanup() map[int]map[string]*ENIDetails {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	snapshot := make(map[int]map[string]*ENIDetails, len(t.orphanCleanupQueue))
-	for vlanID, enis := range t.orphanCleanupQueue {
-		snapshot[vlanID] = make(map[string]*ENIDetails, len(enis))
-		for id, eni := range enis {
-			copy := *eni
-			snapshot[vlanID][id] = &copy
-		}
-	}
-	return snapshot
-}
-
-func (t *trunkENI) updateOrphanCleanupQueue(reconciledVLANs map[int]struct{},
-	ownedVLANs map[int]bool,
-	failedDeletes map[int]map[string]*ENIDetails,
-	successfulDeletes map[int]map[string]struct{},
-) bool {
-	t.lock.Lock()
-	defer t.lock.Unlock()
-
-	progressed := false
-	for vlanID := range reconciledVLANs {
-		if t.updateOrphanCleanupVLANLocked(vlanID, ownedVLANs[vlanID],
-			failedDeletes[vlanID], successfulDeletes[vlanID]) {
-			progressed = true
-		}
-	}
-	return progressed
-}
-
-func (t *trunkENI) updateOrphanCleanupVLANLocked(vlanID int, owned bool,
-	failedDeletes map[string]*ENIDetails, successfulDeletes map[string]struct{},
-) bool {
-	current, exists := t.orphanCleanupQueue[vlanID]
-	if !exists {
-		return false
-	}
-	progressed := len(successfulDeletes) > 0
-	for id := range successfulDeletes {
-		delete(current, id)
-	}
-	for id, eni := range failedDeletes {
-		current[id] = eni
-	}
-	if len(current) > 0 {
-		return progressed
-	}
-	if owned {
-		delete(t.orphanCleanupQueue, vlanID)
-		t.log.Info("completed orphan cleanup for vlan owned by a pod", "vlanID", vlanID)
-		return true
-	}
-
-	delete(t.orphanCleanupQueue, vlanID)
-	t.freeVlanIfUnreferencedLocked(vlanID)
-	branchENIOrphanReclaimCount.WithLabelValues("released_vlan").Inc()
-	t.log.Info("released quarantined vlan after orphan cleanup", "vlanID", vlanID)
-	return true
 }
 
 func (t *trunkENI) getVlanIdFromTag(tags []ec2types.Tag) (int, error) {
@@ -1361,7 +1278,7 @@ func (t *trunkENI) canCreateMore(eniCount int) bool {
 		usedBranches += len(branches)
 	}
 
-	if usedBranches+len(t.deleteQueue)+len(t.orphanCleanupQueue)+t.pendingCreate+eniCount >
+	if usedBranches+len(t.deleteQueue)+t.pendingCreate+eniCount >
 		vpc.Limits[t.instance.Type()].BranchInterface {
 		return false
 	}

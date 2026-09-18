@@ -83,7 +83,6 @@ type EC2APIHelper interface {
 	CreateNetworkInterface(description *string, subnetId *string, securityGroups []string, tags []ec2types.Tag,
 		ipResourceCount *config.IPResourceCount, interfaceType *string, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest) (*ec2types.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
-	DeleteNetworkInterfaceOnce(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2types.Subnet, error)
 	GetSubnetCIDR(subnetId *string) (string, error)
 	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error)
@@ -255,23 +254,17 @@ func (h *ec2APIHelper) GetSubnetCIDR(subnetId *string) (string, error) {
 	return value.(string), nil
 }
 
-// DeleteNetworkInterface deletes a network interface with helper-level backoff
-// for synchronous callers that do not have their own reconciliation queue.
+// DeleteNetworkInterface deletes a network interface with retries with exponential back offs
 func (h *ec2APIHelper) DeleteNetworkInterface(interfaceId *string) error {
-	return retry.OnError(defaultBackOff, func(err error) bool { return true }, func() error {
-		return h.DeleteNetworkInterfaceOnce(interfaceId)
-	})
-}
-
-// DeleteNetworkInterfaceOnce issues one SDK call. The SDK still performs its
-// configured transient retries; callers with a reconciliation queue own any
-// longer-lived retry schedule.
-func (h *ec2APIHelper) DeleteNetworkInterfaceOnce(interfaceId *string) error {
 	deleteNetworkInterface := &ec2.DeleteNetworkInterfaceInput{
 		NetworkInterfaceId: interfaceId,
 	}
 
-	_, err := h.ec2Wrapper.DeleteNetworkInterface(deleteNetworkInterface)
+	err := retry.OnError(defaultBackOff, func(err error) bool { return true }, func() error {
+		_, err := h.ec2Wrapper.DeleteNetworkInterface(deleteNetworkInterface)
+		return err
+	})
+
 	return err
 }
 
@@ -634,10 +627,12 @@ func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*
 			Name:   aws.String("tag:" + config.TrunkENIIDTag),
 			Values: []string{*trunkID},
 		},
-		{
+	}
+	if subnetID != nil && *subnetID != "" {
+		filters = append(filters, ec2types.Filter{
 			Name:   aws.String("subnet-id"),
 			Values: []string{*subnetID},
-		},
+		})
 	}
 
 	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{Filters: filters}

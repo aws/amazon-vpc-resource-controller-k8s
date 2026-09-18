@@ -37,7 +37,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/smithy-go"
 
 	"github.com/go-logr/logr"
@@ -62,10 +61,6 @@ const (
 	ReasonBranchENIAnnotationFailed = "BranchENIAnnotationFailed"
 
 	ReasonTrunkENICreationFailed = "TrunkENICreationFailed"
-
-	// orphanCleanupFastRetryLimit bounds consecutive 30-second retries before
-	// persistent failures move to the slower retry interval.
-	orphanCleanupFastRetryLimit = 5
 )
 
 var (
@@ -86,9 +81,7 @@ var (
 		[]string{operationLabel, resourceCountLabel},
 	)
 
-	deleteQueueRequeueRequest       = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
-	orphanCleanupRequeueRequest     = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
-	orphanCleanupSlowRequeueRequest = ctrl.Result{RequeueAfter: time.Minute * 5, Requeue: true}
+	deleteQueueRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
 
 	// NodeDeleteRequeueRequestDelay represents the time after which the resources belonging to a node will be cleaned
 	// up after receiving the actual node delete event.
@@ -108,9 +101,6 @@ type branchENIProvider struct {
 	lock sync.RWMutex
 	// trunkENICache is the map of node name to the trunk ENI
 	trunkENICache map[string]trunk.TrunkENI
-	// orphanCleanupFailures tracks consecutive failed reconciliations per node.
-	// It is protected by lock and reset whenever reconciliation makes progress.
-	orphanCleanupFailures map[string]int
 	// workerPool is the worker pool and queue for submitting async job
 	workerPool worker.Worker
 	// apiWrapper
@@ -127,12 +117,11 @@ func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
 	trunk.PrometheusRegister()
 
 	provider := &branchENIProvider{
-		apiWrapper:            wrapper,
-		log:                   logger,
-		workerPool:            worker,
-		trunkENICache:         make(map[string]trunk.TrunkENI),
-		orphanCleanupFailures: make(map[string]int),
-		ctx:                   ctx,
+		apiWrapper:    wrapper,
+		log:           logger,
+		workerPool:    worker,
+		trunkENICache: make(map[string]trunk.TrunkENI),
+		ctx:           ctx,
 	}
 	provider.checker = provider.check()
 	return provider
@@ -170,22 +159,17 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	// Restored instances rebuild the trunk ledger from the observed trunk ID and
-	// pod annotations. An invalid ledger falls back to authoritative EC2
-	// initialization with a fresh trunk object.
+	// Restored instances rebuild only the state available from the checkpoint
+	// and Pod annotations. Complete branch state is recovered from EC2 before
+	// the first new allocation, so an invalid annotation ledger must not move
+	// EC2 discovery back into the controller restart path.
 	ec2Path := !instance.IsRestoredFromNodeNetworkState()
 	var initErr error
 	if instance.IsRestoredFromNodeNetworkState() {
 		initErr = trunkENI.InitFromNodeNetworkState(instance.RestoredTrunkENIID(), podList)
 		if errors.Is(initErr, trunk.ErrInvalidRestoredLedger) {
-			log.Info("restored trunk ledger is invalid, falling back to authoritative EC2 initialization")
-			if err := instance.LoadDetails(b.apiWrapper.EC2API); err != nil {
-				branchProviderOperationsErrCount.WithLabelValues("init").Inc()
-				return fmt.Errorf("loading instance details for EC2 fallback, %w", err)
-			}
-			trunkENI = trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API)
-			ec2Path = true
-			initErr = trunkENI.InitTrunk(instance, podList)
+			log.Info("restored Pod annotation ledger is invalid; branch state will be recovered before allocation")
+			initErr = nil
 		}
 	} else {
 		initErr = trunkENI.InitTrunk(instance, podList)
@@ -308,8 +292,6 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 		return b.DeleteBranchUsedByPods(onDemandJob.NodeName, onDemandJob.UID)
 	case worker.OperationProcessDeleteQueue:
 		return b.ProcessDeleteQueue(onDemandJob.NodeName)
-	case worker.OperationProcessOrphanCleanupQueue:
-		return b.ProcessOrphanCleanupQueue(onDemandJob.NodeName)
 	case worker.OperationDeleteNode:
 		return b.DeleteNode(onDemandJob.NodeName)
 	}
@@ -385,115 +367,6 @@ func (b *branchENIProvider) ProcessDeleteQueue(nodeName string) (ctrl.Result, er
 	return deleteQueueRequeueRequest, nil
 }
 
-func (b *branchENIProvider) orphanCleanupFailureRequeue(nodeName string) ctrl.Result {
-	b.lock.Lock()
-	defer b.lock.Unlock()
-
-	if b.orphanCleanupFailures == nil {
-		b.orphanCleanupFailures = make(map[string]int)
-	}
-	b.orphanCleanupFailures[nodeName]++
-	failures := b.orphanCleanupFailures[nodeName]
-	if failures <= orphanCleanupFastRetryLimit {
-		return orphanCleanupRequeueRequest
-	}
-	if failures == orphanCleanupFastRetryLimit+1 {
-		b.log.Info("orphan cleanup entering slow retry",
-			"node", nodeName,
-			"consecutiveFailures", failures,
-			"retryAfter", orphanCleanupSlowRequeueRequest.RequeueAfter)
-	}
-	return orphanCleanupSlowRequeueRequest
-}
-
-func (b *branchENIProvider) resetOrphanCleanupFailures(nodeName string) {
-	b.lock.Lock()
-	defer b.lock.Unlock()
-
-	delete(b.orphanCleanupFailures, nodeName)
-}
-
-// ProcessOrphanCleanupQueue reconciles VLANs quarantined by failed allocations.
-// Errors use timed requeue so cleanup continues beyond the worker's finite
-// error-retry budget.
-func (b *branchENIProvider) ProcessOrphanCleanupQueue(nodeName string) (ctrl.Result, error) {
-	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
-	if !isPresent {
-		b.resetOrphanCleanupFailures(nodeName)
-		b.log.Info("stopping the orphan cleanup queue job", "node", nodeName)
-		return ctrl.Result{}, nil
-	}
-	trunkENIID := trunkENI.TrunkENIID()
-	log := b.log.WithValues("node", nodeName, "trunkENI", trunkENIID)
-	pendingCleanup := trunkENI.SnapshotOrphanCleanup()
-	if len(pendingCleanup) == 0 {
-		b.resetOrphanCleanupFailures(nodeName)
-		return ctrl.Result{}, nil
-	}
-
-	podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
-	if err != nil {
-		log.Error(err, "failed to list pods for orphan cleanup, will retry")
-		return b.orphanCleanupFailureRequeue(nodeName), nil
-	}
-	ownedENIIDs, err := branchENIIDsOwnedByPods(podList.Items)
-	if err != nil {
-		log.Error(err, "cannot safely determine branch ENI ownership, will retry")
-		return b.orphanCleanupFailureRequeue(nodeName), nil
-	}
-
-	branchInterfaces, err := b.apiWrapper.EC2API.GetBranchNetworkInterface(
-		aws.String(trunkENIID), aws.String(trunkENI.TrunkSubnetID()))
-	if err != nil {
-		branchProviderOperationsErrCount.WithLabelValues("orphan_cleanup_describe").Inc()
-		log.Error(err, "failed to list branch ENIs for orphan cleanup, will retry")
-		return b.orphanCleanupFailureRequeue(nodeName), nil
-	}
-
-	pending, progressed, err := trunkENI.ReconcileOrphanCleanup(
-		pendingCleanup, branchInterfaces, ownedENIIDs)
-	if err != nil {
-		log.Error(err, "failed to process orphan cleanup queue, will retry")
-		if progressed {
-			b.resetOrphanCleanupFailures(nodeName)
-			log.Info("orphan cleanup made progress despite errors, keeping fast retry")
-			return orphanCleanupRequeueRequest, nil
-		}
-		return b.orphanCleanupFailureRequeue(nodeName), nil
-	}
-	b.resetOrphanCleanupFailures(nodeName)
-	if pending {
-		return orphanCleanupRequeueRequest, nil
-	}
-	return ctrl.Result{}, nil
-}
-
-// branchENIIDsOwnedByPods builds the authoritative ownership set used by
-// orphan cleanup. An unreadable annotation makes the snapshot unsafe: treating
-// it as empty could delete an ENI still serving a pod.
-func branchENIIDsOwnedByPods(pods []v1.Pod) (map[string]struct{}, error) {
-	ownedENIIDs := make(map[string]struct{})
-	for i := range pods {
-		annotation, present := pods[i].Annotations[config.ResourceNamePodENI]
-		if !present {
-			continue
-		}
-		var eniDetails []*trunk.ENIDetails
-		if err := json.Unmarshal([]byte(annotation), &eniDetails); err != nil {
-			return nil, fmt.Errorf("decoding branch ENI annotation for pod %s/%s: %w",
-				pods[i].Namespace, pods[i].Name, err)
-		}
-		for _, eni := range eniDetails {
-			if eni == nil || eni.ID == "" {
-				return nil, fmt.Errorf("pod %s/%s has branch ENI annotation without an ENI ID",
-					pods[i].Namespace, pods[i].Name)
-			}
-			ownedENIIDs[eni.ID] = struct{}{}
-		}
-	}
-	return ownedENIIDs, nil
-}
-
 // CreateAndAnnotateResources creates resource for the pod, the function can run concurrently for different pods without
 // any locking as long as caller guarantees this function is not called concurrently for same pods.
 func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podName string, resourceCount int) (ctrl.Result, error) {
@@ -546,6 +419,10 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		branchProviderOperationsErrCount.WithLabelValues("get_trunk_create").Inc()
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
 	}
+	if err := b.recoverBranchState(pod.Spec.NodeName, trunkENI); err != nil {
+		branchProviderOperationsErrCount.WithLabelValues("recover_branch_state").Inc()
+		return ctrl.Result{}, err
+	}
 
 	// The trunk records successfully associated ENIs in its local ledger before
 	// this callback writes the pod annotation. If annotation fails, the trunk
@@ -581,9 +458,6 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	// Get the list of branch ENIs that will be allocated to the pod object
 	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount, commitOwnership)
 	if err != nil {
-		if !commitFailed && trunkENI.HasPendingOrphanCleanup() {
-			b.SubmitAsyncJob(worker.NewOnDemandProcessOrphanCleanupQueueJob(pod.Spec.NodeName))
-		}
 		if errors.Is(err, trunk.ErrCurrentlyAtMaxCapacity) {
 			return ctrl.Result{RequeueAfter: cooldown.GetCoolDown().GetCoolDownPeriod(), Requeue: true}, nil
 		}
@@ -604,6 +478,16 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	log.Info("created and annotated branch interface/s successfully", "branches", branchENIs)
 
 	return ctrl.Result{}, nil
+}
+
+func (b *branchENIProvider) recoverBranchState(nodeName string, trunkENI trunk.TrunkENI) error {
+	return trunkENI.RecoverBranchState(func() ([]v1.Pod, error) {
+		podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
+		if err != nil {
+			return nil, err
+		}
+		return podList.Items, nil
+	})
 }
 
 func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) (ctrl.Result, error) {

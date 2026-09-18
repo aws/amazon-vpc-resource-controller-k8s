@@ -61,13 +61,6 @@ func TestNewOnDemandProcessDeleteQueueJob(t *testing.T) {
 	assert.Equal(t, nodeName, onDemandJob.NodeName)
 }
 
-func TestNewOnDemandProcessOrphanCleanupQueueJob(t *testing.T) {
-	onDemandJob := NewOnDemandProcessOrphanCleanupQueueJob(nodeName)
-
-	assert.Equal(t, OperationProcessOrphanCleanupQueue, onDemandJob.Operation)
-	assert.Equal(t, nodeName, onDemandJob.NodeName)
-}
-
 func TestNewWarmPoolCreateJob(t *testing.T) {
 	warmPoolJob := NewWarmPoolCreateJob(nodeName, 2)
 

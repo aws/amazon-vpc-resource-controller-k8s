@@ -20,9 +20,6 @@ type Operations string
 
 const (
 	OperationProcessDeleteQueue Operations = "ProcessDeleteQueue"
-	// OperationProcessOrphanCleanupQueue reconciles VLANs quarantined after a
-	// failed branch ENI allocation.
-	OperationProcessOrphanCleanupQueue Operations = "ProcessOrphanCleanupQueue"
 	// OperationReconcileNode represents a reconcile operation that reclaims dangling network interfaces using local cache
 	OperationReconcileNode Operations = "ReconcileNode"
 	// OperationCreate represents pods that are in created state
@@ -86,15 +83,6 @@ func NewOnDemandReconcileNodeJob(nodeName string) OnDemandJob {
 func NewOnDemandProcessDeleteQueueJob(nodeName string) OnDemandJob {
 	return OnDemandJob{
 		Operation: OperationProcessDeleteQueue,
-		NodeName:  nodeName,
-	}
-}
-
-// NewOnDemandProcessOrphanCleanupQueueJob returns a job that reconciles
-// quarantined VLANs for a trunk.
-func NewOnDemandProcessOrphanCleanupQueueJob(nodeName string) OnDemandJob {
-	return OnDemandJob{
-		Operation: OperationProcessOrphanCleanupQueue,
 		NodeName:  nodeName,
 	}
 }
