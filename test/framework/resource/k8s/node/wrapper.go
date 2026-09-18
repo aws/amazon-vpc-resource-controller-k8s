@@ -37,7 +37,7 @@ func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResou
 			observedNodeList, err := manager.GetNodesWithOS(os)
 			Expect(err).ToNot(HaveOccurred())
 			ready := readyNodesWithResource(observedNodeList, expectedResource)
-			if len(ready.Items) == 0 {
+if len(observedNodeList.Items) == 0 || len(ready.Items) != len(observedNodeList.Items) {
 				return false, nil
 			}
 			readyNodeList = ready
