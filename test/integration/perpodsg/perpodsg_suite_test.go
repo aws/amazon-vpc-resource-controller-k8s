@@ -15,17 +15,26 @@ package perpodsg_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	pkgUtils "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/aws/autoscaling"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/node"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	verifier "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/verify"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	autoscalingtypes "github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 var frameWork *framework.Framework
@@ -52,6 +61,9 @@ var _ = BeforeSuite(func() {
 	securityGroupID2, err = frameWork.EC2Manager.ReCreateSG(utils.ResourceNamePrefix+"sg-2", ctx)
 	Expect(err).ToNot(HaveOccurred())
 
+	// Reused nodes can have every ENI slot taken, leaving no room for a trunk ENI; recycle for fresh nodes.
+	recycleLinuxNodes()
+
 	nodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "linux",
 		config.ResourceNamePodENI)
 	err = node.VerifyCNINode(frameWork.NodeManager)
@@ -62,3 +74,182 @@ var _ = AfterSuite(func() {
 	Expect(frameWork.EC2Manager.DeleteSecurityGroup(ctx, securityGroupID1)).To(Succeed())
 	Expect(frameWork.EC2Manager.DeleteSecurityGroup(ctx, securityGroupID2)).To(Succeed())
 })
+
+// recycleLinuxNodes refreshes every ASG backing a linux node so each comes back
+// with a free trunk-ENI slot. No-op when nodes already advertise pod-eni or none
+// are in an ASG.
+func recycleLinuxNodes() {
+	nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
+	Expect(err).ToNot(HaveOccurred())
+	if len(nodes.Items) == 0 || allNodesReadyWithResource(nodes, config.ResourceNamePodENI) {
+		return
+	}
+
+	asgNames := map[string]struct{}{}
+	oldInstanceIDs := map[string]struct{}{}
+	var nonASGNodes []string
+	for i := range nodes.Items {
+		instanceID := frameWork.NodeManager.GetInstanceID(&nodes.Items[i])
+		Expect(instanceID).ToNot(BeEmpty())
+		oldInstanceIDs[instanceID] = struct{}{}
+		instance, err := frameWork.EC2Manager.GetInstanceDetails(instanceID)
+		Expect(err).ToNot(HaveOccurred())
+		if asgName, ok := pkgUtils.GetTagKeyValueMap(instance.Tags)["aws:autoscaling:groupName"]; ok {
+			asgNames[asgName] = struct{}{}
+		} else {
+			nonASGNodes = append(nonASGNodes, nodes.Items[i].Name)
+		}
+	}
+	if len(asgNames) == 0 {
+		By("skipping node recycle: linux nodes are not part of an autoscaling group")
+		return
+	}
+	Expect(nonASGNodes).To(BeEmpty(),
+		"linux nodes are not part of an autoscaling group and cannot be recycled: %v", nonASGNodes)
+
+	By("recycling linux nodes via instance refresh")
+	refreshInstanceGroups(asgNames)
+
+	By("waiting for the refreshed fleet: old instances gone, every ASG instance Ready with pod-eni")
+	waitForRefreshedFleet(oldInstanceIDs, asgNames)
+}
+
+// waitForRefreshedFleet blocks until no pre-refresh instance still backs a linux
+// Node and every current ASG instance has a Ready Node advertising positive
+// pod-eni, so a mixed old/new fleet can't be mistaken for a completed refresh.
+func waitForRefreshedFleet(oldInstanceIDs, asgNames map[string]struct{}) {
+	Expect(wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.ResourceOperationTimeout, true,
+		func(ctx context.Context) (bool, error) {
+			nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
+			if err != nil {
+				return false, nil
+			}
+			readyInstances := map[string]struct{}{}
+			for i := range nodes.Items {
+				n := nodes.Items[i]
+				id := frameWork.NodeManager.GetInstanceID(&n)
+				if _, isOld := oldInstanceIDs[id]; isOld {
+					return false, nil // a pre-refresh instance still backs a Node
+				}
+				if n.DeletionTimestamp != nil || !nodeReady(&n) {
+					continue
+				}
+				if q, ok := n.Status.Allocatable[v1.ResourceName(config.ResourceNamePodENI)]; !ok || q.CmpInt64(0) <= 0 {
+					continue
+				}
+				readyInstances[id] = struct{}{}
+			}
+			// Every current ASG instance must map to a Ready pod-eni Node.
+			for asgName := range asgNames {
+				groups, err := frameWork.AutoScalingManager.DescribeAutoScalingGroup(asgName)
+				if err != nil || len(groups) == 0 {
+					return false, nil
+				}
+				for _, inst := range groups[0].Instances {
+					if _, ok := readyInstances[aws.ToString(inst.InstanceId)]; !ok {
+						return false, nil
+					}
+				}
+			}
+			return true, nil
+		})).To(Succeed())
+}
+
+func refreshInstanceGroups(asgNames map[string]struct{}) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	refreshIDs := map[string]string{}
+	for asgName := range asgNames {
+		refreshID, startErr := frameWork.AutoScalingManager.StartInstanceRefresh(ctx, asgName,
+			&autoscalingtypes.RefreshPreferences{
+				MinHealthyPercentage: aws.Int32(100),
+				MaxHealthyPercentage: aws.Int32(200),
+				InstanceWarmup:       aws.Int32(0),
+			})
+		if startErr != nil {
+			cancelInstanceRefreshes(ctx, refreshIDs)
+			Expect(startErr).ToNot(HaveOccurred(), "starting instance refresh for asg %s", asgName)
+		}
+		refreshIDs[asgName] = refreshID
+	}
+
+	var wg sync.WaitGroup
+	refreshErrs := make(chan error, len(refreshIDs))
+	for asgName, refreshID := range refreshIDs {
+		wg.Add(1)
+		go func(asgName, refreshID string) {
+			defer wg.Done()
+			refreshErrs <- waitForInstanceRefresh(ctx, asgName, refreshID)
+		}(asgName, refreshID)
+	}
+	wg.Wait()
+	close(refreshErrs)
+
+	var errs []error
+	for e := range refreshErrs {
+		if e != nil {
+			errs = append(errs, e)
+		}
+	}
+	Expect(errors.Join(errs...)).To(Succeed())
+}
+
+func waitForInstanceRefresh(ctx context.Context, asgName, refreshID string) error {
+	return wait.PollUntilContextCancel(ctx, utils.PollIntervalMedium, true,
+		func(ctx context.Context) (bool, error) {
+			refresh, err := frameWork.AutoScalingManager.DescribeInstanceRefresh(ctx, asgName, refreshID)
+			if err != nil {
+				// Not-yet-visible is retryable; other errors are permanent.
+				if errors.Is(err, autoscaling.ErrInstanceRefreshNotFound) {
+					return false, nil
+				}
+				return false, fmt.Errorf("describing instance refresh %s for asg %s: %w", refreshID, asgName, err)
+			}
+			switch refresh.Status {
+			case autoscalingtypes.InstanceRefreshStatusSuccessful:
+				return true, nil
+			case autoscalingtypes.InstanceRefreshStatusFailed,
+				autoscalingtypes.InstanceRefreshStatusCancelled,
+				autoscalingtypes.InstanceRefreshStatusRollbackFailed,
+				autoscalingtypes.InstanceRefreshStatusRollbackSuccessful:
+				return false, fmt.Errorf("instance refresh %s for asg %s ended in status %q: %s",
+					refreshID, asgName, refresh.Status, aws.ToString(refresh.StatusReason))
+			default:
+				return false, nil
+			}
+		})
+}
+
+func cancelInstanceRefreshes(ctx context.Context, refreshIDs map[string]string) {
+	for asgName := range refreshIDs {
+		if err := frameWork.AutoScalingManager.CancelInstanceRefresh(ctx, asgName); err != nil {
+			GinkgoWriter.Printf("failed to cancel instance refresh for asg %s: %v\n", asgName, err)
+		}
+	}
+}
+
+// allNodesReadyWithResource reports whether every node is non-deleting, Ready, and
+// advertises a positive quantity of the resource. Stale/NotReady nodes that still
+// advertise it must not short-circuit a recycle.
+func allNodesReadyWithResource(nodes *v1.NodeList, resource string) bool {
+	for i := range nodes.Items {
+		n := nodes.Items[i]
+		if n.DeletionTimestamp != nil || !nodeReady(&n) {
+			return false
+		}
+		if q, ok := n.Status.Allocatable[v1.ResourceName(resource)]; !ok || q.CmpInt64(0) <= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func nodeReady(n *v1.Node) bool {
+	for _, c := range n.Status.Conditions {
+		if c.Type == v1.NodeReady {
+			return c.Status == v1.ConditionTrue
+		}
+	}
+	return false
+}
