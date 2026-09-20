@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_pod "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
@@ -33,6 +34,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -140,6 +142,85 @@ func TestBranchENIProvider_getTrunkFromCache_NotExist(t *testing.T) {
 	trunkENI, present := provider.getTrunkFromCache(NodeName)
 	assert.False(t, present)
 	assert.Nil(t, trunkENI)
+}
+
+func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+
+	state := rcv1alpha1.NodeNetworkState{
+		InstanceID:                            "i-abc",
+		InstanceType:                          "c5.large",
+		SubnetID:                              "subnet-1",
+		SubnetCIDRBlock:                       "10.0.0.0/16",
+		PrimaryNetworkInterfaceSecurityGroups: []string{"sg-1"},
+	}
+	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
+	mockInstance.EXPECT().BuildNodeNetworkState().Return(state).AnyTimes()
+	mockTrunk.EXPECT().TrunkSubnetID().Return("subnet-observed").AnyTimes()
+	mockTrunk.EXPECT().TrunkENIID().Return("eni-trunk").AnyTimes()
+
+	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(&rcv1alpha1.CNINode{}, nil)
+
+	var written *rcv1alpha1.CNINode
+	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any(), gomock.Any()).DoAndReturn(func(base, cniNode *rcv1alpha1.CNINode) error {
+		written = cniNode
+		return nil
+	})
+
+	before := testutil.ToFloat64(cniNodeCheckpointPersistErrCount)
+	provider.persistCNINodeStatus(mockInstance, mockTrunk)
+
+	assert.Equal(t, before, testutil.ToFloat64(cniNodeCheckpointPersistErrCount))
+	assert.NotNil(t, written)
+	assert.NotNil(t, written.Status.NodeNetworkState)
+	assert.Equal(t, "i-abc", written.Status.NodeNetworkState.InstanceID)
+	assert.Equal(t, []string{"sg-1"}, written.Status.NodeNetworkState.PrimaryNetworkInterfaceSecurityGroups)
+	assert.NotNil(t, written.Status.TrunkInterface)
+	assert.Equal(t, "eni-trunk", written.Status.TrunkInterface.ID)
+	assert.Equal(t, "subnet-observed", written.Status.TrunkInterface.SubnetID)
+}
+
+func TestBranchENIProvider_persistCNINodeStatus_GetError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(nil, MockError)
+
+	before := testutil.ToFloat64(cniNodeCheckpointPersistErrCount)
+	provider.persistCNINodeStatus(mockInstance, mockTrunk)
+
+	assert.Equal(t, 1.0, testutil.ToFloat64(cniNodeCheckpointPersistErrCount)-before)
+}
+
+func TestBranchENIProvider_persistCNINodeStatus_UpdateError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().BuildNodeNetworkState().Return(rcv1alpha1.NodeNetworkState{})
+	mockTrunk.EXPECT().TrunkENIID().Return("eni-trunk")
+	mockTrunk.EXPECT().TrunkSubnetID().Return("subnet-observed")
+	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(&rcv1alpha1.CNINode{}, nil)
+	mockK8s.EXPECT().UpdateCNINodeStatus(gomock.Any(), gomock.Any()).Return(MockError)
+
+	before := testutil.ToFloat64(cniNodeCheckpointPersistErrCount)
+	provider.persistCNINodeStatus(mockInstance, mockTrunk)
+
+	assert.Equal(t, 1.0, testutil.ToFloat64(cniNodeCheckpointPersistErrCount)-before)
 }
 
 // TestBranchENIProvider_removeTrunkFromCache tests that once trunk ENI is removed from cache it's actually removed from
@@ -318,7 +399,7 @@ func TestBranchENIProvider_Supported_LabelNode(t *testing.T) {
 }
 
 // TestBranchENIProvider_CreateAndAnnotateResources tests that create is invoked equal to the number of resources to
-// be created
+// be created.
 func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -335,7 +416,9 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
-	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
+	fakeTrunk.EXPECT().RecoverBranchState(gomock.Any()).Return(nil)
+	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).
+		Return(EniDetails, nil)
 	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1, config.ResourceNamePodENI,
 		string(expectedAnnotation)).Return(nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
@@ -343,6 +426,25 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
 	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_CreateAndAnnotateResources_BlocksAllocationUntilRecovery(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+	fakeTrunk.EXPECT().RecoverBranchState(gomock.Any()).Return(MockError)
+
+	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
+
+	assert.ErrorIs(t, err, MockError)
 }
 
 func TestBranchENIProvider_CreateAndAnnotateResources_AlreadyAnnotated_Cache(t *testing.T) {
@@ -466,15 +568,40 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
-	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
+	fakeTrunk.EXPECT().RecoverBranchState(gomock.Any()).Return(nil)
+	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).
+		Return(EniDetails, nil)
 	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1,
 		config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchENIAnnotationFailed, gomock.Any(), v1.EventTypeWarning)
 	fakeTrunk.EXPECT().PushENIsToFrontOfDeleteQueue(MockPod1, EniDetails)
-
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
 	assert.Error(t, MockError, err)
+}
+
+func TestBranchENIProvider_CreateAndAnnotateResources_AllocationError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+
+	resCount := 1
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+	fakeTrunk.EXPECT().RecoverBranchState(gomock.Any()).Return(nil)
+	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).
+		Return(nil, MockError)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchAllocationFailed, gomock.Any(), v1.EventTypeWarning)
+
+	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
+
+	assert.ErrorIs(t, err, MockError)
 }
 
 // TestBranchENIProvider_ReconcileNode tests that the reconcile job returns no error and returns right results (with requeue after)
@@ -627,4 +754,19 @@ func TestUnSupportedNodeEvents_Windows(t *testing.T) {
 
 	supported := provider.IsInstanceSupported(mockInstance)
 	assert.False(t, supported)
+}
+
+func TestBranchENIProvider_persistCNINodeStatus_ManagedByOtherController(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8s := getProviderAndMockK8sWrapper(ctrl)
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+
+	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
+	mockK8s.EXPECT().GetCNINode(gomock.Any()).Return(&rcv1alpha1.CNINode{
+		Spec: rcv1alpha1.CNINodeSpec{ManagedBy: rcv1alpha1.ManagedByEKSAutoMode},
+	}, nil)
+	provider.persistCNINodeStatus(mockInstance, mockTrunk)
 }

@@ -214,6 +214,12 @@ func IsNitroInstance(instanceType string) (bool, error) {
 	return false, nil
 }
 
+// HasInstanceTypeLimits reports whether network limits are known for an instance type.
+func HasInstanceTypeLimits(instanceType string) bool {
+	_, found := vpc.Limits[instanceType]
+	return found
+}
+
 // GetSourceAcctAndArn constructs source acct and arn and return them for use
 func GetSourceAcctAndArn(roleARN, region, clusterName string) (string, string, string, error) {
 	// ARN format (https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html)

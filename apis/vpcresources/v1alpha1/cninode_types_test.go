@@ -64,6 +64,7 @@ func TestNodeNetworkStateWireFormatAndDeepCopy(t *testing.T) {
 	tcpTimeout := int32(432000)
 	original := &NodeNetworkState{
 		InstanceID:                            "i-0123456789abcdef0",
+		InstanceType:                          "m5.large",
 		SubnetID:                              "subnet-0123456789abcdef0",
 		SubnetCIDRBlock:                       "10.0.0.0/24",
 		PrimaryNetworkInterfaceSecurityGroups: []string{"sg-0123456789abcdef0"},
@@ -75,8 +76,9 @@ func TestNodeNetworkStateWireFormatAndDeepCopy(t *testing.T) {
 	encoded, err := json.Marshal(original)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{
-		"instanceID":"i-0123456789abcdef0",
-		"subnetID":"subnet-0123456789abcdef0",
+			"instanceID":"i-0123456789abcdef0",
+			"instanceType":"m5.large",
+			"subnetID":"subnet-0123456789abcdef0",
 		"subnetCIDRBlock":"10.0.0.0/24",
 		"primaryNetworkInterfaceSecurityGroups":["sg-0123456789abcdef0"],
 		"connectionTracking":{"tcpEstablishedTimeout":432000}

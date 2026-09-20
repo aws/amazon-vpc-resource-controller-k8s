@@ -84,6 +84,7 @@ type K8sWrapper interface {
 	CreateCNINode(node *v1.Node, clusterName string) error
 	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
 	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
+	UpdateCNINodeStatus(base, modified *rcv1alpha1.CNINode) error
 	DeleteCNINode(cniNode *rcv1alpha1.CNINode) error
 }
 
@@ -283,4 +284,19 @@ func (k *k8sWrapper) ListCNINodes() ([]*rcv1alpha1.CNINode, error) {
 
 func (k *k8sWrapper) PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error {
 	return k.cacheClient.Patch(k.context, newCNINode, client.MergeFromWithOptions(oldCNINode, client.MergeFromWithOptimisticLock{}))
+}
+
+// UpdateCNINodeStatus patches status changes and retries transient errors.
+func (k *k8sWrapper) UpdateCNINodeStatus(base, modified *rcv1alpha1.CNINode) error {
+	return retry.OnError(retry.DefaultBackoff, isTransientKubernetesError, func() error {
+		return k.cacheClient.Status().Patch(k.context, modified, client.MergeFrom(base))
+	})
+}
+
+func isTransientKubernetesError(err error) bool {
+	return errors.IsTimeout(err) ||
+		errors.IsServerTimeout(err) ||
+		errors.IsTooManyRequests(err) ||
+		errors.IsServiceUnavailable(err) ||
+		errors.IsInternalError(err)
 }

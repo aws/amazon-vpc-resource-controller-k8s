@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
@@ -33,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	fakeClient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	controllermetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -100,17 +100,42 @@ func TestNodeReconciler_Reconcile_UpdateNode(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mock := NewNodeMock(ctrl, mockNodeObj)
+	currentNode := mockNodeObj.DeepCopy()
+	currentNode.Spec.ProviderID = "aws:///us-west-2c/i-current"
+	mock := NewNodeMock(ctrl, currentNode)
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true).Times(1)
+	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-current")
 	mock.Manager.EXPECT().UpdateNode(mockNodeName).Return(nil)
 	mock.Manager.EXPECT().CheckNodeForLeakedENIs(mockNodeName).Times(1)
 
+	mismatchBefore := prometheusCounterValue(t, "node_instance_id_mismatch_total")
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
-	time.Sleep(time.Second)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
+	assert.Equal(t, mismatchBefore, prometheusCounterValue(t, "node_instance_id_mismatch_total"))
+}
+
+func TestNodeReconciler_Reconcile_UpdateNode_InstanceIDMismatch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	currentNode := mockNodeObj.DeepCopy()
+	currentNode.Spec.ProviderID = "aws:///us-west-2c/i-current"
+	mock := NewNodeMock(ctrl, currentNode)
+
+	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true).Times(1)
+	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-cached")
+	mock.Manager.EXPECT().UpdateNode(mockNodeName).Return(nil)
+	mock.Manager.EXPECT().CheckNodeForLeakedENIs(mockNodeName).Times(1)
+
+	mismatchBefore := prometheusCounterValue(t, "node_instance_id_mismatch_total")
+	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
+	assert.NoError(t, err)
+	assert.Equal(t, res, reconcile.Result{})
+	assert.Equal(t, mismatchBefore+1, prometheusCounterValue(t, "node_instance_id_mismatch_total"))
 }
 
 func TestNodeReconciler_Reconcile_DeleteNode(t *testing.T) {
@@ -211,4 +236,16 @@ func TestNodeReconciler_Reconcile_SkipAutoComputeType(t *testing.T) {
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
+}
+
+func prometheusCounterValue(t *testing.T, name string) float64 {
+	t.Helper()
+	metricFamilies, err := controllermetrics.Registry.Gather()
+	assert.NoError(t, err)
+	for _, metricFamily := range metricFamilies {
+		if metricFamily.GetName() == name && len(metricFamily.Metric) == 1 {
+			return metricFamily.Metric[0].GetCounter().GetValue()
+		}
+	}
+	return 0
 }

@@ -84,6 +84,11 @@ type NodeNetworkState struct {
 	// +kubebuilder:validation:MaxLength=19
 	// +kubebuilder:validation:Pattern=`^i-([0-9a-f]{8}|[0-9a-f]{17})$`
 	InstanceID string `json:"instanceID"`
+	// InstanceType determines branch ENI capacity during restore.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	InstanceType string `json:"instanceType,omitempty"`
 	// May differ from the trunk subnet with ENIConfig.
 	// +required
 	// +kubebuilder:validation:MaxLength=24
@@ -125,11 +130,7 @@ type TrunkInterface struct {
 	// DeviceIndex is the attachment device index of the trunk ENI on the instance.
 	// +optional
 	DeviceIndex int32 `json:"deviceIndex,omitempty"`
-	// SubnetID is the id of the EC2 subnet the trunk ENI resides in, which is
-	// also the subnet its branch ENIs are created in. Persisted with the trunk
-	// so a controller can create a branch ENI straight from the CNINode,
-	// without a DescribeNetworkInterfaces call on the pod path, and so the
-	// value survives a controller restart that drops in-memory node state.
+	// SubnetID is the observed trunk subnet; ENIConfig may select another subnet.
 	// +optional
 	// +kubebuilder:validation:MaxLength=24
 	// +kubebuilder:validation:Pattern=`^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`
@@ -198,6 +199,12 @@ type CNINodeList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []CNINode `json:"items"`
+}
+
+// IsManagedByVPCResourceController reports whether this controller owns the CNINode status.
+// An empty managedBy preserves ownership for older objects.
+func (c *CNINode) IsManagedByVPCResourceController() bool {
+	return c.Spec.ManagedBy == "" || c.Spec.ManagedBy == ManagedByVPCResourceController
 }
 
 func init() {

@@ -15,6 +15,7 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	fakeClientSet "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -218,4 +220,62 @@ func TestK8sWrapper_CreateCNINode_NoError(t *testing.T) {
 	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name})
 	assert.NoError(t, err)
 	assert.Equal(t, mockNode.Name, cniNode.Name)
+}
+
+func TestK8sWrapper_UpdateCNINodeStatus(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
+
+	cniNode := &v1alpha1.CNINode{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
+	k8sClient := fakeClient.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.CNINode{}).
+		WithRuntimeObjects(cniNode).Build()
+	wrapper := NewK8sWrapper(k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+
+	base := &v1alpha1.CNINode{}
+	assert.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: nodeName}, base))
+
+	// Simulate a concurrent spec update after the status read.
+	concurrent := base.DeepCopy()
+	concurrent.Labels = map[string]string{"touched": "true"}
+	assert.NoError(t, k8sClient.Update(context.Background(), concurrent))
+
+	modified := base.DeepCopy()
+	modified.Status.NodeNetworkState = &v1alpha1.NodeNetworkState{
+		InstanceID:   "i-00000000000000000",
+		InstanceType: "m5.large",
+	}
+	modified.Status.TrunkInterface = &v1alpha1.TrunkInterface{ID: "eni-trunk", SubnetID: "subnet-0123456789abcdef0"}
+
+	assert.NoError(t, wrapper.UpdateCNINodeStatus(base, modified))
+
+	stored := &v1alpha1.CNINode{}
+	assert.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: nodeName}, stored))
+	assert.NotNil(t, stored.Status.NodeNetworkState)
+	assert.Equal(t, "i-00000000000000000", stored.Status.NodeNetworkState.InstanceID)
+	assert.Equal(t, "eni-trunk", stored.Status.TrunkInterface.ID)
+	assert.Equal(t, "true", stored.Labels["touched"])
+}
+
+func TestIsTransientKubernetesError(t *testing.T) {
+	transient := []error{
+		errors.NewTimeoutError("timeout", 1),
+		errors.NewServerTimeout(schema.GroupResource{Resource: "cninodes"}, "patch", 1),
+		errors.NewTooManyRequests("throttled", 1),
+		errors.NewServiceUnavailable("unavailable"),
+		errors.NewInternalError(fmt.Errorf("internal")),
+	}
+	for _, err := range transient {
+		assert.True(t, isTransientKubernetesError(err), err.Error())
+	}
+
+	permanent := []error{
+		errors.NewUnauthorized("unauthorized"),
+		errors.NewForbidden(schema.GroupResource{Resource: "cninodes"}, nodeName, fmt.Errorf("forbidden")),
+		errors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, nodeName),
+	}
+	for _, err := range permanent {
+		assert.False(t, isTransientKubernetesError(err), err.Error())
+	}
 }
