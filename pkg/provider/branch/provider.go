@@ -467,11 +467,7 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 
 func (b *branchENIProvider) recoverBranchState(nodeName string, trunkENI trunk.TrunkENI) error {
 	return trunkENI.RecoverBranchState(func() ([]v1.Pod, error) {
-		podList, err := b.apiWrapper.PodAPI.ListPods(nodeName)
-		if err != nil {
-			return nil, err
-		}
-		return podList.Items, nil
+		return b.apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
 	})
 }
 
