@@ -391,15 +391,30 @@ func prefixLengthFromCIDR(cidr string) (string, error) {
 	return strconv.Itoa(prefix.Bits()), nil
 }
 
+func prefixLengthFromCIDRFamily(cidr string, ipv6 bool) (string, error) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return "", err
+	}
+	if prefix.Addr().Is6() != ipv6 {
+		family := "IPv4"
+		if ipv6 {
+			family = "IPv6"
+		}
+		return "", fmt.Errorf("expected an %s CIDR", family)
+	}
+	return strconv.Itoa(prefix.Bits()), nil
+}
+
 // RestoreFromNodeNetworkState restores stable instance state; ENIConfig is applied separately.
 func (i *ec2Instance) RestoreFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, trunkENIID string) error {
-	subnetMask, err := prefixLengthFromCIDR(state.SubnetCIDRBlock)
+	subnetMask, err := prefixLengthFromCIDRFamily(state.SubnetCIDRBlock, false)
 	if err != nil {
 		return fmt.Errorf("invalid IPv4 CIDR block %q in NodeNetworkState: %w", state.SubnetCIDRBlock, err)
 	}
 	subnetV6Mask := ""
 	if state.SubnetV6CIDRBlock != "" {
-		subnetV6Mask, err = prefixLengthFromCIDR(state.SubnetV6CIDRBlock)
+		subnetV6Mask, err = prefixLengthFromCIDRFamily(state.SubnetV6CIDRBlock, true)
 		if err != nil {
 			return fmt.Errorf("invalid IPv6 CIDR block %q in NodeNetworkState: %w", state.SubnetV6CIDRBlock, err)
 		}
