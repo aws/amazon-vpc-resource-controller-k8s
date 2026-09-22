@@ -535,6 +535,36 @@ func TestIsNitroInstance_NonNitro(t *testing.T) {
 	assert.False(t, isNitro)
 }
 
+func TestHasInstanceTypeLimits(t *testing.T) {
+	tests := []struct {
+		name         string
+		instanceType string
+		expected     bool
+	}{
+		{
+			name:         "known instance type",
+			instanceType: "a1.2xlarge",
+			expected:     true,
+		},
+		{
+			name:         "unknown instance type",
+			instanceType: "unknown.large",
+			expected:     false,
+		},
+		{
+			name:         "empty instance type",
+			instanceType: "",
+			expected:     false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.expected, HasInstanceTypeLimits(test.instanceType))
+		})
+	}
+}
+
 // TestGetSourceAcctAndArn tests that generating account ID and cluster ARN
 func TestGetSourceAcctAndArn(t *testing.T) {
 	accountID := "123456789876"

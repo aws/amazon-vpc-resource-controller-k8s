@@ -15,6 +15,7 @@ package api
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,7 +112,7 @@ var (
 		SubnetIds: []string{subnetId},
 	}
 
-	describeSubnetOutput = &ec2.DescribeSubnetsOutput{Subnets: []ec2types.Subnet{{SubnetId: &subnetId}}}
+	describeSubnetOutput = &ec2.DescribeSubnetsOutput{Subnets: []ec2types.Subnet{{SubnetId: &subnetId, CidrBlock: aws.String("192.168.0.0/24")}}}
 
 	describeNetworkInterfaceInputUsingInstanceId = &ec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceId},
@@ -172,10 +173,12 @@ var (
 
 	networkInterface1 = ec2types.NetworkInterface{
 		NetworkInterfaceId: &branchInterfaceId,
+		Status:             ec2types.NetworkInterfaceStatusInUse,
 		TagSet:             branchTag1,
 	}
 	networkInterface2 = ec2types.NetworkInterface{
 		NetworkInterfaceId: &branchInterfaceId2,
+		Status:             ec2types.NetworkInterfaceStatusAvailable,
 		TagSet:             branchTag2,
 	}
 
@@ -587,22 +590,19 @@ func TestEc2APIHelper_DeleteNetworkInterface(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestEc2APIHelper_DeleteNetworkInterface_Error tests that delete is tried multiple times in case of error form
-// ec2 api call
 func TestEc2APIHelper_DeleteNetworkInterface_Error(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
 
-	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, errMock).Times(maxRetryOnError)
+	mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).
+		Return(nil, errMock).Times(maxRetryOnError)
 
 	err := ec2ApiHelper.DeleteNetworkInterface(&branchInterfaceId)
 	assert.Error(t, errMock, err)
 }
 
-// TestEc2APIHelper_DeleteNetworkInterface_ErrorThenSuccess tests that if delete network call fails initially and
-// succeeds subsequently then no error is returned
 func TestEc2APIHelper_DeleteNetworkInterface_ErrorThenSuccess(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -611,7 +611,7 @@ func TestEc2APIHelper_DeleteNetworkInterface_ErrorThenSuccess(t *testing.T) {
 
 	gomock.InOrder(
 		mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, errMock).Times(2),
-		mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil).Times(1),
+		mockWrapper.EXPECT().DeleteNetworkInterface(deleteNetworkInterfaceInput).Return(nil, nil),
 	)
 
 	err := ec2ApiHelper.DeleteNetworkInterface(&branchInterfaceId)
@@ -629,6 +629,56 @@ func TestEc2APIHelper_GetSubnet(t *testing.T) {
 	subnet, err := ec2ApiHelper.GetSubnet(&subnetId)
 	assert.NoError(t, err)
 	assert.Equal(t, subnetId, *subnet.SubnetId)
+}
+
+func TestEc2APIHelper_GetSubnetCIDR_Cached(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+	mockWrapper.EXPECT().DescribeSubnets(describeSubnetInput).Return(describeSubnetOutput, nil).Times(1)
+
+	first, err := ec2ApiHelper.GetSubnetCIDR(&subnetId)
+	assert.NoError(t, err)
+	second, err := ec2ApiHelper.GetSubnetCIDR(&subnetId)
+	assert.NoError(t, err)
+	assert.Equal(t, first, second)
+	assert.Equal(t, *describeSubnetOutput.Subnets[0].CidrBlock, first)
+}
+
+func TestEc2APIHelper_GetSubnetCIDR_ConcurrentLookupsShareDescribe(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+	mockWrapper.EXPECT().DescribeSubnets(describeSubnetInput).Return(describeSubnetOutput, nil).Times(1)
+
+	const callers = 20
+	start := make(chan struct{})
+	results := make(chan string, callers)
+	errors := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			cidr, err := ec2ApiHelper.GetSubnetCIDR(&subnetId)
+			results <- cidr
+			errors <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errors)
+
+	for err := range errors {
+		assert.NoError(t, err)
+	}
+	for cidr := range results {
+		assert.Equal(t, *describeSubnetOutput.Subnets[0].CidrBlock, cidr)
+	}
 }
 
 // TestEc2APIHelper_GetSubnet_NoSubnetReturned tests that in case the ec2 api call response returns empty response
@@ -1223,4 +1273,43 @@ func TestEc2APIHelper_GetBranchNetworkInterface(t *testing.T) {
 	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []*ec2types.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
+}
+
+func TestEc2APIHelper_GetBranchNetworkInterfaceWithoutSubnetFilter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+	expectedInput := &ec2.DescribeNetworkInterfacesInput{
+		Filters: []ec2types.Filter{{
+			Name:   aws.String("tag:" + config.TrunkENIIDTag),
+			Values: []string{trunkInterfaceId},
+		}},
+	}
+	mockWrapper.EXPECT().DescribeNetworkInterfaces(expectedInput).Return(describeTrunkInterfaceOutput, nil)
+
+	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, nil)
+	assert.NoError(t, err)
+	assert.ElementsMatch(t, []*ec2types.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
+}
+
+func TestEc2APIHelper_GetBranchNetworkInterfaceRejectsMissingID(t *testing.T) {
+	for name, id := range map[string]*string{
+		"nil":   nil,
+		"empty": aws.String(""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+			mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput).Return(
+				&ec2.DescribeNetworkInterfacesOutput{
+					NetworkInterfaces: []ec2types.NetworkInterface{{NetworkInterfaceId: id}},
+				}, nil)
+
+			_, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
+			assert.ErrorContains(t, err, "without an interface ID")
+		})
+	}
 }

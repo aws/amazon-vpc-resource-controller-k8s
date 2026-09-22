@@ -857,7 +857,7 @@ func (e *ec2Wrapper) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.Desc
 	return output, err
 }
 
-// DescribeTrunkInterfaceAssociations cannot be used as it's not public yet.
+// DescribeTrunkInterfaceAssociations uses the instance service client.
 func (e *ec2Wrapper) DescribeTrunkInterfaceAssociations(input *ec2.DescribeTrunkInterfaceAssociationsInput) (*ec2.DescribeTrunkInterfaceAssociationsOutput, error) {
 	start := time.Now()
 	describeTrunkInterfaceAssociationInput, err := e.instanceServiceClient.DescribeTrunkInterfaceAssociations(context.TODO(), input)

@@ -76,6 +76,20 @@ func (mr *MockTrunkENIMockRecorder) DeleteCooledDownENIs() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteCooledDownENIs", reflect.TypeOf((*MockTrunkENI)(nil).DeleteCooledDownENIs))
 }
 
+// InitFromNodeNetworkState mocks base method.
+func (m *MockTrunkENI) InitFromNodeNetworkState(arg0 string, arg1 []v1.Pod) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InitFromNodeNetworkState", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InitFromNodeNetworkState indicates an expected call of InitFromNodeNetworkState.
+func (mr *MockTrunkENIMockRecorder) InitFromNodeNetworkState(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitFromNodeNetworkState", reflect.TypeOf((*MockTrunkENI)(nil).InitFromNodeNetworkState), arg0, arg1)
+}
+
 // InitTrunk mocks base method.
 func (m *MockTrunkENI) InitTrunk(arg0 ec2.EC2Instance, arg1 []v1.Pod) error {
 	m.ctrl.T.Helper()
@@ -140,4 +154,46 @@ func (m *MockTrunkENI) Reconcile(arg0 []v1.Pod) bool {
 func (mr *MockTrunkENIMockRecorder) Reconcile(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reconcile", reflect.TypeOf((*MockTrunkENI)(nil).Reconcile), arg0)
+}
+
+// RecoverBranchState mocks base method.
+func (m *MockTrunkENI) RecoverBranchState(arg0 func() ([]v1.Pod, error)) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecoverBranchState", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RecoverBranchState indicates an expected call of RecoverBranchState.
+func (mr *MockTrunkENIMockRecorder) RecoverBranchState(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecoverBranchState", reflect.TypeOf((*MockTrunkENI)(nil).RecoverBranchState), arg0)
+}
+
+// TrunkENIID mocks base method.
+func (m *MockTrunkENI) TrunkENIID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TrunkENIID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// TrunkENIID indicates an expected call of TrunkENIID.
+func (mr *MockTrunkENIMockRecorder) TrunkENIID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TrunkENIID", reflect.TypeOf((*MockTrunkENI)(nil).TrunkENIID))
+}
+
+// TrunkSubnetID mocks base method.
+func (m *MockTrunkENI) TrunkSubnetID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TrunkSubnetID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// TrunkSubnetID indicates an expected call of TrunkSubnetID.
+func (mr *MockTrunkENIMockRecorder) TrunkSubnetID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TrunkSubnetID", reflect.TypeOf((*MockTrunkENI)(nil).TrunkSubnetID))
 }

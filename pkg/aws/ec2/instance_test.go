@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
@@ -42,7 +43,7 @@ var (
 	instanceType    = ec2types.InstanceTypeC5Large
 	subnetCidrBlock = "192.168.0.0/16"
 
-	primaryInterfaceID = "192.168.0.2"
+	primaryInterfaceID = "eni-0123456789abcdef0"
 
 	deviceIndex0 = int32(0)
 	deviceIndex2 = int32(2)
@@ -103,6 +104,172 @@ func TestNewEC2Instance(t *testing.T) {
 	assert.Equal(t, instanceID, ec2Instance.InstanceID())
 }
 
+func TestEc2Instance_IsRestoredFromNodeNetworkState_Default(t *testing.T) {
+	instance := getMockInstanceInterface()
+	assert.False(t, instance.IsRestoredFromNodeNetworkState())
+	assert.Equal(t, "", instance.RestoredTrunkENIID())
+}
+
+func TestEc2Instance_RestoreFromNodeNetworkState(t *testing.T) {
+	instance := getMockInstanceInterface()
+
+	tcpTimeout := int32(300)
+	state := rcv1alpha1.NodeNetworkState{
+		InstanceID:                            instanceID,
+		InstanceType:                          string(instanceType),
+		SubnetID:                              subnetID,
+		SubnetCIDRBlock:                       subnetCidrBlock,
+		PrimaryNetworkInterfaceID:             primaryInterfaceID,
+		PrimaryNetworkInterfaceSecurityGroups: []string{securityGroup1, securityGroup2},
+		ConnectionTracking: &rcv1alpha1.ConnectionTrackingConfig{
+			TCPEstablishedTimeout: &tcpTimeout,
+		},
+	}
+
+	assert.NoError(t, instance.RestoreFromNodeNetworkState(state, "eni-trunk"))
+	concrete := instance.(*ec2Instance)
+	assert.Equal(t, instanceSourceState{
+		instanceType:          string(instanceType),
+		subnetID:              subnetID,
+		subnetCIDRBlock:       subnetCidrBlock,
+		subnetMask:            "16",
+		primaryENIID:          primaryInterfaceID,
+		primarySecurityGroups: []string{securityGroup1, securityGroup2},
+		connectionTracking: connectionTrackingState{
+			tcpEstablishedTimeout: &tcpTimeout,
+		},
+	}, concrete.source)
+	assert.Equal(t, effectiveNetworkState{}, concrete.current)
+	assert.Equal(t, restoreState{
+		fromNodeNetworkState: true,
+		trunkENIID:           "eni-trunk",
+	}, concrete.restore)
+
+	assert.NoError(t, instance.UpdateCurrentSubnetAndCidrBlock(nil))
+
+	assert.True(t, instance.IsRestoredFromNodeNetworkState())
+	assert.Equal(t, "eni-trunk", instance.RestoredTrunkENIID())
+	assert.Equal(t, string(instanceType), instance.Type())
+	assert.Equal(t, subnetID, instance.SubnetID())
+	assert.Equal(t, subnetCidrBlock, instance.SubnetCidrBlock())
+	assert.Equal(t, "16", instance.SubnetMask())
+	assert.Equal(t, primaryInterfaceID, instance.PrimaryNetworkInterfaceID())
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, instance.CurrentInstanceSecurityGroups())
+	gotTCP, _, _ := instance.GetConnectionTrackingSpec()
+	assert.Equal(t, &tcpTimeout, gotTCP)
+}
+
+func TestEc2Instance_RestoreFromNodeNetworkState_CustomNetworking(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	instance := getMockInstanceInterface()
+	mockEC2API := mock_api.NewMockEC2APIHelper(ctrl)
+
+	customSubnetID := "subnet-custom"
+	customCidr := "192.168.100.0/24"
+	state := rcv1alpha1.NodeNetworkState{
+		InstanceID:                            instanceID,
+		InstanceType:                          string(instanceType),
+		SubnetID:                              subnetID,
+		SubnetCIDRBlock:                       subnetCidrBlock,
+		PrimaryNetworkInterfaceSecurityGroups: []string{securityGroup1, securityGroup2},
+	}
+
+	instance.SetNewCustomNetworkingSpec(customSubnetID, []string{securityGroup3})
+	assert.NoError(t, instance.RestoreFromNodeNetworkState(state, "eni-trunk"))
+	mockEC2API.EXPECT().GetSubnetCIDR(&customSubnetID).
+		Return(customCidr, nil).
+		Times(1)
+	assert.NoError(t, instance.UpdateCurrentSubnetAndCidrBlock(mockEC2API))
+
+	assert.Equal(t, customSubnetID, instance.SubnetID())
+	assert.Equal(t, customCidr, instance.SubnetCidrBlock())
+	assert.Equal(t, []string{securityGroup3}, instance.CurrentInstanceSecurityGroups())
+
+}
+
+func TestEc2Instance_RestoreFromNodeNetworkState_InvalidCIDR(t *testing.T) {
+	for name, state := range map[string]rcv1alpha1.NodeNetworkState{
+		"IPv4": {
+			SubnetCIDRBlock: "not-a-cidr",
+		},
+		"IPv6": {
+			SubnetCIDRBlock:   subnetCidrBlock,
+			SubnetV6CIDRBlock: "not-a-cidr",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			instance := getMockInstanceInterface()
+
+			err := instance.RestoreFromNodeNetworkState(state, "eni-trunk")
+
+			assert.Error(t, err)
+			assert.False(t, instance.IsRestoredFromNodeNetworkState())
+		})
+	}
+}
+
+func TestEc2Instance_BuildNodeNetworkState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil)
+	assert.NoError(t, ec2Instance.LoadDetails(mockEC2ApiHelper))
+
+	state := ec2Instance.BuildNodeNetworkState()
+	assert.Equal(t, instanceID, state.InstanceID)
+	assert.Equal(t, string(instanceType), state.InstanceType)
+	assert.Equal(t, subnetID, state.SubnetID)
+	assert.Equal(t, subnetCidrBlock, state.SubnetCIDRBlock)
+	assert.Equal(t, primaryInterfaceID, state.PrimaryNetworkInterfaceID)
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, state.PrimaryNetworkInterfaceSecurityGroups)
+
+	restored := getMockInstanceInterface()
+	assert.NoError(t, restored.RestoreFromNodeNetworkState(state, "eni-trunk"))
+	assert.NoError(t, restored.UpdateCurrentSubnetAndCidrBlock(nil))
+	assert.Equal(t, subnetID, restored.SubnetID())
+	assert.Equal(t, subnetCidrBlock, restored.SubnetCidrBlock())
+	assert.Equal(t, primaryInterfaceID, restored.PrimaryNetworkInterfaceID())
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, restored.CurrentInstanceSecurityGroups())
+}
+
+func TestEc2Instance_LoadDetails_OverwritesRestoredState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+
+	tcpTimeout := int32(300)
+	assert.NoError(t, ec2Instance.RestoreFromNodeNetworkState(rcv1alpha1.NodeNetworkState{
+		InstanceID:                            instanceID,
+		InstanceType:                          string(instanceType),
+		SubnetID:                              subnetID,
+		SubnetCIDRBlock:                       subnetCidrBlock,
+		SubnetV6CIDRBlock:                     "2600:1f13::/64",
+		PrimaryNetworkInterfaceSecurityGroups: []string{"sg-stale-from-state"},
+		ConnectionTracking:                    &rcv1alpha1.ConnectionTrackingConfig{TCPEstablishedTimeout: &tcpTimeout},
+	}, "eni-trunk"))
+	assert.True(t, ec2Instance.IsRestoredFromNodeNetworkState())
+
+	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil)
+	assert.NoError(t, ec2Instance.LoadDetails(mockEC2ApiHelper))
+
+	assert.False(t, ec2Instance.IsRestoredFromNodeNetworkState())
+	assert.Equal(t, "", ec2Instance.RestoredTrunkENIID())
+	assert.Equal(t, restoreState{}, ec2Instance.restore)
+	assert.Equal(t, "", ec2Instance.SubnetV6CidrBlock(), "restored IPv6 CIDR must not survive EC2 initialization")
+	assert.Equal(t, "", ec2Instance.source.subnetV6CIDRBlock)
+	assert.Nil(t, ec2Instance.source.connectionTracking.tcpEstablishedTimeout,
+		"restored connection tracking must not survive EC2 initialization")
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.source.primarySecurityGroups,
+		"restored security groups must not survive EC2 initialization")
+	assert.Equal(t, primaryInterfaceID, ec2Instance.PrimaryNetworkInterfaceID())
+}
+
 // TestEc2Instance_LoadDetails tests that load instance details loads all the instance details correctly by making calls
 // to EC2 API Helper
 func TestEc2Instance_LoadDetails(t *testing.T) {
@@ -123,9 +290,50 @@ func TestEc2Instance_LoadDetails(t *testing.T) {
 	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.CurrentInstanceSecurityGroups())
 	assert.Equal(t, primaryInterfaceID, ec2Instance.PrimaryNetworkInterfaceID())
 	// No connection tracking config set in test data
-	assert.Nil(t, ec2Instance.tcpEstablishedTimeout)
-	assert.Nil(t, ec2Instance.udpStreamTimeout)
-	assert.Nil(t, ec2Instance.udpTimeout)
+	assert.Equal(t, connectionTrackingState{}, ec2Instance.source.connectionTracking)
+}
+
+func TestEc2Instance_LoadDetails_InvalidSubnetCIDR(t *testing.T) {
+	invalidIPv4CIDR := "192.168.0.0"
+	invalidIPv6CIDR := "2600:1f13::"
+
+	tests := []struct {
+		name       string
+		subnet     ec2types.Subnet
+		wantErrMsg string
+	}{
+		{
+			name: "invalid IPv4 CIDR",
+			subnet: ec2types.Subnet{
+				CidrBlock: &invalidIPv4CIDR,
+			},
+			wantErrMsg: "invalid IPv4 CIDR block",
+		},
+		{
+			name: "invalid IPv6 CIDR",
+			subnet: ec2types.Subnet{
+				CidrBlock: &subnetCidrBlock,
+				Ipv6CidrBlockAssociationSet: []ec2types.SubnetIpv6CidrBlockAssociation{
+					{Ipv6CidrBlock: &invalidIPv6CIDR},
+				},
+			},
+			wantErrMsg: "invalid IPv6 CIDR block",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+			mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
+			mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&test.subnet, nil)
+
+			err := ec2Instance.LoadDetails(mockEC2ApiHelper)
+			assert.ErrorContains(t, err, test.wantErrMsg)
+		})
+	}
 }
 
 // TestEc2Instance_LoadDetails_WithConnectionTracking tests that connection tracking config
@@ -173,9 +381,11 @@ func TestEc2Instance_LoadDetails_WithConnectionTracking(t *testing.T) {
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NoError(t, err)
-	assert.Equal(t, &tcpTimeout, ec2Instance.tcpEstablishedTimeout)
-	assert.Equal(t, &udpStreamTimeout, ec2Instance.udpStreamTimeout)
-	assert.Equal(t, &udpTimeout, ec2Instance.udpTimeout)
+	assert.Equal(t, connectionTrackingState{
+		tcpEstablishedTimeout: &tcpTimeout,
+		udpStreamTimeout:      &udpStreamTimeout,
+		udpTimeout:            &udpTimeout,
+	}, ec2Instance.source.connectionTracking)
 
 	// Verify via the public getter too
 	gotTcp, gotUdpStream, gotUdp := ec2Instance.GetConnectionTrackingSpec()
@@ -254,24 +464,24 @@ func TestEc2Instance_LoadDetails_SubnetPreLoaded(t *testing.T) {
 	customNWSubnetCidr := "192.2.0.0/24"
 
 	// Set the instance subnet ID and CIDR block
-	ec2Instance.instanceSubnetID = subnetID
-	ec2Instance.instanceSubnetCidrBlock = subnetCidrBlock
+	ec2Instance.source.subnetID = subnetID
+	ec2Instance.source.subnetCIDRBlock = subnetCidrBlock
 
 	// Set the custom networking subnet ID and CIDR block
 	ec2Instance.newCustomNetworkingSubnetID = customNWSubnetID
 	ec2Instance.newCustomNetworkingSecurityGroups = customNWSecurityGroups
 
-	customSubnet := &ec2types.Subnet{CidrBlock: &customNWSubnetCidr}
-
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
 	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil)
-	mockEC2ApiHelper.EXPECT().GetSubnet(&customNWSubnetID).Return(customSubnet, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnetCIDR(&customNWSubnetID).Return(customNWSubnetCidr, nil)
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NoError(t, err)
-	assert.Equal(t, customNWSubnetID, ec2Instance.currentSubnetID)
-	assert.Equal(t, customNWSecurityGroups, ec2Instance.currentInstanceSecurityGroups)
-	assert.Equal(t, customNWSubnetCidr, ec2Instance.currentSubnetCIDRBlock)
+	assert.Equal(t, effectiveNetworkState{
+		subnetID:        customNWSubnetID,
+		subnetCIDRBlock: customNWSubnetCidr,
+		securityGroups:  customNWSecurityGroups,
+	}, ec2Instance.current)
 }
 
 // TestEc2Instance_LoadDetails_ErrInstanceDetails tests that if error is returned in loading instance details then the
@@ -402,8 +612,8 @@ func TestEc2Instance_LoadDetails_InvalidCustomNetworkingConfiguration(t *testing
 	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
 
 	// Set the instance subnet ID and CIDR block
-	ec2Instance.instanceSubnetID = subnetID
-	ec2Instance.instanceSubnetCidrBlock = subnetCidrBlock
+	ec2Instance.source.subnetID = subnetID
+	ec2Instance.source.subnetCIDRBlock = subnetCidrBlock
 
 	// Set the custom networking subnet ID and CIDR block
 	customNWSubnetID := "custom-networking"
@@ -411,16 +621,50 @@ func TestEc2Instance_LoadDetails_InvalidCustomNetworkingConfiguration(t *testing
 	ec2Instance.newCustomNetworkingSecurityGroups = []string{}
 
 	customNWSubnetCidr := "192.2.0.0/24"
-	customSubnet := &ec2types.Subnet{CidrBlock: &customNWSubnetCidr}
-
 	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
 	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil)
-	mockEC2ApiHelper.EXPECT().GetSubnet(&customNWSubnetID).Return(customSubnet, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnetCIDR(&customNWSubnetID).Return(customNWSubnetCidr, nil)
 
 	err := ec2Instance.LoadDetails(mockEC2ApiHelper)
 	assert.NoError(t, err)
-	assert.Equal(t, customNWSubnetID, ec2Instance.currentSubnetID)
+	assert.Equal(t, customNWSubnetID, ec2Instance.current.subnetID)
 	// Expect the primary network interface security groups when ENIConfig SG is missing
-	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.currentInstanceSecurityGroups)
-	assert.Equal(t, customNWSubnetCidr, ec2Instance.currentSubnetCIDRBlock)
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.current.securityGroups)
+	assert.Equal(t, customNWSubnetCidr, ec2Instance.current.subnetCIDRBlock)
+}
+
+func TestEc2Instance_LoadDetails_CustomNetworking_AfterRestore(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2Instance, mockEC2ApiHelper := getMockInstance(ctrl)
+
+	customSubnetID := "subnet-custom"
+	staleCidr := "10.99.0.0/24"
+	freshCidr := "192.168.100.0/24"
+
+	ec2Instance.SetNewCustomNetworkingSpec(customSubnetID, []string{securityGroup3})
+	assert.NoError(t, ec2Instance.RestoreFromNodeNetworkState(rcv1alpha1.NodeNetworkState{
+		InstanceID:                            instanceID,
+		InstanceType:                          string(instanceType),
+		SubnetID:                              subnetID,
+		SubnetCIDRBlock:                       subnetCidrBlock,
+		PrimaryNetworkInterfaceSecurityGroups: []string{securityGroup1, securityGroup2},
+	}, "eni-trunk"))
+	mockEC2ApiHelper.EXPECT().GetSubnetCIDR(&customSubnetID).
+		Return(staleCidr, nil)
+	assert.NoError(t, ec2Instance.UpdateCurrentSubnetAndCidrBlock(mockEC2ApiHelper))
+	assert.Equal(t, staleCidr, ec2Instance.SubnetCidrBlock())
+
+	mockEC2ApiHelper.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil)
+	mockEC2ApiHelper.EXPECT().GetSubnetCIDR(&customSubnetID).Return(freshCidr, nil)
+
+	assert.NoError(t, ec2Instance.LoadDetails(mockEC2ApiHelper))
+
+	assert.False(t, ec2Instance.IsRestoredFromNodeNetworkState())
+	assert.Equal(t, customSubnetID, ec2Instance.SubnetID())
+	assert.Equal(t, freshCidr, ec2Instance.SubnetCidrBlock())
+	assert.Equal(t, []string{securityGroup3}, ec2Instance.CurrentInstanceSecurityGroups())
+	assert.Equal(t, "", ec2Instance.SubnetV6CidrBlock())
 }
