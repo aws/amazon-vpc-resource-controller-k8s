@@ -105,6 +105,7 @@ func TestNodeNetworkStateSchema(t *testing.T) {
 		"subnetID",
 		"subnetCIDRBlock",
 		"subnetV6CIDRBlock",
+		"primaryNetworkInterfaceID",
 		"primaryNetworkInterfaceSecurityGroups",
 		"connectionTracking",
 	}
@@ -128,6 +129,12 @@ func TestNodeNetworkStateSchema(t *testing.T) {
 	assert.Equal(t, `^subnet-([0-9a-f]{8}|[0-9a-f]{17})$`, subnetID.Pattern)
 	require.NotNil(t, subnetID.MaxLength)
 	assert.EqualValues(t, 24, *subnetID.MaxLength)
+
+	primaryENIID := state.Properties["primaryNetworkInterfaceID"]
+	assert.Equal(t, `^eni-([0-9a-f]{8}|[0-9a-f]{17})$`, primaryENIID.Pattern)
+	require.NotNil(t, primaryENIID.MaxLength)
+	assert.EqualValues(t, 21, *primaryENIID.MaxLength)
+	assert.NotContains(t, state.Required, "primaryNetworkInterfaceID")
 
 	securityGroups := state.Properties["primaryNetworkInterfaceSecurityGroups"]
 	assert.Equal(t, "array", securityGroups.Type)

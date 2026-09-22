@@ -284,26 +284,29 @@ func (e *eniManager) DeleteIPV4Resource(resourceList []string, resourceType conf
 	ipLimit := vpc.Limits[e.instance.Type()].IPv4PerInterface - 1
 	primaryENIID := e.instance.PrimaryNetworkInterfaceID()
 
-	// Clean up ENIs that just have the primary network interface attached to them
-	i := 0
-	for _, eni := range e.attachedENIs {
-		// ENI doesn't have any secondary IP or prefix attached to it and is not the primary network interface
-		if eni.remainingCapacity == ipLimit && primaryENIID != eni.eniID {
-			err := ec2APIHelper.DeleteNetworkInterface(&eni.eniID)
-			if err != nil {
-				errors = append(errors, err)
+	if primaryENIID == "" {
+		log.Info("skipping empty ENI cleanup because the primary network interface ID is unknown")
+	} else {
+		// Clean up ENIs that just have the primary network interface attached to them.
+		i := 0
+		for _, eni := range e.attachedENIs {
+			if eni.remainingCapacity == ipLimit && primaryENIID != eni.eniID {
+				err := ec2APIHelper.DeleteNetworkInterface(&eni.eniID)
+				if err != nil {
+					errors = append(errors, err)
+					e.attachedENIs[i] = eni
+					i++
+					continue
+				}
+				log.Info("deleted ENI successfully as it has no secondary IP or prefix attached",
+					"id", eni.eniID)
+			} else {
 				e.attachedENIs[i] = eni
 				i++
-				continue
 			}
-			log.Info("deleted ENI successfully as it has no secondary IP or prefix attached",
-				"id", eni.eniID)
-		} else {
-			e.attachedENIs[i] = eni
-			i++
 		}
+		e.attachedENIs = e.attachedENIs[:i]
 	}
-	e.attachedENIs = e.attachedENIs[:i]
 
 	if errors != nil && len(errors) > 0 {
 		return failedToUnAssign, fmt.Errorf("failed to unassign one or more %s: %v", resourceType, errors)

@@ -43,7 +43,7 @@ var (
 	instanceType    = ec2types.InstanceTypeC5Large
 	subnetCidrBlock = "192.168.0.0/16"
 
-	primaryInterfaceID = "192.168.0.2"
+	primaryInterfaceID = "eni-0123456789abcdef0"
 
 	deviceIndex0 = int32(0)
 	deviceIndex2 = int32(2)
@@ -119,6 +119,7 @@ func TestEc2Instance_RestoreFromNodeNetworkState(t *testing.T) {
 		InstanceType:                          string(instanceType),
 		SubnetID:                              subnetID,
 		SubnetCIDRBlock:                       subnetCidrBlock,
+		PrimaryNetworkInterfaceID:             primaryInterfaceID,
 		PrimaryNetworkInterfaceSecurityGroups: []string{securityGroup1, securityGroup2},
 		ConnectionTracking: &rcv1alpha1.ConnectionTrackingConfig{
 			TCPEstablishedTimeout: &tcpTimeout,
@@ -132,6 +133,7 @@ func TestEc2Instance_RestoreFromNodeNetworkState(t *testing.T) {
 		subnetID:              subnetID,
 		subnetCIDRBlock:       subnetCidrBlock,
 		subnetMask:            "16",
+		primaryENIID:          primaryInterfaceID,
 		primarySecurityGroups: []string{securityGroup1, securityGroup2},
 		connectionTracking: connectionTrackingState{
 			tcpEstablishedTimeout: &tcpTimeout,
@@ -151,6 +153,7 @@ func TestEc2Instance_RestoreFromNodeNetworkState(t *testing.T) {
 	assert.Equal(t, subnetID, instance.SubnetID())
 	assert.Equal(t, subnetCidrBlock, instance.SubnetCidrBlock())
 	assert.Equal(t, "16", instance.SubnetMask())
+	assert.Equal(t, primaryInterfaceID, instance.PrimaryNetworkInterfaceID())
 	assert.Equal(t, []string{securityGroup1, securityGroup2}, instance.CurrentInstanceSecurityGroups())
 	gotTCP, _, _ := instance.GetConnectionTrackingSpec()
 	assert.Equal(t, &tcpTimeout, gotTCP)
@@ -221,6 +224,7 @@ func TestEc2Instance_BuildNodeNetworkState(t *testing.T) {
 	assert.Equal(t, string(instanceType), state.InstanceType)
 	assert.Equal(t, subnetID, state.SubnetID)
 	assert.Equal(t, subnetCidrBlock, state.SubnetCIDRBlock)
+	assert.Equal(t, primaryInterfaceID, state.PrimaryNetworkInterfaceID)
 	assert.Equal(t, []string{securityGroup1, securityGroup2}, state.PrimaryNetworkInterfaceSecurityGroups)
 
 	restored := getMockInstanceInterface()
@@ -228,6 +232,7 @@ func TestEc2Instance_BuildNodeNetworkState(t *testing.T) {
 	assert.NoError(t, restored.UpdateCurrentSubnetAndCidrBlock(nil))
 	assert.Equal(t, subnetID, restored.SubnetID())
 	assert.Equal(t, subnetCidrBlock, restored.SubnetCidrBlock())
+	assert.Equal(t, primaryInterfaceID, restored.PrimaryNetworkInterfaceID())
 	assert.Equal(t, []string{securityGroup1, securityGroup2}, restored.CurrentInstanceSecurityGroups())
 }
 

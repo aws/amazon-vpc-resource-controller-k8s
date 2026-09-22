@@ -157,6 +157,7 @@ func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 		InstanceType:                          "c5.large",
 		SubnetID:                              "subnet-1",
 		SubnetCIDRBlock:                       "10.0.0.0/16",
+		PrimaryNetworkInterfaceID:             "eni-0123456789abcdef0",
 		PrimaryNetworkInterfaceSecurityGroups: []string{"sg-1"},
 	}
 	mockInstance.EXPECT().Name().Return(NodeName).AnyTimes()
@@ -179,6 +180,7 @@ func TestBranchENIProvider_persistCNINodeStatus(t *testing.T) {
 	assert.NotNil(t, written)
 	assert.NotNil(t, written.Status.NodeNetworkState)
 	assert.Equal(t, "i-abc", written.Status.NodeNetworkState.InstanceID)
+	assert.Equal(t, "eni-0123456789abcdef0", written.Status.NodeNetworkState.PrimaryNetworkInterfaceID)
 	assert.Equal(t, []string{"sg-1"}, written.Status.NodeNetworkState.PrimaryNetworkInterfaceSecurityGroups)
 	assert.NotNil(t, written.Status.TrunkInterface)
 	assert.Equal(t, "eni-trunk", written.Status.TrunkInterface.ID)

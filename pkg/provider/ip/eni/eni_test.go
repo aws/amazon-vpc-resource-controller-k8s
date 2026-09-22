@@ -18,14 +18,17 @@ import (
 	"reflect"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	ec2instance "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -620,6 +623,75 @@ func TestEniManager_DeleteIPV4Resource_TypeIPV4Prefix(t *testing.T) {
 	assert.Empty(t, failedToDelete)
 	assert.Equal(t, []*eni{eniDetails1}, manager.attachedENIs)
 	assert.NotContains(t, manager.resourceToENIMap, prefix1)
+}
+
+func TestEniManager_DeleteIPV4Resource_PrimaryENIUnknown(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	manager, mockInstance, mockEc2APIHelper := getMockManager(ctrl)
+
+	eniDetails := createENIDetails(eniID1, 1)
+	manager.resourceToENIMap = map[string]*eni{ip1: eniDetails}
+	manager.attachedENIs = []*eni{eniDetails}
+
+	mockInstance.EXPECT().Name().Return(instanceName)
+	mockInstance.EXPECT().Type().Return(instanceType)
+	mockInstance.EXPECT().PrimaryNetworkInterfaceID().Return("")
+	mockEc2APIHelper.EXPECT().
+		UnassignIPv4Resources(eniID1, config.ResourceTypeIPv4Address, []string{ip1}).
+		Return(nil)
+
+	failedToDelete, err := manager.DeleteIPV4Resource(
+		[]string{ip1}, config.ResourceTypeIPv4Address, mockEc2APIHelper, log)
+
+	assert.NoError(t, err)
+	assert.Empty(t, failedToDelete)
+	assert.Equal(t, []*eni{eniDetails}, manager.attachedENIs)
+	assert.NotContains(t, manager.resourceToENIMap, ip1)
+}
+
+func TestEniManager_DeleteIPV4Resource_RestoredPrimaryENINotDeleted(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	instance := ec2instance.NewEC2Instance(instanceName, instanceID, "linux", log)
+	require.NoError(t, instance.RestoreFromNodeNetworkState(rcv1alpha1.NodeNetworkState{
+		InstanceID:                            instanceID,
+		InstanceType:                          instanceType,
+		SubnetID:                              subnetID,
+		SubnetCIDRBlock:                       "192.168.0.0/16",
+		PrimaryNetworkInterfaceID:             eniID1,
+		PrimaryNetworkInterfaceSecurityGroups: instanceSG,
+	}, "eni-trunk"))
+
+	mockEC2APIHelper := mock_api.NewMockEC2APIHelper(ctrl)
+	manager := eniManager{
+		resourceToENIMap: map[string]*eni{},
+		instance:         instance,
+	}
+	interfaces := []ec2types.InstanceNetworkInterface{{
+		NetworkInterfaceId: &eniID1,
+		PrivateIpAddresses: []ec2types.InstancePrivateIpAddress{
+			{PrivateIpAddress: &ip1, Primary: aws.Bool(true)},
+			{PrivateIpAddress: &ip2, Primary: aws.Bool(false)},
+		},
+	}}
+	mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&instanceID).Return(interfaces, nil)
+	_, err := manager.InitResources(mockEC2APIHelper)
+	require.NoError(t, err)
+
+	mockEC2APIHelper.EXPECT().
+		UnassignIPv4Resources(eniID1, config.ResourceTypeIPv4Address, []string{ip2}).
+		Return(nil)
+
+	failedToDelete, err := manager.DeleteIPV4Resource(
+		[]string{ip2}, config.ResourceTypeIPv4Address, mockEC2APIHelper, log)
+
+	assert.NoError(t, err)
+	assert.Empty(t, failedToDelete)
+	require.Len(t, manager.attachedENIs, 1)
+	assert.Equal(t, eniID1, manager.attachedENIs[0].eniID)
 }
 
 // TestEniManager_DeleteIPV4Resource_TypeIPV4Address_SomeFail tests ips are un assigned and network interface without any secondary IP is deleted

@@ -104,6 +104,12 @@ type NodeNetworkState struct {
 	// +kubebuilder:validation:items:Pattern=`^sg-([0-9a-f]{8}|[0-9a-f]{17})$`
 	// +listType=atomic
 	PrimaryNetworkInterfaceSecurityGroups []string `json:"primaryNetworkInterfaceSecurityGroups"`
+	// Identifies the primary ENI so cleanup never treats it as a disposable secondary ENI.
+	// Optional in the API for upgrade compatibility; restore treats it as required.
+	// +optional
+	// +kubebuilder:validation:MaxLength=21
+	// +kubebuilder:validation:Pattern=`^eni-([0-9a-f]{8}|[0-9a-f]{17})$`
+	PrimaryNetworkInterfaceID string `json:"primaryNetworkInterfaceID,omitempty"`
 	// Preserves primary ENI settings for new branch ENIs.
 	// +optional
 	ConnectionTracking *ConnectionTrackingConfig `json:"connectionTracking,omitempty"`

@@ -67,6 +67,7 @@ func TestNodeNetworkStateWireFormatAndDeepCopy(t *testing.T) {
 		InstanceType:                          "m5.large",
 		SubnetID:                              "subnet-0123456789abcdef0",
 		SubnetCIDRBlock:                       "10.0.0.0/24",
+		PrimaryNetworkInterfaceID:             "eni-0123456789abcdef0",
 		PrimaryNetworkInterfaceSecurityGroups: []string{"sg-0123456789abcdef0"},
 		ConnectionTracking: &ConnectionTrackingConfig{
 			TCPEstablishedTimeout: &tcpTimeout,
@@ -79,9 +80,10 @@ func TestNodeNetworkStateWireFormatAndDeepCopy(t *testing.T) {
 			"instanceID":"i-0123456789abcdef0",
 			"instanceType":"m5.large",
 			"subnetID":"subnet-0123456789abcdef0",
-		"subnetCIDRBlock":"10.0.0.0/24",
-		"primaryNetworkInterfaceSecurityGroups":["sg-0123456789abcdef0"],
-		"connectionTracking":{"tcpEstablishedTimeout":432000}
+			"subnetCIDRBlock":"10.0.0.0/24",
+			"primaryNetworkInterfaceID":"eni-0123456789abcdef0",
+			"primaryNetworkInterfaceSecurityGroups":["sg-0123456789abcdef0"],
+			"connectionTracking":{"tcpEstablishedTimeout":432000}
 	}`, string(encoded))
 
 	copied := original.DeepCopy()

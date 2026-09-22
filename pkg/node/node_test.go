@@ -138,6 +138,7 @@ func validNodeNetworkStateCNINode(instID, instType string) *rcv1alpha1.CNINode {
 				InstanceType:                          instType,
 				SubnetID:                              "subnet-1",
 				SubnetCIDRBlock:                       "10.0.0.0/16",
+				PrimaryNetworkInterfaceID:             "eni-00000000000000001",
 				PrimaryNetworkInterfaceSecurityGroups: []string{"sg-1"},
 			},
 		},
@@ -260,6 +261,9 @@ func TestNode_tryRestoreFromNodeNetworkState_MissingField(t *testing.T) {
 		},
 		"instanceSubnetCIDR": func(c *rcv1alpha1.NodeNetworkState) {
 			c.SubnetCIDRBlock = ""
+		},
+		"primaryENIID": func(c *rcv1alpha1.NodeNetworkState) {
+			c.PrimaryNetworkInterfaceID = ""
 		},
 		"primaryENISecurityGroups": func(c *rcv1alpha1.NodeNetworkState) {
 			c.PrimaryNetworkInterfaceSecurityGroups = nil

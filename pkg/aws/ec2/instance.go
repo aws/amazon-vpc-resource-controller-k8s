@@ -428,6 +428,7 @@ func (i *ec2Instance) RestoreFromNodeNetworkState(state rcv1alpha1.NodeNetworkSt
 		subnetMask:            subnetMask,
 		subnetV6Mask:          subnetV6Mask,
 		primarySecurityGroups: state.PrimaryNetworkInterfaceSecurityGroups,
+		primaryENIID:          state.PrimaryNetworkInterfaceID,
 	}
 	if ct := state.ConnectionTracking; ct != nil {
 		source.connectionTracking = connectionTrackingState{
@@ -465,6 +466,7 @@ func (i *ec2Instance) BuildNodeNetworkState() rcv1alpha1.NodeNetworkState {
 		SubnetCIDRBlock:                       i.source.subnetCIDRBlock,
 		SubnetV6CIDRBlock:                     i.source.subnetV6CIDRBlock,
 		PrimaryNetworkInterfaceSecurityGroups: i.source.primarySecurityGroups,
+		PrimaryNetworkInterfaceID:             i.source.primaryENIID,
 		ConnectionTracking:                    connectionTracking,
 	}
 }

@@ -285,6 +285,7 @@ func validateNodeNetworkState(observed *rcv1alpha1.TrunkInterface, state *rcv1al
 	switch {
 	case observed == nil, observed.ID == "", state.InstanceID == "", state.InstanceType == "",
 		state.SubnetID == "", state.SubnetCIDRBlock == "",
+		state.PrimaryNetworkInterfaceID == "",
 		len(state.PrimaryNetworkInterfaceSecurityGroups) == 0:
 		return restoreReasonMissingField
 	}
