@@ -54,7 +54,7 @@ normal recovery flow.
 
 - instance ID and type;
 - primary subnet and CIDRs;
-- primary ENI security groups;
+- primary ENI identity and security groups;
 - connection-tracking configuration;
 - trunk ENI identity.
 
@@ -77,6 +77,9 @@ current Kubernetes Node providerID instance ID
 
 If they match, Init restores the stable instance and trunk state. If they do not
 match, the checkpoint is not consumed.
+
+Checkpoints without the primary ENI identity use the EC2 fallback once and are
+rewritten. IP and prefix cleanup never deletes an ENI while that identity is unknown.
 
 ### 4.2 Branch-state verification
 
@@ -227,6 +230,7 @@ be validated with rapid same-name Node replacement tests before merge.
 3. Every EC2 Branch ENI reserves its VLAN before verification succeeds.
 4. Partial recovery never sets the flag.
 5. Only one recovery operation runs concurrently per trunk.
+6. IP and prefix cleanup never deletes an ENI without a known primary ENI identity.
 
 ### Issue 515
 
