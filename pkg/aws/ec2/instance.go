@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
@@ -93,6 +94,7 @@ type EC2Instance interface {
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
+	BuildNodeNetworkState() rcv1alpha1.NodeNetworkState
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -352,4 +354,27 @@ func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, ud
 	defer i.lock.RUnlock()
 
 	return i.tcpEstablishedTimeout, i.udpStreamTimeout, i.udpTimeout
+}
+
+// BuildNodeNetworkState returns the stable instance state persisted in CNINode.
+func (i *ec2Instance) BuildNodeNetworkState() rcv1alpha1.NodeNetworkState {
+	var connectionTracking *rcv1alpha1.ConnectionTrackingConfig
+	if i.tcpEstablishedTimeout != nil || i.udpStreamTimeout != nil || i.udpTimeout != nil {
+		connectionTracking = &rcv1alpha1.ConnectionTrackingConfig{
+			TCPEstablishedTimeout: i.tcpEstablishedTimeout,
+			UDPStreamTimeout:      i.udpStreamTimeout,
+			UDPTimeout:            i.udpTimeout,
+		}
+	}
+
+	return rcv1alpha1.NodeNetworkState{
+		InstanceID:                            i.instanceID,
+		InstanceType:                          i.instanceType,
+		SubnetID:                              i.instanceSubnetID,
+		SubnetCIDRBlock:                       i.instanceSubnetCidrBlock,
+		SubnetV6CIDRBlock:                     i.instanceSubnetV6CidrBlock,
+		PrimaryNetworkInterfaceID:             i.primaryENIID,
+		PrimaryNetworkInterfaceSecurityGroups: append([]string(nil), i.primaryENISecurityGroups...),
+		ConnectionTracking:                    connectionTracking,
+	}
 }

@@ -84,6 +84,11 @@ type NodeNetworkState struct {
 	// +kubebuilder:validation:MaxLength=19
 	// +kubebuilder:validation:Pattern=`^i-([0-9a-f]{8}|[0-9a-f]{17})$`
 	InstanceID string `json:"instanceID"`
+	// Optional for compatibility with checkpoints written before this field was added.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	InstanceType string `json:"instanceType,omitempty"`
 	// May differ from the trunk subnet with ENIConfig.
 	// +required
 	// +kubebuilder:validation:MaxLength=24
@@ -99,6 +104,11 @@ type NodeNetworkState struct {
 	// +kubebuilder:validation:items:Pattern=`^sg-([0-9a-f]{8}|[0-9a-f]{17})$`
 	// +listType=atomic
 	PrimaryNetworkInterfaceSecurityGroups []string `json:"primaryNetworkInterfaceSecurityGroups"`
+	// Optional for compatibility with checkpoints written before this field was added.
+	// +optional
+	// +kubebuilder:validation:MaxLength=21
+	// +kubebuilder:validation:Pattern=`^eni-([0-9a-f]{8}|[0-9a-f]{17})$`
+	PrimaryNetworkInterfaceID string `json:"primaryNetworkInterfaceID,omitempty"`
 	// Preserves primary ENI settings for new branch ENIs.
 	// +optional
 	ConnectionTracking *ConnectionTrackingConfig `json:"connectionTracking,omitempty"`

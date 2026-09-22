@@ -150,12 +150,15 @@ var (
 	}
 
 	// Trunk Interface
-	trunkId        = "eni-00000000000000002"
-	trunkInterface = &awsEc2Types.NetworkInterface{
+	trunkId          = "eni-00000000000000002"
+	trunkDeviceIndex = int32(2)
+	trunkInterface   = &awsEc2Types.NetworkInterface{
 		InterfaceType:      awsEc2Types.NetworkInterfaceTypeTrunk,
 		NetworkInterfaceId: &trunkId,
+		SubnetId:           &SubnetId,
 		Attachment: &awsEc2Types.NetworkInterfaceAttachment{
-			Status: awsEc2Types.AttachmentStatusAttached,
+			DeviceIndex: &trunkDeviceIndex,
+			Status:      awsEc2Types.AttachmentStatusAttached,
 		},
 	}
 
@@ -178,6 +181,10 @@ var (
 		{
 			InterfaceType:      aws.String("trunk"),
 			NetworkInterfaceId: &trunkId,
+			SubnetId:           &SubnetId,
+			Attachment: &awsEc2Types.InstanceNetworkInterfaceAttachment{
+				DeviceIndex: &trunkDeviceIndex,
+			},
 		},
 	}
 
@@ -689,7 +696,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 		{
 			name: "TrunkNotExists, verifies trunk is created if it does not exist with no error",
 			prepare: func(f *fields) {
-				freeIndex := int32(2)
+				freeIndex := trunkDeviceIndex
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
 				f.mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(SecurityGroups)
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]awsEc2Types.InstanceNetworkInterface{}, nil)
@@ -702,7 +709,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			args:    args{instance: nil, podList: []v1.Pod{*MockPod2}},
 			wantErr: false,
 			asserts: func(f *fields) {
-				assert.Equal(t, trunkId, f.trunkENI.trunkENIId)
+				assert.Equal(t, trunkId, f.trunkENI.TrunkENIID())
 			},
 		},
 		{
@@ -750,6 +757,8 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			args:    args{instance: FakeInstance, podList: []v1.Pod{*MockPod1, *MockPod2}},
 			wantErr: false,
 			asserts: func(f *fields) {
+				assert.Equal(t, trunkId, f.trunkENI.TrunkENIID())
+
 				branchENIs, isPresent := f.trunkENI.uidToBranchENIMap[PodUID]
 				assert.True(t, isPresent)
 				// Assert eni details are correct

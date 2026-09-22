@@ -16,6 +16,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
@@ -84,6 +85,7 @@ type K8sWrapper interface {
 	CreateCNINode(node *v1.Node, clusterName string) error
 	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
 	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
+	PatchCNINodeCheckpoint(nodeName string, state rcv1alpha1.NodeNetworkState, trunkENIID string) error
 	DeleteCNINode(cniNode *rcv1alpha1.CNINode) error
 }
 
@@ -283,4 +285,48 @@ func (k *k8sWrapper) ListCNINodes() ([]*rcv1alpha1.CNINode, error) {
 
 func (k *k8sWrapper) PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error {
 	return k.cacheClient.Patch(k.context, newCNINode, client.MergeFromWithOptions(oldCNINode, client.MergeFromWithOptimisticLock{}))
+}
+
+func (k *k8sWrapper) PatchCNINodeCheckpoint(
+	nodeName string,
+	state rcv1alpha1.NodeNetworkState,
+	trunkENIID string,
+) error {
+	return retry.OnError(retry.DefaultBackoff, shouldRetryCNINodeStatusUpdate, func() error {
+		current := &rcv1alpha1.CNINode{}
+		if err := k.cacheClient.Get(k.context, types.NamespacedName{Name: nodeName}, current); err != nil {
+			return err
+		}
+		if current.Spec.ManagedBy != "" &&
+			current.Spec.ManagedBy != rcv1alpha1.ManagedByVPCResourceController {
+			return nil
+		}
+
+		modified := current.DeepCopy()
+		modified.Status.NodeNetworkState = state.DeepCopy()
+		if modified.Status.TrunkInterface == nil {
+			modified.Status.TrunkInterface = &rcv1alpha1.TrunkInterface{}
+		}
+		modified.Status.TrunkInterface.ID = trunkENIID
+
+		if reflect.DeepEqual(current.Status, modified.Status) {
+			return nil
+		}
+
+		return k.cacheClient.Status().Patch(
+			k.context,
+			modified,
+			client.MergeFrom(current),
+		)
+	})
+}
+
+func shouldRetryCNINodeStatusUpdate(err error) bool {
+	return errors.IsNotFound(err) ||
+		errors.IsConflict(err) ||
+		errors.IsTimeout(err) ||
+		errors.IsServerTimeout(err) ||
+		errors.IsTooManyRequests(err) ||
+		errors.IsServiceUnavailable(err) ||
+		errors.IsInternalError(err)
 }
