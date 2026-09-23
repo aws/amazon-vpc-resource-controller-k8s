@@ -81,7 +81,7 @@ var (
 
 	cniNodeCheckpointPersistErrCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Name: "cninode_checkpoint_persist_error_count",
+			Name: "cninode_checkpoint_persist_error_total",
 			Help: "The number of failures to persist the CNINode checkpoint",
 		},
 	)
@@ -199,16 +199,16 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 			branchProviderOperationsErrCount.WithLabelValues("add_trunk_to_cache").Inc()
 			return err
 		}
-	} else {
-		state := instance.BuildNodeNetworkState()
-		if err := b.apiWrapper.K8sAPI.PatchCNINodeCheckpoint(
-			nodeName,
-			state,
-			trunkENI.TrunkENIID(),
-		); err != nil {
-			cniNodeCheckpointPersistErrCount.Inc()
-			b.log.Error(err, "failed to persist CNINode status", "node", nodeName)
-		}
+	}
+
+	state := instance.BuildNodeNetworkState()
+	if err := b.apiWrapper.K8sAPI.PatchCNINodeCheckpoint(
+		nodeName,
+		state,
+		trunkENI.TrunkENIID(),
+	); err != nil {
+		cniNodeCheckpointPersistErrCount.Inc()
+		b.log.Error(err, "failed to persist CNINode checkpoint", "node", nodeName)
 	}
 
 	// TODO: For efficiency submit the process delete queue job only when the delete queue has items.
