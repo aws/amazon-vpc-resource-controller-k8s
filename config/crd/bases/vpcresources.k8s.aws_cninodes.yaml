@@ -111,6 +111,18 @@ spec:
                     maxLength: 19
                     pattern: ^i-([0-9a-f]{8}|[0-9a-f]{17})$
                     type: string
+                  instanceType:
+                    description: Optional for compatibility with checkpoints written
+                      before this field was added.
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  primaryNetworkInterfaceID:
+                    description: Optional for compatibility with checkpoints written
+                      before this field was added.
+                    maxLength: 21
+                    pattern: ^eni-([0-9a-f]{8}|[0-9a-f]{17})$
+                    type: string
                   primaryNetworkInterfaceSecurityGroups:
                     items:
                       maxLength: 20

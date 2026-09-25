@@ -16,6 +16,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
@@ -84,21 +85,26 @@ type K8sWrapper interface {
 	CreateCNINode(node *v1.Node, clusterName string) error
 	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
 	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
+	PatchCNINodeCheckpoint(nodeName string, state rcv1alpha1.NodeNetworkState, trunkENIID string) error
 	DeleteCNINode(cniNode *rcv1alpha1.CNINode) error
 }
 
 // k8sWrapper is the wrapper object with the client
 type k8sWrapper struct {
 	// cacheClient MUST never be used for getting Pods. The Pods
-	// can be retrieved using the separate Pod Wrapper. For all
-	// other K8s Object use the cache client
-	cacheClient   client.Client
+	// can be retrieved using the separate Pod Wrapper. It handles
+	// normal cached reads and all writes.
+	cacheClient client.Client
+	// apiReader bypasses the informer cache for checkpoint read-before-write.
+	apiReader     client.Reader
 	eventRecorder record.EventRecorder
 	context       context.Context
 }
 
 // NewK8sWrapper returns a new K8sWrapper
-func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, ctx context.Context) K8sWrapper {
+func NewK8sWrapper(cacheClient client.Client, apiReader client.Reader, coreV1 corev1.CoreV1Interface,
+	ctx context.Context,
+) K8sWrapper {
 	if !prometheusRegistered {
 		prometheusRegister()
 	}
@@ -107,7 +113,12 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, ctx cont
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{
 		Component: config.ControllerName,
 	})
-	return &k8sWrapper{cacheClient: client, eventRecorder: recorder, context: ctx}
+	return &k8sWrapper{
+		cacheClient:   cacheClient,
+		apiReader:     apiReader,
+		eventRecorder: recorder,
+		context:       ctx,
+	}
 }
 
 func (k *k8sWrapper) GetDaemonSet(name, namespace string) (*appv1.DaemonSet, error) {
@@ -283,4 +294,65 @@ func (k *k8sWrapper) ListCNINodes() ([]*rcv1alpha1.CNINode, error) {
 
 func (k *k8sWrapper) PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error {
 	return k.cacheClient.Patch(k.context, newCNINode, client.MergeFromWithOptions(oldCNINode, client.MergeFromWithOptimisticLock{}))
+}
+
+func (k *k8sWrapper) PatchCNINodeCheckpoint(
+	nodeName string,
+	state rcv1alpha1.NodeNetworkState,
+	trunkENIID string,
+) error {
+	useAPIReader := false
+	return retry.OnError(retry.DefaultBackoff, shouldRetryCNINodeStatusUpdate, func() error {
+		current := &rcv1alpha1.CNINode{}
+		namespacedName := types.NamespacedName{Name: nodeName}
+
+		var err error
+		if useAPIReader {
+			err = k.apiReader.Get(k.context, namespacedName, current)
+		} else {
+			err = k.cacheClient.Get(k.context, namespacedName, current)
+			if errors.IsNotFound(err) {
+				useAPIReader = true
+				err = k.apiReader.Get(k.context, namespacedName, current)
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if current.Spec.ManagedBy != "" &&
+			current.Spec.ManagedBy != rcv1alpha1.ManagedByVPCResourceController {
+			return nil
+		}
+
+		modified := current.DeepCopy()
+		modified.Status.NodeNetworkState = state.DeepCopy()
+		if modified.Status.TrunkInterface == nil {
+			modified.Status.TrunkInterface = &rcv1alpha1.TrunkInterface{}
+		}
+		modified.Status.TrunkInterface.ID = trunkENIID
+
+		if reflect.DeepEqual(current.Status, modified.Status) {
+			return nil
+		}
+
+		err = k.cacheClient.Status().Patch(
+			k.context,
+			modified,
+			client.MergeFromWithOptions(current, client.MergeFromWithOptimisticLock{}),
+		)
+		if errors.IsConflict(err) {
+			useAPIReader = true
+		}
+		return err
+	})
+}
+
+func shouldRetryCNINodeStatusUpdate(err error) bool {
+	return errors.IsNotFound(err) ||
+		errors.IsConflict(err) ||
+		errors.IsTimeout(err) ||
+		errors.IsServerTimeout(err) ||
+		errors.IsTooManyRequests(err) ||
+		errors.IsServiceUnavailable(err) ||
+		errors.IsInternalError(err)
 }

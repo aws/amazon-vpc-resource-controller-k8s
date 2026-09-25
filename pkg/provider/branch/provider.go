@@ -79,6 +79,13 @@ var (
 		[]string{operationLabel, resourceCountLabel},
 	)
 
+	cniNodeCheckpointPersistErrCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "cninode_checkpoint_persist_error_total",
+			Help: "The number of failures to persist the CNINode checkpoint",
+		},
+	)
+
 	deleteQueueRequeueRequest = ctrl.Result{RequeueAfter: time.Second * 30, Requeue: true}
 
 	// NodeDeleteRequeueRequestDelay represents the time after which the resources belonging to a node will be cleaned
@@ -130,7 +137,8 @@ func prometheusRegister() {
 	if !prometheusRegistered {
 		metrics.Registry.MustRegister(
 			branchProviderOperationsErrCount,
-			branchProviderOperationLatency)
+			branchProviderOperationLatency,
+			cniNodeCheckpointPersistErrCount)
 
 		prometheusRegistered = true
 	}
@@ -186,9 +194,21 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceSeconds(start))
 
 	// Add the Trunk ENI to cache if it does not already exist
-	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil && err != ErrTrunkExistInCache {
-		branchProviderOperationsErrCount.WithLabelValues("add_trunk_to_cache").Inc()
-		return err
+	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil {
+		if err != ErrTrunkExistInCache {
+			branchProviderOperationsErrCount.WithLabelValues("add_trunk_to_cache").Inc()
+			return err
+		}
+	}
+
+	state := instance.BuildNodeNetworkState()
+	if err := b.apiWrapper.K8sAPI.PatchCNINodeCheckpoint(
+		nodeName,
+		state,
+		trunkENI.TrunkENIID(),
+	); err != nil {
+		cniNodeCheckpointPersistErrCount.Inc()
+		b.log.Error(err, "failed to persist CNINode checkpoint", "node", nodeName)
 	}
 
 	// TODO: For efficiency submit the process delete queue job only when the delete queue has items.

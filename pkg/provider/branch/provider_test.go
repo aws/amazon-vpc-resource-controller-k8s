@@ -20,7 +20,9 @@ import (
 	"reflect"
 	"testing"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
+	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_pod "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
 	mock_trunk "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk"
@@ -30,9 +32,13 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/worker"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/golang/mock/gomock"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -119,6 +125,94 @@ func getProvider() branchENIProvider {
 	}
 }
 
+func prepareInitResourceSuccess(
+	ctrl *gomock.Controller,
+	checkpointErr error,
+) (*branchENIProvider, *mock_ec2.MockEC2Instance, rcv1alpha1.NodeNetworkState, string) {
+	instanceID := "i-00000000000000000"
+	subnetID := "subnet-00000000000000000"
+	trunkENIID := "eni-00000000000000000"
+	securityGroups := []string{"sg-00000000000000000"}
+	freeIndex := int32(2)
+	state := rcv1alpha1.NodeNetworkState{
+		InstanceID:   instanceID,
+		InstanceType: "m5.large",
+		SubnetID:     subnetID,
+	}
+
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockEC2API := mock_api.NewMockEC2APIHelper(ctrl)
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockPodAPI := mock_pod.NewMockPodClientAPIWrapper(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	provider := branchENIProvider{
+		apiWrapper: api.Wrapper{
+			EC2API: mockEC2API,
+			K8sAPI: mockK8sAPI,
+			PodAPI: mockPodAPI,
+		},
+		log:           zap.New(zap.UseDevMode(true)).WithName("branch provider"),
+		workerPool:    mockWorker,
+		trunkENICache: make(map[string]trunk.TrunkENI),
+	}
+
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	mockEC2API.EXPECT().GetInstanceNetworkInterface(&instanceID).
+		Return([]ec2types.InstanceNetworkInterface{}, nil)
+	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(freeIndex, nil)
+	mockInstance.EXPECT().SubnetID().Return(subnetID)
+	mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(securityGroups)
+	mockEC2API.EXPECT().CreateAndAttachNetworkInterface(
+		&instanceID,
+		&subnetID,
+		securityGroups,
+		gomock.Any(),
+		&freeIndex,
+		gomock.Any(),
+		gomock.Any(),
+		nil,
+		nil,
+	).Return(&ec2types.NetworkInterface{NetworkInterfaceId: aws.String(trunkENIID)}, nil)
+	mockInstance.EXPECT().BuildNodeNetworkState().Return(state)
+	mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(checkpointErr)
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: NodeName}}
+	mockK8sAPI.EXPECT().GetNode(NodeName).Return(node, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(
+		gomock.Any(),
+		utils.NodeTrunkInitiatedReason,
+		"The node has trunk interface initialized successfully",
+		v1.EventTypeNormal,
+	)
+
+	return &provider, mockInstance, state, trunkENIID
+}
+
+func TestBranchENIProvider_InitResourcePatchesCheckpoint(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	provider, mockInstance, _, _ := prepareInitResourceSuccess(ctrl, nil)
+
+	assert.NoError(t, provider.InitResource(mockInstance))
+}
+
+func TestBranchENIProvider_InitResourceCheckpointFailureIsBestEffort(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	provider, mockInstance, _, _ := prepareInitResourceSuccess(ctrl, MockError)
+	before := checkpointPersistErrorCount(t)
+
+	assert.NoError(t, provider.InitResource(mockInstance))
+	assert.Equal(t, before+1, checkpointPersistErrorCount(t))
+}
+
+func checkpointPersistErrorCount(t *testing.T) float64 {
+	t.Helper()
+	metric := &dto.Metric{}
+	assert.NoError(t, cniNodeCheckpointPersistErrCount.Write(metric))
+	return metric.GetCounter().GetValue()
+}
+
 // TestBranchENIProvider_getTrunkFromCache tests Trunk ENI is returned when the trunk is present in the cache
 func TestBranchENIProvider_getTrunkFromCache(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -196,7 +290,7 @@ func TestBranchENIProvider_addTrunkToCache_AlreadyExist(t *testing.T) {
 
 	err := provider.addTrunkToCache(NodeName, fakeTrunk)
 
-	assert.NotNil(t, err)
+	assert.ErrorIs(t, err, ErrTrunkExistInCache)
 }
 
 // TestBranchENIProvider_DeleteBranchUsedByPods tests that ENIs used by pods are pushed to the Cool down Queue by the

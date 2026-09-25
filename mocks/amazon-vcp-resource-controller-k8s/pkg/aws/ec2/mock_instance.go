@@ -20,6 +20,7 @@ package mock_ec2
 import (
 	reflect "reflect"
 
+	v1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	api "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	gomock "github.com/golang/mock/gomock"
 )
@@ -45,6 +46,20 @@ func NewMockEC2Instance(ctrl *gomock.Controller) *MockEC2Instance {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockEC2Instance) EXPECT() *MockEC2InstanceMockRecorder {
 	return m.recorder
+}
+
+// BuildNodeNetworkState mocks base method.
+func (m *MockEC2Instance) BuildNodeNetworkState() v1alpha1.NodeNetworkState {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BuildNodeNetworkState")
+	ret0, _ := ret[0].(v1alpha1.NodeNetworkState)
+	return ret0
+}
+
+// BuildNodeNetworkState indicates an expected call of BuildNodeNetworkState.
+func (mr *MockEC2InstanceMockRecorder) BuildNodeNetworkState() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildNodeNetworkState", reflect.TypeOf((*MockEC2Instance)(nil).BuildNodeNetworkState))
 }
 
 // CurrentInstanceSecurityGroups mocks base method.

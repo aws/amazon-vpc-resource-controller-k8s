@@ -103,6 +103,8 @@ type TrunkENI interface {
 	Reconcile(pods []v1.Pod) bool
 	// PushENIsToFrontOfDeleteQueue pushes the eni network interfaces to the front of the delete queue
 	PushENIsToFrontOfDeleteQueue(*v1.Pod, []*ENIDetails)
+	// TrunkENIID returns the trunk network interface ID.
+	TrunkENIID() string
 	// Introspect returns the state of the Trunk ENI
 	Introspect() IntrospectResponse
 }
@@ -733,6 +735,13 @@ func (t *trunkENI) canCreateMore() bool {
 		return true
 	}
 	return false
+}
+
+func (t *trunkENI) TrunkENIID() string {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return t.trunkENIId
 }
 
 func (t *trunkENI) Introspect() IntrospectResponse {

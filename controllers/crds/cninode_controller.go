@@ -105,6 +105,7 @@ func NewCNINodeReconciler(
 }
 
 //+kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=cninodes,verbs=get;list;watch;create;update;patch;
+//+kubebuilder:rbac:groups=vpcresources.k8s.aws,resources=cninodes/status,verbs=get;update;patch
 
 // Reconcile handles CNINode create/update/delete events
 // Reconciler will add the finalizer and cluster name tag if it does not exist and finalize on CNINode on deletion to clean up leaked resource on node

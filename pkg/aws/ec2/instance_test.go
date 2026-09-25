@@ -424,3 +424,34 @@ func TestEc2Instance_LoadDetails_InvalidCustomNetworkingConfiguration(t *testing
 	assert.Equal(t, []string{securityGroup1, securityGroup2}, ec2Instance.currentInstanceSecurityGroups)
 	assert.Equal(t, customNWSubnetCidr, ec2Instance.currentSubnetCIDRBlock)
 }
+
+func TestEc2Instance_BuildNodeNetworkState(t *testing.T) {
+	tcpTimeout := int32(300)
+	ec2Instance := ec2Instance{
+		instanceID:                    "i-0123456789abcdef0",
+		instanceType:                  "c5.large",
+		instanceSubnetID:              "subnet-0123456789abcdef0",
+		instanceSubnetCidrBlock:       "10.0.0.0/24",
+		instanceSubnetV6CidrBlock:     "2001:db8::/64",
+		primaryENIID:                  "eni-0123456789abcdef0",
+		primaryENISecurityGroups:      []string{"sg-0123456789abcdef0"},
+		currentSubnetID:               "subnet-0fedcba9876543210",
+		currentSubnetCIDRBlock:        "10.1.0.0/24",
+		currentInstanceSecurityGroups: []string{"sg-0fedcba9876543210"},
+		tcpEstablishedTimeout:         &tcpTimeout,
+	}
+
+	state := ec2Instance.BuildNodeNetworkState()
+
+	assert.Equal(t, "i-0123456789abcdef0", state.InstanceID)
+	assert.Equal(t, "c5.large", state.InstanceType)
+	assert.Equal(t, "subnet-0123456789abcdef0", state.SubnetID)
+	assert.Equal(t, "10.0.0.0/24", state.SubnetCIDRBlock)
+	assert.Equal(t, "2001:db8::/64", state.SubnetV6CIDRBlock)
+	assert.Equal(t, "eni-0123456789abcdef0", state.PrimaryNetworkInterfaceID)
+	assert.Equal(t, []string{"sg-0123456789abcdef0"}, state.PrimaryNetworkInterfaceSecurityGroups)
+	assert.Equal(t, &tcpTimeout, state.ConnectionTracking.TCPEstablishedTimeout)
+
+	state.PrimaryNetworkInterfaceSecurityGroups[0] = "sg-mutated"
+	assert.Equal(t, "sg-0123456789abcdef0", ec2Instance.primaryENISecurityGroups[0])
+}
