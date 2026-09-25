@@ -275,7 +275,7 @@ func TestPatchCNINodeCheckpointPreservesExistingStatus(t *testing.T) {
 	assert.Equal(t, existingTrunk.Branches, stored.Status.TrunkInterface.Branches)
 }
 
-func TestPatchCNINodeCheckpointReadsFromAPIReader(t *testing.T) {
+func TestPatchCNINodeCheckpointUsesCachedReaderOnHit(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(scheme)
 
@@ -287,21 +287,21 @@ func TestPatchCNINodeCheckpointReadsFromAPIReader(t *testing.T) {
 
 	cacheGetCalls := 0
 	cacheClient := interceptor.NewClient(baseClient, interceptor.Funcs{
-		Get: func(context.Context, client.WithWatch, client.ObjectKey,
-			client.Object, ...client.GetOption,
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+			obj client.Object, opts ...client.GetOption,
 		) error {
 			cacheGetCalls++
-			return fmt.Errorf("checkpoint read must not use the cache client")
+			return c.Get(ctx, key, obj, opts...)
 		},
 	})
 
 	apiReaderGetCalls := 0
 	apiReader := interceptor.NewClient(baseClient, interceptor.Funcs{
-		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
-			obj client.Object, opts ...client.GetOption,
+		Get: func(context.Context, client.WithWatch, client.ObjectKey,
+			client.Object, ...client.GetOption,
 		) error {
 			apiReaderGetCalls++
-			return c.Get(ctx, key, obj, opts...)
+			return fmt.Errorf("checkpoint read must use the cache client on a cache hit")
 		},
 	})
 
@@ -314,8 +314,8 @@ func TestPatchCNINodeCheckpointReadsFromAPIReader(t *testing.T) {
 
 	state := v1alpha1.NodeNetworkState{InstanceID: "i-00000000000000000"}
 	assert.NoError(t, wrapper.PatchCNINodeCheckpoint(nodeName, state, "eni-00000000000000000"))
-	assert.Zero(t, cacheGetCalls)
-	assert.Equal(t, 1, apiReaderGetCalls)
+	assert.Equal(t, 1, cacheGetCalls)
+	assert.Zero(t, apiReaderGetCalls)
 
 	stored := &v1alpha1.CNINode{}
 	assert.NoError(t, baseClient.Get(context.Background(), types.NamespacedName{Name: nodeName}, stored))
@@ -381,28 +381,45 @@ func TestPatchCNINodeCheckpointNoopWhenUnchanged(t *testing.T) {
 	assert.Zero(t, patchCalls)
 }
 
-func TestPatchCNINodeCheckpointRetriesNotFound(t *testing.T) {
+func TestPatchCNINodeCheckpointFallsBackToAPIReaderOnCacheMiss(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(scheme)
 
-	getCalls := 0
-	k8sClient := fakeClient.NewClientBuilder().
+	baseClient := fakeClient.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&v1alpha1.CNINode{}).
 		WithRuntimeObjects(&v1alpha1.CNINode{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
-				obj client.Object, opts ...client.GetOption,
-			) error {
-				getCalls++
-				if getCalls == 1 {
-					return errors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, key.Name)
-				}
-				return c.Get(ctx, key, obj, opts...)
-			},
-		}).
 		Build()
-	wrapper := NewK8sWrapper(k8sClient, k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+
+	cacheGetCalls := 0
+	cacheClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(_ context.Context, _ client.WithWatch, key client.ObjectKey,
+			_ client.Object, _ ...client.GetOption,
+		) error {
+			cacheGetCalls++
+			return errors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, key.Name)
+		},
+	})
+
+	apiReaderGetCalls := 0
+	apiReader := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+			obj client.Object, opts ...client.GetOption,
+		) error {
+			apiReaderGetCalls++
+			if apiReaderGetCalls == 1 {
+				return errors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, key.Name)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+
+	wrapper := NewK8sWrapper(
+		cacheClient,
+		apiReader,
+		fakeClientSet.NewSimpleClientset().CoreV1(),
+		context.Background(),
+	)
 
 	err := wrapper.PatchCNINodeCheckpoint(
 		nodeName,
@@ -411,10 +428,11 @@ func TestPatchCNINodeCheckpointRetriesNotFound(t *testing.T) {
 	)
 
 	assert.NoError(t, err)
-	assert.Equal(t, 2, getCalls)
+	assert.Equal(t, 1, cacheGetCalls)
+	assert.Equal(t, 2, apiReaderGetCalls)
 }
 
-func TestPatchCNINodeCheckpointRetriesTransientPatch(t *testing.T) {
+func TestPatchCNINodeCheckpointFallsBackToAPIReaderOnConflict(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(scheme)
 
@@ -427,11 +445,79 @@ func TestPatchCNINodeCheckpointRetriesTransientPatch(t *testing.T) {
 	cacheGetCalls := 0
 	patchCalls := 0
 	cacheClient := interceptor.NewClient(baseClient, interceptor.Funcs{
-		Get: func(context.Context, client.WithWatch, client.ObjectKey,
-			client.Object, ...client.GetOption,
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+			obj client.Object, opts ...client.GetOption,
 		) error {
 			cacheGetCalls++
-			return fmt.Errorf("checkpoint read must not use the cache client")
+			return c.Get(ctx, key, obj, opts...)
+		},
+		SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string,
+			obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption,
+		) error {
+			patchCalls++
+			patchData, err := patch.Data(obj)
+			if err != nil {
+				return err
+			}
+			assert.Contains(t, string(patchData), `"resourceVersion":`)
+			if patchCalls == 1 {
+				return errors.NewConflict(
+					schema.GroupResource{Resource: "cninodes"},
+					obj.GetName(),
+					fmt.Errorf("stale resource version"),
+				)
+			}
+			return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
+		},
+	})
+
+	apiReaderGetCalls := 0
+	apiReader := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+			obj client.Object, opts ...client.GetOption,
+		) error {
+			apiReaderGetCalls++
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+
+	wrapper := NewK8sWrapper(
+		cacheClient,
+		apiReader,
+		fakeClientSet.NewSimpleClientset().CoreV1(),
+		context.Background(),
+	)
+
+	err := wrapper.PatchCNINodeCheckpoint(
+		nodeName,
+		v1alpha1.NodeNetworkState{InstanceID: "i-00000000000000000"},
+		"eni-00000000000000000",
+	)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 2, patchCalls)
+	assert.Equal(t, 1, cacheGetCalls)
+	assert.Equal(t, 1, apiReaderGetCalls)
+}
+
+func TestPatchCNINodeCheckpointRetriesTransientPatchFromCache(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+
+	baseClient := fakeClient.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.CNINode{}).
+		WithRuntimeObjects(&v1alpha1.CNINode{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}).
+		Build()
+
+	cacheGetCalls := 0
+	patchCalls := 0
+	cacheClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+			obj client.Object, opts ...client.GetOption,
+		) error {
+			cacheGetCalls++
+			return c.Get(ctx, key, obj, opts...)
 		},
 		SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string,
 			obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption,
@@ -469,8 +555,8 @@ func TestPatchCNINodeCheckpointRetriesTransientPatch(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, 2, patchCalls)
-	assert.Equal(t, 2, apiReaderGetCalls)
-	assert.Zero(t, cacheGetCalls)
+	assert.Equal(t, 2, cacheGetCalls)
+	assert.Zero(t, apiReaderGetCalls)
 }
 
 func TestPatchCNINodeCheckpointTransientFailureIsBounded(t *testing.T) {

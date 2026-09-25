@@ -301,9 +301,22 @@ func (k *k8sWrapper) PatchCNINodeCheckpoint(
 	state rcv1alpha1.NodeNetworkState,
 	trunkENIID string,
 ) error {
+	useAPIReader := false
 	return retry.OnError(retry.DefaultBackoff, shouldRetryCNINodeStatusUpdate, func() error {
 		current := &rcv1alpha1.CNINode{}
-		if err := k.apiReader.Get(k.context, types.NamespacedName{Name: nodeName}, current); err != nil {
+		namespacedName := types.NamespacedName{Name: nodeName}
+
+		var err error
+		if useAPIReader {
+			err = k.apiReader.Get(k.context, namespacedName, current)
+		} else {
+			err = k.cacheClient.Get(k.context, namespacedName, current)
+			if errors.IsNotFound(err) {
+				useAPIReader = true
+				err = k.apiReader.Get(k.context, namespacedName, current)
+			}
+		}
+		if err != nil {
 			return err
 		}
 		if current.Spec.ManagedBy != "" &&
@@ -322,11 +335,15 @@ func (k *k8sWrapper) PatchCNINodeCheckpoint(
 			return nil
 		}
 
-		return k.cacheClient.Status().Patch(
+		err = k.cacheClient.Status().Patch(
 			k.context,
 			modified,
-			client.MergeFrom(current),
+			client.MergeFromWithOptions(current, client.MergeFromWithOptimisticLock{}),
 		)
+		if errors.IsConflict(err) {
+			useAPIReader = true
+		}
+		return err
 	})
 }
 
