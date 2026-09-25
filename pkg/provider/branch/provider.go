@@ -155,6 +155,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 	log := b.log.WithValues("nodeName", nodeName)
 	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API)
+	restoredFromCheckpoint := instance.RestoredTrunkENIID() != ""
 
 	// Initialize the Trunk ENI
 	start := time.Now()
@@ -201,14 +202,16 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		}
 	}
 
-	state := instance.BuildNodeNetworkState()
-	if err := b.apiWrapper.K8sAPI.PatchCNINodeCheckpoint(
-		nodeName,
-		state,
-		trunkENI.TrunkENIID(),
-	); err != nil {
-		cniNodeCheckpointPersistErrCount.Inc()
-		b.log.Error(err, "failed to persist CNINode checkpoint", "node", nodeName)
+	if !restoredFromCheckpoint {
+		state := instance.BuildNodeNetworkState()
+		if err := b.apiWrapper.K8sAPI.PatchCNINodeCheckpoint(
+			nodeName,
+			state,
+			trunkENI.TrunkENIID(),
+		); err != nil {
+			cniNodeCheckpointPersistErrCount.Inc()
+			b.log.Error(err, "failed to persist CNINode checkpoint", "node", nodeName)
+		}
 	}
 
 	// TODO: For efficiency submit the process delete queue job only when the delete queue has items.

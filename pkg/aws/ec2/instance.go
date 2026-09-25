@@ -15,6 +15,9 @@ package ec2
 
 import (
 	"fmt"
+	"net/netip"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -26,6 +29,41 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/go-logr/logr"
 )
+
+type connectionTrackingState struct {
+	tcpEstablishedTimeout *int32
+	udpStreamTimeout      *int32
+	udpTimeout            *int32
+}
+
+type instanceSourceState struct {
+	instanceType       string
+	subnetID           string
+	subnetCIDR         string
+	subnetV6CIDR       string
+	subnetMask         string
+	subnetV6Mask       string
+	primaryENIID       string
+	primarySGs         []string
+	connectionTracking connectionTrackingState
+}
+
+type effectiveNetworkState struct {
+	subnetID       string
+	subnetCIDR     string
+	subnetV6CIDR   string
+	securityGroups []string
+}
+
+type customNetworkingSpec struct {
+	subnetID       string
+	securityGroups []string
+}
+
+type restoreState struct {
+	fromNodeNetworkState bool
+	trunkENIID           string
+}
 
 // ec2Instance stores all the information that can be shared across the providers for an instance
 type ec2Instance struct {
@@ -39,39 +77,16 @@ type ec2Instance struct {
 	os string
 	// instanceId of the worker node
 	instanceID string
-	// instanceType is the EC2 instance type
-	instanceType string
-	// subnetId is the instance's subnet id
-	instanceSubnetID string
-	// instanceSubnetCidrBlock is the cidr block of the instance's subnet
-	instanceSubnetCidrBlock   string
-	instanceSubnetV6CidrBlock string
-	// currentSubnetID can either point to the Subnet ID of the instance or subnet ID from the ENIConfig
-	currentSubnetID string
-	// currentSubnetCIDRBlock can either point to the Subnet CIDR block for instance subnet or subnet from ENIConfig
-	currentSubnetCIDRBlock   string
-	currentSubnetV6CIDRBlock string
-	// currentInstanceSecurityGroups can either point to the primary network interface security groups or the security groups in ENIConfig
-	currentInstanceSecurityGroups []string
-	// subnetMask is the mask of the subnet CIDR block
-	subnetMask   string
-	subnetV6Mask string
+	// source is the stable instance state loaded from EC2 or a CNINode checkpoint.
+	source instanceSourceState
+	// current is the effective network state after applying the current ENIConfig.
+	current effectiveNetworkState
+	// customNetworking is the desired override read from the current ENIConfig.
+	customNetworking customNetworkingSpec
+	// restore records whether stable state came from CNINode and the restored trunk identity.
+	restore restoreState
 	// deviceIndexes is the list of indexes used by the EC2 Instance
 	deviceIndexes []bool
-	// primaryENIGroups is the security group used by the primary network interface
-	primaryENISecurityGroups []string
-	// primaryENIID is the ID of the primary network interface of the instance
-	primaryENIID string
-	// newCustomNetworkingSubnetID is the SubnetID from the ENIConfig
-	newCustomNetworkingSubnetID string
-	// newCustomNetworkingSecurityGroups is the security groups from the ENIConfig
-	newCustomNetworkingSecurityGroups []string
-
-	// connectionTracking* fields cache the primary ENI's connection tracking
-	// configuration, applied to branch ENIs created on this instance
-	tcpEstablishedTimeout *int32
-	udpStreamTimeout      *int32
-	udpTimeout            *int32
 }
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
@@ -94,6 +109,8 @@ type EC2Instance interface {
 	GetCustomNetworkingSpec() (subnetID string, securityGroup []string)
 	UpdateCurrentSubnetAndCidrBlock(helper api.EC2APIHelper) error
 	GetConnectionTrackingSpec() (tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32)
+	LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, trunkENIID string) error
+	RestoredTrunkENIID() string
 	BuildNodeNetworkState() rcv1alpha1.NodeNetworkState
 }
 
@@ -109,9 +126,6 @@ func NewEC2Instance(nodeName string, instanceID string, os string, log logr.Logg
 
 // LoadDetails loads the instance details by making an EC2 API call
 func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
-	i.lock.Lock()
-	defer i.lock.Unlock()
-
 	instance, err := ec2APIHelper.GetInstanceDetails(&i.instanceID)
 	if err != nil {
 		return err
@@ -120,31 +134,32 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		return fmt.Errorf("failed to find instance %s details from EC2 API", i.instanceID)
 	}
 
-	// Set instance subnet and cidr during node initialization
-	i.instanceSubnetID = *instance.SubnetId
-	instanceSubnet, err := ec2APIHelper.GetSubnet(&i.instanceSubnetID)
+	source := instanceSourceState{
+		instanceType: string(instance.InstanceType),
+		subnetID:     *instance.SubnetId,
+	}
+	instanceSubnet, err := ec2APIHelper.GetSubnet(&source.subnetID)
 	if err != nil {
 		return err
 	}
 	if instanceSubnet == nil || instanceSubnet.CidrBlock == nil {
 		return fmt.Errorf("failed to find subnet or CIDR block for subnet %s for instance %s",
-			i.instanceSubnetID, i.instanceID)
+			source.subnetID, i.instanceID)
 	}
-	i.instanceSubnetCidrBlock = *instanceSubnet.CidrBlock
-	i.subnetMask = strings.Split(i.instanceSubnetCidrBlock, "/")[1]
+	source.subnetCIDR = *instanceSubnet.CidrBlock
+	source.subnetMask = strings.Split(source.subnetCIDR, "/")[1]
 	// Cache IPv6 CIDR block if one is present
 	for _, v6CidrBlock := range instanceSubnet.Ipv6CidrBlockAssociationSet {
 		if v6CidrBlock.Ipv6CidrBlock != nil {
-			i.instanceSubnetV6CidrBlock = *v6CidrBlock.Ipv6CidrBlock
-			i.subnetV6Mask = strings.Split(i.instanceSubnetV6CidrBlock, "/")[1]
+			source.subnetV6CIDR = *v6CidrBlock.Ipv6CidrBlock
+			source.subnetV6Mask = strings.Split(source.subnetV6CIDR, "/")[1]
 			break
 		}
 	}
 
-	i.instanceType = string(instance.InstanceType)
-	limits, ok := vpc.Limits[i.instanceType]
+	limits, ok := vpc.Limits[source.instanceType]
 	if !ok {
-		return fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s, error: %w", i.instanceType, utils.ErrNotFound)
+		return fmt.Errorf("unsupported instance type, couldn't find ENI Limit for instance %s, error: %w", source.instanceType, utils.ErrNotFound)
 	}
 
 	defaultCardIdx := limits.DefaultNetworkCardIndex
@@ -156,42 +171,50 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 		}
 	}
 	if defaultNetworkCardLimit == 0 {
-		return fmt.Errorf("didn't find valid network card with max interface limit from limit file for instance type %s", i.instanceType)
+		return fmt.Errorf("didn't find valid network card with max interface limit from limit file for instance type %s", source.instanceType)
 	}
 
 	// currently CNI and this controller both only support single network card
 	// we want to make sure to use the smaller number between instance max supported interfaces and the default card max supported interfaces
 	maxInterfaces := utils.Minimum(int64(limits.Interface), defaultNetworkCardLimit)
 
-	i.deviceIndexes = make([]bool, int(maxInterfaces))
+	deviceIndexes := make([]bool, int(maxInterfaces))
 	for _, nwInterface := range instance.NetworkInterfaces {
 		index := aws.ToInt32(nwInterface.Attachment.DeviceIndex)
-		i.deviceIndexes[index] = true
+		deviceIndexes[index] = true
 
 		// Load the Security group of the primary network interface
-		if i.primaryENISecurityGroups == nil && (nwInterface.PrivateIpAddress != nil && instance.PrivateIpAddress != nil && *nwInterface.PrivateIpAddress == *instance.PrivateIpAddress) {
-			i.primaryENIID = *nwInterface.NetworkInterfaceId
+		if source.primarySGs == nil && (nwInterface.PrivateIpAddress != nil && instance.PrivateIpAddress != nil && *nwInterface.PrivateIpAddress == *instance.PrivateIpAddress) {
+			source.primaryENIID = *nwInterface.NetworkInterfaceId
 			// TODO: Group can change, should be refreshed each time we want to use this
 			for _, group := range nwInterface.Groups {
-				i.primaryENISecurityGroups = append(i.primaryENISecurityGroups, *group.GroupId)
+				source.primarySGs = append(source.primarySGs, *group.GroupId)
 			}
 		}
 
 		// Get the connection tracking configuration from the primary ENI
 		if index == 0 {
 			if nwInterface.ConnectionTrackingConfiguration != nil {
-				i.tcpEstablishedTimeout = nwInterface.ConnectionTrackingConfiguration.TcpEstablishedTimeout
-				i.udpStreamTimeout = nwInterface.ConnectionTrackingConfiguration.UdpStreamTimeout
-				i.udpTimeout = nwInterface.ConnectionTrackingConfiguration.UdpTimeout
+				source.connectionTracking = connectionTrackingState{
+					tcpEstablishedTimeout: copyInt32(nwInterface.ConnectionTrackingConfiguration.TcpEstablishedTimeout),
+					udpStreamTimeout:      copyInt32(nwInterface.ConnectionTrackingConfiguration.UdpStreamTimeout),
+					udpTimeout:            copyInt32(nwInterface.ConnectionTrackingConfiguration.UdpTimeout),
+				}
 				i.log.Info("instance has connection tracking settings",
 					"instanceID", i.instanceID,
-					"tcpEstablishedTimeout", i.tcpEstablishedTimeout,
-					"udpStreamTimeout", i.udpStreamTimeout,
-					"udpTimeout", i.udpTimeout)
+					"tcpEstablishedTimeout", source.connectionTracking.tcpEstablishedTimeout,
+					"udpStreamTimeout", source.connectionTracking.udpStreamTimeout,
+					"udpTimeout", source.connectionTracking.udpTimeout)
 			}
 		}
 	}
 
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	i.source = source
+	i.deviceIndexes = deviceIndexes
+	i.restore = restoreState{}
 	return i.updateCurrentSubnetAndCidrBlock(ec2APIHelper)
 }
 
@@ -210,7 +233,7 @@ func (i *ec2Instance) SubnetID() string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
 
-	return i.currentSubnetID
+	return i.current.subnetID
 }
 
 // SubnetCidrBlock returns the subnet cidr block of the instance
@@ -218,14 +241,14 @@ func (i *ec2Instance) SubnetCidrBlock() string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
 
-	return i.currentSubnetCIDRBlock
+	return i.current.subnetCIDR
 }
 
 func (i *ec2Instance) SubnetV6CidrBlock() string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
 
-	return i.currentSubnetV6CIDRBlock
+	return i.current.subnetV6CIDR
 }
 
 // Name returns the name of the node
@@ -235,11 +258,17 @@ func (i *ec2Instance) Name() string {
 
 // Type returns the instance type of the node
 func (i *ec2Instance) Type() string {
-	return i.instanceType
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.source.instanceType
 }
 
 func (i *ec2Instance) PrimaryNetworkInterfaceID() string {
-	return i.primaryENIID
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	return i.source.primaryENIID
 }
 
 // CurrentInstanceSecurityGroups returns the current instance security groups
@@ -248,7 +277,7 @@ func (i *ec2Instance) CurrentInstanceSecurityGroups() []string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
 
-	return i.currentInstanceSecurityGroups
+	return slices.Clone(i.current.securityGroups)
 }
 
 // GetHighestUnusedDeviceIndex assigns a free device index from the end of the list since IPAMD assigns indexes from
@@ -275,17 +304,17 @@ func (i *ec2Instance) FreeDeviceIndex(index int32) {
 }
 
 func (i *ec2Instance) SubnetMask() string {
-	i.lock.Lock()
-	defer i.lock.Unlock()
+	i.lock.RLock()
+	defer i.lock.RUnlock()
 
-	return i.subnetMask
+	return i.source.subnetMask
 }
 
 func (i *ec2Instance) SubnetV6Mask() string {
-	i.lock.Lock()
-	defer i.lock.Unlock()
+	i.lock.RLock()
+	defer i.lock.RUnlock()
 
-	return i.subnetV6Mask
+	return i.source.subnetV6Mask
 }
 
 // SetNewCustomNetworkingSpec updates the subnet ID and subnet CIDR block for the instance
@@ -293,8 +322,10 @@ func (i *ec2Instance) SetNewCustomNetworkingSpec(subnet string, securityGroups [
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
-	i.newCustomNetworkingSubnetID = subnet
-	i.newCustomNetworkingSecurityGroups = securityGroups
+	i.customNetworking = customNetworkingSpec{
+		subnetID:       subnet,
+		securityGroups: slices.Clone(securityGroups),
+	}
 }
 
 // UpdateCurrentSubnetAndCidrBlock updates the subnet details under a write lock
@@ -310,33 +341,35 @@ func (i *ec2Instance) UpdateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHel
 func (i *ec2Instance) updateCurrentSubnetAndCidrBlock(ec2APIHelper api.EC2APIHelper) error {
 	// Custom networking is being used on node, point the current subnet ID, CIDR block and
 	// instance security group to the one's present in the Custom networking spec
-	if i.newCustomNetworkingSubnetID != "" {
-		if i.newCustomNetworkingSecurityGroups != nil && len(i.newCustomNetworkingSecurityGroups) > 0 {
-			i.currentInstanceSecurityGroups = i.newCustomNetworkingSecurityGroups
+	if i.customNetworking.subnetID != "" {
+		if len(i.customNetworking.securityGroups) > 0 {
+			i.current.securityGroups = slices.Clone(i.customNetworking.securityGroups)
 		} else {
 			// when security groups are not specified in ENIConfig, use the primary network interface SG as per custom networking documentation
-			i.currentInstanceSecurityGroups = i.primaryENISecurityGroups
+			i.current.securityGroups = slices.Clone(i.source.primarySGs)
 		}
 		// Only get the subnet CIDR block again if the subnet ID has changed
-		if i.newCustomNetworkingSubnetID != i.currentSubnetID {
-			customSubnet, err := ec2APIHelper.GetSubnet(&i.newCustomNetworkingSubnetID)
+		if i.customNetworking.subnetID != i.current.subnetID {
+			customSubnet, err := ec2APIHelper.GetSubnet(&i.customNetworking.subnetID)
 			if err != nil {
 				return err
 			}
 			if customSubnet == nil || customSubnet.CidrBlock == nil {
-				return fmt.Errorf("failed to find subnet %s", i.newCustomNetworkingSubnetID)
+				return fmt.Errorf("failed to find subnet %s", i.customNetworking.subnetID)
 			}
-			i.currentSubnetID = i.newCustomNetworkingSubnetID
-			i.currentSubnetCIDRBlock = *customSubnet.CidrBlock
+			i.current.subnetID = i.customNetworking.subnetID
+			i.current.subnetCIDR = *customSubnet.CidrBlock
 			// NOTE: IPv6 does not support custom networking
 		}
 	} else {
 		// Custom networking in not being used, point to the primary network interface security group and
 		// subnet details
-		i.currentSubnetID = i.instanceSubnetID
-		i.currentSubnetCIDRBlock = i.instanceSubnetCidrBlock
-		i.currentSubnetV6CIDRBlock = i.instanceSubnetV6CidrBlock
-		i.currentInstanceSecurityGroups = i.primaryENISecurityGroups
+		i.current = effectiveNetworkState{
+			subnetID:       i.source.subnetID,
+			subnetCIDR:     i.source.subnetCIDR,
+			subnetV6CIDR:   i.source.subnetV6CIDR,
+			securityGroups: slices.Clone(i.source.primarySGs),
+		}
 	}
 
 	return nil
@@ -346,35 +379,137 @@ func (i *ec2Instance) GetCustomNetworkingSpec() (subnetID string, securityGroup 
 	i.lock.RLock()
 	defer i.lock.RUnlock()
 
-	return i.newCustomNetworkingSubnetID, i.newCustomNetworkingSecurityGroups
+	return i.customNetworking.subnetID, slices.Clone(i.customNetworking.securityGroups)
 }
 
 func (i *ec2Instance) GetConnectionTrackingSpec() (tcpEstablished, udpStream, udp *int32) {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
 
-	return i.tcpEstablishedTimeout, i.udpStreamTimeout, i.udpTimeout
+	return copyInt32(i.source.connectionTracking.tcpEstablishedTimeout),
+		copyInt32(i.source.connectionTracking.udpStreamTimeout),
+		copyInt32(i.source.connectionTracking.udpTimeout)
+}
+
+func subnetMaskFromCIDR(cidr string, wantIPv6 bool) (string, error) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return "", err
+	}
+	if prefix.Addr().Is6() != wantIPv6 {
+		family := "IPv4"
+		if wantIPv6 {
+			family = "IPv6"
+		}
+		return "", fmt.Errorf("expected an %s CIDR", family)
+	}
+	return strconv.Itoa(prefix.Bits()), nil
+}
+
+func copyInt32(value *int32) *int32 {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+// LoadFromNodeNetworkState restores the stable instance and trunk state persisted in CNINode.
+// Current ENIConfig state is applied separately by UpdateCurrentSubnetAndCidrBlock.
+func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, trunkENIID string) error {
+	if state.InstanceID != i.instanceID {
+		return fmt.Errorf("checkpoint instance ID %q does not match node instance ID %q", state.InstanceID, i.instanceID)
+	}
+	if state.InstanceType == "" || state.SubnetID == "" || state.SubnetCIDRBlock == "" ||
+		state.PrimaryNetworkInterfaceID == "" || len(state.PrimaryNetworkInterfaceSecurityGroups) == 0 ||
+		trunkENIID == "" {
+		return fmt.Errorf("checkpoint is missing required stable instance or trunk state")
+	}
+	if _, ok := vpc.Limits[state.InstanceType]; !ok {
+		return fmt.Errorf("unsupported checkpoint instance type %s", state.InstanceType)
+	}
+
+	subnetMask, err := subnetMaskFromCIDR(state.SubnetCIDRBlock, false)
+	if err != nil {
+		return fmt.Errorf("invalid IPv4 CIDR block %q in checkpoint: %w", state.SubnetCIDRBlock, err)
+	}
+	subnetV6Mask := ""
+	if state.SubnetV6CIDRBlock != "" {
+		subnetV6Mask, err = subnetMaskFromCIDR(state.SubnetV6CIDRBlock, true)
+		if err != nil {
+			return fmt.Errorf("invalid IPv6 CIDR block %q in checkpoint: %w", state.SubnetV6CIDRBlock, err)
+		}
+	}
+
+	i.lock.Lock()
+	defer i.lock.Unlock()
+
+	i.source = instanceSourceState{
+		instanceType:       state.InstanceType,
+		subnetID:           state.SubnetID,
+		subnetCIDR:         state.SubnetCIDRBlock,
+		subnetV6CIDR:       state.SubnetV6CIDRBlock,
+		subnetMask:         subnetMask,
+		subnetV6Mask:       subnetV6Mask,
+		primaryENIID:       state.PrimaryNetworkInterfaceID,
+		primarySGs:         slices.Clone(state.PrimaryNetworkInterfaceSecurityGroups),
+		connectionTracking: connectionTrackingFrom(state.ConnectionTracking),
+	}
+	i.current = effectiveNetworkState{}
+	i.restore = restoreState{
+		fromNodeNetworkState: true,
+		trunkENIID:           trunkENIID,
+	}
+
+	return nil
+}
+
+func connectionTrackingFrom(config *rcv1alpha1.ConnectionTrackingConfig) connectionTrackingState {
+	if config == nil {
+		return connectionTrackingState{}
+	}
+	return connectionTrackingState{
+		tcpEstablishedTimeout: copyInt32(config.TCPEstablishedTimeout),
+		udpStreamTimeout:      copyInt32(config.UDPStreamTimeout),
+		udpTimeout:            copyInt32(config.UDPTimeout),
+	}
+}
+
+// RestoredTrunkENIID returns the checkpointed trunk ID, or empty for EC2-initialized instances.
+func (i *ec2Instance) RestoredTrunkENIID() string {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
+	if !i.restore.fromNodeNetworkState {
+		return ""
+	}
+	return i.restore.trunkENIID
 }
 
 // BuildNodeNetworkState returns the stable instance state persisted in CNINode.
 func (i *ec2Instance) BuildNodeNetworkState() rcv1alpha1.NodeNetworkState {
+	i.lock.RLock()
+	defer i.lock.RUnlock()
+
 	var connectionTracking *rcv1alpha1.ConnectionTrackingConfig
-	if i.tcpEstablishedTimeout != nil || i.udpStreamTimeout != nil || i.udpTimeout != nil {
+	if i.source.connectionTracking.tcpEstablishedTimeout != nil ||
+		i.source.connectionTracking.udpStreamTimeout != nil ||
+		i.source.connectionTracking.udpTimeout != nil {
 		connectionTracking = &rcv1alpha1.ConnectionTrackingConfig{
-			TCPEstablishedTimeout: i.tcpEstablishedTimeout,
-			UDPStreamTimeout:      i.udpStreamTimeout,
-			UDPTimeout:            i.udpTimeout,
+			TCPEstablishedTimeout: copyInt32(i.source.connectionTracking.tcpEstablishedTimeout),
+			UDPStreamTimeout:      copyInt32(i.source.connectionTracking.udpStreamTimeout),
+			UDPTimeout:            copyInt32(i.source.connectionTracking.udpTimeout),
 		}
 	}
 
 	return rcv1alpha1.NodeNetworkState{
 		InstanceID:                            i.instanceID,
-		InstanceType:                          i.instanceType,
-		SubnetID:                              i.instanceSubnetID,
-		SubnetCIDRBlock:                       i.instanceSubnetCidrBlock,
-		SubnetV6CIDRBlock:                     i.instanceSubnetV6CidrBlock,
-		PrimaryNetworkInterfaceID:             i.primaryENIID,
-		PrimaryNetworkInterfaceSecurityGroups: append([]string(nil), i.primaryENISecurityGroups...),
+		InstanceType:                          i.source.instanceType,
+		SubnetID:                              i.source.subnetID,
+		SubnetCIDRBlock:                       i.source.subnetCIDR,
+		SubnetV6CIDRBlock:                     i.source.subnetV6CIDR,
+		PrimaryNetworkInterfaceID:             i.source.primaryENIID,
+		PrimaryNetworkInterfaceSecurityGroups: slices.Clone(i.source.primarySGs),
 		ConnectionTracking:                    connectionTracking,
 	}
 }
