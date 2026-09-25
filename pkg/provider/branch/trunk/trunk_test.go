@@ -698,6 +698,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			prepare: func(f *fields) {
 				freeIndex := trunkDeviceIndex
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
 				f.mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(SecurityGroups)
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]awsEc2Types.InstanceNetworkInterface{}, nil)
 				f.mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(freeIndex, nil)
@@ -716,6 +717,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			name: "ErrWhen_EmptyNWInterfaceResponse, verifies error is returned when interface type is nil",
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(
 					[]awsEc2Types.InstanceNetworkInterface{{InterfaceType: nil}}, nil)
 			},
@@ -727,6 +729,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			name: "GetTrunkError, verifies error is returned when get trunkENI call fails",
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(nil, MockError)
 			},
 			args:    args{instance: nil, podList: []v1.Pod{*MockPod2}},
@@ -737,12 +740,45 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			name: "GetFreeIndexFail, verifies error is returned if no free index exists",
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]awsEc2Types.InstanceNetworkInterface{}, nil)
 				f.mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int32(0), MockError)
 			},
 			args:    args{instance: nil, podList: []v1.Pod{*MockPod2}},
 			wantErr: true,
 			asserts: nil,
+		},
+		{
+			name: "RestoredTrunkSkipsInstanceDiscoveryAndRecoversBranches",
+			prepare: func(f *fields) {
+				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().RestoredTrunkENIID().Return(trunkId)
+				f.mockInstance.EXPECT().SubnetID().Return(SubnetId)
+				f.mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
+					Return(branchInterfaces, nil)
+			},
+			args:    args{instance: nil, podList: []v1.Pod{*MockPod1, *MockPod2}},
+			wantErr: false,
+			asserts: func(f *fields) {
+				assert.Equal(t, trunkId, f.trunkENI.TrunkENIID())
+				branchENIs, present := f.trunkENI.uidToBranchENIMap[PodUID]
+				assert.True(t, present)
+				assert.Equal(t, []*ENIDetails{EniDetails1, EniDetails2}, branchENIs)
+				assert.True(t, f.trunkENI.usedVlanIds[VlanId1])
+				assert.True(t, f.trunkENI.usedVlanIds[VlanId2])
+			},
+		},
+		{
+			name: "RestoredTrunkReturnsBranchInventoryError",
+			prepare: func(f *fields) {
+				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().RestoredTrunkENIID().Return(trunkId)
+				f.mockInstance.EXPECT().SubnetID().Return(SubnetId)
+				f.mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
+					Return(nil, MockError)
+			},
+			args:    args{instance: nil},
+			wantErr: true,
 		},
 		{
 			name: "TrunkExists_WithBranches, verifies no error when trunk exists with branches",

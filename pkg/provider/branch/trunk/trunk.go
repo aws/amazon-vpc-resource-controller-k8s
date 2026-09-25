@@ -227,28 +227,34 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	instanceID := t.instance.InstanceID()
 	log := t.log.WithValues("request", "initialize", "instance ID", instanceID)
 
-	nwInterfaces, err := t.ec2ApiHelper.GetInstanceNetworkInterface(&instanceID)
-	if err != nil {
-		trunkENIOperationsErrCount.WithLabelValues("describe_instance_nw_interface").Inc()
-		return err
-	}
-
 	var trunk ec2types.InstanceNetworkInterface
-	// Get trunk network interface
-	for _, nwInterface := range nwInterfaces {
-		// It's possible to get an empty network interface response if the instance is being deleted.
-		if nwInterface.InterfaceType == nil {
-			return fmt.Errorf("received an empty network interface response "+
-				"from EC2 %+v", nwInterface)
+	restoredTrunkENIID := instance.RestoredTrunkENIID()
+	if restoredTrunkENIID != "" {
+		t.trunkENIId = restoredTrunkENIID
+		log.V(1).Info("restored trunk identity from CNINode checkpoint", "trunk", restoredTrunkENIID)
+	} else {
+		nwInterfaces, err := t.ec2ApiHelper.GetInstanceNetworkInterface(&instanceID)
+		if err != nil {
+			trunkENIOperationsErrCount.WithLabelValues("describe_instance_nw_interface").Inc()
+			return err
 		}
-		if *nwInterface.InterfaceType == "trunk" {
-			// Check that the trunkENI is in attached state before adding to cache
-			if err = t.ec2ApiHelper.WaitForNetworkInterfaceStatusChange(nwInterface.NetworkInterfaceId, string(ec2types.AttachmentStatusAttached)); err == nil {
-				t.trunkENIId = *nwInterface.NetworkInterfaceId
-			} else {
-				return fmt.Errorf("failed to verify network interface status attached for %v", *nwInterface.NetworkInterfaceId)
+
+		// Get trunk network interface
+		for _, nwInterface := range nwInterfaces {
+			// It's possible to get an empty network interface response if the instance is being deleted.
+			if nwInterface.InterfaceType == nil {
+				return fmt.Errorf("received an empty network interface response "+
+					"from EC2 %+v", nwInterface)
 			}
-			trunk = nwInterface
+			if *nwInterface.InterfaceType == "trunk" {
+				// Check that the trunkENI is in attached state before adding to cache
+				if err = t.ec2ApiHelper.WaitForNetworkInterfaceStatusChange(nwInterface.NetworkInterfaceId, string(ec2types.AttachmentStatusAttached)); err == nil {
+					t.trunkENIId = *nwInterface.NetworkInterfaceId
+				} else {
+					return fmt.Errorf("failed to verify network interface status attached for %v", *nwInterface.NetworkInterfaceId)
+				}
+				trunk = nwInterface
+			}
 		}
 	}
 
@@ -275,37 +281,39 @@ func (t *trunkENI) InitTrunk(instance ec2.EC2Instance, podList []v1.Pod) error {
 	}
 
 	// the node already have trunk, let's check if its SGs and Subnets match with expected
-	expectedSubnetID, expectedSecurityGroups := t.instance.GetCustomNetworkingSpec()
-	if len(expectedSecurityGroups) > 0 || expectedSubnetID != "" {
-		slices.Sort(expectedSecurityGroups)
-		trunkSGs := lo.Map(trunk.Groups, func(g ec2types.GroupIdentifier, _ int) string {
-			return lo.FromPtr(g.GroupId)
-		})
-		slices.Sort(trunkSGs)
+	if restoredTrunkENIID == "" {
+		expectedSubnetID, expectedSecurityGroups := t.instance.GetCustomNetworkingSpec()
+		if len(expectedSecurityGroups) > 0 || expectedSubnetID != "" {
+			slices.Sort(expectedSecurityGroups)
+			trunkSGs := lo.Map(trunk.Groups, func(g ec2types.GroupIdentifier, _ int) string {
+				return lo.FromPtr(g.GroupId)
+			})
+			slices.Sort(trunkSGs)
 
-		mismatchedSubnets := expectedSubnetID != lo.FromPtr(trunk.SubnetId)
-		mismatchedSGs := !slices.Equal(expectedSecurityGroups, trunkSGs)
+			mismatchedSubnets := expectedSubnetID != lo.FromPtr(trunk.SubnetId)
+			mismatchedSGs := !slices.Equal(expectedSecurityGroups, trunkSGs)
 
-		extraSGsInTrunk, missingSGsInTrunk := lo.Difference(trunkSGs, expectedSecurityGroups)
-		t.log.Info("Observed trunk ENI config",
-			"instanceID", t.instance.InstanceID(),
-			"trunkENIID", lo.FromPtr(trunk.NetworkInterfaceId),
-			"configuredTrunkSGs", trunkSGs,
-			"configuredTrunkSubnet", lo.FromPtr(trunk.SubnetId),
-			"desiredTrunkSGs", expectedSecurityGroups,
-			"desiredTrunkSubnet", expectedSubnetID,
-			"mismatchedSGs", mismatchedSGs,
-			"mismatchedSubnets", mismatchedSubnets,
-			"missingSGs", missingSGsInTrunk,
-			"extraSGs", extraSGsInTrunk,
-		)
+			extraSGsInTrunk, missingSGsInTrunk := lo.Difference(trunkSGs, expectedSecurityGroups)
+			t.log.Info("Observed trunk ENI config",
+				"instanceID", t.instance.InstanceID(),
+				"trunkENIID", lo.FromPtr(trunk.NetworkInterfaceId),
+				"configuredTrunkSGs", trunkSGs,
+				"configuredTrunkSubnet", lo.FromPtr(trunk.SubnetId),
+				"desiredTrunkSGs", expectedSecurityGroups,
+				"desiredTrunkSubnet", expectedSubnetID,
+				"mismatchedSGs", mismatchedSGs,
+				"mismatchedSubnets", mismatchedSubnets,
+				"missingSGs", missingSGsInTrunk,
+				"extraSGs", extraSGsInTrunk,
+			)
 
-		if mismatchedSGs {
-			unreconciledTrunkENICount.WithLabelValues(SecurityGroupsLabel).Inc()
-		}
+			if mismatchedSGs {
+				unreconciledTrunkENICount.WithLabelValues(SecurityGroupsLabel).Inc()
+			}
 
-		if mismatchedSubnets {
-			unreconciledTrunkENICount.WithLabelValues(SubnetLabel).Inc()
+			if mismatchedSubnets {
+				unreconciledTrunkENICount.WithLabelValues(SubnetLabel).Inc()
+			}
 		}
 	}
 
