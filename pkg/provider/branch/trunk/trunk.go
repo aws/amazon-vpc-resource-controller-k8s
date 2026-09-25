@@ -738,6 +738,9 @@ func (t *trunkENI) canCreateMore() bool {
 }
 
 func (t *trunkENI) TrunkENIID() string {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
 	return t.trunkENIId
 }
 
