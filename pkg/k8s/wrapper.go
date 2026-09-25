@@ -92,15 +92,19 @@ type K8sWrapper interface {
 // k8sWrapper is the wrapper object with the client
 type k8sWrapper struct {
 	// cacheClient MUST never be used for getting Pods. The Pods
-	// can be retrieved using the separate Pod Wrapper. For all
-	// other K8s Object use the cache client
-	cacheClient   client.Client
+	// can be retrieved using the separate Pod Wrapper. It handles
+	// normal cached reads and all writes.
+	cacheClient client.Client
+	// apiReader bypasses the informer cache for checkpoint read-before-write.
+	apiReader     client.Reader
 	eventRecorder record.EventRecorder
 	context       context.Context
 }
 
 // NewK8sWrapper returns a new K8sWrapper
-func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, ctx context.Context) K8sWrapper {
+func NewK8sWrapper(cacheClient client.Client, apiReader client.Reader, coreV1 corev1.CoreV1Interface,
+	ctx context.Context,
+) K8sWrapper {
 	if !prometheusRegistered {
 		prometheusRegister()
 	}
@@ -109,7 +113,12 @@ func NewK8sWrapper(client client.Client, coreV1 corev1.CoreV1Interface, ctx cont
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{
 		Component: config.ControllerName,
 	})
-	return &k8sWrapper{cacheClient: client, eventRecorder: recorder, context: ctx}
+	return &k8sWrapper{
+		cacheClient:   cacheClient,
+		apiReader:     apiReader,
+		eventRecorder: recorder,
+		context:       ctx,
+	}
 }
 
 func (k *k8sWrapper) GetDaemonSet(name, namespace string) (*appv1.DaemonSet, error) {
@@ -294,7 +303,7 @@ func (k *k8sWrapper) PatchCNINodeCheckpoint(
 ) error {
 	return retry.OnError(retry.DefaultBackoff, shouldRetryCNINodeStatusUpdate, func() error {
 		current := &rcv1alpha1.CNINode{}
-		if err := k.cacheClient.Get(k.context, types.NamespacedName{Name: nodeName}, current); err != nil {
+		if err := k.apiReader.Get(k.context, types.NamespacedName{Name: nodeName}, current); err != nil {
 			return err
 		}
 		if current.Spec.ManagedBy != "" &&

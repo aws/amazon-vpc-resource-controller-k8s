@@ -94,7 +94,7 @@ func getMockK8sWrapperWithClient(ctrl *gomock.Controller, objs []runtime.Object)
 	clientSet := fakeClientSet.NewSimpleClientset(mockNode)
 	mockController := mock_custom.NewMockController(ctrl)
 
-	return NewK8sWrapper(client, clientSet.CoreV1(), context.Background()), client, mockController
+	return NewK8sWrapper(client, client, clientSet.CoreV1(), context.Background()), client, mockController
 }
 
 // TestK8sWrapper_AdvertiseCapacity tests that the capacity is advertised to the k8s node
@@ -257,7 +257,7 @@ func TestPatchCNINodeCheckpointPreservesExistingStatus(t *testing.T) {
 		WithStatusSubresource(&v1alpha1.CNINode{}).
 		WithRuntimeObjects(cniNode).
 		Build()
-	wrapper := NewK8sWrapper(k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+	wrapper := NewK8sWrapper(k8sClient, k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
 
 	state := v1alpha1.NodeNetworkState{
 		InstanceID:   "i-00000000000000000",
@@ -275,6 +275,54 @@ func TestPatchCNINodeCheckpointPreservesExistingStatus(t *testing.T) {
 	assert.Equal(t, existingTrunk.Branches, stored.Status.TrunkInterface.Branches)
 }
 
+func TestPatchCNINodeCheckpointReadsFromAPIReader(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+
+	baseClient := fakeClient.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.CNINode{}).
+		WithRuntimeObjects(&v1alpha1.CNINode{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}).
+		Build()
+
+	cacheGetCalls := 0
+	cacheClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey,
+			client.Object, ...client.GetOption,
+		) error {
+			cacheGetCalls++
+			return fmt.Errorf("checkpoint read must not use the cache client")
+		},
+	})
+
+	apiReaderGetCalls := 0
+	apiReader := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+			obj client.Object, opts ...client.GetOption,
+		) error {
+			apiReaderGetCalls++
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+
+	wrapper := NewK8sWrapper(
+		cacheClient,
+		apiReader,
+		fakeClientSet.NewSimpleClientset().CoreV1(),
+		context.Background(),
+	)
+
+	state := v1alpha1.NodeNetworkState{InstanceID: "i-00000000000000000"}
+	assert.NoError(t, wrapper.PatchCNINodeCheckpoint(nodeName, state, "eni-00000000000000000"))
+	assert.Zero(t, cacheGetCalls)
+	assert.Equal(t, 1, apiReaderGetCalls)
+
+	stored := &v1alpha1.CNINode{}
+	assert.NoError(t, baseClient.Get(context.Background(), types.NamespacedName{Name: nodeName}, stored))
+	assert.Equal(t, state, *stored.Status.NodeNetworkState)
+	assert.Equal(t, "eni-00000000000000000", stored.Status.TrunkInterface.ID)
+}
+
 func TestPatchCNINodeCheckpointCreatesTrunkInterfaceWhenMissing(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(scheme)
@@ -284,7 +332,7 @@ func TestPatchCNINodeCheckpointCreatesTrunkInterfaceWhenMissing(t *testing.T) {
 		WithStatusSubresource(&v1alpha1.CNINode{}).
 		WithRuntimeObjects(&v1alpha1.CNINode{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}).
 		Build()
-	wrapper := NewK8sWrapper(k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+	wrapper := NewK8sWrapper(k8sClient, k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
 
 	state := v1alpha1.NodeNetworkState{InstanceID: "i-00000000000000000"}
 	assert.NoError(t, wrapper.PatchCNINodeCheckpoint(nodeName, state, "eni-00000000000000000"))
@@ -323,7 +371,7 @@ func TestPatchCNINodeCheckpointNoopWhenUnchanged(t *testing.T) {
 			},
 		}).
 		Build()
-	wrapper := NewK8sWrapper(k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+	wrapper := NewK8sWrapper(k8sClient, k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
 
 	assert.NoError(t, wrapper.PatchCNINodeCheckpoint(
 		nodeName,
@@ -354,7 +402,7 @@ func TestPatchCNINodeCheckpointRetriesNotFound(t *testing.T) {
 			},
 		}).
 		Build()
-	wrapper := NewK8sWrapper(k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+	wrapper := NewK8sWrapper(k8sClient, k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
 
 	err := wrapper.PatchCNINodeCheckpoint(
 		nodeName,
@@ -370,24 +418,48 @@ func TestPatchCNINodeCheckpointRetriesTransientPatch(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(scheme)
 
-	patchCalls := 0
-	k8sClient := fakeClient.NewClientBuilder().
+	baseClient := fakeClient.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&v1alpha1.CNINode{}).
 		WithRuntimeObjects(&v1alpha1.CNINode{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string,
-				obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption,
-			) error {
-				patchCalls++
-				if patchCalls == 1 {
-					return errors.NewServiceUnavailable("unavailable")
-				}
-				return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
-			},
-		}).
 		Build()
-	wrapper := NewK8sWrapper(k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+
+	cacheGetCalls := 0
+	patchCalls := 0
+	cacheClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey,
+			client.Object, ...client.GetOption,
+		) error {
+			cacheGetCalls++
+			return fmt.Errorf("checkpoint read must not use the cache client")
+		},
+		SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string,
+			obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption,
+		) error {
+			patchCalls++
+			if patchCalls == 1 {
+				return errors.NewServiceUnavailable("unavailable")
+			}
+			return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
+		},
+	})
+
+	apiReaderGetCalls := 0
+	apiReader := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+			obj client.Object, opts ...client.GetOption,
+		) error {
+			apiReaderGetCalls++
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+
+	wrapper := NewK8sWrapper(
+		cacheClient,
+		apiReader,
+		fakeClientSet.NewSimpleClientset().CoreV1(),
+		context.Background(),
+	)
 
 	err := wrapper.PatchCNINodeCheckpoint(
 		nodeName,
@@ -397,6 +469,8 @@ func TestPatchCNINodeCheckpointRetriesTransientPatch(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, 2, patchCalls)
+	assert.Equal(t, 2, apiReaderGetCalls)
+	assert.Zero(t, cacheGetCalls)
 }
 
 func TestPatchCNINodeCheckpointTransientFailureIsBounded(t *testing.T) {
@@ -417,7 +491,7 @@ func TestPatchCNINodeCheckpointTransientFailureIsBounded(t *testing.T) {
 			},
 		}).
 		Build()
-	wrapper := NewK8sWrapper(k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+	wrapper := NewK8sWrapper(k8sClient, k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
 
 	err := wrapper.PatchCNINodeCheckpoint(
 		nodeName,
@@ -451,7 +525,7 @@ func TestPatchCNINodeCheckpointSkipsOtherManager(t *testing.T) {
 			Status: existingStatus,
 		}).
 		Build()
-	wrapper := NewK8sWrapper(k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+	wrapper := NewK8sWrapper(k8sClient, k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
 
 	assert.NoError(t, wrapper.PatchCNINodeCheckpoint(
 		nodeName,

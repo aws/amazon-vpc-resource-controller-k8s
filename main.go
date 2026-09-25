@@ -306,7 +306,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	k8sApi := k8s.NewK8sWrapper(mgr.GetClient(), clientSet.CoreV1(), ctx)
+	k8sApi := k8s.NewK8sWrapper(mgr.GetClient(), mgr.GetAPIReader(), clientSet.CoreV1(), ctx)
 
 	featureGauge := prometheus.NewGauge(
 		prometheus.GaugeOpts{
