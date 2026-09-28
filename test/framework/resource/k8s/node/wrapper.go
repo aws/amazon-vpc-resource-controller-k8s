@@ -26,9 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-// GetNodeAndWaitTillCapacityPresent waits until a non-empty set of nodes is
-// non-deleting, Ready, and advertises positive expectedResource capacity, then
-// returns that ready set.
+// GetNodeAndWaitTillCapacityPresent waits for Ready nodes advertising expectedResource and returns them.
 func GetNodeAndWaitTillCapacityPresent(manager Manager, os string, expectedResource string) *v1.NodeList {
 	readyNodeList := &v1.NodeList{}
 	err := wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.ResourceOperationTimeout, true,

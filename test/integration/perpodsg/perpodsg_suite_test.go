@@ -75,9 +75,7 @@ var _ = AfterSuite(func() {
 	Expect(frameWork.EC2Manager.DeleteSecurityGroup(ctx, securityGroupID2)).To(Succeed())
 })
 
-// recycleLinuxNodes refreshes every ASG backing a linux node so each comes back
-// with a free trunk-ENI slot. No-op when nodes already advertise pod-eni or none
-// are in an ASG.
+// recycleLinuxNodes refreshes the linux nodes' ASGs so they come back with a free trunk-ENI slot.
 func recycleLinuxNodes() {
 	nodes, err := frameWork.NodeManager.GetNodesWithOS(config.OSLinux)
 	Expect(err).ToNot(HaveOccurred())
@@ -114,9 +112,7 @@ func recycleLinuxNodes() {
 	waitForRefreshedFleet(oldInstanceIDs, asgNames)
 }
 
-// waitForRefreshedFleet blocks until no pre-refresh instance still backs a linux
-// Node and every current ASG instance has a Ready Node advertising positive
-// pod-eni, so a mixed old/new fleet can't be mistaken for a completed refresh.
+// waitForRefreshedFleet waits until old instances are gone and every ASG instance is Ready with pod-eni.
 func waitForRefreshedFleet(oldInstanceIDs, asgNames map[string]struct{}) {
 	Expect(wait.PollUntilContextTimeout(context.Background(), utils.PollIntervalShort, utils.ResourceOperationTimeout, true,
 		func(ctx context.Context) (bool, error) {
@@ -168,7 +164,7 @@ func refreshInstanceGroups(asgNames map[string]struct{}) {
 				InstanceWarmup:       aws.Int32(0),
 			})
 		if startErr != nil {
-			cancelInstanceRefreshes(ctx, refreshIDs)
+			cancelInstanceRefreshes(refreshIDs)
 			Expect(startErr).ToNot(HaveOccurred(), "starting instance refresh for asg %s", asgName)
 		}
 		refreshIDs[asgName] = refreshID
@@ -180,7 +176,10 @@ func refreshInstanceGroups(asgNames map[string]struct{}) {
 		wg.Add(1)
 		go func(asgName, refreshID string) {
 			defer wg.Done()
-			refreshErrs <- waitForInstanceRefresh(ctx, asgName, refreshID)
+			if e := waitForInstanceRefresh(ctx, asgName, refreshID); e != nil {
+				cancel() // stop the sibling waiters as soon as one refresh fails
+				refreshErrs <- e
+			}
 		}(asgName, refreshID)
 	}
 	wg.Wait()
@@ -188,9 +187,13 @@ func refreshInstanceGroups(asgNames map[string]struct{}) {
 
 	var errs []error
 	for e := range refreshErrs {
-		if e != nil {
+		// context.Canceled comes from cancelling siblings, not a real failure.
+		if !errors.Is(e, context.Canceled) {
 			errs = append(errs, e)
 		}
+	}
+	if len(errs) > 0 {
+		cancelInstanceRefreshes(refreshIDs)
 	}
 	Expect(errors.Join(errs...)).To(Succeed())
 }
@@ -221,17 +224,45 @@ func waitForInstanceRefresh(ctx context.Context, asgName, refreshID string) erro
 		})
 }
 
-func cancelInstanceRefreshes(ctx context.Context, refreshIDs map[string]string) {
+// cancelInstanceRefreshes cancels in-flight refreshes and waits for them to stop; errors are only logged.
+func cancelInstanceRefreshes(refreshIDs map[string]string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	for asgName := range refreshIDs {
 		if err := frameWork.AutoScalingManager.CancelInstanceRefresh(ctx, asgName); err != nil {
 			GinkgoWriter.Printf("failed to cancel instance refresh for asg %s: %v\n", asgName, err)
 		}
 	}
+	for asgName, refreshID := range refreshIDs {
+		if err := wait.PollUntilContextCancel(ctx, utils.PollIntervalMedium, true,
+			func(ctx context.Context) (bool, error) {
+				refresh, err := frameWork.AutoScalingManager.DescribeInstanceRefresh(ctx, asgName, refreshID)
+				if err != nil {
+					return false, nil // transient describe error; keep polling until ctx expires
+				}
+				return isTerminalRefreshStatus(refresh.Status), nil
+			}); err != nil {
+			GinkgoWriter.Printf("timed out waiting for instance refresh %s on asg %s to cancel: %v\n",
+				refreshID, asgName, err)
+		}
+	}
 }
 
-// allNodesReadyWithResource reports whether every node is non-deleting, Ready, and
-// advertises a positive quantity of the resource. Stale/NotReady nodes that still
-// advertise it must not short-circuit a recycle.
+// isTerminalRefreshStatus reports whether a refresh will no longer replace nodes.
+func isTerminalRefreshStatus(status autoscalingtypes.InstanceRefreshStatus) bool {
+	switch status {
+	case autoscalingtypes.InstanceRefreshStatusSuccessful,
+		autoscalingtypes.InstanceRefreshStatusFailed,
+		autoscalingtypes.InstanceRefreshStatusCancelled,
+		autoscalingtypes.InstanceRefreshStatusRollbackFailed,
+		autoscalingtypes.InstanceRefreshStatusRollbackSuccessful:
+		return true
+	default:
+		return false
+	}
+}
+
+// allNodesReadyWithResource reports whether every node is non-deleting, Ready, and advertises the resource.
 func allNodesReadyWithResource(nodes *v1.NodeList, resource string) bool {
 	for i := range nodes.Items {
 		n := nodes.Items[i]
