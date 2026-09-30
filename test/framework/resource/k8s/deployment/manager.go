@@ -15,7 +15,6 @@ package deployment
 
 import (
 	"context"
-	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
@@ -28,7 +27,6 @@ import (
 
 type Manager interface {
 	CreateAndWaitUntilDeploymentReady(ctx context.Context, dp *appsv1.Deployment) (*appsv1.Deployment, error)
-	CreateAndWaitUntilDeploymentReadyWithTimeout(ctx context.Context, dp *appsv1.Deployment, timeout time.Duration) (*appsv1.Deployment, error)
 	DeleteAndWaitUntilDeploymentDeleted(ctx context.Context, dp *appsv1.Deployment) error
 	ScaleDeploymentAndWaitTillReady(ctx context.Context, namespace string, name string, replicas int32) error
 	UpdateDeploymentImage(ctx context.Context, namespace string, name string, imageReplacement string) error
@@ -44,18 +42,22 @@ type defaultManager struct {
 	k8sClient client.Client
 }
 
+// CreateAndWaitUntilDeploymentReady waits until the deadline on ctx, or
+// utils.ResourceOperationTimeout if ctx has no deadline.
 func (m *defaultManager) CreateAndWaitUntilDeploymentReady(ctx context.Context, dp *appsv1.Deployment) (*appsv1.Deployment, error) {
-	return m.CreateAndWaitUntilDeploymentReadyWithTimeout(ctx, dp, utils.ResourceOperationTimeout)
-}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, utils.ResourceOperationTimeout)
+		defer cancel()
+	}
 
-func (m *defaultManager) CreateAndWaitUntilDeploymentReadyWithTimeout(ctx context.Context, dp *appsv1.Deployment, timeout time.Duration) (*appsv1.Deployment, error) {
 	err := m.k8sClient.Create(ctx, dp)
 	if err != nil {
 		return nil, err
 	}
 
 	observedDP := &appsv1.Deployment{}
-	return observedDP, wait.PollUntilContextTimeout(ctx, utils.PollIntervalMedium, timeout, false, func(ctx context.Context) (bool, error) {
+	return observedDP, wait.PollUntilContextCancel(ctx, utils.PollIntervalMedium, false, func(ctx context.Context) (bool, error) {
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(dp), observedDP); err != nil {
 			return false, err
 		}

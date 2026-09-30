@@ -14,6 +14,7 @@
 package windows_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -644,7 +645,9 @@ var _ = Describe("Windows Integration Test", func() {
 						PodLabel(podLabelKey, podLabelVal).
 						NodeSelector(map[string]string{"kubernetes.io/os": "windows", podLabelKey: podLabelVal}).
 						Build()
-					_, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReadyWithTimeout(ctx, deployment, utils.WindowsPodsCreationTimeout)
+					deployCtx, cancel := context.WithTimeout(ctx, utils.WindowsPodsCreationTimeout)
+					defer cancel()
+					_, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReady(deployCtx, deployment)
 					Expect(err).ToNot(HaveOccurred())
 
 					_, prefixesAfterDeployment, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
@@ -777,7 +780,9 @@ var _ = Describe("Windows Integration Test", func() {
 						PodLabel(podLabelKey, podLabelVal).
 						NodeSelector(map[string]string{"kubernetes.io/os": "windows", podLabelKey: podLabelVal}).
 						Build()
-					_, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReadyWithTimeout(ctx, deployment, utils.WindowsPodsCreationTimeout)
+					deployCtx, cancel := context.WithTimeout(ctx, utils.WindowsPodsCreationTimeout)
+					defer cancel()
+					_, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReady(deployCtx, deployment)
 					Expect(err).ToNot(HaveOccurred())
 
 					_, prefixesAfterDeployment, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
