@@ -15,6 +15,7 @@ package autoscaling
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,11 +23,16 @@ import (
 	autoscalingtypes "github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 )
 
+// ErrInstanceRefreshNotFound signals a not-yet-visible refresh (retryable),
+// distinct from permanent API errors.
+var ErrInstanceRefreshNotFound = errors.New("instance refresh not found")
+
 type Manager interface {
 	DescribeAutoScalingGroup(autoScalingGroupName string) ([]autoscalingtypes.AutoScalingGroup, error)
 	UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int32) error
-	StartInstanceRefresh(asgName string) (string, error)
-	DescribeInstanceRefresh(asgName string, instanceRefreshId string) (autoscalingtypes.InstanceRefresh, error)
+	StartInstanceRefresh(ctx context.Context, asgName string, preferences *autoscalingtypes.RefreshPreferences) (string, error)
+	DescribeInstanceRefresh(ctx context.Context, asgName string, instanceRefreshId string) (autoscalingtypes.InstanceRefresh, error)
+	CancelInstanceRefresh(ctx context.Context, asgName string) error
 }
 
 type defaultManager struct {
@@ -65,18 +71,35 @@ func (d defaultManager) UpdateAutoScalingGroup(asgName string, desiredSize, minS
 	return err
 }
 
-func (d defaultManager) StartInstanceRefresh(asgName string) (string, error) {
+func (d defaultManager) StartInstanceRefresh(ctx context.Context, asgName string, preferences *autoscalingtypes.RefreshPreferences) (string, error) {
 	in := &autoscaling.StartInstanceRefreshInput{
 		AutoScalingGroupName: aws.String(asgName),
+		Preferences:          preferences,
 	}
-	out, err := d.AutoScalingAPI.StartInstanceRefresh(context.TODO(), in)
-	return *out.InstanceRefreshId, err
+	out, err := d.AutoScalingAPI.StartInstanceRefresh(ctx, in)
+	if err != nil {
+		return "", err
+	}
+	return *out.InstanceRefreshId, nil
 }
 
-func (d defaultManager) DescribeInstanceRefresh(asgName, instanceRefreshId string) (autoscalingtypes.InstanceRefresh, error) {
-	out, err := d.AutoScalingAPI.DescribeInstanceRefreshes(context.TODO(), &autoscaling.DescribeInstanceRefreshesInput{
+func (d defaultManager) DescribeInstanceRefresh(ctx context.Context, asgName, instanceRefreshId string) (autoscalingtypes.InstanceRefresh, error) {
+	out, err := d.AutoScalingAPI.DescribeInstanceRefreshes(ctx, &autoscaling.DescribeInstanceRefreshesInput{
 		AutoScalingGroupName: aws.String(asgName),
 		InstanceRefreshIds:   []string{instanceRefreshId},
 	})
-	return out.InstanceRefreshes[0], err
+	if err != nil {
+		return autoscalingtypes.InstanceRefresh{}, err
+	}
+	if len(out.InstanceRefreshes) == 0 {
+		return autoscalingtypes.InstanceRefresh{}, fmt.Errorf("%w: %s for asg %s", ErrInstanceRefreshNotFound, instanceRefreshId, asgName)
+	}
+	return out.InstanceRefreshes[0], nil
+}
+
+func (d defaultManager) CancelInstanceRefresh(ctx context.Context, asgName string) error {
+	_, err := d.AutoScalingAPI.CancelInstanceRefresh(ctx, &autoscaling.CancelInstanceRefreshInput{
+		AutoScalingGroupName: aws.String(asgName),
+	})
+	return err
 }
