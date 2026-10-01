@@ -15,6 +15,7 @@ package deployment
 
 import (
 	"context"
+
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -41,14 +42,22 @@ type defaultManager struct {
 	k8sClient client.Client
 }
 
+// CreateAndWaitUntilDeploymentReady waits until the deadline on ctx, or
+// utils.ResourceOperationTimeout if ctx has no deadline.
 func (m *defaultManager) CreateAndWaitUntilDeploymentReady(ctx context.Context, dp *appsv1.Deployment) (*appsv1.Deployment, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, utils.ResourceOperationTimeout)
+		defer cancel()
+	}
+
 	err := m.k8sClient.Create(ctx, dp)
 	if err != nil {
 		return nil, err
 	}
 
 	observedDP := &appsv1.Deployment{}
-	return observedDP, wait.PollUntilContextTimeout(ctx, utils.PollIntervalMedium, utils.ResourceOperationTimeout, false, func(ctx context.Context) (bool, error) {
+	return observedDP, wait.PollUntilContextCancel(ctx, utils.PollIntervalMedium, false, func(ctx context.Context) (bool, error) {
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(dp), observedDP); err != nil {
 			return false, err
 		}
