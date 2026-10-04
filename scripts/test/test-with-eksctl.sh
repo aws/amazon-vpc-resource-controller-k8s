@@ -258,7 +258,7 @@ trap 'on_exit' EXIT
 kubectl cordon -l kubernetes.io/os=windows
 
 # Install the stable version of VPC CNI
-bash "$SCRIPTS_DIR/install-vpc-cni.sh" "1.11"
+bash "$SCRIPTS_DIR/install-vpc-cni.sh" "1.21"
 
 # Install Cert Manager which is used for generating the
 # certificates for the Webhooks

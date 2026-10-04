@@ -5,7 +5,7 @@
 set -eo pipefail
 
 SCRIPTS_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
-DEFAULT_VPC_CNI_VERSION="1.11"
+DEFAULT_VPC_CNI_VERSION="1.21"
 
 source "$SCRIPTS_DIR/lib/k8s.sh"
 source "$SCRIPTS_DIR/lib/common.sh"
