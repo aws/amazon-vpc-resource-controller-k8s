@@ -81,7 +81,7 @@ type EC2APIHelper interface {
 		ipResourceCount *config.IPResourceCount, interfaceType *string, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest) (*ec2types.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2types.Subnet, error)
-	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error)
+	GetBranchNetworkInterface(trunkID *string) ([]*ec2types.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]ec2types.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []string) ([]ec2types.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]ec2types.TrunkInterfaceAssociation, error)
@@ -570,15 +570,12 @@ func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.R
 	return err
 }
 
-func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error) {
+func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2types.NetworkInterface, error) {
+	// No subnet filter: branches from earlier ENIConfig subnets stay on this trunk and must keep their VLANs.
 	filters := []ec2types.Filter{
 		{
 			Name:   aws.String("tag:" + config.TrunkENIIDTag),
 			Values: []string{*trunkID},
-		},
-		{
-			Name:   aws.String("subnet-id"),
-			Values: []string{*subnetID},
 		},
 	}
 

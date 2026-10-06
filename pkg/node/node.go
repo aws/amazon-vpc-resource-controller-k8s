@@ -285,8 +285,7 @@ func checkpointFallbackReason(cniNode *rcv1alpha1.CNINode, instanceID string) st
 	}
 	if cniNode.Status.TrunkInterface == nil || cniNode.Status.TrunkInterface.ID == "" ||
 		state.InstanceID == "" || state.InstanceType == "" || state.SubnetID == "" ||
-		state.SubnetCIDRBlock == "" || state.PrimaryNetworkInterfaceID == "" ||
-		len(state.PrimaryNetworkInterfaceSecurityGroups) == 0 {
+		state.SubnetCIDRBlock == "" || state.PrimaryNetworkInterfaceID == "" {
 		return checkpointRestoreReasonMissingField
 	}
 	return checkpointRestoreReasonNone

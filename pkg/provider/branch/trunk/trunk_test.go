@@ -242,12 +242,12 @@ func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *m
 	EniDetails1.deleteRetryCount = 0
 	EniDetails2.deleteRetryCount = 0
 
-	return &trunkENI, mockHelper, mockInstance
+	return trunkENI, mockHelper, mockInstance
 }
 
-func getMockTrunk() trunkENI {
+func getMockTrunk() *trunkENI {
 	log := zap.New(zap.UseDevMode(true)).WithName("node manager")
-	return trunkENI{
+	trunk := trunkENI{
 		log:               log,
 		usedVlanIds:       make([]bool, MaxAllocatableVlanIds),
 		uidToBranchENIMap: map[string][]*ENIDetails{},
@@ -258,6 +258,8 @@ func getMockTrunk() trunkENI {
 			},
 		},
 	}
+	trunk.prepared.Store(true)
+	return &trunk
 }
 
 func TestNewTrunkENI(t *testing.T) {
@@ -299,17 +301,6 @@ func TestTrunkENI_freeVlanId(t *testing.T) {
 	assert.Equal(t, 0, id)
 }
 
-func TestTrunkENI_markVlanAssigned(t *testing.T) {
-	trunkENI := getMockTrunk()
-
-	// Mark a Vlan as assigned
-	trunkENI.markVlanAssigned(0)
-
-	id, err := trunkENI.assignVlanId()
-	assert.NoError(t, err)
-	assert.Equal(t, 1, id)
-}
-
 // TestTrunkENI_getBranchFromCache tests branch eni is returned when present in the cache
 func TestTrunkENI_getBranchFromCache(t *testing.T) {
 	trunkENI := getMockTrunk()
@@ -342,22 +333,11 @@ func TestTrunkENI_addBranchToCache(t *testing.T) {
 	assert.Equal(t, branchENIs1, branchFromCache)
 }
 
-// TestTrunkENI_pushENIToDeleteQueue tests pushing to delete queue the data is stored in FIFO strategy
-func TestTrunkENI_pushENIToDeleteQueue(t *testing.T) {
-	trunkENI := getMockTrunk()
-
-	trunkENI.pushENIToDeleteQueue(EniDetails1)
-	trunkENI.pushENIToDeleteQueue(EniDetails2)
-
-	assert.Equal(t, EniDetails1, trunkENI.deleteQueue[0])
-	assert.Equal(t, EniDetails2, trunkENI.deleteQueue[1])
-}
-
 // TestTrunkENI_pushENIsToFrontOfDeleteQueue tests ENIs are pushed to the front of the queue instead of the back
 func TestTrunkENI_pushENIsToFrontOfDeleteQueue(t *testing.T) {
 	trunkENI := getMockTrunk()
 
-	trunkENI.pushENIToDeleteQueue(EniDetails1)
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, EniDetails1)
 	trunkENI.PushENIsToFrontOfDeleteQueue(nil, []*ENIDetails{EniDetails2})
 
 	assert.Equal(t, EniDetails2, trunkENI.deleteQueue[0])
@@ -370,7 +350,7 @@ func TestTrunkENI_pushENIsToFrontOfDeleteQueue_RemovePodFromCache(t *testing.T) 
 	trunkENI := getMockTrunk()
 	trunkENI.uidToBranchENIMap[PodUID] = []*ENIDetails{EniDetails2}
 
-	trunkENI.pushENIToDeleteQueue(EniDetails1)
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, EniDetails1)
 	trunkENI.PushENIsToFrontOfDeleteQueue(MockPod1, []*ENIDetails{EniDetails2})
 
 	assert.Equal(t, EniDetails2, trunkENI.deleteQueue[0])
@@ -382,7 +362,7 @@ func TestTrunkENI_pushENIsToFrontOfDeleteQueue_RemovePodFromCache(t *testing.T) 
 func TestTrunkENI_popENIFromDeleteQueue(t *testing.T) {
 	trunkENI := getMockTrunk()
 
-	trunkENI.pushENIToDeleteQueue(EniDetails1)
+	trunkENI.deleteQueue = append(trunkENI.deleteQueue, EniDetails1)
 	eniDetails, hasENI := trunkENI.popENIFromDeleteQueue()
 
 	assert.True(t, hasENI)
@@ -392,40 +372,53 @@ func TestTrunkENI_popENIFromDeleteQueue(t *testing.T) {
 	assert.False(t, hasENI)
 }
 
-// TestTrunkENI_getBranchInterfacesUsedByPod tests that branch interface are returned if present in pod annotation
-func TestTrunkENI_getBranchInterfacesUsedByPod(t *testing.T) {
+// TestTrunkENI_decodeBranchInterfacesUsedByPod tests that branch interfaces are returned if present in pod annotation.
+func TestTrunkENI_decodeBranchInterfacesUsedByPod(t *testing.T) {
 	trunkENI := getMockTrunk()
-	branchENIs := trunkENI.getBranchInterfacesUsedByPod(MockPod1)
+	branchENIs := trunkENI.decodeBranchInterfacesUsedByPod(MockPod1)
 
 	assert.Equal(t, 2, len(branchENIs))
 	assert.Equal(t, EniDetails1, branchENIs[0])
 	assert.Equal(t, EniDetails2, branchENIs[1])
 }
 
-// TestTrunkENI_getBranchInterfacesUsedByPod_MissingAnnotation tests that empty slice is returned if the pod has no branch
+// TestTrunkENI_decodeBranchInterfacesUsedByPod_MissingAnnotation tests that an empty slice is returned if the pod has no branch
 // eni annotation
-func TestTrunkENI_getBranchInterfacesUsedByPod_MissingAnnotation(t *testing.T) {
+func TestTrunkENI_decodeBranchInterfacesUsedByPod_MissingAnnotation(t *testing.T) {
 	trunkENI := getMockTrunk()
-	branchENIs := trunkENI.getBranchInterfacesUsedByPod(MockPod2)
+	branchENIs := trunkENI.decodeBranchInterfacesUsedByPod(MockPod2)
 
 	assert.Equal(t, 0, len(branchENIs))
 }
 
-// TestTrunkENI_getBranchInterfaceMap tests that the branch interface map is returned for the given branch interface slice
-func TestTrunkENI_getBranchInterfaceMap(t *testing.T) {
+func TestTrunkENI_buildRecoveredBranchStateRecoversVlanIDFromEC2Tag(t *testing.T) {
 	trunkENI := getMockTrunk()
+	pod := v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			UID: MockPodUID1,
+			Annotations: map[string]string{
+				config.ResourceNamePodENI: fmt.Sprintf(`[{"eniId":%q,"vlanId":0}]`, Branch1Id),
+			},
+		},
+	}
+	branch := &awsEc2Types.NetworkInterface{
+		NetworkInterfaceId: aws.String(Branch1Id),
+		TagSet: []awsEc2Types.Tag{
+			{Key: aws.String(config.VLandIDTag), Value: aws.String("4")},
+		},
+	}
 
-	branchENIsMap := trunkENI.getBranchInterfaceMap([]*ENIDetails{EniDetails1})
-	assert.Equal(t, EniDetails1, branchENIsMap[EniDetails1.ID])
-}
+	state := trunkENI.buildRecoveredBranchState([]v1.Pod{pod}, []*awsEc2Types.NetworkInterface{branch})
+	trunkENI.commitBranchState(trunkId, state)
 
-// TestTrunkENI_getBranchInterfaceMap_EmptyList tests that empty map is returned if empty list is passed
-func TestTrunkENI_getBranchInterfaceMap_EmptyList(t *testing.T) {
-	trunkENI := getMockTrunk()
-
-	branchENIsMap := trunkENI.getBranchInterfaceMap([]*ENIDetails{})
-	assert.NotNil(t, branchENIsMap)
-	assert.Zero(t, len(branchENIsMap))
+	assert.True(t, trunkENI.usedVlanIds[4])
+	assert.Equal(t, 4, trunkENI.uidToBranchENIMap[PodUID][0].VlanID)
+	for vlanID := 1; vlanID < 4; vlanID++ {
+		trunkENI.usedVlanIds[vlanID] = true
+	}
+	nextVlanID, err := trunkENI.assignVlanId()
+	assert.NoError(t, err)
+	assert.NotEqual(t, 4, nextVlanID)
 }
 
 // TestTrunkENI_deleteENI tests deleting branch ENI
@@ -512,7 +505,7 @@ func TestTrunkENI_deleteENI(t *testing.T) {
 			defer ctrl.Finish()
 
 			trunkENI, ec2APIHelper, _ := getMockHelperInstanceAndTrunkObject(ctrl)
-			trunkENI.markVlanAssigned(tt.args.VlanID)
+			trunkENI.usedVlanIds[tt.args.VlanID] = true
 
 			f := fields{
 				mockEC2APIHelper: ec2APIHelper,
@@ -678,8 +671,7 @@ func TestTrunkENI_Reconcile_NoStateChange(t *testing.T) {
 
 func TestTrunkENI_InitTrunk(t *testing.T) {
 	type args struct {
-		instance ec2.EC2Instance
-		podList  []v1.Pod
+		podList []v1.Pod
 	}
 	type fields struct {
 		mockInstance     *mock_ec2.MockEC2Instance
@@ -706,8 +698,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 				f.mockEC2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&InstanceId, &SubnetId, SecurityGroups, f.trunkENI.nodeIDTag,
 					&freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil, nil).Return(trunkInterface, nil)
 			},
-			// Pass a different instance to verify the receiver's stored instance is used.
-			args:    args{instance: FakeInstance, podList: []v1.Pod{*MockPod2}},
+			args:    args{podList: []v1.Pod{*MockPod2}},
 			wantErr: false,
 			asserts: func(f *fields) {
 				assert.Equal(t, trunkId, f.trunkENI.TrunkENIID())
@@ -721,7 +712,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(
 					[]awsEc2Types.InstanceNetworkInterface{{InterfaceType: nil}}, nil)
 			},
-			args:    args{instance: nil, podList: []v1.Pod{*MockPod2}},
+			args:    args{podList: []v1.Pod{*MockPod2}},
 			wantErr: true,
 			asserts: nil,
 		},
@@ -732,7 +723,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(nil, MockError)
 			},
-			args:    args{instance: nil, podList: []v1.Pod{*MockPod2}},
+			args:    args{podList: []v1.Pod{*MockPod2}},
 			wantErr: true,
 			asserts: nil,
 		},
@@ -744,20 +735,16 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]awsEc2Types.InstanceNetworkInterface{}, nil)
 				f.mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int32(0), MockError)
 			},
-			args:    args{instance: nil, podList: []v1.Pod{*MockPod2}},
+			args:    args{podList: []v1.Pod{*MockPod2}},
 			wantErr: true,
 			asserts: nil,
 		},
 		{
-			name: "RestoredTrunkSkipsInstanceDiscoveryAndRecoversBranches",
+			name: "RestoredTrunkDefersBranchInventory",
 			prepare: func(f *fields) {
-				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
 				f.mockInstance.EXPECT().RestoredTrunkENIID().Return(trunkId)
-				f.mockInstance.EXPECT().SubnetID().Return(SubnetId)
-				f.mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
-					Return(branchInterfaces, nil)
 			},
-			args:    args{instance: nil, podList: []v1.Pod{*MockPod1, *MockPod2}},
+			args:    args{podList: []v1.Pod{*MockPod1, *MockPod2}},
 			wantErr: false,
 			asserts: func(f *fields) {
 				assert.Equal(t, trunkId, f.trunkENI.TrunkENIID())
@@ -769,18 +756,6 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			},
 		},
 		{
-			name: "RestoredTrunkReturnsBranchInventoryError",
-			prepare: func(f *fields) {
-				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
-				f.mockInstance.EXPECT().RestoredTrunkENIID().Return(trunkId)
-				f.mockInstance.EXPECT().SubnetID().Return(SubnetId)
-				f.mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).
-					Return(nil, MockError)
-			},
-			args:    args{instance: nil},
-			wantErr: true,
-		},
-		{
 			name: "TrunkExists_WithBranches, verifies no error when trunk exists with branches",
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
@@ -788,10 +763,9 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 				f.mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
 				f.mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
-				f.mockInstance.EXPECT().SubnetID().Return(SubnetId)
-				f.mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil)
+				f.mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(branchInterfaces, nil)
 			},
-			args:    args{instance: FakeInstance, podList: []v1.Pod{*MockPod1, *MockPod2}},
+			args:    args{podList: []v1.Pod{*MockPod1, *MockPod2}},
 			wantErr: false,
 			asserts: func(f *fields) {
 				assert.Equal(t, trunkId, f.trunkENI.TrunkENIID())
@@ -821,10 +795,9 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 				f.mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
 				f.mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
-				f.mockInstance.EXPECT().SubnetID().Return(SubnetId)
-				f.mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId, &SubnetId).Return(branchInterfaces, nil)
+				f.mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(branchInterfaces, nil)
 			},
-			args:    args{instance: FakeInstance, podList: []v1.Pod{*MockPod2}},
+			args:    args{podList: []v1.Pod{*MockPod2}},
 			wantErr: false,
 			asserts: func(f *fields) {
 				_, isPresent := f.trunkENI.uidToBranchENIMap[PodUID]
@@ -844,7 +817,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
 				f.mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(MockError)
 			},
-			args:    args{instance: FakeInstance, podList: []v1.Pod{*MockPod1, *MockPod2}},
+			args:    args{podList: []v1.Pod{*MockPod1, *MockPod2}},
 			wantErr: true,
 			asserts: nil,
 		},
@@ -863,10 +836,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			if tt.prepare != nil {
 				tt.prepare(&f)
 			}
-			if tt.args.instance == nil {
-				tt.args.instance = f.mockInstance
-			}
-			err := f.trunkENI.InitTrunk(tt.args.instance, tt.args.podList)
+			err := f.trunkENI.InitTrunk(tt.args.podList)
 			assert.Equal(t, err != nil, tt.wantErr)
 			if tt.asserts != nil {
 				tt.asserts(&f)

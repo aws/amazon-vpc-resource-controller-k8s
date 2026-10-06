@@ -125,6 +125,20 @@ func getProvider() branchENIProvider {
 	}
 }
 
+func prepareWithPods(
+	t *testing.T,
+	wantPods []v1.Pod,
+	result error,
+) func(func() ([]v1.Pod, error)) ([]v1.Pod, error) {
+	t.Helper()
+	return func(listRunningPods func() ([]v1.Pod, error)) ([]v1.Pod, error) {
+		pods, err := listRunningPods()
+		assert.NoError(t, err)
+		assert.Equal(t, wantPods, pods)
+		return pods, result
+	}
+}
+
 func prepareInitResourceSuccess(
 	ctrl *gomock.Controller,
 	checkpointErr error,
@@ -242,10 +256,8 @@ func TestBranchENIProvider_InitResourceRestoredCheckpointPersistsCheckpoint(t *t
 
 	mockInstance.EXPECT().Name().Return(NodeName)
 	mockInstance.EXPECT().RestoredTrunkENIID().Return(trunkENIID).AnyTimes()
-	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
-	mockInstance.EXPECT().SubnetID().Return(subnetID)
+	mockInstance.EXPECT().InstanceID().Return(instanceID)
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
-	mockEC2API.EXPECT().GetBranchNetworkInterface(&trunkENIID, &subnetID).Return(nil, nil)
 	mockInstance.EXPECT().BuildNodeNetworkState().Return(state)
 	mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(nil)
 	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
@@ -259,6 +271,60 @@ func TestBranchENIProvider_InitResourceRestoredCheckpointPersistsCheckpoint(t *t
 	)
 
 	assert.NoError(t, provider.InitResource(mockInstance))
+}
+
+func TestBranchENIProvider_RestoredTrunkFallbackRewritesCheckpoint(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockEC2API := mock_api.NewMockEC2APIHelper(ctrl)
+	provider.apiWrapper.EC2API = mockEC2API
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	state := rcv1alpha1.NodeNetworkState{InstanceID: "i-current"}
+	pods := []v1.Pod{*MockPod1}
+	trunkENIID := "eni-current-trunk"
+
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(pods, nil)
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
+		DoAndReturn(prepareWithPods(t, pods, trunk.ErrNeedsColdInit))
+	gomock.InOrder(
+		fakeTrunk.EXPECT().ColdInit(pods).Return(mockInstance, nil),
+		mockInstance.EXPECT().BuildNodeNetworkState().Return(state),
+		fakeTrunk.EXPECT().TrunkENIID().Return(trunkENIID),
+		mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(nil),
+		fakeTrunk.EXPECT().CompletePreparation(true),
+	)
+
+	assert.NoError(t, provider.prepareTrunkForAllocation(NodeName, fakeTrunk))
+}
+
+func TestBranchENIProvider_RestoredTrunkFallbackRequiresCheckpointRewrite(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	mockEC2API := mock_api.NewMockEC2APIHelper(ctrl)
+	provider.apiWrapper.EC2API = mockEC2API
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	state := rcv1alpha1.NodeNetworkState{InstanceID: "i-current"}
+	pods := []v1.Pod{*MockPod1}
+	trunkENIID := "eni-current-trunk"
+
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(pods, nil)
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
+		DoAndReturn(prepareWithPods(t, pods, trunk.ErrNeedsColdInit))
+	gomock.InOrder(
+		fakeTrunk.EXPECT().ColdInit(pods).Return(mockInstance, nil),
+		mockInstance.EXPECT().BuildNodeNetworkState().Return(state),
+		fakeTrunk.EXPECT().TrunkENIID().Return(trunkENIID),
+		mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(MockError),
+		fakeTrunk.EXPECT().CompletePreparation(false),
+	)
+
+	assert.ErrorIs(t, provider.prepareTrunkForAllocation(NodeName, fakeTrunk), MockError)
 }
 
 func checkpointPersistErrorCount(t *testing.T) float64 {
@@ -484,7 +550,12 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
-	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	gomock.InOrder(
+		fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
+			DoAndReturn(prepareWithPods(t, nil, nil)),
+		fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil),
+	)
 	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1, config.ResourceNamePodENI,
 		string(expectedAnnotation)).Return(nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
@@ -492,6 +563,96 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
 	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_CreateAndAnnotateResources_PrepareFailureRequeuesAllocation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
+		DoAndReturn(prepareWithPods(t, nil, MockError))
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchAllocationFailed, gomock.Any(), v1.EventTypeWarning)
+
+	result, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
+
+	assert.True(t, result.Requeue)
+	assert.Equal(t, preparationRetryPeriod, result.RequeueAfter)
+	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_CreateAndAnnotateResources_PreparationRetriesPastWorkerErrorLimit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+	preparationFailures := config.WorkQueueDefaultMaxRetries + 1
+	totalAttempts := preparationFailures + 1
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil).Times(totalAttempts)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).
+		Return(MockPod1, nil).
+		Times(totalAttempts)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).
+		Return(SecurityGroups, nil).
+		Times(totalAttempts)
+	mockK8sAPI.EXPECT().BroadcastEvent(
+		MockPod1,
+		ReasonSecurityGroupRequested,
+		gomock.Any(),
+		v1.EventTypeNormal,
+	).Times(totalAttempts)
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil).Times(totalAttempts)
+	prepareAttempts := 0
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
+		listRunningPods func() ([]v1.Pod, error),
+	) ([]v1.Pod, error) {
+		pods, err := listRunningPods()
+		assert.NoError(t, err)
+		prepareAttempts++
+		if prepareAttempts <= preparationFailures {
+			return pods, MockError
+		}
+		return pods, nil
+	}).Times(totalAttempts)
+	mockK8sAPI.EXPECT().BroadcastEvent(
+		MockPod1,
+		ReasonBranchAllocationFailed,
+		gomock.Any(),
+		v1.EventTypeWarning,
+	).Times(preparationFailures)
+	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, 1).Return(EniDetails, nil)
+	expectedAnnotation, err := json.Marshal(EniDetails)
+	assert.NoError(t, err)
+	mockPodAPI.EXPECT().AnnotatePod(
+		MockPodNamespace1,
+		MockPodName1,
+		MockPodUID1,
+		config.ResourceNamePodENI,
+		string(expectedAnnotation),
+	).Return(nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
+
+	for attempt := 0; attempt < totalAttempts; attempt++ {
+		result, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
+		assert.NoError(t, err)
+		if attempt < preparationFailures {
+			assert.True(t, result.Requeue)
+			assert.Positive(t, result.RequeueAfter)
+			continue
+		}
+		assert.False(t, result.Requeue)
+	}
 }
 
 func TestBranchENIProvider_CreateAndAnnotateResources_AlreadyAnnotated_Cache(t *testing.T) {
@@ -615,7 +776,12 @@ func TestBranchENIProvider_CreateAndAnnotateResources_Annotate_Error(t *testing.
 	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
-	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil)
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	gomock.InOrder(
+		fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
+			DoAndReturn(prepareWithPods(t, nil, nil)),
+		fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, resCount).Return(EniDetails, nil),
+	)
 	mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1,
 		config.ResourceNamePodENI, string(expectedAnnotation)).Return(MockError)
 	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchENIAnnotationFailed, gomock.Any(), v1.EventTypeWarning)

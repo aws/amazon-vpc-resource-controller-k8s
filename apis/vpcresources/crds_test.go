@@ -95,10 +95,11 @@ func TestNodeNetworkStateSchema(t *testing.T) {
 		"instanceID",
 		"subnetID",
 		"subnetCIDRBlock",
-		"primaryNetworkInterfaceSecurityGroups",
 	}, state.Required)
 	assert.NotContains(t, state.Required, "instanceType")
 	assert.NotContains(t, state.Required, "primaryNetworkInterfaceID")
+	assert.NotContains(t, state.Required, "primaryNetworkInterfaceSecurityGroups")
+	assert.NotContains(t, state.Required, "connectionTracking")
 
 	expectedFields := []string{
 		"instanceID",
@@ -107,8 +108,6 @@ func TestNodeNetworkStateSchema(t *testing.T) {
 		"subnetCIDRBlock",
 		"subnetV6CIDRBlock",
 		"primaryNetworkInterfaceID",
-		"primaryNetworkInterfaceSecurityGroups",
-		"connectionTracking",
 	}
 	assert.Len(t, state.Properties, len(expectedFields))
 	for _, field := range expectedFields {
@@ -135,18 +134,15 @@ func TestNodeNetworkStateSchema(t *testing.T) {
 	assert.Equal(t, `^eni-([0-9a-f]{8}|[0-9a-f]{17})$`, primaryENIID.Pattern)
 	require.NotNil(t, primaryENIID.MaxLength)
 	assert.EqualValues(t, 21, *primaryENIID.MaxLength)
+}
 
-	securityGroups := state.Properties["primaryNetworkInterfaceSecurityGroups"]
-	assert.Equal(t, "array", securityGroups.Type)
-	require.NotNil(t, securityGroups.MinItems)
-	assert.EqualValues(t, 1, *securityGroups.MinItems)
-	require.NotNil(t, securityGroups.XListType)
-	assert.Equal(t, "atomic", *securityGroups.XListType)
+func TestNodeNetworkStateSchemaOmitsMutablePrimaryENISettings(t *testing.T) {
+	require.Len(t, CNINodeCRD.Spec.Versions, 1)
+	state := CNINodeCRD.Spec.Versions[0].Schema.OpenAPIV3Schema.
+		Properties["status"].Properties["nodeNetworkState"]
 
-	connectionTracking := state.Properties["connectionTracking"]
-	assert.Contains(t, connectionTracking.Properties, "tcpEstablishedTimeout")
-	assert.Contains(t, connectionTracking.Properties, "udpStreamTimeout")
-	assert.Contains(t, connectionTracking.Properties, "udpTimeout")
+	assert.NotContains(t, state.Properties, "primaryNetworkInterfaceSecurityGroups")
+	assert.NotContains(t, state.Properties, "connectionTracking")
 }
 
 // TestEmbeddedCRDsMatchGenerated fails if the embedded copies drift from the

@@ -59,6 +59,7 @@ const (
 	ReasonBranchENIAnnotationFailed = "BranchENIAnnotationFailed"
 
 	ReasonTrunkENICreationFailed = "TrunkENICreationFailed"
+	preparationRetryPeriod       = time.Second
 )
 
 var (
@@ -165,7 +166,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	if err := trunkENI.InitTrunk(instance, podList); err != nil {
+	if err := trunkENI.InitTrunk(podList); err != nil {
 		// If it's an AWS Error, get the exit code without the error message to avoid
 		// broadcasting multiple different messaged events
 
@@ -201,15 +202,8 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		}
 	}
 
-	state := instance.BuildNodeNetworkState()
-	if err := b.apiWrapper.K8sAPI.PatchCNINodeCheckpoint(
-		nodeName,
-		state,
-		trunkENI.TrunkENIID(),
-	); err != nil {
-		cniNodeCheckpointPersistErrCount.Inc()
-		b.log.Error(err, "failed to persist CNINode checkpoint", "node", nodeName)
-	}
+	// A failed write only disables fast restore on the next controller restart.
+	_ = b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
 
 	// TODO: For efficiency submit the process delete queue job only when the delete queue has items.
 	// Submit periodic jobs for the given node name
@@ -220,6 +214,57 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	// send an event to notify user this node has trunk interface initialized
 	utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkInitiatedReason, "The node has trunk interface initialized successfully", v1.EventTypeNormal, b.log)
 
+	return nil
+}
+
+func (b *branchENIProvider) persistCNINodeCheckpoint(
+	nodeName string,
+	instance ec2.EC2Instance,
+	trunkENI trunk.TrunkENI,
+) error {
+	state := instance.BuildNodeNetworkState()
+	if err := b.apiWrapper.K8sAPI.PatchCNINodeCheckpoint(
+		nodeName,
+		state,
+		trunkENI.TrunkENIID(),
+	); err != nil {
+		cniNodeCheckpointPersistErrCount.Inc()
+		b.log.Error(err, "failed to persist CNINode checkpoint", "node", nodeName)
+		return err
+	}
+	return nil
+}
+
+func (b *branchENIProvider) prepareTrunkForAllocation(
+	nodeName string,
+	trunkENI trunk.TrunkENI,
+) (err error) {
+	defer func() {
+		if err != nil {
+			b.log.Error(err, "branch inventory check failed", "node", nodeName)
+		}
+	}()
+
+	pods, err := trunkENI.PrepareForAllocation(func() ([]v1.Pod, error) {
+		return b.apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
+	})
+	if !errors.Is(err, trunk.ErrNeedsColdInit) {
+		return err
+	}
+
+	completed := false
+	defer func() {
+		trunkENI.CompletePreparation(completed)
+	}()
+
+	instance, err := trunkENI.ColdInit(pods)
+	if err != nil {
+		return fmt.Errorf("cold initializing trunk after restored trunk validation failed: %w", err)
+	}
+	if err := b.persistCNINodeCheckpoint(nodeName, instance, trunkENI); err != nil {
+		return fmt.Errorf("persisting checkpoint after restored trunk fallback: %w", err)
+	}
+	completed = true
 	return nil
 }
 
@@ -381,6 +426,13 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		// This should never happen
 		branchProviderOperationsErrCount.WithLabelValues("get_trunk_create").Inc()
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
+	}
+
+	if err := b.prepareTrunkForAllocation(pod.Spec.NodeName, trunkENI); err != nil {
+		branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation").Inc()
+		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
+			fmt.Sprintf("failed to prepare trunk before branch ENI allocation: %v", err), v1.EventTypeWarning)
+		return ctrl.Result{RequeueAfter: preparationRetryPeriod, Requeue: true}, nil
 	}
 
 	// Get the list of branch ENIs that will be allocated to the pod object

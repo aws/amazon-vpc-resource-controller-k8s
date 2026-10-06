@@ -196,12 +196,11 @@ func validCheckpointCNINode(checkpointInstanceID string) *rcv1alpha1.CNINode {
 	return &rcv1alpha1.CNINode{
 		Status: rcv1alpha1.CNINodeStatus{
 			NodeNetworkState: &rcv1alpha1.NodeNetworkState{
-				InstanceID:                            checkpointInstanceID,
-				InstanceType:                          nitroInstanceType,
-				SubnetID:                              "subnet-00000000000000000",
-				SubnetCIDRBlock:                       "10.0.0.0/24",
-				PrimaryNetworkInterfaceID:             "eni-00000000000000000",
-				PrimaryNetworkInterfaceSecurityGroups: []string{"sg-00000000000000000"},
+				InstanceID:                checkpointInstanceID,
+				InstanceType:              nitroInstanceType,
+				SubnetID:                  "subnet-00000000000000000",
+				SubnetCIDRBlock:           "10.0.0.0/24",
+				PrimaryNetworkInterfaceID: "eni-00000000000000000",
 			},
 			TrunkInterface: &rcv1alpha1.TrunkInterface{
 				ID: "eni-11111111111111111",

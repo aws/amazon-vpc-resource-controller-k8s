@@ -98,30 +98,11 @@ type NodeNetworkState struct {
 	SubnetCIDRBlock string `json:"subnetCIDRBlock"`
 	// +optional
 	SubnetV6CIDRBlock string `json:"subnetV6CIDRBlock,omitempty"`
-	// +required
-	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:items:MaxLength=20
-	// +kubebuilder:validation:items:Pattern=`^sg-([0-9a-f]{8}|[0-9a-f]{17})$`
-	// +listType=atomic
-	PrimaryNetworkInterfaceSecurityGroups []string `json:"primaryNetworkInterfaceSecurityGroups"`
 	// Optional for compatibility with checkpoints written before this field was added.
 	// +optional
 	// +kubebuilder:validation:MaxLength=21
 	// +kubebuilder:validation:Pattern=`^eni-([0-9a-f]{8}|[0-9a-f]{17})$`
 	PrimaryNetworkInterfaceID string `json:"primaryNetworkInterfaceID,omitempty"`
-	// Preserves primary ENI settings for new branch ENIs.
-	// +optional
-	ConnectionTracking *ConnectionTrackingConfig `json:"connectionTracking,omitempty"`
-}
-
-// ConnectionTrackingConfig is applied to newly created branch ENIs.
-type ConnectionTrackingConfig struct {
-	// +optional
-	TCPEstablishedTimeout *int32 `json:"tcpEstablishedTimeout,omitempty"`
-	// +optional
-	UDPStreamTimeout *int32 `json:"udpStreamTimeout,omitempty"`
-	// +optional
-	UDPTimeout *int32 `json:"udpTimeout,omitempty"`
 }
 
 // TrunkInterface describes a trunk ENI and its associated branch ENIs.
