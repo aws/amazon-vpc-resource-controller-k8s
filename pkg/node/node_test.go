@@ -64,7 +64,7 @@ func TestCheckpointMetricsContract(t *testing.T) {
 		assert.Contains(t, counter.Desc().String(), `fqName: "cninode_checkpoint_restore_total"`)
 		assert.Contains(t, counter.Desc().String(), `variableLabels: {result,reason}`)
 		before := writePrometheusMetric(t, counter).GetCounter().GetValue()
-		recordCheckpointRestore(series.result, series.reason)
+		cniNodeCheckpointRestoreCount.WithLabelValues(series.result, series.reason).Inc()
 		assert.Equal(t, before+1, writePrometheusMetric(t, counter).GetCounter().GetValue())
 	}
 
@@ -362,70 +362,37 @@ func TestNode_InitResources_ReturnsErrorWhenRestoredNetworkUpdateFails(t *testin
 	assert.Equal(t, before+1, writePrometheusMetric(t, restoreCounter).GetCounter().GetValue())
 }
 
-func TestCheckpointFallbackReason(t *testing.T) {
-	tests := map[string]struct {
-		cniNode    *rcv1alpha1.CNINode
-		instanceID string
-		want       string
-	}{
-		"nil CNINode": {
-			want: checkpointRestoreReasonMissingState,
+func TestNode_InitResources_FallsBackWhenCheckpointFieldMissing(t *testing.T) {
+	tests := map[string]func(*rcv1alpha1.CNINode){
+		"trunk": func(cniNode *rcv1alpha1.CNINode) {
+			cniNode.Status.TrunkInterface = nil
 		},
-		"missing state": {
-			cniNode: &rcv1alpha1.CNINode{},
-			want:    checkpointRestoreReasonMissingState,
+		"instance type": func(cniNode *rcv1alpha1.CNINode) {
+			cniNode.Status.NodeNetworkState.InstanceType = ""
 		},
-		"missing trunk": {
-			cniNode: func() *rcv1alpha1.CNINode {
-				cniNode := validCheckpointCNINode(instanceID)
-				cniNode.Status.TrunkInterface = nil
-				return cniNode
-			}(),
-			instanceID: instanceID,
-			want:       checkpointRestoreReasonMissingField,
-		},
-		"legacy missing instance type": {
-			cniNode: func() *rcv1alpha1.CNINode {
-				cniNode := validCheckpointCNINode(instanceID)
-				cniNode.Status.NodeNetworkState.InstanceType = ""
-				return cniNode
-			}(),
-			instanceID: instanceID,
-			want:       checkpointRestoreReasonMissingField,
-		},
-		"legacy missing primary ENI": {
-			cniNode: func() *rcv1alpha1.CNINode {
-				cniNode := validCheckpointCNINode(instanceID)
-				cniNode.Status.NodeNetworkState.PrimaryNetworkInterfaceID = ""
-				return cniNode
-			}(),
-			instanceID: instanceID,
-			want:       checkpointRestoreReasonMissingField,
-		},
-		"instance mismatch": {
-			cniNode:    validCheckpointCNINode("i-other"),
-			instanceID: instanceID,
-			want:       checkpointRestoreReasonInstanceIDMismatch,
-		},
-		"instance mismatch takes precedence over legacy fields": {
-			cniNode: func() *rcv1alpha1.CNINode {
-				cniNode := validCheckpointCNINode("i-other")
-				cniNode.Status.NodeNetworkState.InstanceType = ""
-				return cniNode
-			}(),
-			instanceID: instanceID,
-			want:       checkpointRestoreReasonInstanceIDMismatch,
-		},
-		"valid": {
-			cniNode:    validCheckpointCNINode(instanceID),
-			instanceID: instanceID,
-			want:       checkpointRestoreReasonNone,
+		"primary ENI": func(cniNode *rcv1alpha1.CNINode) {
+			cniNode.Status.NodeNetworkState.PrimaryNetworkInterfaceID = ""
 		},
 	}
 
-	for name, test := range tests {
+	for name, removeField := range tests {
 		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, test.want, checkpointFallbackReason(test.cniNode, test.instanceID))
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mock := NewMock(ctrl, 1)
+			expectCheckpointRestore(&mock)
+			cniNode := validCheckpointCNINode(instanceID)
+			removeField(cniNode)
+			mock.MockInstance.EXPECT().Name().Return(nodeName)
+			mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
+			mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(cniNode, nil)
+			mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+			mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
+			mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
+			mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+
+			assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
 		})
 	}
 }

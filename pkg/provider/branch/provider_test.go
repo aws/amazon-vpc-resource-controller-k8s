@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
+	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	mock_pod "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s/pod"
 	mock_trunk "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider/branch/trunk"
@@ -40,8 +42,11 @@ import (
 	"github.com/golang/mock/gomock"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/time/rate"
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	k8sCtrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -139,6 +144,28 @@ func prepareWithPods(
 	}
 }
 
+func branchEligibleNode(nodeName, instanceID string) *v1.Node {
+	return &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nodeName,
+			Labels: map[string]string{
+				config.NodeLabelOS:           config.OSLinux,
+				v1.LabelInstanceTypeStable:   "m5.large",
+				config.HasTrunkAttachedLabel: config.BooleanTrue,
+			},
+		},
+		Spec: v1.NodeSpec{ProviderID: "aws:///us-west-2a/" + instanceID},
+	}
+}
+
+func restoredNodeForTest(nodeName, instanceID string) restoredNode {
+	return restoredNode{
+		name:         nodeName,
+		instanceID:   instanceID,
+		instanceType: "m5.large",
+	}
+}
+
 func prepareInitResourceSuccess(
 	ctrl *gomock.Controller,
 	checkpointErr error,
@@ -172,7 +199,7 @@ func prepareInitResourceSuccess(
 
 	mockInstance.EXPECT().Name().Return(NodeName)
 	mockInstance.EXPECT().RestoredTrunkENIID().Return("").AnyTimes()
-	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
+	mockInstance.EXPECT().InstanceID().Return(instanceID).AnyTimes()
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
 	mockEC2API.EXPECT().GetInstanceNetworkInterface(&instanceID).
 		Return([]ec2types.InstanceNetworkInterface{}, nil)
@@ -256,7 +283,7 @@ func TestBranchENIProvider_InitResourceRestoredCheckpointPersistsCheckpoint(t *t
 
 	mockInstance.EXPECT().Name().Return(NodeName)
 	mockInstance.EXPECT().RestoredTrunkENIID().Return(trunkENIID).AnyTimes()
-	mockInstance.EXPECT().InstanceID().Return(instanceID)
+	mockInstance.EXPECT().InstanceID().Return(instanceID).AnyTimes()
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
 	mockInstance.EXPECT().BuildNodeNetworkState().Return(state)
 	mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(nil)
@@ -470,6 +497,456 @@ func TestBranchENIProvider_DeInitResources(t *testing.T) {
 	err := provider.DeInitResource(mockInstance)
 
 	assert.NoError(t, err)
+}
+
+func TestBranchENIProvider_RestoredNodeCheckWaitsForGrace(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	conditions := mock_condition.NewMockConditions(ctrl)
+	provider.conditions = conditions
+	conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	instanceID := "i-restored"
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+	restoredNodes := []restoredNode{restoredNodeForTest(NodeName, instanceID)}
+
+	mockK8sAPI.EXPECT().GetNode(NodeName).
+		Return(branchEligibleNode(NodeName, instanceID), nil).
+		Times(2)
+	fakeTrunk.EXPECT().InstanceID().Return(instanceID).Times(2)
+	fakeTrunk.EXPECT().NeedsPreparation().Return(true).Times(2)
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	prepared := make(chan struct{})
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
+		listRunningPods func() ([]v1.Pod, error),
+	) ([]v1.Pod, error) {
+		pods, err := listRunningPods()
+		close(prepared)
+		return pods, err
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- provider.runRestoredNodeChecks(
+			context.Background(),
+			restoredNodes,
+			25*time.Millisecond,
+			time.Millisecond,
+			rate.NewLimiter(rate.Inf, 1),
+		)
+	}()
+
+	select {
+	case <-prepared:
+		t.Fatal("restored node was checked before the grace period")
+	case <-time.After(10 * time.Millisecond):
+	}
+	select {
+	case <-prepared:
+	case <-time.After(time.Second):
+		t.Fatal("restored node was not checked after the grace period")
+	}
+	assert.NoError(t, <-done)
+}
+
+func TestBranchENIProvider_StartRetriesRestoredNodeCapture(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
+	startContext, cancelStart := context.WithCancel(context.Background())
+	gomock.InOrder(
+		mockK8sAPI.EXPECT().ListCNINodes().Return(nil, MockError),
+		mockK8sAPI.EXPECT().ListCNINodes().DoAndReturn(func() ([]*rcv1alpha1.CNINode, error) {
+			cancelStart()
+			return nil, nil
+		}),
+	)
+
+	assert.NoError(t, provider.Start(startContext))
+}
+
+func TestBranchENIProvider_RestoredNodeCheckSkipsWithoutToken(t *testing.T) {
+	tests := map[string]struct {
+		cachedInstanceID string
+		currentNode      *v1.Node
+		getNodeError     error
+	}{
+		"verified": {
+			cachedInstanceID: "i-restored",
+		},
+		"removed": {
+			getNodeError: apierrors.NewNotFound(
+				schema.GroupResource{Resource: "nodes"},
+				NodeName,
+			),
+		},
+		"replaced in cache": {
+			cachedInstanceID: "i-replacement",
+		},
+		"replaced before initialization": {
+			currentNode: &v1.Node{
+				Spec: v1.NodeSpec{ProviderID: "aws:///us-west-2a/i-replacement"},
+			},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
+			conditions := mock_condition.NewMockConditions(ctrl)
+			provider.conditions = conditions
+			conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+			instanceID := "i-restored"
+			currentNode := test.currentNode
+			if currentNode == nil && test.getNodeError == nil {
+				currentNode = branchEligibleNode(NodeName, instanceID)
+			}
+			mockK8sAPI.EXPECT().GetNode(NodeName).Return(currentNode, test.getNodeError)
+			if test.cachedInstanceID != "" {
+				fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+				provider.trunkENICache[NodeName] = fakeTrunk
+				fakeTrunk.EXPECT().InstanceID().Return(test.cachedInstanceID)
+				if test.cachedInstanceID == instanceID {
+					fakeTrunk.EXPECT().NeedsPreparation().Return(false)
+				}
+			}
+			limiter := rate.NewLimiter(rate.Every(time.Hour), 1)
+
+			assert.NoError(t, provider.runRestoredNodeChecks(
+				context.Background(),
+				[]restoredNode{restoredNodeForTest(NodeName, instanceID)},
+				0,
+				time.Millisecond,
+				limiter,
+			))
+			assert.True(t, limiter.Allow(), "skip consumed a rate-limit token")
+		})
+	}
+}
+
+func TestBranchENIProvider_RestoredNodeCheckWaitsForNodeInitialization(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	conditions := mock_condition.NewMockConditions(ctrl)
+	provider.conditions = conditions
+	conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	instanceID := "i-restored"
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	currentNode := branchEligibleNode(NodeName, instanceID)
+	delete(currentNode.Labels, config.HasTrunkAttachedLabel)
+	currentCNINode := &rcv1alpha1.CNINode{
+		Spec: rcv1alpha1.CNINodeSpec{
+			Features: []rcv1alpha1.Feature{{Name: rcv1alpha1.SecurityGroupsForPods}},
+		},
+	}
+	gomock.InOrder(
+		mockK8sAPI.EXPECT().GetNode(NodeName).Return(currentNode, nil),
+		mockK8sAPI.EXPECT().GetNode(NodeName).DoAndReturn(func(string) (*v1.Node, error) {
+			assert.NoError(t, provider.addTrunkToCache(NodeName, fakeTrunk))
+			return currentNode, nil
+		}),
+		mockK8sAPI.EXPECT().GetNode(NodeName).Return(currentNode, nil),
+	)
+	mockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).
+		Return(currentCNINode, nil).
+		Times(3)
+	fakeTrunk.EXPECT().InstanceID().Return(instanceID).Times(2)
+	fakeTrunk.EXPECT().NeedsPreparation().Return(true).Times(2)
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
+		listRunningPods func() ([]v1.Pod, error),
+	) ([]v1.Pod, error) {
+		return listRunningPods()
+	})
+
+	assert.NoError(t, provider.runRestoredNodeChecks(
+		context.Background(),
+		[]restoredNode{restoredNodeForTest(NodeName, instanceID)},
+		0,
+		time.Millisecond,
+		rate.NewLimiter(rate.Inf, 1),
+	))
+}
+
+func TestBranchENIProvider_RestoredNodeCheckSkipsStaleCacheEntryAfterReplacement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
+	conditions := mock_condition.NewMockConditions(ctrl)
+	provider.conditions = conditions
+	conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	oldInstanceID := "i-restored"
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+	mockK8sAPI.EXPECT().GetNode(NodeName).
+		Return(branchEligibleNode(NodeName, "i-replacement"), nil)
+	limiter := rate.NewLimiter(rate.Every(time.Hour), 1)
+
+	assert.NoError(t, provider.runRestoredNodeChecks(
+		context.Background(),
+		[]restoredNode{restoredNodeForTest(NodeName, oldInstanceID)},
+		0,
+		time.Millisecond,
+		limiter,
+	))
+	assert.True(t, limiter.Allow(), "replaced node consumed a rate-limit token")
+}
+
+func TestBranchENIProvider_RestoredNodeCheckStopsForIneligibleNode(t *testing.T) {
+	instanceID := "i-restored"
+	tests := map[string]struct {
+		currentNode    *v1.Node
+		currentCNINode *rcv1alpha1.CNINode
+		restoredNode   restoredNode
+	}{
+		"windows": {
+			currentNode: func() *v1.Node {
+				node := branchEligibleNode(NodeName, instanceID)
+				node.Labels[config.NodeLabelOS] = config.OSWindows
+				return node
+			}(),
+			restoredNode: restoredNodeForTest(NodeName, instanceID),
+		},
+		"unsupported instance type": {
+			currentNode: branchEligibleNode(NodeName, instanceID),
+			restoredNode: func() restoredNode {
+				node := restoredNodeForTest(NodeName, instanceID)
+				node.instanceType = "unsupported"
+				return node
+			}(),
+		},
+		"not selected for branch management": {
+			currentNode: func() *v1.Node {
+				node := branchEligibleNode(NodeName, instanceID)
+				delete(node.Labels, config.HasTrunkAttachedLabel)
+				return node
+			}(),
+			currentCNINode: &rcv1alpha1.CNINode{},
+			restoredNode:   restoredNodeForTest(NodeName, instanceID),
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
+			conditions := mock_condition.NewMockConditions(ctrl)
+			provider.conditions = conditions
+			conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+			mockK8sAPI.EXPECT().GetNode(NodeName).Return(test.currentNode, nil).AnyTimes()
+			if test.currentCNINode != nil {
+				mockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: NodeName}).
+					Return(test.currentCNINode, nil).
+					AnyTimes()
+			}
+			checkContext, cancelCheck := context.WithCancel(context.Background())
+			defer cancelCheck()
+			limiter := rate.NewLimiter(rate.Every(time.Hour), 1)
+			done := make(chan error, 1)
+
+			go func() {
+				done <- provider.runRestoredNodeChecks(
+					checkContext,
+					[]restoredNode{test.restoredNode},
+					0,
+					5*time.Millisecond,
+					limiter,
+				)
+			}()
+
+			select {
+			case err := <-done:
+				assert.NoError(t, err)
+			case <-time.After(50 * time.Millisecond):
+				cancelCheck()
+				<-done
+				t.Fatal("ineligible node remained in the idle retry loop")
+			}
+			assert.True(t, limiter.Allow(), "ineligible node consumed a rate-limit token")
+		})
+	}
+}
+
+func TestBranchENIProvider_RestoredNodeCheckWaitsForPodDataStoreSync(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	conditions := mock_condition.NewMockConditions(ctrl)
+	provider.conditions = conditions
+	podDataStoreSynced := false
+	gomock.InOrder(
+		conditions.EXPECT().GetPodDataStoreSyncStatus().Return(false),
+		conditions.EXPECT().GetPodDataStoreSyncStatus().DoAndReturn(func() bool {
+			podDataStoreSynced = true
+			return true
+		}),
+	)
+	instanceID := "i-restored"
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+	mockK8sAPI.EXPECT().GetNode(NodeName).
+		Return(branchEligibleNode(NodeName, instanceID), nil).
+		Times(2)
+	fakeTrunk.EXPECT().InstanceID().Return(instanceID).Times(2)
+	fakeTrunk.EXPECT().NeedsPreparation().Return(true).Times(2)
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
+		listRunningPods func() ([]v1.Pod, error),
+	) ([]v1.Pod, error) {
+		assert.True(t, podDataStoreSynced, "preparation ran before the pod datastore synced")
+		return listRunningPods()
+	})
+	limiter := rate.NewLimiter(rate.Every(time.Hour), 1)
+
+	assert.NoError(t, provider.runRestoredNodeChecks(
+		context.Background(),
+		[]restoredNode{restoredNodeForTest(NodeName, instanceID)},
+		0,
+		time.Millisecond,
+		limiter,
+	))
+}
+
+func TestBranchENIProvider_RestoredNodeCheckRetriesFailedPreparation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	conditions := mock_condition.NewMockConditions(ctrl)
+	provider.conditions = conditions
+	conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	instanceID := "i-restored"
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+	mockK8sAPI.EXPECT().GetNode(NodeName).
+		Return(branchEligibleNode(NodeName, instanceID), nil).
+		Times(4)
+	fakeTrunk.EXPECT().InstanceID().Return(instanceID).Times(4)
+	fakeTrunk.EXPECT().NeedsPreparation().Return(true).Times(4)
+	gomock.InOrder(
+		fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
+			Return(nil, fmt.Errorf("transient preparation failure")),
+		fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
+			listRunningPods func() ([]v1.Pod, error),
+		) ([]v1.Pod, error) {
+			return listRunningPods()
+		}),
+	)
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+
+	retryPeriod := 10 * time.Millisecond
+	start := time.Now()
+	assert.NoError(t, provider.runRestoredNodeChecks(
+		context.Background(),
+		[]restoredNode{restoredNodeForTest(NodeName, instanceID)},
+		0,
+		retryPeriod,
+		rate.NewLimiter(rate.Inf, 1),
+	))
+	assert.GreaterOrEqual(t, time.Since(start), retryPeriod)
+}
+
+func TestBranchENIProvider_RestoredNodeCheckPacesThreePerSecond(t *testing.T) {
+	assert.Equal(t, 5*time.Minute, RestoredNodeCheckGracePeriod)
+	assert.Equal(t, 3, RestoredNodeCheckRatePerSecond)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	conditions := mock_condition.NewMockConditions(ctrl)
+	provider.conditions = conditions
+	conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	var restoredNodes []restoredNode
+	var preparedAt []time.Time
+	for index := range 4 {
+		nodeName := fmt.Sprintf("node-%d", index)
+		instanceID := fmt.Sprintf("i-%d", index)
+		restoredNodes = append(restoredNodes, restoredNodeForTest(nodeName, instanceID))
+		fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+		provider.trunkENICache[nodeName] = fakeTrunk
+		mockK8sAPI.EXPECT().GetNode(nodeName).
+			Return(branchEligibleNode(nodeName, instanceID), nil).
+			Times(2)
+		fakeTrunk.EXPECT().InstanceID().Return(instanceID).Times(2)
+		fakeTrunk.EXPECT().NeedsPreparation().Return(true).Times(2)
+		mockPodAPI.EXPECT().GetRunningPodsOnNode(nodeName).Return(nil, nil)
+		fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
+			listRunningPods func() ([]v1.Pod, error),
+		) ([]v1.Pod, error) {
+			pods, err := listRunningPods()
+			preparedAt = append(preparedAt, time.Now())
+			return pods, err
+		})
+	}
+
+	assert.NoError(t, provider.runRestoredNodeChecks(
+		context.Background(),
+		restoredNodes,
+		0,
+		time.Millisecond,
+		rate.NewLimiter(rate.Limit(RestoredNodeCheckRatePerSecond), restoredNodeCheckBurst),
+	))
+	if assert.Len(t, preparedAt, 4) {
+		assert.GreaterOrEqual(t, preparedAt[3].Sub(preparedAt[0]), 900*time.Millisecond)
+	}
+}
+
+func TestBranchENIProvider_RestoredNodeCheckRechecksAfterToken(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
+	conditions := mock_condition.NewMockConditions(ctrl)
+	provider.conditions = conditions
+	conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	instanceID := "i-restored"
+	oldTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	replacementTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = oldTrunk
+
+	checked := make(chan struct{})
+	mockK8sAPI.EXPECT().GetNode(NodeName).
+		Return(branchEligibleNode(NodeName, instanceID), nil).
+		Times(2)
+	oldTrunk.EXPECT().InstanceID().Return(instanceID)
+	oldTrunk.EXPECT().NeedsPreparation().DoAndReturn(func() bool {
+		close(checked)
+		return true
+	})
+	replacementTrunk.EXPECT().InstanceID().Return("i-replacement").AnyTimes()
+
+	limiter := rate.NewLimiter(rate.Every(200*time.Millisecond), 1)
+	assert.True(t, limiter.Allow())
+	done := make(chan error, 1)
+	go func() {
+		done <- provider.runRestoredNodeChecks(
+			context.Background(),
+			[]restoredNode{restoredNodeForTest(NodeName, instanceID)},
+			0,
+			time.Millisecond,
+			limiter,
+		)
+	}()
+
+	<-checked
+	provider.lock.Lock()
+	provider.trunkENICache[NodeName] = replacementTrunk
+	provider.lock.Unlock()
+
+	assert.NoError(t, <-done)
 }
 
 // TestBranchENIProvider_GetResourceCapacity tests that the correct capacity is returned for supported instance types

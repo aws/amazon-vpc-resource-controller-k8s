@@ -105,11 +105,9 @@ type TrunkENI interface {
 	CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int) ([]*ENIDetails, error)
 	// PrepareForAllocation keeps prepareMu locked when it returns ErrNeedsColdInit.
 	PrepareForAllocation(listRunningPods func() ([]v1.Pod, error)) ([]v1.Pod, error)
-	// ColdInit rebuilds the trunk after PrepareForAllocation returns ErrNeedsColdInit.
 	ColdInit(pods []v1.Pod) (ec2.EC2Instance, error)
 	// CompletePreparation must be called exactly once after ErrNeedsColdInit.
 	CompletePreparation(succeeded bool)
-	// NeedsPreparation reports whether deferred restored-trunk inventory remains.
 	NeedsPreparation() bool
 	// PushBranchENIsToCoolDownQueue pushes the branch interface belonging to the pod to the cool down queue
 	PushBranchENIsToCoolDownQueue(UID string)
@@ -121,7 +119,6 @@ type TrunkENI interface {
 	PushENIsToFrontOfDeleteQueue(*v1.Pod, []*ENIDetails)
 	// TrunkENIID returns the trunk network interface ID.
 	TrunkENIID() string
-	// InstanceID returns the EC2 instance that owns the trunk.
 	InstanceID() string
 	// Introspect returns the state of the Trunk ENI
 	Introspect() IntrospectResponse
@@ -250,7 +247,6 @@ func (t *trunkENI) InitTrunk(podList []v1.Pod) error {
 		t.log.V(1).Info("restored trunk identity from CNINode checkpoint", "trunk", restoredTrunkENIID)
 		return nil
 	}
-
 	if err := t.coldInit(podList); err != nil {
 		return err
 	}
@@ -273,13 +269,11 @@ func (t *trunkENI) coldInit(podList []v1.Pod) error {
 	instanceID := t.instance.InstanceID()
 	log := t.log.WithValues("request", "initialize", "instance ID", instanceID)
 	var trunk ec2types.InstanceNetworkInterface
-
 	nwInterfaces, err := t.ec2ApiHelper.GetInstanceNetworkInterface(&instanceID)
 	if err != nil {
 		trunkENIOperationsErrCount.WithLabelValues("describe_instance_nw_interface").Inc()
 		return err
 	}
-
 	trunkENIID := ""
 	for _, nwInterface := range nwInterfaces {
 		// It's possible to get an empty network interface response if the instance is being deleted.
@@ -301,8 +295,6 @@ func (t *trunkENI) coldInit(podList []v1.Pod) error {
 		trunkENIID = *nwInterface.NetworkInterfaceId
 		trunk = nwInterface
 	}
-
-	// Trunk interface doesn't exist, try to create a new trunk interface.
 	if trunkENIID == "" {
 		freeIndex, err := t.instance.GetHighestUnusedDeviceIndex()
 		if err != nil {
@@ -317,17 +309,14 @@ func (t *trunkENI) coldInit(podList []v1.Pod) error {
 			trunkENIOperationsErrCount.WithLabelValues("create_trunk_eni").Inc()
 			return err
 		}
-
 		if trunk.NetworkInterfaceId == nil {
 			return fmt.Errorf("created trunk network interface has no ID")
 		}
 		trunkENIID = *trunk.NetworkInterfaceId
 		t.commitBranchState(trunkENIID, newRecoveredBranchState())
 		log.Info("created a new trunk interface", "trunk id", trunkENIID)
-
 		return nil
 	}
-
 	// the node already have trunk, let's check if its SGs and Subnets match with expected
 	expectedSubnetID, expectedSecurityGroups := t.instance.GetCustomNetworkingSpec()
 	if len(expectedSecurityGroups) > 0 || expectedSubnetID != "" {
@@ -368,13 +357,10 @@ func (t *trunkENI) coldInit(podList []v1.Pod) error {
 	if err != nil {
 		return err
 	}
-
 	state := t.buildRecoveredBranchState(podList, branchInterfaces)
 	t.commitBranchState(trunkENIID, state)
-
 	log.V(1).Info("successfully initialized trunk with all associated branch interfaces",
 		"trunk", trunkENIID, "branch interfaces", state.uidToBranchENIMap)
-
 	return nil
 }
 
@@ -426,7 +412,6 @@ func (t *trunkENI) buildRecoveredBranchState(
 		}
 		branchByID[*branchInterface.NetworkInterfaceId] = branchInterface
 	}
-
 	for index := range pods {
 		uid := string(pods[index].UID)
 		for _, branchENI := range t.decodeBranchInterfacesUsedByPod(&pods[index]) {
@@ -449,7 +434,6 @@ func (t *trunkENI) buildRecoveredBranchState(
 			delete(branchByID, branchENI.ID)
 		}
 	}
-
 	orphanIDs := make([]string, 0, len(branchByID))
 	for id := range branchByID {
 		orphanIDs = append(orphanIDs, id)
@@ -478,7 +462,6 @@ func (t *trunkENI) decodeBranchInterfacesUsedByPod(pod *v1.Pod) []*ENIDetails {
 	if !isPresent {
 		return nil
 	}
-
 	var eniDetails []*ENIDetails
 	if err := json.Unmarshal([]byte(branchAnnotation), &eniDetails); err != nil {
 		trunkENIOperationsErrCount.WithLabelValues("unusable_pod_eni_annotation").Inc()
@@ -487,7 +470,6 @@ func (t *trunkENI) decodeBranchInterfacesUsedByPod(pod *v1.Pod) []*ENIDetails {
 			"podUID", pod.UID)
 		return nil
 	}
-
 	usable := make([]*ENIDetails, 0, len(eniDetails))
 	invalidENIIDs := 0
 	for _, eni := range eniDetails {
@@ -526,7 +508,6 @@ func validateVlanID(vlanID int) error {
 func (t *trunkENI) commitBranchState(trunkENIID string, state *recoveredBranchState) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
-
 	t.trunkENIId = trunkENIID
 	t.uidToBranchENIMap = state.uidToBranchENIMap
 	t.deleteQueue = state.deleteQueue
@@ -539,24 +520,20 @@ func (t *trunkENI) PrepareForAllocation(
 	if t.prepared.Load() {
 		return nil, nil
 	}
-
 	t.prepareMu.Lock()
 	if t.prepared.Load() {
 		t.prepareMu.Unlock()
 		return nil, nil
 	}
-
 	pods, err := listRunningPods()
 	if err != nil {
 		t.prepareMu.Unlock()
 		return nil, fmt.Errorf("listing running pods before branch inventory: %w", err)
 	}
-
 	restoredTrunkENIID := t.instance.RestoredTrunkENIID()
 	if restoredTrunkENIID == "" {
 		return pods, ErrNeedsColdInit
 	}
-
 	err = t.validateRestoredNetworkInterfaces(restoredTrunkENIID)
 	if err != nil {
 		if errors.Is(err, ErrNeedsColdInit) {
@@ -569,7 +546,6 @@ func (t *trunkENI) PrepareForAllocation(
 		trunkENIOperationsErrCount.WithLabelValues("recover_branch_state").Inc()
 		return nil, fmt.Errorf("validating restored trunk before allocation: %w", err)
 	}
-
 	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&restoredTrunkENIID)
 	if err != nil {
 		t.prepareMu.Unlock()
@@ -581,7 +557,6 @@ func (t *trunkENI) PrepareForAllocation(
 	t.prepared.Store(true)
 	t.prepareMu.Unlock()
 	branchENIOperationsSuccessCount.WithLabelValues("recover_branch_state").Inc()
-
 	t.log.Info("validated restored trunk and recovered branch state before allocation",
 		"trunk", restoredTrunkENIID,
 		"ownedPods", len(state.uidToBranchENIMap),
@@ -612,7 +587,6 @@ func (t *trunkENI) validateRestoredNetworkInterfaces(trunkENIID string) error {
 	if primaryENIID == "" || trunkENIID == "" || primaryENIID == trunkENIID {
 		return fmt.Errorf("%w: checkpoint has invalid primary or trunk ENI IDs", ErrNeedsColdInit)
 	}
-
 	interfaces, err := t.ec2ApiHelper.DescribeNetworkInterfaces([]string{primaryENIID, trunkENIID})
 	if err != nil {
 		var apiErr smithy.APIError
@@ -623,7 +597,6 @@ func (t *trunkENI) validateRestoredNetworkInterfaces(trunkENIID string) error {
 		}
 		return err
 	}
-
 	var primaryInterface, trunkInterface *ec2types.NetworkInterface
 	for index := range interfaces {
 		if interfaces[index].NetworkInterfaceId == nil {
@@ -676,7 +649,6 @@ func (t *trunkENI) Reconcile(pods []v1.Pod) bool {
 		t.prepareMu.Lock()
 		defer t.prepareMu.Unlock()
 	}
-
 	// Perform under lock to block new pods being added/removed concurrently
 	t.lock.Lock()
 	defer t.lock.Unlock()
@@ -814,7 +786,6 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 		t.prepareMu.Lock()
 		defer t.prepareMu.Unlock()
 	}
-
 	// Lock is required as Reconciler is also performing operation concurrently
 	t.lock.Lock()
 	defer t.lock.Unlock()
@@ -843,7 +814,6 @@ func (t *trunkENI) DeleteCooledDownENIs() {
 		// Preparation replaces provisional ownership with EC2-verified branches before deletion.
 		return
 	}
-
 	for eni, hasENI := t.popENIFromDeleteQueue(); hasENI; eni, hasENI = t.popENIFromDeleteQueue() {
 		if eni.deletionTimeStamp.IsZero() ||
 			time.Now().After(eni.deletionTimeStamp.Add(cooldown.GetCoolDown().GetCoolDownPeriod())) {

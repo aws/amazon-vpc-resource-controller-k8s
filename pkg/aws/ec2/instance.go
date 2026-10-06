@@ -245,14 +245,12 @@ func (i *ec2Instance) Name() string {
 func (i *ec2Instance) Type() string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
-
 	return i.instanceType
 }
 
 func (i *ec2Instance) PrimaryNetworkInterfaceID() string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
-
 	return i.primaryENIID
 }
 
@@ -396,7 +394,6 @@ func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState
 	if _, ok := vpc.Limits[state.InstanceType]; !ok {
 		return fmt.Errorf("unsupported checkpoint instance type %s", state.InstanceType)
 	}
-
 	subnetMask, err := subnetMaskFromCIDR(state.SubnetCIDRBlock, false)
 	if err != nil {
 		return fmt.Errorf("invalid IPv4 CIDR block %q in checkpoint: %w", state.SubnetCIDRBlock, err)
@@ -408,10 +405,8 @@ func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState
 			return fmt.Errorf("invalid IPv6 CIDR block %q in checkpoint: %w", state.SubnetV6CIDRBlock, err)
 		}
 	}
-
 	i.lock.Lock()
 	defer i.lock.Unlock()
-
 	i.instanceType = state.InstanceType
 	i.instanceSubnetID = state.SubnetID
 	i.instanceSubnetCidrBlock = state.SubnetCIDRBlock
@@ -428,7 +423,6 @@ func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState
 	i.currentSubnetV6CIDRBlock = ""
 	i.currentInstanceSecurityGroups = nil
 	i.restoredTrunkENIID = trunkENIID
-
 	return nil
 }
 
@@ -436,7 +430,6 @@ func (i *ec2Instance) RefreshPrimaryNetworkInterface(networkInterface ec2types.N
 	if networkInterface.NetworkInterfaceId == nil {
 		return fmt.Errorf("described primary network interface has no ID")
 	}
-
 	var securityGroups []string
 	for _, group := range networkInterface.Groups {
 		if group.GroupId != nil && *group.GroupId != "" {
@@ -446,17 +439,14 @@ func (i *ec2Instance) RefreshPrimaryNetworkInterface(networkInterface ec2types.N
 	if len(securityGroups) == 0 {
 		return fmt.Errorf("described primary network interface has no security groups")
 	}
-
 	var tcpEstablishedTimeout, udpStreamTimeout, udpTimeout *int32
 	if networkInterface.ConnectionTrackingConfiguration != nil {
 		tcpEstablishedTimeout = networkInterface.ConnectionTrackingConfiguration.TcpEstablishedTimeout
 		udpStreamTimeout = networkInterface.ConnectionTrackingConfiguration.UdpStreamTimeout
 		udpTimeout = networkInterface.ConnectionTrackingConfiguration.UdpTimeout
 	}
-
 	i.lock.Lock()
 	defer i.lock.Unlock()
-
 	if *networkInterface.NetworkInterfaceId != i.primaryENIID {
 		return fmt.Errorf("described primary network interface does not match checkpoint")
 	}
@@ -473,14 +463,12 @@ func (i *ec2Instance) RefreshPrimaryNetworkInterface(networkInterface ec2types.N
 func (i *ec2Instance) RestoredTrunkENIID() string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
-
 	return i.restoredTrunkENIID
 }
 
 func (i *ec2Instance) BuildNodeNetworkState() rcv1alpha1.NodeNetworkState {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
-
 	return rcv1alpha1.NodeNetworkState{
 		InstanceID:                i.instanceID,
 		InstanceType:              i.instanceType,

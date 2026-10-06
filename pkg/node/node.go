@@ -63,12 +63,9 @@ const (
 )
 
 const (
-	checkpointRestoreResultHit      = "hit"
-	checkpointRestoreResultFallback = "fallback"
-	checkpointRestoreResultError    = "error"
-)
-
-const (
+	checkpointRestoreResultHit                = "hit"
+	checkpointRestoreResultFallback           = "fallback"
+	checkpointRestoreResultError              = "error"
 	checkpointRestoreReasonNone               = "none"
 	checkpointRestoreReasonReadError          = "read_error"
 	checkpointRestoreReasonForeignManager     = "foreign_manager"
@@ -77,11 +74,6 @@ const (
 	checkpointRestoreReasonInstanceIDMismatch = "instance_id_mismatch"
 	checkpointRestoreReasonInvalidState       = "invalid_state"
 	checkpointRestoreReasonNetworkUpdate      = "network_update_failed"
-)
-
-const (
-	nodeInitResultSuccess = "success"
-	nodeInitResultError   = "error"
 )
 
 var (
@@ -106,10 +98,6 @@ func registerNodeMetrics() {
 	registerMetricsOnce.Do(func() {
 		metrics.Registry.MustRegister(cniNodeCheckpointRestoreCount, nodeInitDuration)
 	})
-}
-
-func recordCheckpointRestore(result, reason string) {
-	cniNodeCheckpointRestoreCount.WithLabelValues(result, reason).Inc()
 }
 
 // ErrInitResources to wrap error messages for all errors encountered
@@ -210,7 +198,7 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	defer n.lock.Unlock()
 
 	start := time.Now()
-	initResult := nodeInitResultError
+	initResult := "error"
 	defer func() {
 		nodeInitDuration.WithLabelValues(string(initResult)).Observe(time.Since(start).Seconds())
 	}()
@@ -270,47 +258,40 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	}
 
 	n.ready = true
-	initResult = nodeInitResultSuccess
+	initResult = "success"
 	return errInit
-}
-
-func checkpointFallbackReason(cniNode *rcv1alpha1.CNINode, instanceID string) string {
-	if cniNode == nil || cniNode.Status.NodeNetworkState == nil {
-		return checkpointRestoreReasonMissingState
-	}
-
-	state := cniNode.Status.NodeNetworkState
-	if state.InstanceID != "" && state.InstanceID != instanceID {
-		return checkpointRestoreReasonInstanceIDMismatch
-	}
-	if cniNode.Status.TrunkInterface == nil || cniNode.Status.TrunkInterface.ID == "" ||
-		state.InstanceID == "" || state.InstanceType == "" || state.SubnetID == "" ||
-		state.SubnetCIDRBlock == "" || state.PrimaryNetworkInterfaceID == "" {
-		return checkpointRestoreReasonMissingField
-	}
-	return checkpointRestoreReasonNone
 }
 
 func (n *node) tryRestoreFromNodeNetworkState() (bool, error) {
 	nodeName := n.instance.Name()
 	cniNode, err := n.k8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
 	if err != nil {
-		recordCheckpointRestore(checkpointRestoreResultFallback, checkpointRestoreReasonReadError)
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, checkpointRestoreReasonReadError).Inc()
 		return false, nil
 	}
 	if cniNode.Spec.ManagedBy != "" &&
 		cniNode.Spec.ManagedBy != rcv1alpha1.ManagedByVPCResourceController {
-		recordCheckpointRestore(checkpointRestoreResultFallback, checkpointRestoreReasonForeignManager)
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, checkpointRestoreReasonForeignManager).Inc()
 		return false, nil
 	}
-
 	instanceID := n.instance.InstanceID()
-	reason := checkpointFallbackReason(cniNode, instanceID)
+	state := cniNode.Status.NodeNetworkState
+	reason := checkpointRestoreReasonNone
+	switch {
+	case state == nil:
+		reason = checkpointRestoreReasonMissingState
+	case state.InstanceID != "" && state.InstanceID != instanceID:
+		reason = checkpointRestoreReasonInstanceIDMismatch
+	case cniNode.Status.TrunkInterface == nil || cniNode.Status.TrunkInterface.ID == "" ||
+		state.InstanceID == "" || state.InstanceType == "" || state.SubnetID == "" ||
+		state.SubnetCIDRBlock == "" || state.PrimaryNetworkInterfaceID == "":
+		reason = checkpointRestoreReasonMissingField
+	}
 	if reason != checkpointRestoreReasonNone {
-		recordCheckpointRestore(checkpointRestoreResultFallback, reason)
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, reason).Inc()
 		checkpointInstanceID := ""
-		if cniNode.Status.NodeNetworkState != nil {
-			checkpointInstanceID = cniNode.Status.NodeNetworkState.InstanceID
+		if state != nil {
+			checkpointInstanceID = state.InstanceID
 		}
 		n.log.Info("CNINode checkpoint is unusable, falling back to EC2",
 			"reason", reason,
@@ -318,20 +299,17 @@ func (n *node) tryRestoreFromNodeNetworkState() (bool, error) {
 			"nodeInstanceID", instanceID)
 		return false, nil
 	}
-
-	state := *cniNode.Status.NodeNetworkState
 	trunkENIID := cniNode.Status.TrunkInterface.ID
-	if err := n.instance.LoadFromNodeNetworkState(state, trunkENIID); err != nil {
-		recordCheckpointRestore(checkpointRestoreResultFallback, checkpointRestoreReasonInvalidState)
+	if err := n.instance.LoadFromNodeNetworkState(*state, trunkENIID); err != nil {
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, checkpointRestoreReasonInvalidState).Inc()
 		n.log.Error(err, "CNINode checkpoint restore failed, falling back to EC2")
 		return false, nil
 	}
 	if err := n.instance.UpdateCurrentSubnetAndCidrBlock(n.ec2API); err != nil {
-		recordCheckpointRestore(checkpointRestoreResultError, checkpointRestoreReasonNetworkUpdate)
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultError, checkpointRestoreReasonNetworkUpdate).Inc()
 		return false, err
 	}
-
-	recordCheckpointRestore(checkpointRestoreResultHit, checkpointRestoreReasonNone)
+	cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultHit, checkpointRestoreReasonNone).Inc()
 	n.log.Info("restored stable instance and trunk state from CNINode checkpoint",
 		"trunkENIID", trunkENIID)
 	return true, nil
