@@ -157,6 +157,7 @@ func prepareInitResourceSuccess(
 	}
 
 	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().RestoredTrunkENIID().Return("").AnyTimes()
 	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
 	mockEC2API.EXPECT().GetInstanceNetworkInterface(&instanceID).
@@ -200,10 +201,64 @@ func TestBranchENIProvider_InitResourcePatchesCheckpoint(t *testing.T) {
 func TestBranchENIProvider_InitResourceCheckpointFailureIsBestEffort(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	provider, mockInstance, _, _ := prepareInitResourceSuccess(ctrl, MockError)
+	assert.Contains(
+		t,
+		cniNodeCheckpointPersistErrCount.Desc().String(),
+		`fqName: "cninode_checkpoint_persist_error_total"`,
+	)
 	before := checkpointPersistErrorCount(t)
 
 	assert.NoError(t, provider.InitResource(mockInstance))
 	assert.Equal(t, before+1, checkpointPersistErrorCount(t))
+}
+
+func TestBranchENIProvider_InitResourceRestoredCheckpointPersistsCheckpoint(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	instanceID := "i-00000000000000000"
+	subnetID := "subnet-00000000000000000"
+	trunkENIID := "eni-00000000000000000"
+	state := rcv1alpha1.NodeNetworkState{
+		InstanceID:   instanceID,
+		InstanceType: "m5.large",
+		SubnetID:     subnetID,
+	}
+	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	mockEC2API := mock_api.NewMockEC2APIHelper(ctrl)
+	mockK8sAPI := mock_k8s.NewMockK8sWrapper(ctrl)
+	mockPodAPI := mock_pod.NewMockPodClientAPIWrapper(ctrl)
+	mockWorker := mock_worker.NewMockWorker(ctrl)
+	provider := branchENIProvider{
+		apiWrapper: api.Wrapper{
+			EC2API: mockEC2API,
+			K8sAPI: mockK8sAPI,
+			PodAPI: mockPodAPI,
+		},
+		log:           zap.New(zap.UseDevMode(true)).WithName("branch provider"),
+		workerPool:    mockWorker,
+		trunkENICache: make(map[string]trunk.TrunkENI),
+	}
+
+	mockInstance.EXPECT().Name().Return(NodeName)
+	mockInstance.EXPECT().RestoredTrunkENIID().Return(trunkENIID).AnyTimes()
+	mockInstance.EXPECT().InstanceID().Return(instanceID).Times(2)
+	mockInstance.EXPECT().SubnetID().Return(subnetID)
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	mockEC2API.EXPECT().GetBranchNetworkInterface(&trunkENIID, &subnetID).Return(nil, nil)
+	mockInstance.EXPECT().BuildNodeNetworkState().Return(state)
+	mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(nil)
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: NodeName}}
+	mockK8sAPI.EXPECT().GetNode(NodeName).Return(node, nil)
+	mockK8sAPI.EXPECT().BroadcastEvent(
+		gomock.Any(),
+		utils.NodeTrunkInitiatedReason,
+		"The node has trunk interface initialized successfully",
+		v1.EventTypeNormal,
+	)
+
+	assert.NoError(t, provider.InitResource(mockInstance))
 }
 
 func checkpointPersistErrorCount(t *testing.T) float64 {
