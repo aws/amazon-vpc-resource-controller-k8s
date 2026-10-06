@@ -30,32 +30,58 @@ import (
 var lastKnowRuleState []v1.PolicyRule
 
 func RestartController(ctx context.Context, manager Manager, depManager deployment.Manager) string {
+	previousLeader := StopControllerAndWaitForLeaseExpiry(ctx, manager, depManager)
+	leader := StartControllerAndWaitForNewLeader(
+		ctx, manager, depManager, previousLeader)
 
-	ScaleControllerDeployment(ctx, depManager, 0)
-	ScaleControllerDeployment(ctx, depManager, 2)
-
-	return GetNewPodWithLeaderLease(ctx, manager)
+	By(fmt.Sprintf("waiting for the leader %s to initialize", leader.PodName))
+	time.Sleep(time.Second * 30)
+	return leader.PodName
 }
 
 func ForcefullyKillControllerPods(ctx context.Context, manager Manager, podManager pod.Manager) string {
-	err := podManager.DeleteAllPodsForcefully(ctx, PodLabelKey, PodLabelVal)
+	previousLeader, err := manager.WaitForActiveLeader(ctx, "")
 	Expect(err).ToNot(HaveOccurred())
 
-	return GetNewPodWithLeaderLease(ctx, manager)
-}
-
-func GetNewPodWithLeaderLease(ctx context.Context, manager Manager) string {
-	By(fmt.Sprintf("waiting for the leader to take over lease"))
-	time.Sleep(time.Second * 60)
-
-	By("waiting till the new controller has the leader lease")
-	leaderPod, err := manager.WaitTillControllerHasLeaderLease(ctx)
+	err = podManager.DeleteAllPodsForcefully(ctx, PodLabelKey, PodLabelVal)
 	Expect(err).ToNot(HaveOccurred())
 
-	By(fmt.Sprintf("waiting for the leader %s to initalize", leaderPod))
+	By("waiting until the new controller has the leader lease")
+	leader, err := manager.WaitForActiveLeader(ctx, previousLeader.AcquisitionID)
+	Expect(err).ToNot(HaveOccurred())
+
+	By(fmt.Sprintf("waiting for the leader %s to initialize", leader.PodName))
 	time.Sleep(time.Second * 30)
 
-	return leaderPod
+	return leader.PodName
+}
+
+func StopControllerAndWaitForLeaseExpiry(
+	ctx context.Context,
+	manager Manager,
+	deploymentManager deployment.Manager,
+) LeaderLease {
+	previousLeader, err := manager.WaitForActiveLeader(ctx, "")
+	Expect(err).ToNot(HaveOccurred())
+
+	ScaleControllerDeployment(ctx, deploymentManager, 0)
+	By("waiting for the controller leader lease to expire")
+	Expect(manager.WaitForLeaderLeaseExpiry(ctx)).To(Succeed())
+	return previousLeader
+}
+
+func StartControllerAndWaitForNewLeader(
+	ctx context.Context,
+	manager Manager,
+	deploymentManager deployment.Manager,
+	previousLeader LeaderLease,
+) LeaderLease {
+	ScaleControllerDeployment(ctx, deploymentManager, 2)
+	By("waiting until the new controller has the leader lease")
+	leader, err := manager.WaitForActiveLeader(ctx, previousLeader.AcquisitionID)
+	Expect(err).ToNot(HaveOccurred())
+	Expect(leader.HolderIdentity).NotTo(Equal(previousLeader.HolderIdentity))
+	return leader
 }
 
 func ScaleControllerDeployment(ctx context.Context, deploymentManager deployment.Manager, replica int) {
@@ -70,9 +96,9 @@ func ScaleControllerDeployment(ctx context.Context, deploymentManager deployment
 func VerifyLeaseHolderIsSame(ctx context.Context, manager Manager,
 	previousLeaseHolder string) {
 	By("verifying the lease didn't switch")
-	newLeaderName, err := manager.WaitTillControllerHasLeaderLease(ctx)
+	leader, err := manager.WaitForActiveLeader(ctx, "")
 	Expect(err).ToNot(HaveOccurred())
-	Expect(newLeaderName).To(Equal(previousLeaseHolder))
+	Expect(leader.PodName).To(Equal(previousLeaseHolder))
 }
 
 // PatchClusterRole patches the cluster Role with a given set of verbs and stores the
