@@ -187,10 +187,6 @@ var (
 				Name:   aws.String("tag:" + config.TrunkENIIDTag),
 				Values: []string{trunkInterfaceId},
 			},
-			{
-				Name:   aws.String("subnet-id"),
-				Values: []string{subnetId},
-			},
 		},
 	}
 
@@ -1220,7 +1216,7 @@ func TestEc2APIHelper_GetBranchNetworkInterface(t *testing.T) {
 
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput).Return(describeTrunkInterfaceOutput, nil)
 
-	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
+	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []*ec2types.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
 }

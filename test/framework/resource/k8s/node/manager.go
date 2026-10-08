@@ -27,11 +27,13 @@ import (
 
 type Manager interface {
 	GetNodesWithOS(os string) (*v1.NodeList, error)
+	GetNodesWithOSContext(ctx context.Context, os string) (*v1.NodeList, error)
 	AddLabels(nodeList []v1.Node, label map[string]string) error
 	RemoveLabels(nodeList []v1.Node, label map[string]string) error
-	GetNode(node *v1.Node) (*v1.Node, error)
+	GetNodeContext(ctx context.Context, node *v1.Node) (*v1.Node, error)
 	GetNodeList() (*v1.NodeList, error)
 	GetCNINode(node *v1.Node) (*cninode.CNINode, error)
+	GetCNINodeContext(ctx context.Context, node *v1.Node) (*cninode.CNINode, error)
 	GetCNINodeList() (*cninode.CNINodeList, error)
 	GetInstanceID(node *v1.Node) string
 	DeleteCNINode(cniNode *cninode.CNINode) error
@@ -47,8 +49,15 @@ func NewManager(k8sClient client.Client) Manager {
 }
 
 func (d *defaultManager) GetNodesWithOS(os string) (*v1.NodeList, error) {
+	return d.GetNodesWithOSContext(context.TODO(), os)
+}
+
+func (d *defaultManager) GetNodesWithOSContext(
+	ctx context.Context,
+	os string,
+) (*v1.NodeList, error) {
 	nodeList := &v1.NodeList{}
-	err := d.k8sClient.List(context.TODO(), nodeList, &client.ListOptions{
+	err := d.k8sClient.List(ctx, nodeList, &client.ListOptions{
 		LabelSelector: labels.SelectorFromSet(map[string]string{"kubernetes.io/os": os}),
 	})
 	return nodeList, err
@@ -98,15 +107,25 @@ func (d *defaultManager) RemoveLabels(nodeList []v1.Node, label map[string]strin
 	return nil
 }
 
-func (d *defaultManager) GetNode(node *v1.Node) (*v1.Node, error) {
+func (d *defaultManager) GetNodeContext(
+	ctx context.Context,
+	node *v1.Node,
+) (*v1.Node, error) {
 	observedNode := &v1.Node{}
-	err := d.k8sClient.Get(context.TODO(), utils.NamespacedName(node), observedNode)
+	err := d.k8sClient.Get(ctx, utils.NamespacedName(node), observedNode)
 	return observedNode, err
 }
 
 func (d *defaultManager) GetCNINode(node *v1.Node) (*cninode.CNINode, error) {
+	return d.GetCNINodeContext(context.TODO(), node)
+}
+
+func (d *defaultManager) GetCNINodeContext(
+	ctx context.Context,
+	node *v1.Node,
+) (*cninode.CNINode, error) {
 	cniNode := &cninode.CNINode{}
-	err := d.k8sClient.Get(context.TODO(), types.NamespacedName{Name: node.Name}, cniNode)
+	err := d.k8sClient.Get(ctx, types.NamespacedName{Name: node.Name}, cniNode)
 	return cniNode, err
 }
 

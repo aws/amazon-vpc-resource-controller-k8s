@@ -19,8 +19,10 @@ import (
 	"sync"
 	"time"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/resource"
@@ -28,6 +30,9 @@ import (
 	v1 "k8s.io/api/core/v1"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 type node struct {
@@ -56,6 +61,44 @@ const (
 	MaxNodeReconciliationInterval = 15 * time.Minute
 	NodeInitialCleanupInterval    = 1 * time.Minute
 )
+
+const (
+	checkpointRestoreResultHit                = "hit"
+	checkpointRestoreResultFallback           = "fallback"
+	checkpointRestoreResultError              = "error"
+	checkpointRestoreReasonNone               = "none"
+	checkpointRestoreReasonReadError          = "read_error"
+	checkpointRestoreReasonForeignManager     = "foreign_manager"
+	checkpointRestoreReasonMissingState       = "missing_state"
+	checkpointRestoreReasonMissingField       = "missing_field"
+	checkpointRestoreReasonInstanceIDMismatch = "instance_id_mismatch"
+	checkpointRestoreReasonInvalidState       = "invalid_state"
+	checkpointRestoreReasonNetworkUpdate      = "network_update_failed"
+)
+
+var (
+	cniNodeCheckpointRestoreCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cninode_checkpoint_restore_total",
+			Help: "Number of CNINode checkpoint restore attempts by result and reason",
+		},
+		[]string{"result", "reason"},
+	)
+	nodeInitDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "node_init_duration_seconds",
+			Help: "Duration of node resource initialization by result",
+		},
+		[]string{"result"},
+	)
+	registerMetricsOnce sync.Once
+)
+
+func registerNodeMetrics() {
+	registerMetricsOnce.Do(func() {
+		metrics.Registry.MustRegister(cniNodeCheckpointRestoreCount, nodeInitDuration)
+	})
+}
 
 // ErrInitResources to wrap error messages for all errors encountered
 // during node initialization so the node can be de-registered on failure
@@ -89,6 +132,7 @@ type Node interface {
 
 // NewManagedNode returns node managed by the controller
 func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
+	registerNodeMetrics()
 	return &node{
 		managed: true,
 		log: log.WithName("node resource handler").
@@ -152,16 +196,36 @@ func (n *node) UpdateResources(resourceManager resource.ResourceManager) error {
 func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	n.lock.Lock()
 	defer n.lock.Unlock()
-	err := n.instance.LoadDetails(n.ec2API)
-	if err != nil {
-		if errors.Is(err, utils.ErrNotFound) {
-			// Send a node event for users' visibility
-			msg := fmt.Sprintf("The instance type %s is not supported yet by the vpc resource controller", n.instance.Type())
-			utils.SendNodeEventWithNodeName(n.k8sAPI, n.instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, n.log)
+
+	start := time.Now()
+	initResult := "error"
+	defer func() {
+		nodeInitDuration.WithLabelValues(string(initResult)).Observe(time.Since(start).Seconds())
+	}()
+
+	restored := false
+	var err error
+	if n.instance.Os() == config.OSLinux {
+		restored, err = n.tryRestoreFromNodeNetworkState()
+		if err != nil {
+			return &ErrInitResources{
+				Message: "failed to apply restored instance details",
+				Err:     err,
+			}
 		}
-		return &ErrInitResources{
-			Message: "failed to load instance details",
-			Err:     err,
+	}
+	if !restored {
+		err = n.instance.LoadDetails(n.ec2API)
+		if err != nil {
+			if errors.Is(err, utils.ErrNotFound) {
+				// Send a node event for users' visibility
+				msg := fmt.Sprintf("The instance type %s is not supported yet by the vpc resource controller", n.instance.Type())
+				utils.SendNodeEventWithNodeName(n.k8sAPI, n.instance.Name(), utils.UnsupportedInstanceTypeReason, msg, v1.EventTypeWarning, n.log)
+			}
+			return &ErrInitResources{
+				Message: "failed to load instance details",
+				Err:     err,
+			}
 		}
 	}
 
@@ -194,7 +258,61 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	}
 
 	n.ready = true
+	initResult = "success"
 	return errInit
+}
+
+func (n *node) tryRestoreFromNodeNetworkState() (bool, error) {
+	nodeName := n.instance.Name()
+	cniNode, err := n.k8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
+	if err != nil {
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, checkpointRestoreReasonReadError).Inc()
+		return false, nil
+	}
+	if cniNode.Spec.ManagedBy != "" &&
+		cniNode.Spec.ManagedBy != rcv1alpha1.ManagedByVPCResourceController {
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, checkpointRestoreReasonForeignManager).Inc()
+		return false, nil
+	}
+	instanceID := n.instance.InstanceID()
+	state := cniNode.Status.NodeNetworkState
+	reason := checkpointRestoreReasonNone
+	switch {
+	case state == nil:
+		reason = checkpointRestoreReasonMissingState
+	case state.InstanceID != "" && state.InstanceID != instanceID:
+		reason = checkpointRestoreReasonInstanceIDMismatch
+	case cniNode.Status.TrunkInterface == nil || cniNode.Status.TrunkInterface.ID == "" ||
+		state.InstanceID == "" || state.InstanceType == "" || state.SubnetID == "" ||
+		state.SubnetCIDRBlock == "" || state.PrimaryNetworkInterfaceID == "":
+		reason = checkpointRestoreReasonMissingField
+	}
+	if reason != checkpointRestoreReasonNone {
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, reason).Inc()
+		checkpointInstanceID := ""
+		if state != nil {
+			checkpointInstanceID = state.InstanceID
+		}
+		n.log.Info("CNINode checkpoint is unusable, falling back to EC2",
+			"reason", reason,
+			"checkpointInstanceID", checkpointInstanceID,
+			"nodeInstanceID", instanceID)
+		return false, nil
+	}
+	trunkENIID := cniNode.Status.TrunkInterface.ID
+	if err := n.instance.LoadFromNodeNetworkState(*state, trunkENIID); err != nil {
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, checkpointRestoreReasonInvalidState).Inc()
+		n.log.Error(err, "CNINode checkpoint restore failed, falling back to EC2")
+		return false, nil
+	}
+	if err := n.instance.UpdateCurrentSubnetAndCidrBlock(n.ec2API); err != nil {
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultError, checkpointRestoreReasonNetworkUpdate).Inc()
+		return false, err
+	}
+	cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultHit, checkpointRestoreReasonNone).Inc()
+	n.log.Info("restored stable instance and trunk state from CNINode checkpoint",
+		"trunkENIID", trunkENIID)
+	return true, nil
 }
 
 // DeleteResources performs clean up of all the resource pools and provider of the nodes

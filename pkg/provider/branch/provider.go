@@ -19,15 +19,19 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/condition"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/pool"
@@ -40,7 +44,10 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/time/rate"
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -59,6 +66,11 @@ const (
 	ReasonBranchENIAnnotationFailed = "BranchENIAnnotationFailed"
 
 	ReasonTrunkENICreationFailed = "TrunkENICreationFailed"
+
+	RestoredNodeCheckGracePeriod   = 5 * time.Minute
+	RestoredNodeCheckRatePerSecond = 3
+	restoredNodeCheckBurst         = 1
+	preparationRetryPeriod         = time.Second
 )
 
 var (
@@ -110,13 +122,30 @@ type branchENIProvider struct {
 	workerPool worker.Worker
 	// apiWrapper
 	apiWrapper api.Wrapper
+	conditions condition.Conditions
 	ctx        context.Context
 	checker    healthz.Checker
 }
 
+type restoredNode struct {
+	name         string
+	instanceID   string
+	instanceType string
+}
+type restoredNodeState int
+
+const (
+	restoredNodePrepared restoredNodeState = iota
+	restoredNodeRemoved
+	restoredNodeReplaced
+	restoredNodeNotEligibleForBranchProvider
+	restoredNodeInitializationPending
+	restoredNodeNeedsPreparation
+)
+
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
 func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
-	worker worker.Worker, _ config.ResourceConfig, ctx context.Context,
+	worker worker.Worker, _ config.ResourceConfig, conditions condition.Conditions, ctx context.Context,
 ) provider.ResourceProvider {
 	prometheusRegister()
 	trunk.PrometheusRegister()
@@ -126,6 +155,7 @@ func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
 		log:           logger,
 		workerPool:    worker,
 		trunkENICache: make(map[string]trunk.TrunkENI),
+		conditions:    conditions,
 		ctx:           ctx,
 	}
 	provider.checker = provider.check()
@@ -165,7 +195,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return err
 	}
 
-	if err := trunkENI.InitTrunk(instance, podList); err != nil {
+	if err := trunkENI.InitTrunk(podList); err != nil {
 		// If it's an AWS Error, get the exit code without the error message to avoid
 		// broadcasting multiple different messaged events
 
@@ -192,7 +222,6 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		return fmt.Errorf("initializing trunk, %w", err)
 	}
 	branchProviderOperationLatency.WithLabelValues(operationInitTrunk, "1").Observe(timeSinceSeconds(start))
-
 	// Add the Trunk ENI to cache if it does not already exist
 	if err := b.addTrunkToCache(nodeName, trunkENI); err != nil {
 		if err != ErrTrunkExistInCache {
@@ -200,7 +229,19 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 			return err
 		}
 	}
+	// A failed write only disables fast restore on the next controller restart.
+	_ = b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
+	b.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
+	b.log.Info("initialized the resource provider successfully")
+	utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkInitiatedReason, "The node has trunk interface initialized successfully", v1.EventTypeNormal, b.log)
+	return nil
+}
 
+func (b *branchENIProvider) persistCNINodeCheckpoint(
+	nodeName string,
+	instance ec2.EC2Instance,
+	trunkENI trunk.TrunkENI,
+) error {
 	state := instance.BuildNodeNetworkState()
 	if err := b.apiWrapper.K8sAPI.PatchCNINodeCheckpoint(
 		nodeName,
@@ -209,17 +250,38 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	); err != nil {
 		cniNodeCheckpointPersistErrCount.Inc()
 		b.log.Error(err, "failed to persist CNINode checkpoint", "node", nodeName)
+		return err
 	}
+	return nil
+}
 
-	// TODO: For efficiency submit the process delete queue job only when the delete queue has items.
-	// Submit periodic jobs for the given node name
-	b.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
-
-	b.log.Info("initialized the resource provider successfully")
-
-	// send an event to notify user this node has trunk interface initialized
-	utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkInitiatedReason, "The node has trunk interface initialized successfully", v1.EventTypeNormal, b.log)
-
+func (b *branchENIProvider) prepareTrunkForAllocation(
+	nodeName string,
+	trunkENI trunk.TrunkENI,
+) (err error) {
+	defer func() {
+		if err != nil {
+			b.log.Error(err, "branch inventory check failed", "node", nodeName)
+		}
+	}()
+	pods, err := trunkENI.PrepareForAllocation(func() ([]v1.Pod, error) {
+		return b.apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
+	})
+	if !errors.Is(err, trunk.ErrNeedsColdInit) {
+		return err
+	}
+	completed := false
+	defer func() {
+		trunkENI.CompletePreparation(completed)
+	}()
+	instance, err := trunkENI.ColdInit(pods)
+	if err != nil {
+		return fmt.Errorf("cold initializing trunk after restored trunk validation failed: %w", err)
+	}
+	if err := b.persistCNINodeCheckpoint(nodeName, instance, trunkENI); err != nil {
+		return fmt.Errorf("persisting checkpoint after restored trunk fallback: %w", err)
+	}
+	completed = true
 	return nil
 }
 
@@ -383,6 +445,13 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
 	}
 
+	if err := b.prepareTrunkForAllocation(pod.Spec.NodeName, trunkENI); err != nil {
+		branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation").Inc()
+		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
+			fmt.Sprintf("failed to prepare trunk before branch ENI allocation: %v", err), v1.EventTypeWarning)
+		return ctrl.Result{RequeueAfter: preparationRetryPeriod, Requeue: true}, nil
+	}
+
 	// Get the list of branch ENIs that will be allocated to the pod object
 	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
 	if err != nil {
@@ -488,6 +557,160 @@ func (b *branchENIProvider) getTrunkFromCache(nodeName string) (trunkENI trunk.T
 
 	trunkENI, present = b.trunkENICache[nodeName]
 	return
+}
+
+func (b *branchENIProvider) Start(ctx context.Context) error {
+	for {
+		cniNodes, err := b.apiWrapper.K8sAPI.ListCNINodes()
+		if err != nil {
+			b.log.Error(err, "waiting to capture restored nodes")
+			if !waitForRestoredNodeCheck(ctx, preparationRetryPeriod) {
+				return nil
+			}
+			continue
+		}
+		var restoredNodes []restoredNode
+		for _, cniNode := range cniNodes {
+			if cniNode.Spec.ManagedBy != "" &&
+				cniNode.Spec.ManagedBy != rcv1alpha1.ManagedByVPCResourceController {
+				continue
+			}
+			state := cniNode.Status.NodeNetworkState
+			if state == nil || state.InstanceID == "" ||
+				cniNode.Status.TrunkInterface == nil || cniNode.Status.TrunkInterface.ID == "" {
+				continue
+			}
+			restoredNodes = append(restoredNodes, restoredNode{
+				name:         cniNode.Name,
+				instanceID:   state.InstanceID,
+				instanceType: state.InstanceType,
+			})
+		}
+		return b.runRestoredNodeChecks(
+			ctx,
+			restoredNodes,
+			RestoredNodeCheckGracePeriod,
+			preparationRetryPeriod,
+			rate.NewLimiter(rate.Limit(RestoredNodeCheckRatePerSecond), restoredNodeCheckBurst),
+		)
+	}
+}
+
+func waitForRestoredNodeCheck(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (b *branchENIProvider) NeedLeaderElection() bool {
+	return true
+}
+
+func (b *branchENIProvider) runRestoredNodeChecks(
+	ctx context.Context,
+	restoredNodes []restoredNode,
+	gracePeriod time.Duration,
+	retryPeriod time.Duration,
+	limiter *rate.Limiter,
+) error {
+	if !waitForRestoredNodeCheck(ctx, gracePeriod) {
+		return nil
+	}
+	podDataStoreSynced := b.conditions.GetPodDataStoreSyncStatus()
+	if !podDataStoreSynced {
+		b.log.Info("waiting to check restored nodes until pod datastore is synced")
+	}
+	for !podDataStoreSynced {
+		if !waitForRestoredNodeCheck(ctx, retryPeriod) {
+			return nil
+		}
+		podDataStoreSynced = b.conditions.GetPodDataStoreSyncStatus()
+	}
+	pendingNodes := restoredNodes
+	for len(pendingNodes) != 0 {
+		failedNodes := make([]restoredNode, 0, len(pendingNodes))
+		for _, node := range pendingNodes {
+			state, trunkENI := b.classifyRestoredNode(node)
+			if state == restoredNodeNeedsPreparation {
+				if err := limiter.Wait(ctx); err != nil {
+					return nil
+				}
+				state, trunkENI = b.classifyRestoredNode(node)
+			}
+			switch state {
+			case restoredNodeInitializationPending:
+				failedNodes = append(failedNodes, node)
+			case restoredNodeNeedsPreparation:
+				if err := b.prepareTrunkForAllocation(node.name, trunkENI); err != nil {
+					failedNodes = append(failedNodes, node)
+				}
+			}
+		}
+		pendingNodes = failedNodes
+		if len(pendingNodes) != 0 && !waitForRestoredNodeCheck(ctx, retryPeriod) {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (b *branchENIProvider) classifyRestoredNode(node restoredNode) (restoredNodeState, trunk.TrunkENI) {
+	currentNode, err := b.apiWrapper.K8sAPI.GetNode(node.name)
+	if apierrors.IsNotFound(err) {
+		return restoredNodeRemoved, nil
+	}
+	if err != nil {
+		b.log.Error(err, "waiting to verify restored node", "node", node.name)
+		return restoredNodeInitializationPending, nil
+	}
+	providerIDParts := strings.Split(currentNode.Spec.ProviderID, "/")
+	currentInstanceID := providerIDParts[len(providerIDParts)-1]
+	switch {
+	case currentInstanceID == "":
+		return restoredNodeInitializationPending, nil
+	case currentInstanceID != node.instanceID:
+		return restoredNodeReplaced, nil
+	}
+	labels := currentNode.GetLabels()
+	nodeOS := labels[config.NodeLabelOS]
+	if nodeOS == "" {
+		nodeOS = labels[config.NodeLabelOSBeta]
+	}
+	limits, instanceTypeSupported := vpc.Limits[node.instanceType]
+	if nodeOS != config.OSLinux || !instanceTypeSupported || !limits.IsTrunkingCompatible {
+		return restoredNodeNotEligibleForBranchProvider, nil
+	}
+	if _, trunkAttached := labels[config.HasTrunkAttachedLabel]; !trunkAttached {
+		cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: node.name})
+		switch {
+		case apierrors.IsNotFound(err):
+			return restoredNodeNotEligibleForBranchProvider, nil
+		case err != nil:
+			b.log.Error(err, "waiting to verify restored node eligibility", "node", node.name)
+			return restoredNodeInitializationPending, nil
+		}
+		if !slices.ContainsFunc(cniNode.Spec.Features, func(feature rcv1alpha1.Feature) bool {
+			return feature.Name == rcv1alpha1.SecurityGroupsForPods
+		}) {
+			return restoredNodeNotEligibleForBranchProvider, nil
+		}
+	}
+	trunkENI, present := b.getTrunkFromCache(node.name)
+	switch {
+	case !present:
+		return restoredNodeInitializationPending, nil
+	case trunkENI.InstanceID() != node.instanceID:
+		return restoredNodeReplaced, nil
+	case trunkENI.NeedsPreparation():
+		return restoredNodeNeedsPreparation, trunkENI
+	default:
+		return restoredNodePrepared, nil
+	}
 }
 
 // GetPool is not supported for Branch ENI

@@ -14,6 +14,7 @@
 package perpodsg_test
 
 import (
+	"context"
 	"time"
 
 	cninode "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -22,7 +23,6 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
 	deploymentWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/deployment"
 	podWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/pod"
 	sgpWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
@@ -512,19 +512,18 @@ var _ = Describe("Branch ENI Pods", func() {
 			})
 
 			It("pod should be created on startup", func() {
-				By("scaling the controller deployment to 0")
-				controller.ScaleControllerDeployment(ctx, frameWork.DeploymentManager, 0)
+				restartContext, cancel := context.WithTimeout(ctx, controllerRestartHangGuard)
+				defer cancel()
+				restart := stopControllerAndWaitForLeaseExpiry(restartContext)
 				pod := podTemplate.DeepCopy()
 
 				By("creating pod which should not run since controller is down")
-				_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(ctx, pod, time.Second*10)
+				_, err = frameWork.PodManager.CreateAndWaitTillPodIsRunning(
+					restartContext, pod, time.Second*10)
 				Expect(err).To(HaveOccurred())
 
-				By("scaling the controller deployment to 2")
-				controller.ScaleControllerDeployment(ctx, frameWork.DeploymentManager, 2)
-
-				By("waiting for leader lease to be acquired")
-				time.Sleep(ControllerInitWaitPeriod)
+				restart.startAndWaitForNodeRestore(
+					restartContext, []string{targetedNodes[0].Name}, nil)
 
 				By("verifying the Pod is running with Branch ENI")
 				verify.VerifyNetworkingOfAllPodUsingENI(namespace, podLabelKey, podLabelValue,

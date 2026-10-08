@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -357,6 +358,11 @@ func main() {
 			ctx, supportedResources, apiWrapper, ctrl.Log.WithName("managers").WithName("resource"), healthzHandler, controllerConditions)
 		if err != nil {
 			ctrl.Log.Error(err, "failed to init resources", "resources", supportedResources)
+			os.Exit(1)
+		}
+		branchProvider, _ := resourceManager.GetResourceProvider(config.ResourceNamePodENI)
+		if err := mgr.Add(branchProvider.(interface{ Start(context.Context) error })); err != nil {
+			ctrl.Log.Error(err, "failed to add restored-node branch inventory")
 			os.Exit(1)
 		}
 
