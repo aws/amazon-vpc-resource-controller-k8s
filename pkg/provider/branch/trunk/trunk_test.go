@@ -301,6 +301,19 @@ func TestTrunkENI_freeVlanId(t *testing.T) {
 	assert.Equal(t, 0, id)
 }
 
+func TestTrunkENI_markVlanAssigned(t *testing.T) {
+	trunkENI := getMockTrunk()
+	state := newRecoveredBranchState()
+	state.usedVlanIDs[0] = true
+
+	// The recovery refactor replaced individual VLAN mutation with an atomic state commit.
+	trunkENI.commitBranchState(trunkId, state)
+
+	id, err := trunkENI.assignVlanId()
+	assert.NoError(t, err)
+	assert.Equal(t, 1, id)
+}
+
 // TestTrunkENI_getBranchFromCache tests branch eni is returned when present in the cache
 func TestTrunkENI_getBranchFromCache(t *testing.T) {
 	trunkENI := getMockTrunk()
@@ -331,6 +344,21 @@ func TestTrunkENI_addBranchToCache(t *testing.T) {
 	branchFromCache, ok := trunkENI.uidToBranchENIMap[PodUID]
 	assert.True(t, ok)
 	assert.Equal(t, branchENIs1, branchFromCache)
+}
+
+// TestTrunkENI_pushENIToDeleteQueue tests pushing to delete queue the data is stored in FIFO strategy
+func TestTrunkENI_pushENIToDeleteQueue(t *testing.T) {
+	trunkENI := getMockTrunk()
+	eniDetails1 := *EniDetails1
+	eniDetails2 := *EniDetails2
+	trunkENI.uidToBranchENIMap["pod-1"] = []*ENIDetails{&eniDetails1}
+	trunkENI.uidToBranchENIMap["pod-2"] = []*ENIDetails{&eniDetails2}
+
+	trunkENI.PushBranchENIsToCoolDownQueue("pod-1")
+	trunkENI.PushBranchENIsToCoolDownQueue("pod-2")
+
+	assert.Equal(t, &eniDetails1, trunkENI.deleteQueue[0])
+	assert.Equal(t, &eniDetails2, trunkENI.deleteQueue[1])
 }
 
 // TestTrunkENI_pushENIsToFrontOfDeleteQueue tests ENIs are pushed to the front of the queue instead of the back
@@ -389,6 +417,48 @@ func TestTrunkENI_decodeBranchInterfacesUsedByPod_MissingAnnotation(t *testing.T
 	branchENIs := trunkENI.decodeBranchInterfacesUsedByPod(MockPod2)
 
 	assert.Equal(t, 0, len(branchENIs))
+}
+
+// TestTrunkENI_getBranchInterfacesUsedByPod tests that branch interface are returned if present in pod annotation
+func TestTrunkENI_getBranchInterfacesUsedByPod(t *testing.T) {
+	trunkENI := getMockTrunk()
+	branchENIs := trunkENI.decodeBranchInterfacesUsedByPod(MockPod1)
+
+	assert.Equal(t, 2, len(branchENIs))
+	assert.Equal(t, EniDetails1, branchENIs[0])
+	assert.Equal(t, EniDetails2, branchENIs[1])
+}
+
+// TestTrunkENI_getBranchInterfacesUsedByPod_MissingAnnotation tests that empty slice is returned if the pod has no branch
+// eni annotation
+func TestTrunkENI_getBranchInterfacesUsedByPod_MissingAnnotation(t *testing.T) {
+	trunkENI := getMockTrunk()
+	branchENIs := trunkENI.decodeBranchInterfacesUsedByPod(MockPod2)
+
+	assert.Equal(t, 0, len(branchENIs))
+}
+
+// TestTrunkENI_getBranchInterfaceMap tests that the branch interface map is returned for the given branch interface slice
+func TestTrunkENI_getBranchInterfaceMap(t *testing.T) {
+	trunkENI := getMockTrunk()
+	state := trunkENI.buildRecoveredBranchState(
+		[]v1.Pod{*MockPod1},
+		[]*awsEc2Types.NetworkInterface{
+			{NetworkInterfaceId: aws.String(EniDetails1.ID)},
+			{NetworkInterfaceId: aws.String(EniDetails2.ID)},
+		},
+	)
+
+	assert.Equal(t, EniDetails1, state.uidToBranchENIMap[PodUID][0])
+}
+
+// TestTrunkENI_getBranchInterfaceMap_EmptyList tests that empty map is returned if empty list is passed
+func TestTrunkENI_getBranchInterfaceMap_EmptyList(t *testing.T) {
+	trunkENI := getMockTrunk()
+
+	state := trunkENI.buildRecoveredBranchState(nil, []*awsEc2Types.NetworkInterface{})
+	assert.NotNil(t, state.uidToBranchENIMap)
+	assert.Zero(t, len(state.uidToBranchENIMap))
 }
 
 func TestTrunkENI_buildRecoveredBranchStateRecoversVlanIDFromEC2Tag(t *testing.T) {

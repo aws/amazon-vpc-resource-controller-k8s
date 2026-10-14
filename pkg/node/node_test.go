@@ -174,6 +174,25 @@ func TestNewUnManagedNode(t *testing.T) {
 	assert.True(t, node.GetNodeInstanceID() == instanceID)
 }
 
+// TestNode_InitResources tests the instance details is loaded and the node is initialized without error
+func TestNode_InitResources(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 1)
+	expectColdInitialization(&mock)
+
+	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
+
+	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
+	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+
+	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
+	assert.NoError(t, err)
+	assert.True(t, mock.NodeWithMock.IsReady())
+}
+
 func TestNode_InitResources_WindowsSkipsCheckpointRestore(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -234,6 +253,37 @@ func TestNode_InitResources_RestoresCheckpointWithoutLoadingInstance(t *testing.
 	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
 	assert.True(t, mock.NodeWithMock.IsReady())
 	assert.Equal(t, before+1, writePrometheusMetric(t, restoreCounter).GetCounter().GetValue())
+}
+
+func TestNode_InitResources_RestoreWithOwnManagedBy(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 1)
+	expectCheckpointRestore(&mock)
+	cniNode := validCheckpointCNINode(instanceID)
+	cniNode.Spec.ManagedBy = rcv1alpha1.ManagedByVPCResourceController
+	restoredTrunkENIID := ""
+
+	mock.MockInstance.EXPECT().Name().Return(nodeName)
+	mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(cniNode, nil)
+	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Times(0)
+	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(
+		*cniNode.Status.NodeNetworkState,
+		cniNode.Status.TrunkInterface.ID,
+	).DoAndReturn(func(_ rcv1alpha1.NodeNetworkState, trunkENIID string) error {
+		restoredTrunkENIID = trunkENIID
+		return nil
+	})
+	mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.MockEC2API).Return(nil)
+	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
+	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
+	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+
+	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
+	assert.True(t, mock.NodeWithMock.IsReady())
+	assert.Equal(t, cniNode.Status.TrunkInterface.ID, restoredTrunkENIID)
 }
 
 func TestNode_InitResources_FallsBackWhenCheckpointMissing(t *testing.T) {

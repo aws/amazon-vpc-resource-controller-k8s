@@ -22,6 +22,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
+	nodeWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/node"
 	testUtils "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -42,7 +43,15 @@ var cniNodeAutoScalingGroupName = flag.String(
 	"Auto Scaling group used by the CNINode suite node",
 )
 
-var _ = Describe("[CANARY]CNINode test", Serial, func() {
+var _ = Describe("[CANARY]CNINode test", Serial, Ordered, func() {
+	Describe("CNINode count verification on adding or removing node", func() {
+		Context("when new node is added", func() {
+			It("it should create new CNINode", func() {
+				Expect(nodeWrapper.VerifyCNINode(frameWork.NodeManager)).Should(Succeed())
+			})
+		})
+	})
+
 	Describe("CNINode checkpoint on the suite node", func() {
 		It("matches EC2 for the newly added node", func(ctx SpecContext) {
 			node := suiteNode()
@@ -128,6 +137,24 @@ var _ = Describe("[CANARY]CNINode test", Serial, func() {
 				cniNodeCopy.ObjectMeta.Labels = map[string]string{}
 				err := frameWork.NodeManager.UpdateCNINode(cniNode, cniNodeCopy)
 				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+	})
+
+	Describe("CNINode count verification on adding or removing node", func() {
+		Context("when existing node is removed", func() {
+			It("it should delete CNINode", func(ctx SpecContext) {
+				node := suiteNode()
+				Expect(frameWork.AutoScalingManager.TerminateInstanceInAutoScalingGroup(
+					ctx,
+					suiteNodeInstanceID,
+					true,
+				)).To(Succeed())
+				suiteNodeInstanceID = ""
+				Expect(waitTillNodeDeleted(ctx, node)).To(Succeed())
+				Expect(waitTillCNINodeDeleted(ctx, node)).To(Succeed())
+				Expect(nodeWrapper.VerifyCNINode(frameWork.NodeManager)).Should(Succeed())
+				suiteNodeName = ""
 			})
 		})
 	})

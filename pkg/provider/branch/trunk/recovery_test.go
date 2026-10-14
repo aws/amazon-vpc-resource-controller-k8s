@@ -30,6 +30,7 @@ import (
 	"github.com/golang/mock/gomock"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -192,6 +193,91 @@ func TestRestoredBranchCreationUsesRefreshedPrimaryENISettings(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestRestoredBranchesReadPrimaryOnce(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
+	assert.Empty(t, instance.CurrentInstanceSecurityGroups())
+	conntrack := &ec2types.ConnectionTrackingSpecificationRequest{
+		TcpEstablishedTimeout: aws.Int32(600),
+	}
+	describeCalls := 0
+	var observedConntrack []*ec2types.ConnectionTrackingSpecificationRequest
+
+	helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
+		DoAndReturn(func([]string) ([]ec2types.NetworkInterface, error) {
+			describeCalls++
+			return validRestoredInterfaces(InstanceId), nil
+		}).AnyTimes()
+	helper.EXPECT().GetBranchNetworkInterface(gomock.Eq(aws.String(recoveryTrunkENIID))).
+		Return(nil, nil)
+	assert.NoError(t, prepareTrunk(trunk, nil))
+
+	gomock.InOrder(
+		helper.EXPECT().CreateNetworkInterface(
+			&BranchEniDescription,
+			&SubnetId,
+			[]string{recoveryRefreshedSG},
+			append(vlan1Tag, trunk.nodeIDTag...),
+			nil,
+			nil,
+			gomock.Any(),
+		).DoAndReturn(func(
+			_, _ *string,
+			_ []string,
+			_ []ec2types.Tag,
+			_ *config.IPResourceCount,
+			_ *string,
+			connectionTracking *ec2types.ConnectionTrackingSpecificationRequest,
+		) (*ec2types.NetworkInterface, error) {
+			observedConntrack = append(observedConntrack, connectionTracking)
+			return BranchInterface1, nil
+		}),
+		helper.EXPECT().AssociateBranchToTrunk(
+			aws.String(recoveryTrunkENIID),
+			&Branch1Id,
+			VlanId1,
+		).Return(mockAssociationOutput1, nil),
+		helper.EXPECT().CreateNetworkInterface(
+			&BranchEniDescription,
+			&SubnetId,
+			[]string{recoveryRefreshedSG},
+			append(vlan2Tag, trunk.nodeIDTag...),
+			nil,
+			nil,
+			gomock.Any(),
+		).DoAndReturn(func(
+			_, _ *string,
+			_ []string,
+			_ []ec2types.Tag,
+			_ *config.IPResourceCount,
+			_ *string,
+			connectionTracking *ec2types.ConnectionTrackingSpecificationRequest,
+		) (*ec2types.NetworkInterface, error) {
+			observedConntrack = append(observedConntrack, connectionTracking)
+			return BranchInterface2, nil
+		}),
+		helper.EXPECT().AssociateBranchToTrunk(
+			aws.String(recoveryTrunkENIID),
+			&Branch2Id,
+			VlanId2,
+		).Return(mockAssociationOutput2, nil),
+	)
+
+	first, err := trunk.CreateAndAssociateBranchENIs(MockPod1, nil, 1)
+	assert.NoError(t, err)
+	second, err := trunk.CreateAndAssociateBranchENIs(MockPod2, nil, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, Branch1Id, first[0].ID)
+	assert.Equal(t, Branch2Id, second[0].ID)
+	assert.Equal(t, 1, describeCalls)
+	assert.Equal(t, []*ec2types.ConnectionTrackingSpecificationRequest{
+		conntrack,
+		conntrack,
+	}, observedConntrack)
+}
+
 func TestPrepareForAllocationColdInitializedTrunkSkipsValidation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -277,9 +363,52 @@ func TestPrepareForAllocationReturnsColdInitSentinelForInvalidRestoredTrunk(t *t
 			helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
 				Return(test.interfaces, test.err)
 
-			assert.ErrorIs(t, prepareTrunk(trunk, nil), ErrNeedsColdInit)
+			require.ErrorIs(t, prepareTrunk(trunk, nil), ErrNeedsColdInit)
 			assert.True(t, trunk.NeedsPreparation())
 			trunk.CompletePreparation(false)
+		})
+	}
+}
+
+func TestRestoredTrunkDetachedNeedsColdInit(t *testing.T) {
+	tests := map[string]func([]ec2types.NetworkInterface){
+		"primary detached": func(interfaces []ec2types.NetworkInterface) {
+			interfaces[0].Attachment.Status = ec2types.AttachmentStatusDetached
+		},
+		"trunk detached": func(interfaces []ec2types.NetworkInterface) {
+			interfaces[1].Attachment.Status = ec2types.AttachmentStatusDetached
+		},
+		"trunk attachment missing": func(interfaces []ec2types.NetworkInterface) {
+			interfaces[1].Attachment = nil
+		},
+	}
+
+	for name, detach := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			trunk, helper, instance := getMockHelperInstanceAndTrunkObject(ctrl)
+			instance.EXPECT().RestoredTrunkENIID().Return(recoveryTrunkENIID).Times(2)
+			assert.NoError(t, trunk.InitTrunk(nil))
+			trunk.prepared.Store(false)
+
+			interfaces := validRestoredInterfaces(InstanceId)
+			detach(interfaces)
+			instance.EXPECT().PrimaryNetworkInterfaceID().Return(recoveryPrimaryENIID)
+			instance.EXPECT().InstanceID().Return(InstanceId).AnyTimes()
+			instance.EXPECT().RefreshPrimaryNetworkInterface(gomock.Any()).
+				Return(nil).AnyTimes()
+			helper.EXPECT().DescribeNetworkInterfaces(
+				[]string{recoveryPrimaryENIID, recoveryTrunkENIID},
+			).Return(interfaces, nil)
+			helper.EXPECT().GetBranchNetworkInterface(
+				gomock.Eq(aws.String(recoveryTrunkENIID)),
+			).Return(nil, nil).AnyTimes()
+
+			require.ErrorIs(t, prepareTrunk(trunk, nil), ErrNeedsColdInit)
+			assert.Empty(t, trunk.uidToBranchENIMap)
+			assert.Empty(t, trunk.deleteQueue)
 		})
 	}
 }
