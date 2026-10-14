@@ -278,9 +278,7 @@ func (b *branchENIProvider) prepareTrunkForAllocation(
 	if err != nil {
 		return fmt.Errorf("cold initializing trunk after restored trunk validation failed: %w", err)
 	}
-	if err := b.persistCNINodeCheckpoint(nodeName, instance, trunkENI); err != nil {
-		return fmt.Errorf("persisting checkpoint after restored trunk fallback: %w", err)
-	}
+	_ = b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
 	completed = true
 	return nil
 }

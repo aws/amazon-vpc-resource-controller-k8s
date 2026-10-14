@@ -327,7 +327,7 @@ func TestBranchENIProvider_RestoredTrunkFallbackRewritesCheckpoint(t *testing.T)
 	assert.NoError(t, provider.prepareTrunkForAllocation(NodeName, fakeTrunk))
 }
 
-func TestBranchENIProvider_RestoredTrunkFallbackRequiresCheckpointRewrite(t *testing.T) {
+func TestBranchENIProvider_PrepareFallbackCheckpointWriteFailureDoesNotBlock(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -339,6 +339,8 @@ func TestBranchENIProvider_RestoredTrunkFallbackRequiresCheckpointRewrite(t *tes
 	state := rcv1alpha1.NodeNetworkState{InstanceID: "i-current"}
 	pods := []v1.Pod{*MockPod1}
 	trunkENIID := "eni-current-trunk"
+	persistErrorsBefore := checkpointPersistErrorCount(t)
+	completionSucceeded := false
 
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(pods, nil)
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
@@ -348,10 +350,15 @@ func TestBranchENIProvider_RestoredTrunkFallbackRequiresCheckpointRewrite(t *tes
 		mockInstance.EXPECT().BuildNodeNetworkState().Return(state),
 		fakeTrunk.EXPECT().TrunkENIID().Return(trunkENIID),
 		mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(MockError),
-		fakeTrunk.EXPECT().CompletePreparation(false),
+		fakeTrunk.EXPECT().CompletePreparation(gomock.Any()).
+			Do(func(succeeded bool) {
+				completionSucceeded = succeeded
+			}),
 	)
 
-	assert.ErrorIs(t, provider.prepareTrunkForAllocation(NodeName, fakeTrunk), MockError)
+	assert.NoError(t, provider.prepareTrunkForAllocation(NodeName, fakeTrunk))
+	assert.True(t, completionSucceeded)
+	assert.Equal(t, persistErrorsBefore+1, checkpointPersistErrorCount(t))
 }
 
 func checkpointPersistErrorCount(t *testing.T) float64 {

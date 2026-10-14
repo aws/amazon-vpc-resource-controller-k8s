@@ -534,6 +534,7 @@ func (t *trunkENI) PrepareForAllocation(
 	if restoredTrunkENIID == "" {
 		return pods, ErrNeedsColdInit
 	}
+	t.log.Info("starting restored trunk validation", "trunk", restoredTrunkENIID)
 	err = t.validateRestoredNetworkInterfaces(restoredTrunkENIID)
 	if err != nil {
 		if errors.Is(err, ErrNeedsColdInit) {
