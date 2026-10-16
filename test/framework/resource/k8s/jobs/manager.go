@@ -77,8 +77,15 @@ func (m *defaultManager) CreateJobAndWaitForJobToRun(ctx context.Context,
 	}, ctx.Done())
 }
 
+// CreateAndWaitForJobToComplete waits for the job to be Complete. Failed pods are
+// retried up to BackoffLimit; it returns an error only if the job is Failed.
 func (m *defaultManager) CreateAndWaitForJobToComplete(ctx context.Context,
 	jobs *batchV1.Job) (*batchV1.Job, error) {
+
+	// Require every pod to succeed, so failed pods are replaced.
+	if jobs.Spec.Completions == nil {
+		jobs.Spec.Completions = jobs.Spec.Parallelism
+	}
 
 	err := m.k8sClient.Create(ctx, jobs)
 	if err != nil {
@@ -90,10 +97,17 @@ func (m *defaultManager) CreateAndWaitForJobToComplete(ctx context.Context,
 		if err := m.k8sClient.Get(ctx, utils.NamespacedName(jobs), observedJob); err != nil {
 			return false, err
 		}
-		if observedJob.Status.Failed > 0 {
-			return false, fmt.Errorf("failed to execute job :%v", observedJob.Status)
-		} else if observedJob.Status.Succeeded == (*jobs.Spec.Parallelism) {
-			return true, nil
+		for _, condition := range observedJob.Status.Conditions {
+			if condition.Status != v1.ConditionTrue {
+				continue
+			}
+			switch condition.Type {
+			case batchV1.JobComplete:
+				return true, nil
+			case batchV1.JobFailed:
+				return false, fmt.Errorf("job failed: %s: %s: %v",
+					condition.Reason, condition.Message, observedJob.Status)
+			}
 		}
 		return false, nil
 	}, ctx.Done())
