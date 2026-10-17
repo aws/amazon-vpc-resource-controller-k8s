@@ -136,6 +136,10 @@ func (v *PodVerification) WindowsPodsHaveIPv4Address(namespace string,
 	Expect(err).ToNot(HaveOccurred())
 
 	for _, pod := range pods {
+		// Skip pods that failed and were replaced by their Job.
+		if pod.Status.Phase == v1.PodFailed {
+			continue
+		}
 		v.WindowsPodHaveIPv4Address(&pod)
 	}
 }
