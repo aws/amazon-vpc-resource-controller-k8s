@@ -103,11 +103,7 @@ type TrunkENI interface {
 	InitTrunk(pods []v1.Pod) error
 	// CreateAndAssociateBranchENIs creates and associate branch interface/s to trunk interface
 	CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []string, eniCount int) ([]*ENIDetails, error)
-	// PrepareForAllocation keeps prepareMu locked when it returns ErrNeedsColdInit.
-	PrepareForAllocation(listRunningPods func() ([]v1.Pod, error)) ([]v1.Pod, error)
-	ColdInit(pods []v1.Pod) (ec2.EC2Instance, error)
-	// CompletePreparation must be called exactly once after ErrNeedsColdInit.
-	CompletePreparation(succeeded bool)
+	PrepareForAllocation(listRunningPods func() ([]v1.Pod, error)) (ec2.EC2Instance, error)
 	NeedsPreparation() bool
 	// PushBranchENIsToCoolDownQueue pushes the branch interface belonging to the pod to the cool down queue
 	PushBranchENIsToCoolDownQueue(UID string)
@@ -131,8 +127,10 @@ type trunkENI struct {
 	// lock is used to perform concurrent operation on the shared variables like the list of used vlan ids
 	lock sync.RWMutex
 	// Lock order is prepareMu then lock. Once prepared is true, no whole-state commit remains.
-	prepareMu sync.Mutex
-	prepared  atomic.Bool
+	prepareMu              sync.Mutex
+	prepared               atomic.Bool
+	nextPreparationAttempt time.Time
+	preparationBackoff     time.Duration
 	// ec2ApiHelper is the wrapper interface that provides EC2 API helper functions
 	ec2ApiHelper api.EC2APIHelper
 	// trunkENIId is the interface id of the trunk network interface
@@ -252,17 +250,6 @@ func (t *trunkENI) InitTrunk(podList []v1.Pod) error {
 	}
 	t.prepared.Store(true)
 	return nil
-}
-
-// ColdInit is called while PrepareForAllocation retains prepareMu for fallback.
-func (t *trunkENI) ColdInit(podList []v1.Pod) (ec2.EC2Instance, error) {
-	if err := t.instance.LoadDetails(t.ec2ApiHelper); err != nil {
-		return nil, err
-	}
-	if err := t.coldInit(podList); err != nil {
-		return nil, err
-	}
-	return t.instance, nil
 }
 
 func (t *trunkENI) coldInit(podList []v1.Pod) error {
@@ -512,67 +499,6 @@ func (t *trunkENI) commitBranchState(trunkENIID string, state *recoveredBranchSt
 	t.uidToBranchENIMap = state.uidToBranchENIMap
 	t.deleteQueue = state.deleteQueue
 	t.usedVlanIds = state.usedVlanIDs
-}
-
-func (t *trunkENI) PrepareForAllocation(
-	listRunningPods func() ([]v1.Pod, error),
-) ([]v1.Pod, error) {
-	if t.prepared.Load() {
-		return nil, nil
-	}
-	t.prepareMu.Lock()
-	if t.prepared.Load() {
-		t.prepareMu.Unlock()
-		return nil, nil
-	}
-	pods, err := listRunningPods()
-	if err != nil {
-		t.prepareMu.Unlock()
-		return nil, fmt.Errorf("listing running pods before branch inventory: %w", err)
-	}
-	restoredTrunkENIID := t.instance.RestoredTrunkENIID()
-	if restoredTrunkENIID == "" {
-		return pods, ErrNeedsColdInit
-	}
-	t.log.Info("starting restored trunk validation", "trunk", restoredTrunkENIID)
-	err = t.validateRestoredNetworkInterfaces(restoredTrunkENIID)
-	if err != nil {
-		if errors.Is(err, ErrNeedsColdInit) {
-			t.log.Info("restored trunk is invalid, falling back to cold initialization",
-				"trunk", restoredTrunkENIID,
-				"error", err)
-			return pods, err
-		}
-		t.prepareMu.Unlock()
-		trunkENIOperationsErrCount.WithLabelValues("recover_branch_state").Inc()
-		return nil, fmt.Errorf("validating restored trunk before allocation: %w", err)
-	}
-	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&restoredTrunkENIID)
-	if err != nil {
-		t.prepareMu.Unlock()
-		trunkENIOperationsErrCount.WithLabelValues("recover_branch_state").Inc()
-		return nil, fmt.Errorf("describing branch ENIs before allocation: %w", err)
-	}
-	state := t.buildRecoveredBranchState(pods, branchInterfaces)
-	t.commitBranchState(restoredTrunkENIID, state)
-	t.prepared.Store(true)
-	t.prepareMu.Unlock()
-	branchENIOperationsSuccessCount.WithLabelValues("recover_branch_state").Inc()
-	t.log.Info("validated restored trunk and recovered branch state before allocation",
-		"trunk", restoredTrunkENIID,
-		"ownedPods", len(state.uidToBranchENIMap),
-		"orphanENIs", len(state.deleteQueue))
-	return pods, nil
-}
-
-func (t *trunkENI) CompletePreparation(succeeded bool) {
-	if succeeded {
-		t.prepared.Store(true)
-		branchENIOperationsSuccessCount.WithLabelValues("recover_branch_state").Inc()
-	} else {
-		trunkENIOperationsErrCount.WithLabelValues("recover_branch_state").Inc()
-	}
-	t.prepareMu.Unlock()
 }
 
 func (t *trunkENI) NeedsPreparation() bool {

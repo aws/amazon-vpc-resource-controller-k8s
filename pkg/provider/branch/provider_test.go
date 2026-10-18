@@ -31,6 +31,7 @@ import (
 	mock_utils "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/utils"
 	mock_worker "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/worker"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
@@ -134,13 +135,13 @@ func prepareWithPods(
 	t *testing.T,
 	wantPods []v1.Pod,
 	result error,
-) func(func() ([]v1.Pod, error)) ([]v1.Pod, error) {
+) func(func() ([]v1.Pod, error)) (ec2.EC2Instance, error) {
 	t.Helper()
-	return func(listRunningPods func() ([]v1.Pod, error)) ([]v1.Pod, error) {
+	return func(listRunningPods func() ([]v1.Pod, error)) (ec2.EC2Instance, error) {
 		pods, err := listRunningPods()
 		assert.NoError(t, err)
 		assert.Equal(t, wantPods, pods)
-		return pods, result
+		return nil, result
 	}
 }
 
@@ -315,13 +316,16 @@ func TestBranchENIProvider_RestoredTrunkFallbackRewritesCheckpoint(t *testing.T)
 
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(pods, nil)
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
-		DoAndReturn(prepareWithPods(t, pods, trunk.ErrNeedsColdInit))
+		DoAndReturn(func(listPods func() ([]v1.Pod, error)) (ec2.EC2Instance, error) {
+			observed, err := listPods()
+			assert.NoError(t, err)
+			assert.Equal(t, pods, observed)
+			return mockInstance, nil
+		})
 	gomock.InOrder(
-		fakeTrunk.EXPECT().ColdInit(pods).Return(mockInstance, nil),
 		mockInstance.EXPECT().BuildNodeNetworkState().Return(state),
 		fakeTrunk.EXPECT().TrunkENIID().Return(trunkENIID),
 		mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(nil),
-		fakeTrunk.EXPECT().CompletePreparation(true),
 	)
 
 	assert.NoError(t, provider.prepareTrunkForAllocation(NodeName, fakeTrunk))
@@ -340,24 +344,22 @@ func TestBranchENIProvider_PrepareFallbackCheckpointWriteFailureDoesNotBlock(t *
 	pods := []v1.Pod{*MockPod1}
 	trunkENIID := "eni-current-trunk"
 	persistErrorsBefore := checkpointPersistErrorCount(t)
-	completionSucceeded := false
 
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(pods, nil)
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
-		DoAndReturn(prepareWithPods(t, pods, trunk.ErrNeedsColdInit))
+		DoAndReturn(func(listPods func() ([]v1.Pod, error)) (ec2.EC2Instance, error) {
+			observed, err := listPods()
+			assert.NoError(t, err)
+			assert.Equal(t, pods, observed)
+			return mockInstance, nil
+		})
 	gomock.InOrder(
-		fakeTrunk.EXPECT().ColdInit(pods).Return(mockInstance, nil),
 		mockInstance.EXPECT().BuildNodeNetworkState().Return(state),
 		fakeTrunk.EXPECT().TrunkENIID().Return(trunkENIID),
 		mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(MockError),
-		fakeTrunk.EXPECT().CompletePreparation(gomock.Any()).
-			Do(func(succeeded bool) {
-				completionSucceeded = succeeded
-			}),
 	)
 
 	assert.NoError(t, provider.prepareTrunkForAllocation(NodeName, fakeTrunk))
-	assert.True(t, completionSucceeded)
 	assert.Equal(t, persistErrorsBefore+1, checkpointPersistErrorCount(t))
 }
 
@@ -528,10 +530,10 @@ func TestBranchENIProvider_RestoredNodeCheckWaitsForGrace(t *testing.T) {
 	prepared := make(chan struct{})
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
 		listRunningPods func() ([]v1.Pod, error),
-	) ([]v1.Pod, error) {
-		pods, err := listRunningPods()
+	) (ec2.EC2Instance, error) {
+		_, err := listRunningPods()
 		close(prepared)
-		return pods, err
+		return nil, err
 	})
 
 	done := make(chan error, 1)
@@ -670,8 +672,9 @@ func TestBranchENIProvider_RestoredNodeCheckWaitsForNodeInitialization(t *testin
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
 		listRunningPods func() ([]v1.Pod, error),
-	) ([]v1.Pod, error) {
-		return listRunningPods()
+	) (ec2.EC2Instance, error) {
+		_, err := listRunningPods()
+		return nil, err
 	})
 
 	assert.NoError(t, provider.runRestoredNodeChecks(
@@ -811,9 +814,10 @@ func TestBranchENIProvider_RestoredNodeCheckWaitsForPodDataStoreSync(t *testing.
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
 		listRunningPods func() ([]v1.Pod, error),
-	) ([]v1.Pod, error) {
+	) (ec2.EC2Instance, error) {
 		assert.True(t, podDataStoreSynced, "preparation ran before the pod datastore synced")
-		return listRunningPods()
+		_, err := listRunningPods()
+		return nil, err
 	})
 	limiter := rate.NewLimiter(rate.Every(time.Hour), 1)
 
@@ -847,8 +851,9 @@ func TestBranchENIProvider_RestoredNodeCheckRetriesFailedPreparation(t *testing.
 			Return(nil, fmt.Errorf("transient preparation failure")),
 		fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
 			listRunningPods func() ([]v1.Pod, error),
-		) ([]v1.Pod, error) {
-			return listRunningPods()
+		) (ec2.EC2Instance, error) {
+			_, err := listRunningPods()
+			return nil, err
 		}),
 	)
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
@@ -892,10 +897,10 @@ func TestBranchENIProvider_RestoredNodeCheckPacesThreePerSecond(t *testing.T) {
 		mockPodAPI.EXPECT().GetRunningPodsOnNode(nodeName).Return(nil, nil)
 		fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
 			listRunningPods func() ([]v1.Pod, error),
-		) ([]v1.Pod, error) {
-			pods, err := listRunningPods()
+		) (ec2.EC2Instance, error) {
+			_, err := listRunningPods()
 			preparedAt = append(preparedAt, time.Now())
-			return pods, err
+			return nil, err
 		})
 	}
 
@@ -1073,6 +1078,37 @@ func TestBranchENIProvider_CreateAndAnnotateResources_PrepareFailureRequeuesAllo
 	assert.NoError(t, err)
 }
 
+func TestBranchENIProvider_PreparationDeferralUsesSharedDelay(t *testing.T) {
+	for _, attemptError := range []error{nil, MockError} {
+		name := "waiting"
+		if attemptError != nil {
+			name = "failed attempt"
+		}
+		t.Run(name, func(t *testing.T) {
+			controller := gomock.NewController(t)
+			provider, podAPI, sgpAPI, k8sAPI := getProviderAndMocks(controller)
+			trunkENI := mock_trunk.NewMockTrunkENI(controller)
+			provider.trunkENICache[NodeName] = trunkENI
+			podAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+			podAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+			sgpAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+			k8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+			trunkENI.EXPECT().PrepareForAllocation(gomock.Any()).Return(nil, &trunk.PreparationDeferred{
+				After: 8 * time.Second,
+				Err:   attemptError,
+			})
+			if attemptError != nil {
+				k8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonBranchAllocationFailed, gomock.Any(), v1.EventTypeWarning)
+			}
+
+			result, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
+			assert.NoError(t, err)
+			assert.True(t, result.Requeue)
+			assert.Equal(t, 8*time.Second, result.RequeueAfter)
+		})
+	}
+}
+
 func TestBranchENIProvider_CreateAndAnnotateResources_PreparationRetriesPastWorkerErrorLimit(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1100,14 +1136,14 @@ func TestBranchENIProvider_CreateAndAnnotateResources_PreparationRetriesPastWork
 	prepareAttempts := 0
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
 		listRunningPods func() ([]v1.Pod, error),
-	) ([]v1.Pod, error) {
-		pods, err := listRunningPods()
+	) (ec2.EC2Instance, error) {
+		_, err := listRunningPods()
 		assert.NoError(t, err)
 		prepareAttempts++
 		if prepareAttempts <= preparationFailures {
-			return pods, MockError
+			return nil, MockError
 		}
-		return pods, nil
+		return nil, nil
 	}).Times(totalAttempts)
 	mockK8sAPI.EXPECT().BroadcastEvent(
 		MockPod1,

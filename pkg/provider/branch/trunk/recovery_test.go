@@ -298,7 +298,7 @@ func TestPrepareForAllocationColdInitializedTrunkSkipsValidation(t *testing.T) {
 	assert.False(t, trunk.NeedsPreparation())
 }
 
-func TestPrepareForAllocationReturnsColdInitSentinelForInvalidRestoredTrunk(t *testing.T) {
+func TestValidateRestoredInterfacesRequiresColdInitForInvalidCheckpoint(t *testing.T) {
 	tests := map[string]struct {
 		interfaces []ec2types.NetworkInterface
 		err        error
@@ -363,9 +363,8 @@ func TestPrepareForAllocationReturnsColdInitSentinelForInvalidRestoredTrunk(t *t
 			helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
 				Return(test.interfaces, test.err)
 
-			require.ErrorIs(t, prepareTrunk(trunk, nil), ErrNeedsColdInit)
+			require.ErrorIs(t, trunk.validateRestoredNetworkInterfaces(recoveryTrunkENIID), ErrNeedsColdInit)
 			assert.True(t, trunk.NeedsPreparation())
-			trunk.CompletePreparation(false)
 		})
 	}
 }
@@ -389,7 +388,7 @@ func TestRestoredTrunkDetachedNeedsColdInit(t *testing.T) {
 			defer ctrl.Finish()
 
 			trunk, helper, instance := getMockHelperInstanceAndTrunkObject(ctrl)
-			instance.EXPECT().RestoredTrunkENIID().Return(recoveryTrunkENIID).Times(2)
+			instance.EXPECT().RestoredTrunkENIID().Return(recoveryTrunkENIID).Times(1)
 			assert.NoError(t, trunk.InitTrunk(nil))
 			trunk.prepared.Store(false)
 
@@ -406,7 +405,7 @@ func TestRestoredTrunkDetachedNeedsColdInit(t *testing.T) {
 				gomock.Eq(aws.String(recoveryTrunkENIID)),
 			).Return(nil, nil).AnyTimes()
 
-			require.ErrorIs(t, prepareTrunk(trunk, nil), ErrNeedsColdInit)
+			require.ErrorIs(t, trunk.validateRestoredNetworkInterfaces(recoveryTrunkENIID), ErrNeedsColdInit)
 			assert.Empty(t, trunk.uidToBranchENIMap)
 			assert.Empty(t, trunk.deleteQueue)
 		})
@@ -428,6 +427,7 @@ func TestPrepareForAllocationRetriesTransientFailure(t *testing.T) {
 
 	assert.ErrorIs(t, prepareTrunk(trunk, nil), MockError)
 	assert.True(t, trunk.NeedsPreparation())
+	trunk.nextPreparationAttempt = time.Now().Add(-time.Second)
 	assert.NoError(t, prepareTrunk(trunk, nil))
 	assert.False(t, trunk.NeedsPreparation())
 }
@@ -447,30 +447,35 @@ func TestPrepareForAllocationSharesConcurrentValidation(t *testing.T) {
 		})
 	helper.EXPECT().GetBranchNetworkInterface(gomock.Any()).Return(nil, nil)
 
+	leaderDone := make(chan error, 1)
+	go func() { leaderDone <- prepareTrunk(trunk, nil) }()
+	<-describeStarted
+
 	const callers = 8
 	errs := make(chan error, callers)
-	var wg sync.WaitGroup
-	wg.Add(callers)
+	var workers sync.WaitGroup
 	for index := 0; index < callers; index++ {
+		workers.Add(1)
 		go func() {
-			defer wg.Done()
+			defer workers.Done()
 			errs <- prepareTrunk(trunk, nil)
 		}()
 	}
-
-	<-describeStarted
-	select {
-	case err := <-errs:
-		t.Fatalf("concurrent allocation returned before validation completed: %v", err)
-	case <-time.After(25 * time.Millisecond):
+	for index := 0; index < callers; index++ {
+		select {
+		case err := <-errs:
+			var deferred *PreparationDeferred
+			require.ErrorAs(t, err, &deferred)
+			require.Nil(t, deferred.Err)
+		case <-time.After(time.Second):
+			close(releaseDescribe)
+			t.Fatal("follower blocked behind EC2 validation")
+		}
 	}
+	workers.Wait()
 	close(releaseDescribe)
-	wg.Wait()
-	close(errs)
-
-	for err := range errs {
-		assert.NoError(t, err)
-	}
+	require.NoError(t, <-leaderDone)
+	require.NoError(t, prepareTrunk(trunk, nil))
 }
 
 func TestPrepareForAllocationSnapshotsAfterProvisionalStateChanges(t *testing.T) {
@@ -515,24 +520,15 @@ func TestPrepareForAllocationSnapshotsAfterProvisionalStateChanges(t *testing.T)
 				return true
 			}, time.Second, time.Millisecond)
 
-			prepareDone := make(chan error, 1)
-			snapshotTaken := make(chan struct{})
-			go func() {
-				_, err := trunk.PrepareForAllocation(func() ([]v1.Pod, error) {
-					close(snapshotTaken)
-					return nil, nil
-				})
-				prepareDone <- err
-			}()
-			select {
-			case <-snapshotTaken:
-				t.Fatal("pod snapshot was taken before cleanup finished")
-			case <-time.After(25 * time.Millisecond):
-			}
-
+			_, err := trunk.PrepareForAllocation(func() ([]v1.Pod, error) {
+				t.Error("pod snapshot was taken before cleanup finished")
+				return nil, nil
+			})
+			var deferred *PreparationDeferred
+			require.ErrorAs(t, err, &deferred)
 			trunk.lock.Unlock()
 			<-operationDone
-			assert.NoError(t, <-prepareDone)
+			require.NoError(t, prepareTrunk(trunk, nil))
 			assert.Len(t, trunk.deleteQueue, 1)
 			assert.Equal(t, recoveryBranchENIID, trunk.deleteQueue[0].ID)
 		})

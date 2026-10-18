@@ -36,33 +36,6 @@ func (m *MockTrunkENI) EXPECT() *MockTrunkENIMockRecorder {
 	return m.recorder
 }
 
-// ColdInit mocks base method.
-func (m *MockTrunkENI) ColdInit(arg0 []v1.Pod) (ec2.EC2Instance, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ColdInit", arg0)
-	ret0, _ := ret[0].(ec2.EC2Instance)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ColdInit indicates an expected call of ColdInit.
-func (mr *MockTrunkENIMockRecorder) ColdInit(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ColdInit", reflect.TypeOf((*MockTrunkENI)(nil).ColdInit), arg0)
-}
-
-// CompletePreparation mocks base method.
-func (m *MockTrunkENI) CompletePreparation(arg0 bool) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "CompletePreparation", arg0)
-}
-
-// CompletePreparation indicates an expected call of CompletePreparation.
-func (mr *MockTrunkENIMockRecorder) CompletePreparation(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CompletePreparation", reflect.TypeOf((*MockTrunkENI)(nil).CompletePreparation), arg0)
-}
-
 // CreateAndAssociateBranchENIs mocks base method.
 func (m *MockTrunkENI) CreateAndAssociateBranchENIs(arg0 *v1.Pod, arg1 []string, arg2 int) ([]*trunk.ENIDetails, error) {
 	m.ctrl.T.Helper()
@@ -147,10 +120,10 @@ func (mr *MockTrunkENIMockRecorder) NeedsPreparation() *gomock.Call {
 }
 
 // PrepareForAllocation mocks base method.
-func (m *MockTrunkENI) PrepareForAllocation(arg0 func() ([]v1.Pod, error)) ([]v1.Pod, error) {
+func (m *MockTrunkENI) PrepareForAllocation(arg0 func() ([]v1.Pod, error)) (ec2.EC2Instance, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PrepareForAllocation", arg0)
-	ret0, _ := ret[0].([]v1.Pod)
+	ret0, _ := ret[0].(ec2.EC2Instance)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

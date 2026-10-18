@@ -19,15 +19,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
-	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
@@ -44,10 +41,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/time/rate"
 	v1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -126,22 +120,6 @@ type branchENIProvider struct {
 	ctx        context.Context
 	checker    healthz.Checker
 }
-
-type restoredNode struct {
-	name         string
-	instanceID   string
-	instanceType string
-}
-type restoredNodeState int
-
-const (
-	restoredNodePrepared restoredNodeState = iota
-	restoredNodeRemoved
-	restoredNodeReplaced
-	restoredNodeNotEligibleForBranchProvider
-	restoredNodeInitializationPending
-	restoredNodeNeedsPreparation
-)
 
 // NewBranchENIProvider returns the Branch ENI Provider for all nodes across the cluster
 func NewBranchENIProvider(logger logr.Logger, wrapper api.Wrapper,
@@ -258,28 +236,20 @@ func (b *branchENIProvider) persistCNINodeCheckpoint(
 func (b *branchENIProvider) prepareTrunkForAllocation(
 	nodeName string,
 	trunkENI trunk.TrunkENI,
-) (err error) {
-	defer func() {
-		if err != nil {
-			b.log.Error(err, "branch inventory check failed", "node", nodeName)
-		}
-	}()
-	pods, err := trunkENI.PrepareForAllocation(func() ([]v1.Pod, error) {
+) error {
+	instance, err := trunkENI.PrepareForAllocation(func() ([]v1.Pod, error) {
 		return b.apiWrapper.PodAPI.GetRunningPodsOnNode(nodeName)
 	})
-	if !errors.Is(err, trunk.ErrNeedsColdInit) {
+	if err != nil {
+		var deferred *trunk.PreparationDeferred
+		if !errors.As(err, &deferred) || deferred.Err != nil {
+			b.log.Error(err, "branch inventory check failed", "node", nodeName)
+		}
 		return err
 	}
-	completed := false
-	defer func() {
-		trunkENI.CompletePreparation(completed)
-	}()
-	instance, err := trunkENI.ColdInit(pods)
-	if err != nil {
-		return fmt.Errorf("cold initializing trunk after restored trunk validation failed: %w", err)
+	if instance != nil {
+		_ = b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
 	}
-	_ = b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
-	completed = true
 	return nil
 }
 
@@ -444,10 +414,18 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	}
 
 	if err := b.prepareTrunkForAllocation(pod.Spec.NodeName, trunkENI); err != nil {
+		retryAfter := preparationRetryPeriod
+		var deferred *trunk.PreparationDeferred
+		if errors.As(err, &deferred) {
+			retryAfter = deferred.After
+			if deferred.Err == nil {
+				return ctrl.Result{RequeueAfter: retryAfter, Requeue: true}, nil
+			}
+		}
 		branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation").Inc()
 		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
 			fmt.Sprintf("failed to prepare trunk before branch ENI allocation: %v", err), v1.EventTypeWarning)
-		return ctrl.Result{RequeueAfter: preparationRetryPeriod, Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: retryAfter, Requeue: true}, nil
 	}
 
 	// Get the list of branch ENIs that will be allocated to the pod object
@@ -555,160 +533,6 @@ func (b *branchENIProvider) getTrunkFromCache(nodeName string) (trunkENI trunk.T
 
 	trunkENI, present = b.trunkENICache[nodeName]
 	return
-}
-
-func (b *branchENIProvider) Start(ctx context.Context) error {
-	for {
-		cniNodes, err := b.apiWrapper.K8sAPI.ListCNINodes()
-		if err != nil {
-			b.log.Error(err, "waiting to capture restored nodes")
-			if !waitForRestoredNodeCheck(ctx, preparationRetryPeriod) {
-				return nil
-			}
-			continue
-		}
-		var restoredNodes []restoredNode
-		for _, cniNode := range cniNodes {
-			if cniNode.Spec.ManagedBy != "" &&
-				cniNode.Spec.ManagedBy != rcv1alpha1.ManagedByVPCResourceController {
-				continue
-			}
-			state := cniNode.Status.NodeNetworkState
-			if state == nil || state.InstanceID == "" ||
-				cniNode.Status.TrunkInterface == nil || cniNode.Status.TrunkInterface.ID == "" {
-				continue
-			}
-			restoredNodes = append(restoredNodes, restoredNode{
-				name:         cniNode.Name,
-				instanceID:   state.InstanceID,
-				instanceType: state.InstanceType,
-			})
-		}
-		return b.runRestoredNodeChecks(
-			ctx,
-			restoredNodes,
-			RestoredNodeCheckGracePeriod,
-			preparationRetryPeriod,
-			rate.NewLimiter(rate.Limit(RestoredNodeCheckRatePerSecond), restoredNodeCheckBurst),
-		)
-	}
-}
-
-func waitForRestoredNodeCheck(ctx context.Context, delay time.Duration) bool {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-
-func (b *branchENIProvider) NeedLeaderElection() bool {
-	return true
-}
-
-func (b *branchENIProvider) runRestoredNodeChecks(
-	ctx context.Context,
-	restoredNodes []restoredNode,
-	gracePeriod time.Duration,
-	retryPeriod time.Duration,
-	limiter *rate.Limiter,
-) error {
-	if !waitForRestoredNodeCheck(ctx, gracePeriod) {
-		return nil
-	}
-	podDataStoreSynced := b.conditions.GetPodDataStoreSyncStatus()
-	if !podDataStoreSynced {
-		b.log.Info("waiting to check restored nodes until pod datastore is synced")
-	}
-	for !podDataStoreSynced {
-		if !waitForRestoredNodeCheck(ctx, retryPeriod) {
-			return nil
-		}
-		podDataStoreSynced = b.conditions.GetPodDataStoreSyncStatus()
-	}
-	pendingNodes := restoredNodes
-	for len(pendingNodes) != 0 {
-		failedNodes := make([]restoredNode, 0, len(pendingNodes))
-		for _, node := range pendingNodes {
-			state, trunkENI := b.classifyRestoredNode(node)
-			if state == restoredNodeNeedsPreparation {
-				if err := limiter.Wait(ctx); err != nil {
-					return nil
-				}
-				state, trunkENI = b.classifyRestoredNode(node)
-			}
-			switch state {
-			case restoredNodeInitializationPending:
-				failedNodes = append(failedNodes, node)
-			case restoredNodeNeedsPreparation:
-				if err := b.prepareTrunkForAllocation(node.name, trunkENI); err != nil {
-					failedNodes = append(failedNodes, node)
-				}
-			}
-		}
-		pendingNodes = failedNodes
-		if len(pendingNodes) != 0 && !waitForRestoredNodeCheck(ctx, retryPeriod) {
-			return nil
-		}
-	}
-	return nil
-}
-
-func (b *branchENIProvider) classifyRestoredNode(node restoredNode) (restoredNodeState, trunk.TrunkENI) {
-	currentNode, err := b.apiWrapper.K8sAPI.GetNode(node.name)
-	if apierrors.IsNotFound(err) {
-		return restoredNodeRemoved, nil
-	}
-	if err != nil {
-		b.log.Error(err, "waiting to verify restored node", "node", node.name)
-		return restoredNodeInitializationPending, nil
-	}
-	providerIDParts := strings.Split(currentNode.Spec.ProviderID, "/")
-	currentInstanceID := providerIDParts[len(providerIDParts)-1]
-	switch {
-	case currentInstanceID == "":
-		return restoredNodeInitializationPending, nil
-	case currentInstanceID != node.instanceID:
-		return restoredNodeReplaced, nil
-	}
-	labels := currentNode.GetLabels()
-	nodeOS := labels[config.NodeLabelOS]
-	if nodeOS == "" {
-		nodeOS = labels[config.NodeLabelOSBeta]
-	}
-	limits, instanceTypeSupported := vpc.Limits[node.instanceType]
-	if nodeOS != config.OSLinux || !instanceTypeSupported || !limits.IsTrunkingCompatible {
-		return restoredNodeNotEligibleForBranchProvider, nil
-	}
-	if _, trunkAttached := labels[config.HasTrunkAttachedLabel]; !trunkAttached {
-		cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: node.name})
-		switch {
-		case apierrors.IsNotFound(err):
-			return restoredNodeNotEligibleForBranchProvider, nil
-		case err != nil:
-			b.log.Error(err, "waiting to verify restored node eligibility", "node", node.name)
-			return restoredNodeInitializationPending, nil
-		}
-		if !slices.ContainsFunc(cniNode.Spec.Features, func(feature rcv1alpha1.Feature) bool {
-			return feature.Name == rcv1alpha1.SecurityGroupsForPods
-		}) {
-			return restoredNodeNotEligibleForBranchProvider, nil
-		}
-	}
-	trunkENI, present := b.getTrunkFromCache(node.name)
-	switch {
-	case !present:
-		return restoredNodeInitializationPending, nil
-	case trunkENI.InstanceID() != node.instanceID:
-		return restoredNodeReplaced, nil
-	case trunkENI.NeedsPreparation():
-		return restoredNodeNeedsPreparation, trunkENI
-	default:
-		return restoredNodePrepared, nil
-	}
 }
 
 // GetPool is not supported for Branch ENI
