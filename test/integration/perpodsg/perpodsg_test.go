@@ -524,6 +524,20 @@ var _ = Describe("Branch ENI Pods", func() {
 
 				restart.startAndWaitForNodeRestore(
 					restartContext, []string{targetedNodes[0].Name}, nil)
+				Eventually(func() bool {
+					observedPod := &v1.Pod{}
+					if err := frameWork.K8sClient.Get(restartContext, utils.NamespacedName(pod), observedPod); err != nil {
+						return false
+					}
+					for _, condition := range observedPod.Status.Conditions {
+						if condition.Type == v1.PodReady {
+							return condition.Status == v1.ConditionTrue
+						}
+					}
+					return false
+				}, utils.ResourceCreationTimeout, utils.PollIntervalShort).
+					WithContext(restartContext).
+					Should(BeTrue())
 
 				By("verifying the Pod is running with Branch ENI")
 				verify.VerifyNetworkingOfAllPodUsingENI(namespace, podLabelKey, podLabelValue,
