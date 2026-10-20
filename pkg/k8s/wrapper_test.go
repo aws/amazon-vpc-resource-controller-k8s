@@ -17,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_custom "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/controllers/custom"
@@ -379,6 +381,59 @@ func TestPatchCNINodeCheckpointNoopWhenUnchanged(t *testing.T) {
 		"eni-00000000000000000",
 	))
 	assert.Zero(t, patchCalls)
+}
+
+// A node the controller stops managing must not keep a checkpoint a later restore would trust.
+func TestClearCNINodeCheckpointRemovesTheNetworkState(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(scheme)
+
+	trunkInterface := &v1alpha1.TrunkInterface{ID: "eni-00000000000000000", SubnetID: "subnet-00000000000000000"}
+	k8sClient := fakeClient.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.CNINode{}).
+		WithRuntimeObjects(&v1alpha1.CNINode{
+			ObjectMeta: metav1.ObjectMeta{Name: nodeName},
+			Status: v1alpha1.CNINodeStatus{
+				NodeNetworkState: &v1alpha1.NodeNetworkState{InstanceID: "i-00000000000000000"},
+				TrunkInterface:   trunkInterface.DeepCopy(),
+			},
+		}).
+		Build()
+	wrapper := NewK8sWrapper(k8sClient, k8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+
+	assert.NoError(t, wrapper.ClearCNINodeCheckpoint(nodeName))
+
+	stored := &v1alpha1.CNINode{}
+	assert.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: nodeName}, stored))
+	assert.Nil(t, stored.Status.NodeNetworkState)
+	assert.Equal(t, trunkInterface, stored.Status.TrunkInterface)
+}
+
+// A real node deletion reaches the clear after the CNINode is gone, so it must cost one cache read, not retries.
+func TestClearCNINodeCheckpointSkipsAMissingCNINode(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		scheme := runtime.NewScheme()
+		_ = v1alpha1.AddToScheme(scheme)
+		baseClient := fakeClient.NewClientBuilder().WithScheme(scheme).Build()
+		apiReaderGetCalls := 0
+		apiReader := interceptor.NewClient(baseClient, interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+				obj client.Object, opts ...client.GetOption,
+			) error {
+				apiReaderGetCalls++
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		// A literal wrapper: NewK8sWrapper starts an event broadcaster that would outlive the bubble.
+		wrapper := &k8sWrapper{cacheClient: baseClient, apiReader: apiReader, context: context.Background()}
+		start := time.Now()
+
+		assert.NoError(t, wrapper.ClearCNINodeCheckpoint(nodeName))
+
+		assert.Zero(t, apiReaderGetCalls)
+		assert.Zero(t, time.Since(start), "the clear slept through NotFound retries")
+	})
 }
 
 func TestPatchCNINodeCheckpointFallsBackToAPIReaderOnCacheMiss(t *testing.T) {

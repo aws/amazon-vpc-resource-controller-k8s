@@ -400,6 +400,53 @@ func TestBranchENIProvider_getTrunkFromCache_NotExist(t *testing.T) {
 	assert.Nil(t, trunkENI)
 }
 
+// De-initializing a node clears its checkpoint, so a node that becomes managed again cold-inits.
+func TestBranchENIProvider_DeleteNodeClearsTheCheckpoint(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
+	provider.trunkENICache[NodeName] = mock_trunk.NewMockTrunkENI(ctrl)
+	mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(nil)
+
+	result, err := provider.DeleteNode(NodeName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, k8sCtrl.Result{}, result)
+	assert.NotContains(t, provider.trunkENICache, NodeName)
+}
+
+// A CNINode deleted with its node, after the clear's cache check, is no failure.
+func TestBranchENIProvider_DeleteNodeIgnoresAMissingCNINode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
+	provider.trunkENICache[NodeName] = mock_trunk.NewMockTrunkENI(ctrl)
+	mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).
+		Return(apierrors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, NodeName))
+	failuresBefore := checkpointPersistErrorCount(t)
+
+	_, err := provider.DeleteNode(NodeName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, failuresBefore, checkpointPersistErrorCount(t))
+}
+
+// A failed clear leaves a stale checkpoint, so it is counted, yet DeleteNode still succeeds: a retry
+// would only fail on the trunk it has already dropped.
+func TestBranchENIProvider_DeleteNodeCountsAFailedClear(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
+	provider.trunkENICache[NodeName] = mock_trunk.NewMockTrunkENI(ctrl)
+	mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).
+		Return(apierrors.NewServiceUnavailable("apiserver unavailable"))
+	failuresBefore := checkpointPersistErrorCount(t)
+
+	result, err := provider.DeleteNode(NodeName)
+
+	assert.NoError(t, err)
+	assert.Equal(t, k8sCtrl.Result{}, result)
+	assert.NotContains(t, provider.trunkENICache, NodeName)
+	assert.Equal(t, failuresBefore+1, checkpointPersistErrorCount(t))
+}
+
 // TestBranchENIProvider_removeTrunkFromCache tests that once trunk ENI is removed from cache it's actually removed from
 // memory
 func TestBranchENIProvider_removeTrunkFromCache(t *testing.T) {
@@ -497,6 +544,28 @@ func TestBranchENIProvider_DeleteBranchUsedByPods_PodNotFound(t *testing.T) {
 	_, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
 
 	assert.Nil(t, err)
+}
+
+// A pod delete that a restored-trunk preparation defers is retried, never dropped.
+func TestBranchENIProvider_DeleteBranchUsedByPodsRequeuesADeferredDelete(t *testing.T) {
+	for _, deferred := range []bool{true, false} {
+		t.Run(fmt.Sprintf("deferred %v", deferred), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			provider := getProvider()
+			fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+			provider.trunkENICache[NodeName] = fakeTrunk
+			fakeTrunk.EXPECT().PushBranchENIsToCoolDownQueue(PodUID1).Return(deferred)
+			want := k8sCtrl.Result{}
+			if deferred {
+				want = k8sCtrl.Result{RequeueAfter: preparationRetryPeriod, Requeue: true}
+			}
+
+			result, err := provider.DeleteBranchUsedByPods(NodeName, PodUID1)
+
+			assert.NoError(t, err)
+			assert.Equal(t, want, result)
+		})
+	}
 }
 
 // TestBranchENIProvider_DeInitResources verifies that resources is removed from cache after calling de init workflow
@@ -878,7 +947,7 @@ func TestBranchENIProvider_RestoredNodeCheckRetriesFailedPreparation(t *testing.
 }
 
 func TestBranchENIProvider_RestoredNodeCheckPacesThreePerSecond(t *testing.T) {
-	assert.Equal(t, 5*time.Minute, RestoredNodeCheckGracePeriod)
+	assert.Equal(t, 10*time.Minute, RestoredNodeCheckGracePeriod)
 	assert.Equal(t, 3, RestoredNodeCheckRatePerSecond)
 
 	ctrl := gomock.NewController(t)
@@ -1453,11 +1522,69 @@ func TestBranchENIProvider_ProcessDeleteQueue(t *testing.T) {
 	fakeTrunk1 := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk1
 
+	fakeTrunk1.EXPECT().NeedsPreparation().Return(false)
 	fakeTrunk1.EXPECT().DeleteCooledDownENIs()
 
 	result, err := provider.ProcessDeleteQueue(NodeName)
 	assert.NoError(t, err)
 	assert.Equal(t, deleteQueueRequeueRequest, result)
+}
+
+// The delete tick prepares a restored trunk only when ENIs wait in its queue, so idle nodes cost no EC2 call.
+func TestBranchENIProvider_ProcessDeleteQueuePreparesARestoredTrunkWithQueuedENIs(t *testing.T) {
+	for _, pending := range []bool{true, false} {
+		t.Run(fmt.Sprintf("pending deletions %v", pending), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+			fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+			provider.trunkENICache[NodeName] = fakeTrunk
+			calls := []*gomock.Call{
+				fakeTrunk.EXPECT().NeedsPreparation().Return(true),
+				fakeTrunk.EXPECT().HasPendingDeletions().Return(pending),
+			}
+			if pending {
+				mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+				calls = append(calls, fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
+					DoAndReturn(prepareWithPods(t, nil, nil)))
+			}
+			gomock.InOrder(append(calls, fakeTrunk.EXPECT().DeleteCooledDownENIs())...)
+
+			result, err := provider.ProcessDeleteQueue(NodeName)
+
+			assert.NoError(t, err)
+			assert.Equal(t, deleteQueueRequeueRequest, result)
+		})
+	}
+}
+
+// A deferred preparation postpones the tick, counts only a failed attempt and sends no event, as a tick has no pod.
+func TestBranchENIProvider_ProcessDeleteQueueWaitsForADeferredPreparation(t *testing.T) {
+	for _, attemptError := range []error{nil, MockError} {
+		t.Run(fmt.Sprintf("attempt error %v", attemptError), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			provider, _, _, _ := getProviderAndMocks(ctrl)
+			fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+			provider.trunkENICache[NodeName] = fakeTrunk
+			fakeTrunk.EXPECT().NeedsPreparation().Return(true)
+			fakeTrunk.EXPECT().HasPendingDeletions().Return(true)
+			fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).Return(nil, &trunk.PreparationDeferred{
+				After: 4 * time.Second,
+				Err:   attemptError,
+			})
+			failures := branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation")
+			before := writePrometheusMetric(t, failures).GetCounter().GetValue()
+			wantFailures := 0.0
+			if attemptError != nil {
+				wantFailures = 1
+			}
+
+			result, err := provider.ProcessDeleteQueue(NodeName)
+
+			assert.NoError(t, err)
+			assert.Equal(t, k8sCtrl.Result{RequeueAfter: 4 * time.Second, Requeue: true}, result)
+			assert.Equal(t, before+wantFailures, writePrometheusMetric(t, failures).GetCounter().GetValue())
+		})
+	}
 }
 
 func TestBranchENIProvider_Introspect(t *testing.T) {

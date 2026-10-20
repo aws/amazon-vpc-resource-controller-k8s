@@ -14,6 +14,7 @@
 package node
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	mock_provider "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/provider"
 	mock_resource "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/resource"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
@@ -37,8 +39,11 @@ import (
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	fakeClientSet "k8s.io/client-go/kubernetes/fake"
+	fakeClient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -481,6 +486,10 @@ func TestNode_InitResources_FallsBackWhenCheckpointFieldMissing(t *testing.T) {
 		"primary ENI": func(cniNode *rcv1alpha1.CNINode) {
 			cniNode.Status.NodeNetworkState.PrimaryNetworkInterfaceID = ""
 		},
+		// The shape a de-initialized node leaves behind: the trunk ID stays, the network state is cleared.
+		"cleared network state": func(cniNode *rcv1alpha1.CNINode) {
+			cniNode.Status.NodeNetworkState = nil
+		},
 	}
 
 	for name, removeField := range tests {
@@ -503,6 +512,37 @@ func TestNode_InitResources_FallsBackWhenCheckpointFieldMissing(t *testing.T) {
 			assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
 		})
 	}
+}
+
+// The Managed -> UnManaged -> Managed toggle through the real wrapper: the clear DeleteNode makes leaves
+// a CNINode that the next init cold-inits from.
+func TestNode_InitResources_ColdInitsAfterTheCheckpointIsCleared(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	scheme := runtime.NewScheme()
+	assert.NoError(t, rcv1alpha1.AddToScheme(scheme))
+	cniNode := validCheckpointCNINode(instanceID)
+	cniNode.Name = nodeName
+	fakeK8sClient := fakeClient.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&rcv1alpha1.CNINode{}).
+		WithRuntimeObjects(cniNode).
+		Build()
+	k8sAPI := k8s.NewK8sWrapper(fakeK8sClient, fakeK8sClient, fakeClientSet.NewSimpleClientset().CoreV1(), context.Background())
+	assert.NoError(t, k8sAPI.ClearCNINodeCheckpoint(nodeName))
+
+	mock := NewMock(ctrl, 1)
+	mock.NodeWithMock.k8sAPI = k8sAPI
+	expectCheckpointRestore(&mock)
+	mock.MockInstance.EXPECT().Name().Return(nodeName)
+	mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
+	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
+	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
+	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+
+	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
 }
 
 func TestNode_InitResources_InstanceNotTrunkSupported(t *testing.T) {

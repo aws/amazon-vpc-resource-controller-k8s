@@ -14,7 +14,9 @@
 package trunk
 
 import (
+	"bytes"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -454,6 +456,121 @@ func TestCheckpointSubnetMismatchFallsBackToColdInit(t *testing.T) {
 	assert.Equal(t, SubnetId, instance.SubnetID())
 }
 
+// A checkpoint that EC2 contradicts is cold-initialized, counted once and logged once as an error.
+func TestRestoredCheckpointMismatchColdInitsAndReportsOnce(t *testing.T) {
+	mismatches := map[string]func([]ec2types.NetworkInterface) []ec2types.NetworkInterface{
+		"trunk typed interface": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			interfaces[1].InterfaceType = ec2types.NetworkInterfaceTypeInterface
+			return interfaces
+		},
+		"primary absent": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			return interfaces[1:]
+		},
+		"primary on another instance": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			interfaces[0].Attachment.InstanceId = aws.String("i-other")
+			return interfaces
+		},
+		"primary at device index 1": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			interfaces[0].Attachment.DeviceIndex = aws.Int32(1)
+			return interfaces
+		},
+		"trunk absent": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			return interfaces[:1]
+		},
+		"trunk not attached": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			interfaces[1].Attachment.Status = ec2types.AttachmentStatusDetached
+			return interfaces
+		},
+		"subnet mismatch": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			interfaces[0].SubnetId = aws.String(recoveryOldSubnetID)
+			return interfaces
+		},
+		"primary IP outside the checkpoint CIDR": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			interfaces[0].PrivateIpAddress = aws.String("10.9.0.5")
+			return interfaces
+		},
+		"primary refresh without security groups": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			interfaces[0].Groups = nil
+			return interfaces
+		},
+	}
+
+	for name, mismatch := range mismatches {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
+			var logs bytes.Buffer
+			trunk.log = zap.New(zap.WriteTo(&logs))
+			helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
+				Return(mismatch(validRestoredInterfaces(InstanceId)), nil)
+			helper.EXPECT().GetInstanceDetails(aws.String(InstanceId)).Return(coldInstanceDetails(), nil)
+			helper.EXPECT().GetSubnet(aws.String(SubnetId)).
+				Return(&ec2types.Subnet{CidrBlock: aws.String(SubnetCidrBlock)}, nil)
+			helper.EXPECT().GetInstanceNetworkInterface(aws.String(InstanceId)).Return(instanceNwInterfaces, nil)
+			helper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(ec2types.AttachmentStatusAttached)).
+				Return(nil)
+			helper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(nil, nil)
+			mismatchCount := trunkENIOperationsErrCount.WithLabelValues("restored_checkpoint_mismatch")
+			before := writeTrunkMetric(t, mismatchCount)
+
+			checkpointInstance, err := trunk.PrepareForAllocation(func() ([]v1.Pod, error) { return nil, nil })
+
+			require.NoError(t, err)
+			require.Same(t, instance, checkpointInstance)
+			require.Equal(t, before+1, writeTrunkMetric(t, mismatchCount))
+			errorLines := errorLogLines(&logs)
+			require.Len(t, errorLines, 1)
+			require.Contains(t, errorLines[0], recoveryTrunkENIID)
+			require.Contains(t, errorLines[0], errNeedsColdInit.Error())
+		})
+	}
+}
+
+// errorLogLines returns the Error lines of a captured controller log.
+func errorLogLines(logs *bytes.Buffer) []string {
+	var lines []string
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, `"level":"error"`) {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// A rejected checkpoint is counted and logged once, even when the instance reload fails and the attempt retries.
+func TestRestoredCheckpointMismatchIsReportedOncePerRejection(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
+	var logs bytes.Buffer
+	trunk.log = zap.New(zap.WriteTo(&logs))
+	interfaces := validRestoredInterfaces(InstanceId)
+	interfaces[0].SubnetId = aws.String(recoveryOldSubnetID)
+	// The checkpoint is validated once; after the failed reload the retry goes straight to cold init.
+	helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
+		Return(interfaces, nil)
+	gomock.InOrder(
+		helper.EXPECT().GetInstanceDetails(aws.String(InstanceId)).Return(nil, MockError),
+		helper.EXPECT().GetInstanceDetails(aws.String(InstanceId)).Return(coldInstanceDetails(), nil),
+	)
+	helper.EXPECT().GetSubnet(aws.String(SubnetId)).
+		Return(&ec2types.Subnet{CidrBlock: aws.String(SubnetCidrBlock)}, nil)
+	helper.EXPECT().GetInstanceNetworkInterface(aws.String(InstanceId)).Return(instanceNwInterfaces, nil)
+	helper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(ec2types.AttachmentStatusAttached)).
+		Return(nil)
+	helper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(nil, nil)
+	mismatchCount := trunkENIOperationsErrCount.WithLabelValues("restored_checkpoint_mismatch")
+	before := writeTrunkMetric(t, mismatchCount)
+
+	require.ErrorIs(t, prepareTrunk(trunk, nil), MockError)
+	trunk.nextPreparationAttempt = time.Now().Add(-time.Second)
+	checkpointInstance, err := trunk.PrepareForAllocation(func() ([]v1.Pod, error) { return nil, nil })
+
+	require.NoError(t, err)
+	require.Same(t, instance, checkpointInstance)
+	require.Equal(t, before+1, writeTrunkMetric(t, mismatchCount))
+	require.Len(t, errorLogLines(&logs), 1)
+}
+
 func TestRestoredTrunkDetachedNeedsColdInit(t *testing.T) {
 	tests := map[string]func([]ec2types.NetworkInterface){
 		"primary detached": func(interfaces []ec2types.NetworkInterface) {
@@ -564,12 +681,13 @@ func TestPrepareForAllocationSharesConcurrentValidation(t *testing.T) {
 }
 
 func TestPrepareForAllocationSnapshotsAfterProvisionalStateChanges(t *testing.T) {
-	operations := map[string]func(*trunkENI){
-		"reconcile": func(trunk *trunkENI) {
+	operations := map[string]func(*testing.T, *trunkENI){
+		"reconcile": func(_ *testing.T, trunk *trunkENI) {
 			trunk.Reconcile(nil)
 		},
-		"pod deletion": func(trunk *trunkENI) {
-			trunk.PushBranchENIsToCoolDownQueue("pod-uid")
+		"pod deletion": func(t *testing.T, trunk *trunkENI) {
+			// The push took prepareMu before waiting on the inner lock, so it runs instead of deferring.
+			assert.False(t, trunk.PushBranchENIsToCoolDownQueue("pod-uid"))
 		},
 	}
 
@@ -594,7 +712,7 @@ func TestPrepareForAllocationSnapshotsAfterProvisionalStateChanges(t *testing.T)
 			trunk.lock.Lock()
 			operationDone := make(chan struct{})
 			go func() {
-				operation(trunk)
+				operation(t, trunk)
 				close(operationDone)
 			}()
 			assert.Eventually(t, func() bool {
@@ -669,8 +787,8 @@ func TestDeleteCooledDownENIsWaitsForPreparationAndDropsFabricatedOwnership(t *t
 
 	if assert.Len(t, trunk.deleteQueue, 1) {
 		assert.Equal(t, recoveryBranchENIID, trunk.deleteQueue[0].ID)
-		trunk.deleteQueue[0].deletionTimeStamp = time.Time{}
 	}
+	helper.EXPECT().DisassociateTrunkInterface(aws.String("association-" + recoveryBranchENIID)).Return(nil)
 	helper.EXPECT().DeleteNetworkInterface(aws.String(recoveryBranchENIID)).Return(nil)
 
 	trunk.DeleteCooledDownENIs()

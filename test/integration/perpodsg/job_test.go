@@ -22,6 +22,7 @@ import (
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
@@ -41,7 +42,8 @@ import (
 )
 
 const (
-	controllerRestartHangGuard = 10 * time.Minute
+	// Pods that ended while the controller was down wait for the restored-node sweep, which runs after its grace.
+	controllerRestartHangGuard = branch.RestoredNodeCheckGracePeriod + 5*time.Minute
 )
 
 type controllerRestart struct {

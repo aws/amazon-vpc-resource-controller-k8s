@@ -15,18 +15,23 @@ package trunk
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	mock_k8s "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/cooldown"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 func TestPreparationFailureBackoffIsSharedAcrossCallers(t *testing.T) {
@@ -227,20 +232,25 @@ func TestPodDeleteDuringPreparationCleansTheRecoveredBranch(t *testing.T) {
 	prepared := make(chan error, 1)
 	go func() { prepared <- prepareTrunk(trunk, pods) }()
 	awaitSignal(t, describeStarted, "the restored-trunk check to start")
-	deleted := make(chan struct{})
-	go func() {
-		trunk.PushBranchENIsToCoolDownQueue("deleted-pod")
-		close(deleted)
-	}()
-	select {
-	case <-deleted:
-		close(releaseDescribe)
-		t.Fatal("pod delete changed branch state while the check was running")
-	case <-time.After(50 * time.Millisecond):
+	before := trunk.Introspect()
+	// Neither caller waits for the check: each is told to retry and leaves branch state alone.
+	retry := make(chan bool, 2)
+	go func() { retry <- trunk.PushBranchENIsToCoolDownQueue("deleted-pod") }()
+	go func() { retry <- trunk.Reconcile(nil) }()
+	for range 2 {
+		select {
+		case deferred := <-retry:
+			require.True(t, deferred, "a caller was not told to retry")
+		case <-time.After(100 * time.Millisecond):
+			close(releaseDescribe)
+			t.Fatal("a pod delete or reconcile waited for the restored-trunk check")
+		}
 	}
+	require.Equal(t, before, trunk.Introspect(), "branch state changed while the check was running")
 	close(releaseDescribe)
 	require.NoError(t, awaitSignal(t, prepared, "the restored-trunk check to finish"))
-	awaitSignal(t, deleted, "the pod delete")
+	// The worker retries the deferred delete, which now finds the recovered branch.
+	require.False(t, trunk.PushBranchENIsToCoolDownQueue("deleted-pod"))
 
 	require.NotContains(t, trunk.uidToBranchENIMap, "deleted-pod")
 	require.Contains(t, trunk.uidToBranchENIMap, "running-pod")
@@ -287,6 +297,129 @@ func TestFailedPreparationDefersCleanupUntilTheCheckSucceeds(t *testing.T) {
 	require.True(t, trunk.usedVlanIds[18])
 }
 
+// An ENI queued before preparation keeps its cooldown start and association, so preparation does not re-date it.
+func TestPreparationKeepsTheCooldownOfAnAlreadyQueuedENI(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		controller := gomock.NewController(t)
+		k8sAPI := mock_k8s.NewMockK8sWrapper(controller)
+		k8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(nil, MockError)
+		cooldown.InitCoolDownPeriod(k8sAPI, zap.New())
+		pod := recoveryPod("p1", recoveryBranchENIID, 17)
+		pod.Annotations[config.ResourceNamePodENI] = fmt.Sprintf(
+			`[{"eniId":%q,"vlanId":17,"associationID":"assoc-eni-A"}]`, recoveryBranchENIID)
+		trunk, helper, _ := newRestoredTrunk(t, controller, []v1.Pod{pod})
+
+		trunk.PushBranchENIsToCoolDownQueue("p1")
+		time.Sleep(cooldown.DefaultCoolDownPeriod + time.Second)
+		helper.EXPECT().DescribeNetworkInterfaces(gomock.Any()).Return(validRestoredInterfaces(InstanceId), nil)
+		helper.EXPECT().GetBranchNetworkInterface(gomock.Any()).
+			Return([]*ec2types.NetworkInterface{taggedBranch(recoveryBranchENIID, 17)}, nil)
+		require.NoError(t, prepareTrunk(trunk, nil))
+		helper.EXPECT().DisassociateTrunkInterface(aws.String("assoc-eni-A")).Return(nil)
+		helper.EXPECT().DeleteNetworkInterface(aws.String(recoveryBranchENIID)).Return(nil)
+		trunk.DeleteCooledDownENIs()
+
+		require.Empty(t, trunk.deleteQueue, "preparation restarted the cooldown of an ENI queued before it")
+		require.False(t, trunk.usedVlanIds[17])
+	})
+}
+
+// Preparation returns the queue in cooldown order, so one tick deletes every cooled ENI instead of
+// stopping at a fresh orphan queued ahead of one.
+func TestPreparationQueuesCarriedENIsBeforeInterleavedOrphans(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		controller := gomock.NewController(t)
+		k8sAPI := mock_k8s.NewMockK8sWrapper(controller)
+		k8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(nil, MockError)
+		cooldown.InitCoolDownPeriod(k8sAPI, zap.New())
+		carriedVLANs := []int{20, 22, 24}
+		var pods []v1.Pod
+		for _, vlanID := range carriedVLANs {
+			pod := recoveryPod(fmt.Sprintf("p%d", vlanID), fmt.Sprintf("eni-%017d", vlanID), vlanID)
+			pod.Annotations[config.ResourceNamePodENI] = fmt.Sprintf(
+				`[{"eniId":"eni-%017d","vlanId":%d,"associationID":"assoc-%d"}]`, vlanID, vlanID, vlanID)
+			pods = append(pods, pod)
+		}
+		trunk, helper, _ := newRestoredTrunk(t, controller, pods)
+		// EC2 lists the three carried ENIs between fresh orphans, in ENI ID and VLAN order too, so only a
+		// sort by cooldown start can put all three first.
+		var branches []*ec2types.NetworkInterface
+		for vlanID := 19; vlanID <= 26; vlanID++ {
+			branches = append(branches, taggedBranch(fmt.Sprintf("eni-%017d", vlanID), vlanID))
+		}
+
+		for _, vlanID := range carriedVLANs {
+			trunk.PushBranchENIsToCoolDownQueue(fmt.Sprintf("p%d", vlanID))
+			time.Sleep(10 * time.Second)
+		}
+		time.Sleep(cooldown.DefaultCoolDownPeriod)
+		helper.EXPECT().DescribeNetworkInterfaces(gomock.Any()).Return(validRestoredInterfaces(InstanceId), nil)
+		helper.EXPECT().GetBranchNetworkInterface(gomock.Any()).Return(branches, nil)
+		require.NoError(t, prepareTrunk(trunk, nil))
+		for _, vlanID := range carriedVLANs {
+			helper.EXPECT().DisassociateTrunkInterface(aws.String(fmt.Sprintf("assoc-%d", vlanID))).Return(nil)
+			helper.EXPECT().DeleteNetworkInterface(aws.String(fmt.Sprintf("eni-%017d", vlanID))).Return(nil)
+		}
+
+		trunk.DeleteCooledDownENIs()
+
+		require.Len(t, trunk.deleteQueue, len(branches)-len(carriedVLANs),
+			"the tick stopped at a fresh orphan queued before a cooled ENI")
+	})
+}
+
+// An ENI queued shortly before preparation waits out the rest of its cooldown, not a new one, and not none.
+func TestPreparationKeepsTheRestOfACarriedCooldown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		controller := gomock.NewController(t)
+		k8sAPI := mock_k8s.NewMockK8sWrapper(controller)
+		k8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(nil, MockError)
+		cooldown.InitCoolDownPeriod(k8sAPI, zap.New())
+		pod := recoveryPod("p1", recoveryBranchENIID, 17)
+		pod.Annotations[config.ResourceNamePodENI] = fmt.Sprintf(
+			`[{"eniId":%q,"vlanId":17,"associationID":"assoc-eni-A"}]`, recoveryBranchENIID)
+		trunk, helper, _ := newRestoredTrunk(t, controller, []v1.Pod{pod})
+
+		trunk.PushBranchENIsToCoolDownQueue("p1")
+		time.Sleep(cooldown.DefaultCoolDownPeriod / 2)
+		helper.EXPECT().DescribeNetworkInterfaces(gomock.Any()).Return(validRestoredInterfaces(InstanceId), nil)
+		helper.EXPECT().GetBranchNetworkInterface(gomock.Any()).
+			Return([]*ec2types.NetworkInterface{taggedBranch(recoveryBranchENIID, 17)}, nil)
+		require.NoError(t, prepareTrunk(trunk, nil))
+		trunk.DeleteCooledDownENIs()
+		require.Len(t, trunk.deleteQueue, 1, "preparation cut short the cooldown of an ENI queued before it")
+
+		time.Sleep(cooldown.DefaultCoolDownPeriod/2 + time.Second)
+		helper.EXPECT().DisassociateTrunkInterface(aws.String("assoc-eni-A")).Return(nil)
+		helper.EXPECT().DeleteNetworkInterface(aws.String(recoveryBranchENIID)).Return(nil)
+		trunk.DeleteCooledDownENIs()
+
+		require.Empty(t, trunk.deleteQueue)
+	})
+}
+
+// An orphan that preparation finds starts a fresh cooldown, since its pod may have been deleted just now.
+func TestPreparationStartsAFreshCooldownForANewOrphan(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		controller := gomock.NewController(t)
+		k8sAPI := mock_k8s.NewMockK8sWrapper(controller)
+		k8sAPI.EXPECT().GetConfigMap(config.VpcCniConfigMapName, config.KubeSystemNamespace).Return(nil, MockError)
+		cooldown.InitCoolDownPeriod(k8sAPI, zap.New())
+		trunk, helper, _ := newRestoredTrunk(t, controller, nil)
+		helper.EXPECT().DescribeNetworkInterfaces(gomock.Any()).Return(validRestoredInterfaces(InstanceId), nil)
+		helper.EXPECT().GetBranchNetworkInterface(gomock.Any()).
+			Return([]*ec2types.NetworkInterface{taggedBranch(recoveryOrphanENIID, 18)}, nil)
+		require.NoError(t, prepareTrunk(trunk, nil))
+
+		trunk.DeleteCooledDownENIs()
+		require.Len(t, trunk.deleteQueue, 1, "a new orphan was deleted before its cooldown")
+		time.Sleep(cooldown.DefaultCoolDownPeriod + time.Second)
+		helper.EXPECT().DeleteNetworkInterface(aws.String(recoveryOrphanENIID)).Return(nil)
+		trunk.DeleteCooledDownENIs()
+		require.Empty(t, trunk.deleteQueue)
+	})
+}
+
 func TestColdFallbackRetryRecoversAfterFailure(t *testing.T) {
 	listNoPods := func() ([]v1.Pod, error) { return nil, nil }
 	t.Run("instance reload fails", func(t *testing.T) {
@@ -304,10 +437,9 @@ func TestColdFallbackRetryRecoversAfterFailure(t *testing.T) {
 		require.True(t, trunk.NeedsPreparation())
 
 		trunk.nextPreparationAttempt = time.Now().Add(-time.Second)
+		// The rejection is remembered, so the retry does not validate the checkpoint again.
 		gomock.InOrder(
 			instance.EXPECT().RestoredTrunkENIID().Return(recoveryTrunkENIID),
-			instance.EXPECT().PrimaryNetworkInterfaceID().Return(recoveryPrimaryENIID),
-			helper.EXPECT().DescribeNetworkInterfaces(gomock.Any()).Return(nil, nil),
 			instance.EXPECT().LoadDetails(helper).Return(nil),
 			instance.EXPECT().InstanceID().Return(InstanceId),
 			helper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil),
