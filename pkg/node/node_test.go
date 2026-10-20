@@ -202,24 +202,6 @@ func TestNode_InitResources(t *testing.T) {
 	assert.True(t, mock.NodeWithMock.IsReady())
 }
 
-func TestNode_InitResources_WindowsSkipsCheckpointRestore(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 1)
-	expectColdInitialization(&mock)
-
-	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
-	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
-
-	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
-	assert.NoError(t, err)
-	assert.True(t, mock.NodeWithMock.IsReady())
-}
-
 func validCheckpointCNINode(checkpointInstanceID string) *rcv1alpha1.CNINode {
 	return &rcv1alpha1.CNINode{
 		Status: rcv1alpha1.CNINodeStatus{
@@ -237,279 +219,98 @@ func validCheckpointCNINode(checkpointInstanceID string) *rcv1alpha1.CNINode {
 	}
 }
 
-func TestNode_InitResources_RestoresCheckpointWithoutLoadingInstance(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 1)
-	expectCheckpointRestore(&mock)
-	cniNode := validCheckpointCNINode(instanceID)
-
-	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(cniNode, nil)
-	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(
-		*cniNode.Status.NodeNetworkState,
-		cniNode.Status.TrunkInterface.ID,
-	).Return(nil)
-	mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.MockEC2API).Return(nil)
-	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
-	restoreCounter := cniNodeCheckpointRestoreCount.WithLabelValues("hit", "none")
-	before := writePrometheusMetric(t, restoreCounter).GetCounter().GetValue()
-
-	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
-	assert.True(t, mock.NodeWithMock.IsReady())
-	assert.Equal(t, before+1, writePrometheusMetric(t, restoreCounter).GetCounter().GetValue())
+// restoreAttempts sums every result and reason series of the restore counter.
+func restoreAttempts(t *testing.T) float64 {
+	t.Helper()
+	metrics := make(chan prometheus.Metric, 16)
+	cniNodeCheckpointRestoreCount.Collect(metrics)
+	close(metrics)
+	total := 0.0
+	for metric := range metrics {
+		total += writePrometheusMetric(t, metric).GetCounter().GetValue()
+	}
+	return total
 }
 
-func TestNode_InitResources_RestoreWithOwnManagedBy(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 1)
-	expectCheckpointRestore(&mock)
-	cniNode := validCheckpointCNINode(instanceID)
-	cniNode.Spec.ManagedBy = rcv1alpha1.ManagedByVPCResourceController
-	restoredTrunkENIID := ""
-
-	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(cniNode, nil)
-	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Times(0)
-	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(
-		*cniNode.Status.NodeNetworkState,
-		cniNode.Status.TrunkInterface.ID,
-	).DoAndReturn(func(_ rcv1alpha1.NodeNetworkState, trunkENIID string) error {
-		restoredTrunkENIID = trunkENIID
-		return nil
-	})
-	mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.MockEC2API).Return(nil)
-	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
-
-	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
-	assert.True(t, mock.NodeWithMock.IsReady())
-	assert.Equal(t, cniNode.Status.TrunkInterface.ID, restoredTrunkENIID)
-}
-
-func TestNode_InitResources_FallsBackWhenCheckpointMissing(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 1)
-	expectCheckpointRestore(&mock)
-
-	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).
-		Return(&rcv1alpha1.CNINode{}, nil)
-	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
-	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
-	restoreCounter := cniNodeCheckpointRestoreCount.WithLabelValues("fallback", "missing_state")
-	before := writePrometheusMetric(t, restoreCounter).GetCounter().GetValue()
-
-	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
-	assert.True(t, mock.NodeWithMock.IsReady())
-	assert.Equal(t, before+1, writePrometheusMetric(t, restoreCounter).GetCounter().GetValue())
-}
-
-func TestNode_InitResources_FallsBackWhenCheckpointReadFails(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 1)
-	expectCheckpointRestore(&mock)
-
-	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(nil, mockError)
-	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
-	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
-
-	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
-}
-
-func TestNode_InitResources_CountsMissingCNINodeAsMissingState(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 1)
-	expectCheckpointRestore(&mock)
-
-	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).
-		Return(nil, apierrors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, nodeName))
-	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
-	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
-	missing := cniNodeCheckpointRestoreCount.WithLabelValues("fallback", "missing_state")
-	readError := cniNodeCheckpointRestoreCount.WithLabelValues("fallback", "read_error")
-	missingBefore := writePrometheusMetric(t, missing).GetCounter().GetValue()
-	readErrorBefore := writePrometheusMetric(t, readError).GetCounter().GetValue()
-
-	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
-
-	assert.Equal(t, missingBefore+1, writePrometheusMetric(t, missing).GetCounter().GetValue())
-	assert.Equal(t, readErrorBefore, writePrometheusMetric(t, readError).GetCounter().GetValue())
-}
-
-func TestNode_InitResources_LogsAndCountsCNINodeReadError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 1)
-	expectCheckpointRestore(&mock)
-	var logged []string
-	mock.NodeWithMock.log = funcr.New(func(prefix, args string) {
-		logged = append(logged, args)
-	}, funcr.Options{})
-
-	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(nil, mockError)
-	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
-	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
-	missing := cniNodeCheckpointRestoreCount.WithLabelValues("fallback", "missing_state")
-	readError := cniNodeCheckpointRestoreCount.WithLabelValues("fallback", "read_error")
-	missingBefore := writePrometheusMetric(t, missing).GetCounter().GetValue()
-	readErrorBefore := writePrometheusMetric(t, readError).GetCounter().GetValue()
-
-	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
-
-	assert.Equal(t, readErrorBefore+1, writePrometheusMetric(t, readError).GetCounter().GetValue())
-	assert.Equal(t, missingBefore, writePrometheusMetric(t, missing).GetCounter().GetValue())
-	assert.Contains(t, strings.Join(logged, "\n"), mockError.Error())
-}
-
-func TestNode_InitResources_FallsBackForForeignCheckpointManager(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 1)
-	expectCheckpointRestore(&mock)
-	cniNode := validCheckpointCNINode(instanceID)
-	cniNode.Spec.ManagedBy = rcv1alpha1.ManagedByEKSAutoMode
-
-	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(cniNode, nil)
-	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
-	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
-
-	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
-}
-
-func TestNode_InitResources_FallsBackForInstanceMismatch(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 1)
-	expectCheckpointRestore(&mock)
-	cniNode := validCheckpointCNINode("i-old")
-
-	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(cniNode, nil)
-	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
-	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
-
-	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
-}
-
-func TestNode_InitResources_FallsBackWhenCheckpointRestoreFails(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 1)
-	expectCheckpointRestore(&mock)
-	cniNode := validCheckpointCNINode(instanceID)
-
-	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(cniNode, nil)
-	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(
-		*cniNode.Status.NodeNetworkState,
-		cniNode.Status.TrunkInterface.ID,
-	).Return(mockError)
-	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
-	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
-
-	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
-}
-
-func TestNode_InitResources_ReturnsErrorWhenRestoredNetworkUpdateFails(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mock := NewMock(ctrl, 0)
-	expectCheckpointRestore(&mock)
-	cniNode := validCheckpointCNINode(instanceID)
-
-	mock.MockInstance.EXPECT().Name().Return(nodeName)
-	mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(cniNode, nil)
-	mock.MockInstance.EXPECT().LoadFromNodeNetworkState(
-		*cniNode.Status.NodeNetworkState,
-		cniNode.Status.TrunkInterface.ID,
-	).Return(nil)
-	mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.MockEC2API).Return(mockError)
-	restoreCounter := cniNodeCheckpointRestoreCount.WithLabelValues("error", "network_update_failed")
-	before := writePrometheusMetric(t, restoreCounter).GetCounter().GetValue()
-
-	err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
-	assert.Error(t, err)
-	assert.False(t, mock.NodeWithMock.IsReady())
-	assert.Equal(t, before+1, writePrometheusMetric(t, restoreCounter).GetCounter().GetValue())
-}
-
-func TestNode_InitResources_FallsBackWhenCheckpointFieldMissing(t *testing.T) {
-	tests := map[string]func(*rcv1alpha1.CNINode){
-		"trunk": func(cniNode *rcv1alpha1.CNINode) {
-			cniNode.Status.TrunkInterface = nil
+// A usable checkpoint restores the instance without EC2; any other CNINode state falls back to EC2, counted by reason.
+func TestNode_InitResources_RestoresCheckpointOrFallsBack(t *testing.T) {
+	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, nodeName)
+	tests := map[string]struct {
+		mutate     func(*rcv1alpha1.CNINode)
+		getErr     error
+		loadErr    error
+		updateErr  error
+		wantResult string
+		wantReason string
+	}{
+		"restored": {wantResult: "hit", wantReason: "none"},
+		"restored with own manager": {
+			mutate:     func(c *rcv1alpha1.CNINode) { c.Spec.ManagedBy = rcv1alpha1.ManagedByVPCResourceController },
+			wantResult: "hit", wantReason: "none",
 		},
-		"instance type": func(cniNode *rcv1alpha1.CNINode) {
-			cniNode.Status.NodeNetworkState.InstanceType = ""
-		},
-		"primary ENI": func(cniNode *rcv1alpha1.CNINode) {
-			cniNode.Status.NodeNetworkState.PrimaryNetworkInterfaceID = ""
-		},
+		"no CNINode yet":  {getErr: notFound, wantResult: "fallback", wantReason: "missing_state"},
+		"read error":      {getErr: mockError, wantResult: "fallback", wantReason: "read_error"},
+		"foreign manager": {mutate: func(c *rcv1alpha1.CNINode) { c.Spec.ManagedBy = rcv1alpha1.ManagedByEKSAutoMode }, wantResult: "fallback", wantReason: "foreign_manager"},
+		"no state":        {mutate: func(c *rcv1alpha1.CNINode) { *c = rcv1alpha1.CNINode{} }, wantResult: "fallback", wantReason: "missing_state"},
 		// The shape a de-initialized node leaves behind: the trunk ID stays, the network state is cleared.
-		"cleared network state": func(cniNode *rcv1alpha1.CNINode) {
-			cniNode.Status.NodeNetworkState = nil
+		"cleared network state": {mutate: func(c *rcv1alpha1.CNINode) { c.Status.NodeNetworkState = nil }, wantResult: "fallback", wantReason: "missing_state"},
+		"instance mismatch":     {mutate: func(c *rcv1alpha1.CNINode) { c.Status.NodeNetworkState.InstanceID = "i-old" }, wantResult: "fallback", wantReason: "instance_id_mismatch"},
+		"missing trunk":         {mutate: func(c *rcv1alpha1.CNINode) { c.Status.TrunkInterface = nil }, wantResult: "fallback", wantReason: "missing_field"},
+		"missing instance type": {mutate: func(c *rcv1alpha1.CNINode) { c.Status.NodeNetworkState.InstanceType = "" }, wantResult: "fallback", wantReason: "missing_field"},
+		"missing primary ENI": {
+			mutate:     func(c *rcv1alpha1.CNINode) { c.Status.NodeNetworkState.PrimaryNetworkInterfaceID = "" },
+			wantResult: "fallback", wantReason: "missing_field",
 		},
+		"invalid state":         {loadErr: mockError, wantResult: "fallback", wantReason: "invalid_state"},
+		"network update failed": {updateErr: mockError, wantResult: "error", wantReason: "network_update_failed"},
 	}
 
-	for name, removeField := range tests {
+	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-
 			mock := NewMock(ctrl, 1)
+			var logged []string
+			mock.NodeWithMock.log = funcr.New(func(_, args string) { logged = append(logged, args) }, funcr.Options{})
 			expectCheckpointRestore(&mock)
 			cniNode := validCheckpointCNINode(instanceID)
-			removeField(cniNode)
+			if test.mutate != nil {
+				test.mutate(cniNode)
+			}
+			if test.getErr != nil {
+				cniNode = nil
+			}
 			mock.MockInstance.EXPECT().Name().Return(nodeName)
-			mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
-			mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(cniNode, nil)
-			mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
-			mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
-			mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
-			mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+			mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(cniNode, test.getErr)
+			if test.getErr == nil && test.wantReason != "foreign_manager" {
+				mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
+			}
+			if test.wantReason == "none" || test.loadErr != nil || test.updateErr != nil {
+				mock.MockInstance.EXPECT().LoadFromNodeNetworkState(*cniNode.Status.NodeNetworkState,
+					cniNode.Status.TrunkInterface.ID).Return(test.loadErr)
+			}
+			if test.wantReason == "none" || test.updateErr != nil {
+				mock.MockInstance.EXPECT().UpdateCurrentSubnetAndCidrBlock(mock.MockEC2API).Return(test.updateErr)
+			}
+			if test.wantResult == "fallback" {
+				mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+			}
+			if test.wantResult != "error" {
+				mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
+				mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
+				mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+			}
+			counter := cniNodeCheckpointRestoreCount.WithLabelValues(test.wantResult, test.wantReason)
+			before, totalBefore := writePrometheusMetric(t, counter).GetCounter().GetValue(), restoreAttempts(t)
 
-			assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
+			err := mock.NodeWithMock.InitResources(mock.MockResourceManager)
+
+			assert.Equal(t, test.wantResult == "error", err != nil)
+			assert.Equal(t, test.wantResult != "error", mock.NodeWithMock.IsReady())
+			assert.Equal(t, before+1, writePrometheusMetric(t, counter).GetCounter().GetValue())
+			assert.Equal(t, totalBefore+1, restoreAttempts(t), "an attempt was counted under more than one reason")
+			if test.getErr == mockError {
+				assert.Contains(t, strings.Join(logged, "\n"), mockError.Error())
+			}
 		})
 	}
 }

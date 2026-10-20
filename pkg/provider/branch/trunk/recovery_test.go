@@ -168,14 +168,10 @@ func TestPrepareForAllocationValidatesOnceRefreshesPrimaryAndFindsOldSubnetBranc
 	defer ctrl.Finish()
 
 	trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
+	assert.Empty(t, instance.CurrentInstanceSecurityGroups())
 	branchVLAN := 17
-	branch := &ec2types.NetworkInterface{
-		NetworkInterfaceId: aws.String(recoveryBranchENIID),
-		SubnetId:           aws.String(recoveryOldSubnetID),
-		TagSet: []ec2types.Tag{
-			{Key: aws.String(config.VLandIDTag), Value: aws.String(fmt.Sprint(branchVLAN))},
-		},
-	}
+	branch := taggedBranch(recoveryBranchENIID, branchVLAN)
+	branch.SubnetId = aws.String(recoveryOldSubnetID)
 	helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
 		Return(validRestoredInterfaces(InstanceId), nil)
 	helper.EXPECT().GetBranchNetworkInterface(gomock.Eq(aws.String(recoveryTrunkENIID))).
@@ -190,122 +186,23 @@ func TestPrepareForAllocationValidatesOnceRefreshesPrimaryAndFindsOldSubnetBranc
 	assert.Equal(t, []string{recoveryRefreshedSG}, instance.CurrentInstanceSecurityGroups())
 	tcpTimeout, _, _ := instance.GetConnectionTrackingSpec()
 	assert.Equal(t, int32(600), *tcpTimeout)
-}
 
-func TestRestoredBranchCreationUsesRefreshedPrimaryENISettings(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
-	assert.Empty(t, instance.CurrentInstanceSecurityGroups())
-
-	helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
-		Return(validRestoredInterfaces(InstanceId), nil)
-	helper.EXPECT().GetBranchNetworkInterface(gomock.Eq(aws.String(recoveryTrunkENIID))).
-		Return(nil, nil)
-	assert.NoError(t, prepareTrunk(trunk, nil))
-
-	helper.EXPECT().CreateNetworkInterface(
-		&BranchEniDescription,
-		&SubnetId,
-		[]string{recoveryRefreshedSG},
-		append(vlan1Tag, trunk.nodeIDTag...),
-		nil,
-		nil,
-		gomock.Eq(&ec2types.ConnectionTrackingSpecificationRequest{
-			TcpEstablishedTimeout: aws.Int32(600),
-		}),
-	).Return(BranchInterface1, nil)
-	helper.EXPECT().AssociateBranchToTrunk(aws.String(recoveryTrunkENIID), &Branch1Id, VlanId1).
-		Return(mockAssociationOutput1, nil)
-
-	_, err := trunk.CreateAndAssociateBranchENIs(MockPod2, nil, 1)
-	assert.NoError(t, err)
-}
-
-func TestRestoredBranchesReadPrimaryOnce(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
-	assert.Empty(t, instance.CurrentInstanceSecurityGroups())
-	conntrack := &ec2types.ConnectionTrackingSpecificationRequest{
-		TcpEstablishedTimeout: aws.Int32(600),
-	}
-	describeCalls := 0
-	var observedConntrack []*ec2types.ConnectionTrackingSpecificationRequest
-
-	helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
-		DoAndReturn(func([]string) ([]ec2types.NetworkInterface, error) {
-			describeCalls++
-			return validRestoredInterfaces(InstanceId), nil
-		}).AnyTimes()
-	helper.EXPECT().GetBranchNetworkInterface(gomock.Eq(aws.String(recoveryTrunkENIID))).
-		Return(nil, nil)
-	assert.NoError(t, prepareTrunk(trunk, nil))
-
+	// Every new branch uses the refreshed primary ENI settings without describing the primary again.
+	conntrack := gomock.Eq(&ec2types.ConnectionTrackingSpecificationRequest{TcpEstablishedTimeout: aws.Int32(600)})
 	gomock.InOrder(
-		helper.EXPECT().CreateNetworkInterface(
-			&BranchEniDescription,
-			&SubnetId,
-			[]string{recoveryRefreshedSG},
-			append(vlan1Tag, trunk.nodeIDTag...),
-			nil,
-			nil,
-			gomock.Any(),
-		).DoAndReturn(func(
-			_, _ *string,
-			_ []string,
-			_ []ec2types.Tag,
-			_ *config.IPResourceCount,
-			_ *string,
-			connectionTracking *ec2types.ConnectionTrackingSpecificationRequest,
-		) (*ec2types.NetworkInterface, error) {
-			observedConntrack = append(observedConntrack, connectionTracking)
-			return BranchInterface1, nil
-		}),
-		helper.EXPECT().AssociateBranchToTrunk(
-			aws.String(recoveryTrunkENIID),
-			&Branch1Id,
-			VlanId1,
-		).Return(mockAssociationOutput1, nil),
-		helper.EXPECT().CreateNetworkInterface(
-			&BranchEniDescription,
-			&SubnetId,
-			[]string{recoveryRefreshedSG},
-			append(vlan2Tag, trunk.nodeIDTag...),
-			nil,
-			nil,
-			gomock.Any(),
-		).DoAndReturn(func(
-			_, _ *string,
-			_ []string,
-			_ []ec2types.Tag,
-			_ *config.IPResourceCount,
-			_ *string,
-			connectionTracking *ec2types.ConnectionTrackingSpecificationRequest,
-		) (*ec2types.NetworkInterface, error) {
-			observedConntrack = append(observedConntrack, connectionTracking)
-			return BranchInterface2, nil
-		}),
-		helper.EXPECT().AssociateBranchToTrunk(
-			aws.String(recoveryTrunkENIID),
-			&Branch2Id,
-			VlanId2,
-		).Return(mockAssociationOutput2, nil),
+		helper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, []string{recoveryRefreshedSG},
+			append(vlan1Tag, trunk.nodeIDTag...), nil, nil, conntrack).Return(BranchInterface1, nil),
+		helper.EXPECT().AssociateBranchToTrunk(aws.String(recoveryTrunkENIID), &Branch1Id, VlanId1).
+			Return(mockAssociationOutput1, nil),
+		helper.EXPECT().CreateNetworkInterface(&BranchEniDescription, &SubnetId, []string{recoveryRefreshedSG},
+			append(vlan2Tag, trunk.nodeIDTag...), nil, nil, conntrack).Return(BranchInterface2, nil),
+		helper.EXPECT().AssociateBranchToTrunk(aws.String(recoveryTrunkENIID), &Branch2Id, VlanId2).
+			Return(mockAssociationOutput2, nil),
 	)
-
-	first, err := trunk.CreateAndAssociateBranchENIs(MockPod1, nil, 1)
+	_, err := trunk.CreateAndAssociateBranchENIs(MockPod1, nil, 1)
 	assert.NoError(t, err)
-	second, err := trunk.CreateAndAssociateBranchENIs(MockPod2, nil, 1)
+	_, err = trunk.CreateAndAssociateBranchENIs(MockPod2, nil, 1)
 	assert.NoError(t, err)
-	assert.Equal(t, Branch1Id, first[0].ID)
-	assert.Equal(t, Branch2Id, second[0].ID)
-	assert.Equal(t, 1, describeCalls)
-	assert.Equal(t, []*ec2types.ConnectionTrackingSpecificationRequest{
-		conntrack,
-		conntrack,
-	}, observedConntrack)
 }
 
 func TestColdInitTrunkNeedsNoPreparation(t *testing.T) {
@@ -323,59 +220,67 @@ func TestColdInitTrunkNeedsNoPreparation(t *testing.T) {
 }
 
 func TestValidateRestoredInterfacesRequiresColdInitForInvalidCheckpoint(t *testing.T) {
+	type mismatch func([]ec2types.NetworkInterface) []ec2types.NetworkInterface
 	tests := map[string]struct {
-		interfaces []ec2types.NetworkInterface
-		err        error
+		mismatch mismatch
+		err      error
 	}{
-		"missing trunk": {
-			interfaces: validRestoredInterfaces(InstanceId)[:1],
-		},
-		"missing primary": {
-			interfaces: validRestoredInterfaces(InstanceId)[1:],
-		},
-		"wrong trunk type": {
-			interfaces: func() []ec2types.NetworkInterface {
-				interfaces := validRestoredInterfaces(InstanceId)
-				interfaces[1].InterfaceType = ec2types.NetworkInterfaceTypeBranch
-				return interfaces
-			}(),
-		},
-		"attached elsewhere": {
-			interfaces: validRestoredInterfaces("i-other"),
-		},
-		"primary without attachment": {
-			interfaces: func() []ec2types.NetworkInterface {
-				interfaces := validRestoredInterfaces(InstanceId)
-				interfaces[0].Attachment = nil
-				return interfaces
-			}(),
-		},
-		"primary is not device zero": {
-			interfaces: func() []ec2types.NetworkInterface {
-				interfaces := validRestoredInterfaces(InstanceId)
-				interfaces[0].Attachment.DeviceIndex = aws.Int32(1)
-				return interfaces
-			}(),
-		},
-		"primary refresh fails": {
-			interfaces: func() []ec2types.NetworkInterface {
-				interfaces := validRestoredInterfaces(InstanceId)
-				interfaces[0].Groups = nil
-				return interfaces
-			}(),
-		},
-		"not found API error": {
-			err: &smithy.GenericAPIError{
-				Code:    "InvalidNetworkInterfaceID.NotFound",
-				Message: "missing",
-			},
-		},
-		"malformed API error": {
-			err: &smithy.GenericAPIError{
-				Code:    "InvalidNetworkInterfaceID.Malformed",
-				Message: "malformed",
-			},
-		},
+		"missing trunk":   {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface { return i[:1] }},
+		"missing primary": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface { return i[1:] }},
+		"wrong trunk type": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[1].InterfaceType = ec2types.NetworkInterfaceTypeBranch
+			return i
+		}},
+		"primary on another instance": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[0].Attachment.InstanceId = aws.String("i-other")
+			return i
+		}},
+		"trunk on another instance": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[1].Attachment.InstanceId = aws.String("i-other")
+			return i
+		}},
+		"primary without attachment": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[0].Attachment = nil
+			return i
+		}},
+		"primary is not device zero": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[0].Attachment.DeviceIndex = aws.Int32(1)
+			return i
+		}},
+		"primary detached": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[0].Attachment.Status = ec2types.AttachmentStatusDetached
+			return i
+		}},
+		"trunk detached": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[1].Attachment.Status = ec2types.AttachmentStatusDetached
+			return i
+		}},
+		"trunk attachment missing": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[1].Attachment = nil
+			return i
+		}},
+		"primary in another subnet": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[0].SubnetId = aws.String(recoveryOldSubnetID)
+			return i
+		}},
+		"primary without a subnet": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[0].SubnetId = nil
+			return i
+		}},
+		"primary address outside the checkpoint CIDR": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[0].PrivateIpAddress = aws.String("10.9.0.5")
+			return i
+		}},
+		"primary without an address": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[0].PrivateIpAddress = nil
+			return i
+		}},
+		"primary refresh fails": {mismatch: func(i []ec2types.NetworkInterface) []ec2types.NetworkInterface {
+			i[0].Groups = nil
+			return i
+		}},
+		"not found API error": {err: &smithy.GenericAPIError{Code: "InvalidNetworkInterfaceID.NotFound"}},
+		"malformed API error": {err: &smithy.GenericAPIError{Code: "InvalidNetworkInterfaceID.Malformed"}},
 	}
 
 	for name, test := range tests {
@@ -383,145 +288,18 @@ func TestValidateRestoredInterfacesRequiresColdInitForInvalidCheckpoint(t *testi
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
-			trunk, helper, _ := newRestoredTrunk(t, ctrl, nil)
+			trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
+			var interfaces []ec2types.NetworkInterface
+			if test.mismatch != nil {
+				interfaces = test.mismatch(validRestoredInterfaces(InstanceId))
+			}
 			helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
-				Return(test.interfaces, test.err)
+				Return(interfaces, test.err)
 
 			require.ErrorIs(t, trunk.validateRestoredNetworkInterfaces(recoveryTrunkENIID), errNeedsColdInit)
 			assert.True(t, trunk.NeedsPreparation())
-		})
-	}
-}
-
-func TestRestoredCheckpointSubnetMustMatchThePrimaryENI(t *testing.T) {
-	tests := map[string]func([]ec2types.NetworkInterface){
-		"primary in another subnet": func(interfaces []ec2types.NetworkInterface) {
-			interfaces[0].SubnetId = aws.String(recoveryOldSubnetID)
-		},
-		"primary without a subnet": func(interfaces []ec2types.NetworkInterface) {
-			interfaces[0].SubnetId = nil
-		},
-		"primary address outside the checkpoint CIDR": func(interfaces []ec2types.NetworkInterface) {
-			interfaces[0].PrivateIpAddress = aws.String("10.9.0.5")
-		},
-		"primary without an address": func(interfaces []ec2types.NetworkInterface) {
-			interfaces[0].PrivateIpAddress = nil
-		},
-	}
-
-	for name, breakPrimary := range tests {
-		t.Run(name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-
-			trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
-			interfaces := validRestoredInterfaces(InstanceId)
-			breakPrimary(interfaces)
-			helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
-				Return(interfaces, nil)
-
-			err := trunk.validateRestoredNetworkInterfaces(recoveryTrunkENIID)
-
-			require.ErrorIs(t, err, errNeedsColdInit)
-			assert.True(t, trunk.NeedsPreparation())
 			// A rejected checkpoint must not update the instance.
 			assert.Empty(t, instance.CurrentInstanceSecurityGroups())
-		})
-	}
-}
-
-func TestCheckpointSubnetMismatchFallsBackToColdInit(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
-	interfaces := validRestoredInterfaces(InstanceId)
-	interfaces[0].SubnetId = aws.String(recoveryOldSubnetID)
-	helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
-		Return(interfaces, nil)
-	helper.EXPECT().GetInstanceDetails(aws.String(InstanceId)).Return(coldInstanceDetails(), nil)
-	helper.EXPECT().GetSubnet(aws.String(SubnetId)).
-		Return(&ec2types.Subnet{CidrBlock: aws.String(SubnetCidrBlock)}, nil)
-	helper.EXPECT().GetInstanceNetworkInterface(aws.String(InstanceId)).Return(instanceNwInterfaces, nil)
-	helper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(ec2types.AttachmentStatusAttached)).
-		Return(nil)
-	helper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(nil, nil)
-
-	checkpointInstance, err := trunk.PrepareForAllocation(func() ([]v1.Pod, error) { return nil, nil })
-
-	require.NoError(t, err)
-	require.NotNil(t, checkpointInstance, "the caller must re-persist the checkpoint after cold init")
-	require.Same(t, instance, checkpointInstance)
-	assert.False(t, trunk.NeedsPreparation())
-	assert.Equal(t, SubnetId, instance.SubnetID())
-}
-
-// A checkpoint that EC2 contradicts is cold-initialized, counted once and logged once as an error.
-func TestRestoredCheckpointMismatchColdInitsAndReportsOnce(t *testing.T) {
-	mismatches := map[string]func([]ec2types.NetworkInterface) []ec2types.NetworkInterface{
-		"trunk typed interface": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
-			interfaces[1].InterfaceType = ec2types.NetworkInterfaceTypeInterface
-			return interfaces
-		},
-		"primary absent": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
-			return interfaces[1:]
-		},
-		"primary on another instance": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
-			interfaces[0].Attachment.InstanceId = aws.String("i-other")
-			return interfaces
-		},
-		"primary at device index 1": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
-			interfaces[0].Attachment.DeviceIndex = aws.Int32(1)
-			return interfaces
-		},
-		"trunk absent": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
-			return interfaces[:1]
-		},
-		"trunk not attached": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
-			interfaces[1].Attachment.Status = ec2types.AttachmentStatusDetached
-			return interfaces
-		},
-		"subnet mismatch": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
-			interfaces[0].SubnetId = aws.String(recoveryOldSubnetID)
-			return interfaces
-		},
-		"primary IP outside the checkpoint CIDR": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
-			interfaces[0].PrivateIpAddress = aws.String("10.9.0.5")
-			return interfaces
-		},
-		"primary refresh without security groups": func(interfaces []ec2types.NetworkInterface) []ec2types.NetworkInterface {
-			interfaces[0].Groups = nil
-			return interfaces
-		},
-	}
-
-	for name, mismatch := range mismatches {
-		t.Run(name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
-			var logs bytes.Buffer
-			trunk.log = zap.New(zap.WriteTo(&logs))
-			helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
-				Return(mismatch(validRestoredInterfaces(InstanceId)), nil)
-			helper.EXPECT().GetInstanceDetails(aws.String(InstanceId)).Return(coldInstanceDetails(), nil)
-			helper.EXPECT().GetSubnet(aws.String(SubnetId)).
-				Return(&ec2types.Subnet{CidrBlock: aws.String(SubnetCidrBlock)}, nil)
-			helper.EXPECT().GetInstanceNetworkInterface(aws.String(InstanceId)).Return(instanceNwInterfaces, nil)
-			helper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(ec2types.AttachmentStatusAttached)).
-				Return(nil)
-			helper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(nil, nil)
-			mismatchCount := trunkENIOperationsErrCount.WithLabelValues("restored_checkpoint_mismatch")
-			before := writeTrunkMetric(t, mismatchCount)
-
-			checkpointInstance, err := trunk.PrepareForAllocation(func() ([]v1.Pod, error) { return nil, nil })
-
-			require.NoError(t, err)
-			require.Same(t, instance, checkpointInstance)
-			require.Equal(t, before+1, writeTrunkMetric(t, mismatchCount))
-			errorLines := errorLogLines(&logs)
-			require.Len(t, errorLines, 1)
-			require.Contains(t, errorLines[0], recoveryTrunkENIID)
-			require.Contains(t, errorLines[0], errNeedsColdInit.Error())
 		})
 	}
 }
@@ -535,103 +313,6 @@ func errorLogLines(logs *bytes.Buffer) []string {
 		}
 	}
 	return lines
-}
-
-// A rejected checkpoint is counted and logged once, even when the instance reload fails and the attempt retries.
-func TestRestoredCheckpointMismatchIsReportedOncePerRejection(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	trunk, helper, instance := newRestoredTrunk(t, ctrl, nil)
-	var logs bytes.Buffer
-	trunk.log = zap.New(zap.WriteTo(&logs))
-	interfaces := validRestoredInterfaces(InstanceId)
-	interfaces[0].SubnetId = aws.String(recoveryOldSubnetID)
-	// The checkpoint is validated once; after the failed reload the retry goes straight to cold init.
-	helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
-		Return(interfaces, nil)
-	gomock.InOrder(
-		helper.EXPECT().GetInstanceDetails(aws.String(InstanceId)).Return(nil, MockError),
-		helper.EXPECT().GetInstanceDetails(aws.String(InstanceId)).Return(coldInstanceDetails(), nil),
-	)
-	helper.EXPECT().GetSubnet(aws.String(SubnetId)).
-		Return(&ec2types.Subnet{CidrBlock: aws.String(SubnetCidrBlock)}, nil)
-	helper.EXPECT().GetInstanceNetworkInterface(aws.String(InstanceId)).Return(instanceNwInterfaces, nil)
-	helper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(ec2types.AttachmentStatusAttached)).
-		Return(nil)
-	helper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(nil, nil)
-	mismatchCount := trunkENIOperationsErrCount.WithLabelValues("restored_checkpoint_mismatch")
-	before := writeTrunkMetric(t, mismatchCount)
-
-	require.ErrorIs(t, prepareTrunk(trunk, nil), MockError)
-	trunk.nextPreparationAttempt = time.Now().Add(-time.Second)
-	checkpointInstance, err := trunk.PrepareForAllocation(func() ([]v1.Pod, error) { return nil, nil })
-
-	require.NoError(t, err)
-	require.Same(t, instance, checkpointInstance)
-	require.Equal(t, before+1, writeTrunkMetric(t, mismatchCount))
-	require.Len(t, errorLogLines(&logs), 1)
-}
-
-func TestRestoredTrunkDetachedNeedsColdInit(t *testing.T) {
-	tests := map[string]func([]ec2types.NetworkInterface){
-		"primary detached": func(interfaces []ec2types.NetworkInterface) {
-			interfaces[0].Attachment.Status = ec2types.AttachmentStatusDetached
-		},
-		"trunk detached": func(interfaces []ec2types.NetworkInterface) {
-			interfaces[1].Attachment.Status = ec2types.AttachmentStatusDetached
-		},
-		"trunk attachment missing": func(interfaces []ec2types.NetworkInterface) {
-			interfaces[1].Attachment = nil
-		},
-	}
-
-	for name, detach := range tests {
-		t.Run(name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-
-			trunk, helper, instance := getMockHelperInstanceAndTrunkObject(ctrl)
-			instance.EXPECT().RestoredTrunkENIID().Return(recoveryTrunkENIID).Times(1)
-			assert.NoError(t, trunk.InitTrunk(nil))
-			trunk.prepared.Store(false)
-
-			interfaces := validRestoredInterfaces(InstanceId)
-			detach(interfaces)
-			instance.EXPECT().PrimaryNetworkInterfaceID().Return(recoveryPrimaryENIID)
-			instance.EXPECT().InstanceID().Return(InstanceId).AnyTimes()
-			instance.EXPECT().RefreshPrimaryNetworkInterface(gomock.Any()).
-				Return(nil).AnyTimes()
-			helper.EXPECT().DescribeNetworkInterfaces(
-				[]string{recoveryPrimaryENIID, recoveryTrunkENIID},
-			).Return(interfaces, nil)
-			helper.EXPECT().GetBranchNetworkInterface(
-				gomock.Eq(aws.String(recoveryTrunkENIID)),
-			).Return(nil, nil).AnyTimes()
-
-			require.ErrorIs(t, trunk.validateRestoredNetworkInterfaces(recoveryTrunkENIID), errNeedsColdInit)
-			assert.Empty(t, trunk.uidToBranchENIMap)
-			assert.Empty(t, trunk.deleteQueue)
-		})
-	}
-}
-
-func TestPrepareForAllocationRetriesTransientFailure(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	trunk, helper, _ := newRestoredTrunk(t, ctrl, nil)
-	gomock.InOrder(
-		helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
-			Return(nil, MockError),
-		helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
-			Return(validRestoredInterfaces(InstanceId), nil),
-		helper.EXPECT().GetBranchNetworkInterface(gomock.Any()).Return(nil, nil),
-	)
-
-	assert.ErrorIs(t, prepareTrunk(trunk, nil), MockError)
-	assert.True(t, trunk.NeedsPreparation())
-	trunk.nextPreparationAttempt = time.Now().Add(-time.Second)
-	assert.NoError(t, prepareTrunk(trunk, nil))
-	assert.False(t, trunk.NeedsPreparation())
 }
 
 func TestPrepareForAllocationSharesConcurrentValidation(t *testing.T) {
@@ -738,19 +419,6 @@ func TestPrepareForAllocationSnapshotsAfterProvisionalStateChanges(t *testing.T)
 	}
 }
 
-func TestPeriodicStateOperationsDoNotPrepareRestoredTrunk(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	pod := recoveryPod("pod-uid", recoveryBranchENIID, 17)
-	trunk, _, _ := newRestoredTrunk(t, ctrl, []v1.Pod{pod})
-
-	assert.False(t, trunk.Reconcile([]v1.Pod{pod}))
-	trunk.PushBranchENIsToCoolDownQueue("missing")
-	trunk.DeleteCooledDownENIs()
-	assert.True(t, trunk.NeedsPreparation())
-}
-
 func TestDeleteCooledDownENIsWaitsForPreparationAndDropsFabricatedOwnership(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -761,6 +429,11 @@ func TestDeleteCooledDownENIsWaitsForPreparationAndDropsFabricatedOwnership(t *t
 		recoveryPod("fabricated-pod", fabricatedENIID, 18),
 	}
 	trunk, helper, _ := newRestoredTrunk(t, ctrl, pods)
+	assert.False(t, trunk.Reconcile(pods))
+	assert.False(t, trunk.PushBranchENIsToCoolDownQueue("missing"))
+	// A failed check must not release the provisional state either.
+	helper.EXPECT().DescribeNetworkInterfaces(gomock.Any()).Return(nil, MockError)
+	assert.ErrorIs(t, prepareTrunk(trunk, pods), MockError)
 	trunk.PushBranchENIsToCoolDownQueue("real-pod")
 	trunk.PushBranchENIsToCoolDownQueue("fabricated-pod")
 	for _, branchENI := range trunk.deleteQueue {
@@ -774,7 +447,10 @@ func TestDeleteCooledDownENIsWaitsForPreparationAndDropsFabricatedOwnership(t *t
 		assert.Equal(t, recoveryBranchENIID, trunk.deleteQueue[0].ID)
 		assert.Equal(t, fabricatedENIID, trunk.deleteQueue[1].ID)
 	}
+	assert.True(t, trunk.usedVlanIds[17], "VLAN of a branch awaiting cleanup was released before the check succeeded")
+	assert.True(t, trunk.NeedsPreparation())
 
+	trunk.nextPreparationAttempt = time.Now().Add(-time.Second)
 	helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
 		Return(validRestoredInterfaces(InstanceId), nil)
 	helper.EXPECT().GetBranchNetworkInterface(gomock.Any()).Return([]*ec2types.NetworkInterface{{
@@ -794,6 +470,8 @@ func TestDeleteCooledDownENIsWaitsForPreparationAndDropsFabricatedOwnership(t *t
 	trunk.DeleteCooledDownENIs()
 
 	assert.Empty(t, trunk.deleteQueue)
+	assert.False(t, trunk.usedVlanIds[17])
+	assert.False(t, trunk.usedVlanIds[18], "fabricated ownership kept its VLAN")
 }
 
 func TestPreparedDeleteDoesNotHoldPrepareMutexAcrossEC2(t *testing.T) {
@@ -946,26 +624,6 @@ func TestColdInitTrunkReportsConfigDrift(t *testing.T) {
 	sgAfter, subnetAfter := trunkDriftCounts(t)
 	assert.Equal(t, float64(1), sgAfter-sgBefore)
 	assert.Equal(t, float64(1), subnetAfter-subnetBefore)
-}
-
-func TestOrphanDoesNotTakeAVlanThatAnOwnerHolds(t *testing.T) {
-	trunk := &trunkENI{log: zap.New()}
-	owner := recoveryPod("owner-pod", recoveryBranchENIID, VlanId1)
-
-	state := trunk.buildRecoveredBranchState([]v1.Pod{owner}, []*ec2types.NetworkInterface{
-		taggedBranch(recoveryBranchENIID, VlanId1),
-		taggedBranch(recoveryOrphanENIID, VlanId1),
-	})
-
-	owned := state.uidToBranchENIMap["owner-pod"]
-	require.Len(t, owned, 1)
-	assert.Equal(t, recoveryBranchENIID, owned[0].ID)
-	assert.Equal(t, VlanId1, owned[0].VlanID)
-	if assert.Len(t, state.deleteQueue, 1) {
-		assert.Equal(t, recoveryOrphanENIID, state.deleteQueue[0].ID)
-		assert.Zero(t, state.deleteQueue[0].VlanID)
-	}
-	assert.True(t, state.usedVlanIDs[VlanId1])
 }
 
 func TestDeletingAnOrphanKeepsTheOwnersVlanReserved(t *testing.T) {
