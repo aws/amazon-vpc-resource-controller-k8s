@@ -36,10 +36,7 @@ type restoredNode struct {
 type restoredNodeState int
 
 const (
-	restoredNodePrepared restoredNodeState = iota
-	restoredNodeRemoved
-	restoredNodeReplaced
-	restoredNodeNotEligibleForBranchProvider
+	restoredNodeDone restoredNodeState = iota
 	restoredNodeInitializationPending
 	restoredNodeNeedsPreparation
 )
@@ -102,15 +99,10 @@ func (b *branchENIProvider) runRestoredNodeChecks(
 	if !waitForRestoredNodeCheck(ctx, gracePeriod) {
 		return nil
 	}
-	podDataStoreSynced := b.conditions.GetPodDataStoreSyncStatus()
-	if !podDataStoreSynced {
-		b.log.Info("waiting to check restored nodes until pod datastore is synced")
-	}
-	for !podDataStoreSynced {
+	for !b.conditions.GetPodDataStoreSyncStatus() {
 		if !waitForRestoredNodeCheck(ctx, retryPeriod) {
 			return nil
 		}
-		podDataStoreSynced = b.conditions.GetPodDataStoreSyncStatus()
 	}
 	pendingNodes := restoredNodes
 	for len(pendingNodes) != 0 {
@@ -143,7 +135,7 @@ func (b *branchENIProvider) runRestoredNodeChecks(
 func (b *branchENIProvider) classifyRestoredNode(node restoredNode) (restoredNodeState, trunk.TrunkENI) {
 	currentNode, err := b.apiWrapper.K8sAPI.GetNode(node.name)
 	if apierrors.IsNotFound(err) {
-		return restoredNodeRemoved, nil
+		return restoredNodeDone, nil
 	}
 	if err != nil {
 		b.log.Error(err, "waiting to verify restored node", "node", node.name)
@@ -154,18 +146,18 @@ func (b *branchENIProvider) classifyRestoredNode(node restoredNode) (restoredNod
 	case currentInstanceID == "":
 		return restoredNodeInitializationPending, nil
 	case currentInstanceID != node.instanceID:
-		return restoredNodeReplaced, nil
+		return restoredNodeDone, nil
 	}
 	limits, instanceTypeSupported := vpc.Limits[node.instanceType]
 	if utils.GetNodeOS(currentNode) != config.OSLinux || !instanceTypeSupported || !limits.IsTrunkingCompatible {
-		return restoredNodeNotEligibleForBranchProvider, nil
+		return restoredNodeDone, nil
 	}
 	// Keep in sync with canAttachTrunk in pkg/node/manager.
 	if _, trunkAttached := currentNode.Labels[config.HasTrunkAttachedLabel]; !trunkAttached {
 		cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: node.name})
 		switch {
 		case apierrors.IsNotFound(err):
-			return restoredNodeNotEligibleForBranchProvider, nil
+			return restoredNodeDone, nil
 		case err != nil:
 			b.log.Error(err, "waiting to verify restored node eligibility", "node", node.name)
 			return restoredNodeInitializationPending, nil
@@ -173,7 +165,7 @@ func (b *branchENIProvider) classifyRestoredNode(node restoredNode) (restoredNod
 		if !slices.ContainsFunc(cniNode.Spec.Features, func(feature rcv1alpha1.Feature) bool {
 			return feature.Name == rcv1alpha1.SecurityGroupsForPods
 		}) {
-			return restoredNodeNotEligibleForBranchProvider, nil
+			return restoredNodeDone, nil
 		}
 	}
 	trunkENI, present := b.getTrunkFromCache(node.name)
@@ -181,10 +173,10 @@ func (b *branchENIProvider) classifyRestoredNode(node restoredNode) (restoredNod
 	case !present:
 		return restoredNodeInitializationPending, nil
 	case trunkENI.InstanceID() != node.instanceID:
-		return restoredNodeReplaced, nil
+		return restoredNodeDone, nil
 	case trunkENI.NeedsPreparation():
 		return restoredNodeNeedsPreparation, trunkENI
 	default:
-		return restoredNodePrepared, nil
+		return restoredNodeDone, nil
 	}
 }

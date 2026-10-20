@@ -425,7 +425,7 @@ func (i *ec2Instance) RefreshPrimaryNetworkInterface(networkInterface ec2types.N
 	}
 	i.lock.Lock()
 	defer i.lock.Unlock()
-	i.primaryENISecurityGroups = append([]string(nil), securityGroups...)
+	i.primaryENISecurityGroups = securityGroups
 	i.tcpEstablishedTimeout = tcpEstablishedTimeout
 	i.udpStreamTimeout = udpStreamTimeout
 	i.udpTimeout = udpTimeout

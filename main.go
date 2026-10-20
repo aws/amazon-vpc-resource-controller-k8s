@@ -14,7 +14,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -61,6 +60,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -361,7 +361,7 @@ func main() {
 			os.Exit(1)
 		}
 		branchProvider, _ := resourceManager.GetResourceProvider(config.ResourceNamePodENI)
-		if err := mgr.Add(branchProvider.(interface{ Start(context.Context) error })); err != nil {
+		if err := mgr.Add(branchProvider.(ctrlmanager.Runnable)); err != nil {
 			ctrl.Log.Error(err, "failed to add restored-node branch inventory")
 			os.Exit(1)
 		}

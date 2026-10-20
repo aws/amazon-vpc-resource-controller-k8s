@@ -294,6 +294,7 @@ func TestBranchENIProvider_RestoredTrunkFallbackRewritesCheckpoint(t *testing.T)
 			provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
 			mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 			fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+			provider.trunkENICache[NodeName] = fakeTrunk
 			state := rcv1alpha1.NodeNetworkState{InstanceID: "i-current"}
 			pods := []v1.Pod{*MockPod1}
 			trunkENIID := "eni-current-trunk"
@@ -321,6 +322,27 @@ func TestBranchENIProvider_RestoredTrunkFallbackRewritesCheckpoint(t *testing.T)
 			assert.Equal(t, wantErrors, checkpointPersistErrorCount(t))
 		})
 	}
+}
+
+// A cold fallback still in flight when DeleteNode clears the checkpoint must not write it back.
+func TestBranchENIProvider_FallbackAfterDeleteNodeKeepsCheckpointCleared(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+
+	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(nil)
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
+		DoAndReturn(func(listPods func() ([]v1.Pod, error)) (ec2.EC2Instance, error) {
+			_, err := listPods()
+			assert.NoError(t, err)
+			_, err = provider.DeleteNode(NodeName)
+			assert.NoError(t, err)
+			return mock_ec2.NewMockEC2Instance(ctrl), nil
+		})
+
+	assert.NoError(t, provider.prepareTrunkForAllocation(NodeName, fakeTrunk))
 }
 
 func checkpointPersistErrorCount(t *testing.T) float64 {

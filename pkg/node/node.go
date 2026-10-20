@@ -201,7 +201,7 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 	start := time.Now()
 	initResult := "error"
 	defer func() {
-		nodeInitDuration.WithLabelValues(string(initResult)).Observe(time.Since(start).Seconds())
+		nodeInitDuration.WithLabelValues(initResult).Observe(time.Since(start).Seconds())
 	}()
 
 	restored := false

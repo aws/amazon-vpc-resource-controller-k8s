@@ -471,17 +471,16 @@ func (t *trunkENI) decodeBranchInterfacesUsedByPod(pod *v1.Pod) []*ENIDetails {
 			trunkENIOperationsErrCount.WithLabelValues("unusable_pod_eni_annotation").Inc()
 			continue
 		}
-		recovered := *eni
-		if err := validateVlanID(recovered.VlanID); err != nil {
+		if err := validateVlanID(eni.VlanID); err != nil {
 			trunkENIOperationsErrCount.WithLabelValues("branch_eni_unusable_vlan").Inc()
 			t.log.Error(err,
 				"preserving branch ENI ownership while deferring VLAN recovery to EC2 inventory",
-				"eni", recovered.ID,
-				"vlanID", recovered.VlanID,
+				"eni", eni.ID,
+				"vlanID", eni.VlanID,
 				"podUID", pod.UID)
-			recovered.VlanID = 0
+			eni.VlanID = 0
 		}
-		usable = append(usable, &recovered)
+		usable = append(usable, eni)
 	}
 	return usable
 }

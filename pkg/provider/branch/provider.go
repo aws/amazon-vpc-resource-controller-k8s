@@ -246,7 +246,8 @@ func (b *branchENIProvider) prepareTrunkForAllocation(
 		}
 		return err
 	}
-	if instance != nil {
+	// shortcut: a DeleteNode landing between this check and the patch still re-persists; serialize them on the trunk if that is seen.
+	if current, present := b.getTrunkFromCache(nodeName); instance != nil && present && current == trunkENI {
 		b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
 	}
 	return nil
@@ -302,7 +303,7 @@ func (b *branchENIProvider) DeleteNode(nodeName string) (ctrl.Result, error) {
 	// Any leaked ENIs will be deleted by the periodic cleanup routine if cluster is active
 	// remove trunk from cache and de-initializer the resource provider
 	b.removeTrunkFromCache(nodeName)
-	// After the cache drop no new preparation can re-persist it; a re-managed node must cold-init, as no sweep covers it.
+	// Preparation persists only while its trunk is cached; a re-managed node must cold-init, as no sweep covers it.
 	if err := b.apiWrapper.K8sAPI.ClearCNINodeCheckpoint(nodeName); err != nil && !apierrors.IsNotFound(err) {
 		cniNodeCheckpointPersistErrCount.Inc()
 		b.log.Error(err, "failed to clear the CNINode checkpoint", "node", nodeName)
