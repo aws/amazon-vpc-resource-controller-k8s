@@ -42,6 +42,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -61,7 +62,7 @@ const (
 
 	ReasonTrunkENICreationFailed = "TrunkENICreationFailed"
 
-	RestoredNodeCheckGracePeriod   = 5 * time.Minute
+	RestoredNodeCheckGracePeriod   = 10 * time.Minute
 	RestoredNodeCheckRatePerSecond = 3
 	restoredNodeCheckBurst         = 1
 	preparationRetryPeriod         = time.Second
@@ -88,7 +89,7 @@ var (
 	cniNodeCheckpointPersistErrCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "cninode_checkpoint_persist_error_total",
-			Help: "The number of failures to persist the CNINode checkpoint",
+			Help: "The number of failures to write or clear the CNINode checkpoint",
 		},
 	)
 
@@ -301,6 +302,11 @@ func (b *branchENIProvider) DeleteNode(nodeName string) (ctrl.Result, error) {
 	// Any leaked ENIs will be deleted by the periodic cleanup routine if cluster is active
 	// remove trunk from cache and de-initializer the resource provider
 	b.removeTrunkFromCache(nodeName)
+	// After the cache drop no new preparation can re-persist it; a re-managed node must cold-init, as no sweep covers it.
+	if err := b.apiWrapper.K8sAPI.ClearCNINodeCheckpoint(nodeName); err != nil && !apierrors.IsNotFound(err) {
+		cniNodeCheckpointPersistErrCount.Inc()
+		b.log.Error(err, "failed to clear the CNINode checkpoint", "node", nodeName)
+	}
 
 	b.log.Info("de-initialized resource provider successfully", "nodeName", nodeName)
 
@@ -354,8 +360,27 @@ func (b *branchENIProvider) ProcessDeleteQueue(nodeName string) (ctrl.Result, er
 		log.Info("stopping the process delete queue job")
 		return ctrl.Result{}, nil
 	}
+	// Queued ENIs of a restored trunk wait for preparation, which must happen before the node is removed.
+	if trunkENI.NeedsPreparation() && trunkENI.HasPendingDeletions() {
+		if err := b.prepareTrunkForAllocation(nodeName, trunkENI); err != nil {
+			result, failed := preparationRetry(err)
+			if failed {
+				branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation").Inc()
+			}
+			return result, nil
+		}
+	}
 	trunkENI.DeleteCooledDownENIs()
 	return deleteQueueRequeueRequest, nil
+}
+
+// preparationRetry returns when to rerun a job that trunk preparation deferred, and whether an attempt failed.
+func preparationRetry(err error) (ctrl.Result, bool) {
+	var deferred *trunk.PreparationDeferred
+	if !errors.As(err, &deferred) {
+		return ctrl.Result{RequeueAfter: preparationRetryPeriod, Requeue: true}, true
+	}
+	return ctrl.Result{RequeueAfter: deferred.After, Requeue: true}, deferred.Err != nil
 }
 
 // CreateAndAnnotateResources creates resource for the pod, the function can run concurrently for different pods without
@@ -383,18 +408,13 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	}
 
 	if err := b.prepareTrunkForAllocation(nodeName, trunkENI); err != nil {
-		retryAfter := preparationRetryPeriod
-		var deferred *trunk.PreparationDeferred
-		if errors.As(err, &deferred) {
-			retryAfter = deferred.After
-			if deferred.Err == nil {
-				return ctrl.Result{RequeueAfter: retryAfter, Requeue: true}, nil
-			}
+		result, failed := preparationRetry(err)
+		if failed {
+			branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation").Inc()
+			b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
+				fmt.Sprintf("failed to prepare trunk before branch ENI allocation: %v", err), v1.EventTypeWarning)
 		}
-		branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation").Inc()
-		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
-			fmt.Sprintf("failed to prepare trunk before branch ENI allocation: %v", err), v1.EventTypeWarning)
-		return ctrl.Result{RequeueAfter: retryAfter, Requeue: true}, nil
+		return result, nil
 	}
 
 	// Get the pod object again directly from API Server as the cache can be stale
@@ -493,7 +513,10 @@ func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) 
 		return ctrl.Result{}, nil
 	}
 
-	trunkENI.PushBranchENIsToCoolDownQueue(UID)
+	if trunkENI.PushBranchENIsToCoolDownQueue(UID) {
+		// The trunk is being prepared, so retry rather than hold one of the shared workers.
+		return ctrl.Result{RequeueAfter: preparationRetryPeriod, Requeue: true}, nil
+	}
 
 	return ctrl.Result{}, nil
 }

@@ -63,6 +63,20 @@ func (mr *MockTrunkENIMockRecorder) DeleteCooledDownENIs() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteCooledDownENIs", reflect.TypeOf((*MockTrunkENI)(nil).DeleteCooledDownENIs))
 }
 
+// HasPendingDeletions mocks base method.
+func (m *MockTrunkENI) HasPendingDeletions() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasPendingDeletions")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// HasPendingDeletions indicates an expected call of HasPendingDeletions.
+func (mr *MockTrunkENIMockRecorder) HasPendingDeletions() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasPendingDeletions", reflect.TypeOf((*MockTrunkENI)(nil).HasPendingDeletions))
+}
+
 // InitTrunk mocks base method.
 func (m *MockTrunkENI) InitTrunk(arg0 []v1.Pod) error {
 	m.ctrl.T.Helper()
@@ -135,9 +149,11 @@ func (mr *MockTrunkENIMockRecorder) PrepareForAllocation(arg0 interface{}) *gomo
 }
 
 // PushBranchENIsToCoolDownQueue mocks base method.
-func (m *MockTrunkENI) PushBranchENIsToCoolDownQueue(arg0 string) {
+func (m *MockTrunkENI) PushBranchENIsToCoolDownQueue(arg0 string) bool {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "PushBranchENIsToCoolDownQueue", arg0)
+	ret := m.ctrl.Call(m, "PushBranchENIsToCoolDownQueue", arg0)
+	ret0, _ := ret[0].(bool)
+	return ret0
 }
 
 // PushBranchENIsToCoolDownQueue indicates an expected call of PushBranchENIsToCoolDownQueue.

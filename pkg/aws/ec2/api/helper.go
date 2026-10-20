@@ -63,16 +63,17 @@ var (
 
 type ec2APIHelper struct {
 	ec2Wrapper EC2Wrapper
+	vpcID      string
 }
 
-func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
+func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string, vpcID string) EC2APIHelper {
 	// Set the key and value of the cluster name tag which will be used to tag all the network interfaces created by
 	// the controller
 	clusterNameTag = ec2types.Tag{
 		Key:   aws.String(fmt.Sprintf(config.VPCRCClusterNameTagKeyFormat, clusterName)),
 		Value: aws.String(config.VPCRCClusterNameTagValue),
 	}
-	return &ec2APIHelper{ec2Wrapper: ec2Wrapper}
+	return &ec2APIHelper{ec2Wrapper: ec2Wrapper, vpcID: vpcID}
 }
 
 type EC2APIHelper interface {
@@ -571,11 +572,15 @@ func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.R
 }
 
 func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2types.NetworkInterface, error) {
-	// No subnet filter: branches from earlier ENIConfig subnets stay on this trunk and must keep their VLANs.
+	// Tag plus VPC, no subnet: earlier ENIConfig subnets keep their VLANs, and the VPC bounds a tag anyone allowed to tag ENIs can set.
 	filters := []ec2types.Filter{
 		{
 			Name:   aws.String("tag:" + config.TrunkENIIDTag),
 			Values: []string{*trunkID},
+		},
+		{
+			Name:   aws.String("vpc-id"),
+			Values: []string{h.vpcID},
 		},
 	}
 

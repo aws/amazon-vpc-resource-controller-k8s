@@ -104,8 +104,10 @@ type TrunkENI interface {
 	// PrepareForAllocation verifies restored branch state; it returns the instance only after cold init, and every error is a *PreparationDeferred.
 	PrepareForAllocation(listRunningPods func() ([]v1.Pod, error)) (ec2.EC2Instance, error)
 	NeedsPreparation() bool
-	// PushBranchENIsToCoolDownQueue pushes the branch interface belonging to the pod to the cool down queue
-	PushBranchENIsToCoolDownQueue(UID string)
+	// PushBranchENIsToCoolDownQueue pushes the pod's branch interfaces to the cool down queue, or defers while the trunk is prepared
+	PushBranchENIsToCoolDownQueue(UID string) (deferred bool)
+	// HasPendingDeletions reports whether any branch interface waits in the delete queue
+	HasPendingDeletions() bool
 	// DeleteCooledDownENIs deletes the interfaces that have been sitting in the queue for cool down period
 	DeleteCooledDownENIs()
 	// Reconcile compares the cache state with the list of pods to identify events that were missed and clean up the dangling interfaces
@@ -130,6 +132,7 @@ type trunkENI struct {
 	prepared               atomic.Bool
 	nextPreparationAttempt time.Time
 	preparationBackoff     time.Duration
+	checkpointRejected     bool
 	// ec2ApiHelper is the wrapper interface that provides EC2 API helper functions
 	ec2ApiHelper api.EC2APIHelper
 	// trunkENIId is the interface id of the trunk network interface
@@ -411,10 +414,20 @@ func (t *trunkENI) buildRecoveredBranchState(
 			delete(branchByID, branchENI.ID)
 		}
 	}
+	t.lock.RLock()
+	queued := make(map[string]ENIDetails, len(t.deleteQueue))
+	for _, eni := range t.deleteQueue {
+		queued[eni.ID] = *eni
+	}
+	t.lock.RUnlock()
 	for id, branchInterface := range branchByID {
 		details := &ENIDetails{
 			ID:                id,
 			deletionTimeStamp: time.Now(),
+		}
+		if eni, isQueued := queued[id]; isQueued {
+			// A pod deleted before preparation keeps its cooldown start and trunk association.
+			details.deletionTimeStamp, details.AssociationID = eni.deletionTimeStamp, eni.AssociationID
 		}
 		vlanID, err := t.getVlanIdFromTag(branchInterface.TagSet)
 		switch {
@@ -432,6 +445,10 @@ func (t *trunkENI) buildRecoveredBranchState(
 		}
 		state.deleteQueue = append(state.deleteQueue, details)
 	}
+	// Carried entries and new orphans mix here, and the cleanup stops at the first ENI that has not cooled.
+	slices.SortFunc(state.deleteQueue, func(first, second *ENIDetails) int {
+		return first.deletionTimeStamp.Compare(second.deletionTimeStamp)
+	})
 	return state
 }
 
@@ -569,7 +586,10 @@ func (t *trunkENI) validateRestoredNetworkInterfaces(trunkENIID string) error {
 // missed some delete events the reconcile method will perform cleanup for the dangling interfaces
 func (t *trunkENI) Reconcile(pods []v1.Pod) bool {
 	if !t.prepared.Load() {
-		t.prepareMu.Lock()
+		if !t.prepareMu.TryLock() {
+			// Preparation is rebuilding this state, so ask to reconcile again soon.
+			return true
+		}
 		defer t.prepareMu.Unlock()
 	}
 	// Perform under lock to block new pods being added/removed concurrently
@@ -704,9 +724,11 @@ func (t *trunkENI) CreateAndAssociateBranchENIs(pod *v1.Pod, securityGroups []st
 }
 
 // DeleteBranchNetworkInterface deletes the branch network interface and returns an error in case of failure to delete
-func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
+func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) (deferred bool) {
 	if !t.prepared.Load() {
-		t.prepareMu.Lock()
+		if !t.prepareMu.TryLock() {
+			return true
+		}
 		defer t.prepareMu.Unlock()
 	}
 	// Lock is required as Reconciler is also performing operation concurrently
@@ -718,7 +740,7 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 		t.log.Info("couldn't find Branch ENI in cache, it could have been released if pod"+
 			"succeeded/failed before being deleted", "UID", UID)
 		trunkENIOperationsErrCount.WithLabelValues("get_branch_from_cache").Inc()
-		return
+		return false
 	}
 
 	for _, eni := range branchENIs {
@@ -730,6 +752,13 @@ func (t *trunkENI) PushBranchENIsToCoolDownQueue(UID string) {
 
 	t.log.Info("moved branch network interfaces to delete queue", "Interfaces",
 		branchENIs, "UID", UID)
+	return false
+}
+
+func (t *trunkENI) HasPendingDeletions() bool {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+	return len(t.deleteQueue) > 0
 }
 
 func (t *trunkENI) DeleteCooledDownENIs() {

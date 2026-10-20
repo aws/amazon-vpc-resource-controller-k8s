@@ -81,12 +81,19 @@ func (t *trunkENI) prepareBranchState(
 		return nil, fmt.Errorf("listing running pods before branch inventory: %w", err)
 	}
 	restoredTrunkENIID := t.instance.RestoredTrunkENIID()
-	if restoredTrunkENIID != "" {
+	if restoredTrunkENIID != "" && !t.checkpointRejected {
 		t.log.Info("starting restored trunk validation", "trunk", restoredTrunkENIID)
-		err = t.validateRestoredNetworkInterfaces(restoredTrunkENIID)
+		if err := t.validateRestoredNetworkInterfaces(restoredTrunkENIID); err != nil {
+			if !errors.Is(err, errNeedsColdInit) {
+				return nil, fmt.Errorf("validating restored trunk before allocation: %w", err)
+			}
+			// Never validate again: after a half-finished reload the rejected checkpoint would pass, and each retry would report it anew.
+			t.checkpointRejected = true
+			trunkENIOperationsErrCount.WithLabelValues("restored_checkpoint_mismatch").Inc()
+			t.log.Error(err, "restored trunk requires cold initialization", "trunk", restoredTrunkENIID)
+		}
 	}
-	if restoredTrunkENIID == "" || errors.Is(err, errNeedsColdInit) {
-		t.log.Info("restored trunk requires cold initialization", "trunk", restoredTrunkENIID, "error", err)
+	if restoredTrunkENIID == "" || t.checkpointRejected {
 		if err := t.instance.LoadDetails(t.ec2ApiHelper); err != nil {
 			return nil, fmt.Errorf("loading instance for cold initialization: %w", err)
 		}
@@ -94,9 +101,6 @@ func (t *trunkENI) prepareBranchState(
 			return nil, fmt.Errorf("cold initializing restored trunk: %w", err)
 		}
 		return t.instance, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("validating restored trunk before allocation: %w", err)
 	}
 	branchInterfaces, err := t.ec2ApiHelper.GetBranchNetworkInterface(&restoredTrunkENIID)
 	if err != nil {

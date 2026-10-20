@@ -322,7 +322,7 @@ func main() {
 		setupLog.Info("vpc resource controller is disabled")
 		featureGauge.Set(float64(0))
 	} else {
-		ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName)
+		ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName, vpcID)
 
 		sgpAPI := utils.NewSecurityGroupForPodsAPI(
 			mgr.GetClient(),
