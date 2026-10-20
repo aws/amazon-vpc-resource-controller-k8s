@@ -1,15 +1,28 @@
+// Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"). You may
+// not use this file except in compliance with the License. A copy of the
+// License is located at
+//
+//     http://aws.amazon.com/apache2.0/
+//
+// or in the "license" file accompanying this file. This file is distributed
+// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+// express or implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
 package branch
 
 import (
 	"context"
 	"slices"
-	"strings"
 	"time"
 
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider/branch/trunk"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -79,10 +92,6 @@ func waitForRestoredNodeCheck(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func (b *branchENIProvider) NeedLeaderElection() bool {
-	return true
-}
-
 func (b *branchENIProvider) runRestoredNodeChecks(
 	ctx context.Context,
 	restoredNodes []restoredNode,
@@ -140,24 +149,19 @@ func (b *branchENIProvider) classifyRestoredNode(node restoredNode) (restoredNod
 		b.log.Error(err, "waiting to verify restored node", "node", node.name)
 		return restoredNodeInitializationPending, nil
 	}
-	providerIDParts := strings.Split(currentNode.Spec.ProviderID, "/")
-	currentInstanceID := providerIDParts[len(providerIDParts)-1]
+	currentInstanceID := utils.GetNodeInstanceID(currentNode)
 	switch {
 	case currentInstanceID == "":
 		return restoredNodeInitializationPending, nil
 	case currentInstanceID != node.instanceID:
 		return restoredNodeReplaced, nil
 	}
-	labels := currentNode.GetLabels()
-	nodeOS := labels[config.NodeLabelOS]
-	if nodeOS == "" {
-		nodeOS = labels[config.NodeLabelOSBeta]
-	}
 	limits, instanceTypeSupported := vpc.Limits[node.instanceType]
-	if nodeOS != config.OSLinux || !instanceTypeSupported || !limits.IsTrunkingCompatible {
+	if utils.GetNodeOS(currentNode) != config.OSLinux || !instanceTypeSupported || !limits.IsTrunkingCompatible {
 		return restoredNodeNotEligibleForBranchProvider, nil
 	}
-	if _, trunkAttached := labels[config.HasTrunkAttachedLabel]; !trunkAttached {
+	// Keep in sync with canAttachTrunk in pkg/node/manager.
+	if _, trunkAttached := currentNode.Labels[config.HasTrunkAttachedLabel]; !trunkAttached {
 		cniNode, err := b.apiWrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: node.name})
 		switch {
 		case apierrors.IsNotFound(err):

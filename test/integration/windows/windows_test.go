@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
+	rcUtils "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
 	configMapWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/configmap"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/node"
@@ -230,7 +230,7 @@ var _ = Describe("Windows Integration Test", func() {
 		JustBeforeEach(func() {
 			windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "windows",
 				config.ResourceNameIPAddress)
-			instanceID = manager.GetNodeInstanceID(&windowsNodeList.Items[0])
+			instanceID = rcUtils.GetNodeInstanceID(&windowsNodeList.Items[0])
 			nodeName = windowsNodeList.Items[0].Name
 
 			testPod = generateTestPodSpec(1, container, nodeName)
@@ -457,7 +457,7 @@ var _ = Describe("Windows Integration Test", func() {
 
 			windowsNodeList = node.GetNodeAndWaitTillCapacityPresent(frameWork.NodeManager, "windows",
 				config.ResourceNameIPAddress)
-			instanceID = manager.GetNodeInstanceID(&windowsNodeList.Items[0])
+			instanceID = rcUtils.GetNodeInstanceID(&windowsNodeList.Items[0])
 			nodeName = windowsNodeList.Items[0].Name
 
 			testerContainerCommands = []string{
@@ -632,7 +632,7 @@ var _ = Describe("Windows Integration Test", func() {
 					// allow some time for previous test pod to cool down
 					time.Sleep(bufferForCoolDown)
 					// before running any pod, should have 2 prefixes assigned
-					instanceID = manager.GetNodeInstanceID(&node)
+					instanceID = rcUtils.GetNodeInstanceID(&node)
 					privateIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
 					Expect(err).ToNot(HaveOccurred())
 					Expect(len(prefixesBefore)).To(Equal(2))
@@ -765,7 +765,7 @@ var _ = Describe("Windows Integration Test", func() {
 					// allow some time for previous test pod to cool down
 					time.Sleep(bufferForCoolDown)
 					// before running any pod, should have 2 prefixes assigned
-					instanceID = manager.GetNodeInstanceID(&node)
+					instanceID = rcUtils.GetNodeInstanceID(&node)
 					privateIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
 					Expect(err).ToNot(HaveOccurred())
 					Expect(len(prefixesBefore)).To(Equal(2))

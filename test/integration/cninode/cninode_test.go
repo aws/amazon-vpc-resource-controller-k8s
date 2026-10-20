@@ -73,6 +73,7 @@ var _ = Describe("[CANARY]CNINode test", Serial, Ordered, func() {
 		})
 	})
 
+	// Ordered after the checkpoint spec: the re-created CNINode has no checkpoint status.
 	Describe("CNINode is re-created when node exists", func() {
 		Context("when CNINode is deleted but node exists", func() {
 			It("it should re-create CNINode", func() {
@@ -254,7 +255,7 @@ func waitForReadyNode(
 					continue
 				}
 				if frameWork.NodeManager.GetInstanceID(candidate) != instanceID ||
-					!nodeIsReady(candidate) {
+					!nodeWrapper.IsNodeReady(candidate) {
 					continue
 				}
 				foundNode = candidate.DeepCopy()
@@ -443,15 +444,6 @@ func verifyNetworkCheckpoint(
 		)
 	}
 	return nil
-}
-
-func nodeIsReady(node *v1.Node) bool {
-	for _, condition := range node.Status.Conditions {
-		if condition.Type == v1.NodeReady {
-			return condition.Status == v1.ConditionTrue
-		}
-	}
-	return false
 }
 
 // Verify finalizer, tag, and label is set on new CNINode

@@ -1,3 +1,16 @@
+// Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"). You may
+// not use this file except in compliance with the License. A copy of the
+// License is located at
+//
+//     http://aws.amazon.com/apache2.0/
+//
+// or in the "license" file accompanying this file. This file is distributed
+// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+// express or implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
 package trunk
 
 import (
@@ -48,11 +61,7 @@ func (t *trunkENI) PrepareForAllocation(
 	}
 	instance, err := t.prepareBranchState(listRunningPods)
 	if err != nil {
-		if t.preparationBackoff == 0 {
-			t.preparationBackoff = preparationPollPeriod
-		} else {
-			t.preparationBackoff = min(2*t.preparationBackoff, maxPreparationBackoff)
-		}
+		t.preparationBackoff = min(max(2*t.preparationBackoff, preparationPollPeriod), maxPreparationBackoff)
 		t.nextPreparationAttempt = time.Now().Add(t.preparationBackoff)
 		trunkENIOperationsErrCount.WithLabelValues("recover_branch_state").Inc()
 		return nil, &PreparationDeferred{After: t.preparationBackoff, Err: err}
@@ -76,8 +85,8 @@ func (t *trunkENI) prepareBranchState(
 		t.log.Info("starting restored trunk validation", "trunk", restoredTrunkENIID)
 		err = t.validateRestoredNetworkInterfaces(restoredTrunkENIID)
 	}
-	if restoredTrunkENIID == "" || errors.Is(err, ErrNeedsColdInit) {
-		t.log.Info("restored trunk requires cold initialization", "trunk", restoredTrunkENIID)
+	if restoredTrunkENIID == "" || errors.Is(err, errNeedsColdInit) {
+		t.log.Info("restored trunk requires cold initialization", "trunk", restoredTrunkENIID, "error", err)
 		if err := t.instance.LoadDetails(t.ec2ApiHelper); err != nil {
 			return nil, fmt.Errorf("loading instance for cold initialization: %w", err)
 		}

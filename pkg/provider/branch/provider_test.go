@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -41,6 +42,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/time/rate"
@@ -129,6 +131,13 @@ func getProvider() branchENIProvider {
 		log:           log,
 		trunkENICache: make(map[string]trunk.TrunkENI),
 	}
+}
+
+func writePrometheusMetric(t *testing.T, metric prometheus.Metric) *dto.Metric {
+	t.Helper()
+	value := &dto.Metric{}
+	assert.NoError(t, metric.Write(value))
+	return value
 }
 
 func prepareWithPods(
@@ -365,9 +374,7 @@ func TestBranchENIProvider_PrepareFallbackCheckpointWriteFailureDoesNotBlock(t *
 
 func checkpointPersistErrorCount(t *testing.T) float64 {
 	t.Helper()
-	metric := &dto.Metric{}
-	assert.NoError(t, cniNodeCheckpointPersistErrCount.Write(metric))
-	return metric.GetCounter().GetValue()
+	return writePrometheusMetric(t, cniNodeCheckpointPersistErrCount).GetCounter().GetValue()
 }
 
 // TestBranchENIProvider_getTrunkFromCache tests Trunk ENI is returned when the trunk is present in the cache
@@ -1054,18 +1061,55 @@ func TestBranchENIProvider_CreateAndAnnotateResources(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// The create_branch_eni latency must measure the allocation, not the wait for a restored trunk.
+func TestBranchENIProvider_CreateBranchENILatencyExcludesPreparation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+		fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+		provider.trunkENICache[NodeName] = fakeTrunk
+		expectedAnnotation, err := json.Marshal(EniDetails)
+		assert.NoError(t, err)
+
+		mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+		fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
+			DoAndReturn(func(func() ([]v1.Pod, error)) (ec2.EC2Instance, error) {
+				time.Sleep(10 * time.Second)
+				return nil, nil
+			})
+		mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+		mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
+		mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
+		fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(MockPod1, SecurityGroups, 1).
+			DoAndReturn(func(*v1.Pod, []string, int) ([]*trunk.ENIDetails, error) {
+				time.Sleep(2 * time.Second)
+				return EniDetails, nil
+			})
+		mockPodAPI.EXPECT().AnnotatePod(MockPodNamespace1, MockPodName1, MockPodUID1, config.ResourceNamePodENI,
+			string(expectedAnnotation)).Return(nil)
+		mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonResourceAllocated, gomock.Any(), v1.EventTypeNormal)
+		latency := branchProviderOperationLatency.WithLabelValues(operationCreateBranchENI, "1").(prometheus.Metric)
+		before := writePrometheusMetric(t, latency).GetSummary().GetSampleSum()
+
+		_, err = provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
+
+		assert.NoError(t, err)
+		// The summary carries sums from earlier tests, so compare the delta, not the total.
+		assert.InDelta(t, 2, writePrometheusMetric(t, latency).GetSummary().GetSampleSum()-before, 0.001)
+	})
+}
+
 func TestBranchENIProvider_CreateAndAnnotateResources_PrepareFailureRequeuesAllocation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	provider, mockPodAPI, mockSGPAPI, mockK8sAPI := getProviderAndMocks(ctrl)
+	provider, mockPodAPI, _, mockK8sAPI := getProviderAndMocks(ctrl)
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk
 
 	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
-	mockK8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
 		DoAndReturn(prepareWithPods(t, nil, MockError))
@@ -1086,13 +1130,10 @@ func TestBranchENIProvider_PreparationDeferralUsesSharedDelay(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			controller := gomock.NewController(t)
-			provider, podAPI, sgpAPI, k8sAPI := getProviderAndMocks(controller)
+			provider, podAPI, _, k8sAPI := getProviderAndMocks(controller)
 			trunkENI := mock_trunk.NewMockTrunkENI(controller)
 			provider.trunkENICache[NodeName] = trunkENI
 			podAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-			podAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-			sgpAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
-			k8sAPI.EXPECT().BroadcastEvent(MockPod1, ReasonSecurityGroupRequested, gomock.Any(), v1.EventTypeNormal)
 			trunkENI.EXPECT().PrepareForAllocation(gomock.Any()).Return(nil, &trunk.PreparationDeferred{
 				After: 8 * time.Second,
 				Err:   attemptError,
@@ -1120,18 +1161,15 @@ func TestBranchENIProvider_CreateAndAnnotateResources_PreparationRetriesPastWork
 	totalAttempts := preparationFailures + 1
 
 	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil).Times(totalAttempts)
-	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).
-		Return(MockPod1, nil).
-		Times(totalAttempts)
-	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).
-		Return(SecurityGroups, nil).
-		Times(totalAttempts)
+	// Only the attempt that gets past preparation reads the API server and matches the SGP.
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(SecurityGroups, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(
 		MockPod1,
 		ReasonSecurityGroupRequested,
 		gomock.Any(),
 		v1.EventTypeNormal,
-	).Times(totalAttempts)
+	)
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil).Times(totalAttempts)
 	prepareAttempts := 0
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
@@ -1212,12 +1250,41 @@ func TestBranchENIProvider_CreateAndAnnotateResources_AlreadyAnnotated_APIServer
 	mockPodWithAnnotation := MockPod1.DeepCopy()
 	mockPodWithAnnotation.Annotations[config.ResourceNamePodENI] = "EniDetails"
 
-	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(mockPodWithAnnotation, nil)
+	gomock.InOrder(
+		mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil),
+		fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).Return(nil, nil),
+		mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).
+			Return(mockPodWithAnnotation, nil),
+	)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
 
 	assert.NoError(t, err)
+}
+
+// A same-name pod can be re-created on another node while this job waits, and the trunk is prepared from the
+// cached pod, so the allocation must not land on the node the cache still points at.
+func TestBranchENIProvider_CreateAndAnnotateResources_RequeuesWhenThePodMovedNodes(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = fakeTrunk
+	movedPod := MockPod1.DeepCopy()
+	movedPod.Spec.NodeName = "other-node"
+
+	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).Return(nil, nil)
+	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(movedPod, nil)
+	fakeTrunk.EXPECT().CreateAndAssociateBranchENIs(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	mockPodAPI.EXPECT().AnnotatePod(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+	result, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
+
+	assert.NoError(t, err)
+	assert.True(t, result.Requeue)
+	assert.Equal(t, preparationRetryPeriod, result.RequeueAfter)
 }
 
 // TestBranchENIProvider_CreateAndAnnotateResources_GetPodError tests that error is returned if the get pod error fails
@@ -1233,6 +1300,7 @@ func TestBranchENIProvider_CreateAndAnnotateResources_GetPodError(t *testing.T) 
 	provider.trunkENICache[NodeName] = fakeTrunk
 
 	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).Return(nil, nil)
 	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(nil, MockError)
 
 	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
@@ -1241,22 +1309,21 @@ func TestBranchENIProvider_CreateAndAnnotateResources_GetPodError(t *testing.T) 
 }
 
 // TestBranchENIProvider_CreateAndAnnotateResources_TrunkNotPreset tests that if trunk is not present error is returned
+// before the job reads the API server
 func TestBranchENIProvider_CreateAndAnnotateResources_TrunkNotPreset(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	provider, mockPodAPI, _, _ := getProviderAndMocks(ctrl)
 
-	resCount := 1
-	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-
-	provider.trunkENICache[NodeName] = fakeTrunk
-
 	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
-	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(nil, MockError)
+	errCount := branchProviderOperationsErrCount.WithLabelValues("get_trunk_create")
+	before := writePrometheusMetric(t, errCount).GetCounter().GetValue()
 
-	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, resCount)
-	assert.NotNil(t, err)
+	_, err := provider.CreateAndAnnotateResources(MockPodNamespace1, MockPodName1, 1)
+
+	assert.EqualError(t, err, fmt.Sprintf("trunk not found for node %s", NodeName))
+	assert.Equal(t, before+1, writePrometheusMetric(t, errCount).GetCounter().GetValue())
 }
 
 // TestBranchENIProvider_CreateAndAnnotateResources_GetSecurityGroup_Error tests that error is propagated if getting
@@ -1268,8 +1335,12 @@ func TestBranchENIProvider_CreateAndAnnotateResources_GetSecurityGroup_Error(t *
 	provider, mockPodAPI, mockSGPAPI, _ := getProviderAndMocks(ctrl)
 
 	resCount := 1
+	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+
+	provider.trunkENICache[NodeName] = fakeTrunk
 
 	mockPodAPI.EXPECT().GetPod(MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
+	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).Return(nil, nil)
 	mockPodAPI.EXPECT().GetPodFromAPIServer(ctx, MockPodNamespace1, MockPodName1).Return(MockPod1, nil)
 	mockSGPAPI.EXPECT().GetMatchingSecurityGroupForPods(MockPod1).Return(nil, MockError)
 

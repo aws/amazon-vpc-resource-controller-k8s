@@ -31,6 +31,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
@@ -266,7 +267,14 @@ func (n *node) tryRestoreFromNodeNetworkState() (bool, error) {
 	nodeName := n.instance.Name()
 	cniNode, err := n.k8sAPI.GetCNINode(types.NamespacedName{Name: nodeName})
 	if err != nil {
-		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, checkpointRestoreReasonReadError).Inc()
+		reason := checkpointRestoreReasonReadError
+		if apierrors.IsNotFound(err) {
+			// The node has no CNINode yet, so there is no checkpoint to restore from.
+			reason = checkpointRestoreReasonMissingState
+		} else {
+			n.log.Error(err, "failed to read the CNINode checkpoint, falling back to EC2")
+		}
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, reason).Inc()
 		return false, nil
 	}
 	if cniNode.Spec.ManagedBy != "" &&

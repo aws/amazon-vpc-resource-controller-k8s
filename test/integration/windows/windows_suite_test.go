@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
 	configMapWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/configmap"
@@ -72,7 +72,7 @@ var _ = BeforeSuite(func() {
 
 	By("getting the instance ID for the first node")
 	Expect(len(windowsNodeList.Items)).To(BeNumerically(">", 1))
-	instanceID := manager.GetNodeInstanceID(&windowsNodeList.Items[0])
+	instanceID := utils.GetNodeInstanceID(&windowsNodeList.Items[0])
 
 	By("getting the security group associated with the instance")
 	instance, err := frameWork.EC2Manager.GetInstanceDetails(instanceID)

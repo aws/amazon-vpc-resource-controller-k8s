@@ -203,9 +203,6 @@ func TestEc2Instance_RefreshPrimaryNetworkInterface(t *testing.T) {
 
 func TestEc2Instance_LoadFromNodeNetworkState_RejectsInvalidState(t *testing.T) {
 	tests := map[string]func(*rcv1alpha1.NodeNetworkState){
-		"instance mismatch": func(state *rcv1alpha1.NodeNetworkState) {
-			state.InstanceID = "i-other"
-		},
 		"missing instance type": func(state *rcv1alpha1.NodeNetworkState) {
 			state.InstanceType = ""
 		},
@@ -223,9 +220,6 @@ func TestEc2Instance_LoadFromNodeNetworkState_RejectsInvalidState(t *testing.T) 
 		},
 		"IPv4 CIDR in IPv6 field": func(state *rcv1alpha1.NodeNetworkState) {
 			state.SubnetV6CIDRBlock = "10.0.0.0/24"
-		},
-		"missing primary ENI": func(state *rcv1alpha1.NodeNetworkState) {
-			state.PrimaryNetworkInterfaceID = ""
 		},
 	}
 
@@ -252,6 +246,49 @@ func TestEc2Instance_LoadDetailsClearsRestoredTrunk(t *testing.T) {
 
 	assert.NoError(t, instance.LoadDetails(mockEC2API))
 	assert.Empty(t, instance.RestoredTrunkENIID())
+}
+
+// TestEc2Instance_LoadDetailsAgainFindsPrimaryENIWithLatestSettings runs a restore, then a cold fallback and its retry.
+func TestEc2Instance_LoadDetailsAgainFindsPrimaryENIWithLatestSettings(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	instance := getMockInstanceInterface()
+	mockEC2API := mock_api.NewMockEC2APIHelper(ctrl)
+	assert.NoError(t, instance.LoadFromNodeNetworkState(validNodeNetworkState(), "eni-trunk"))
+	tcpTimeout := int32(300)
+	withConnTracking := &ec2types.Instance{
+		InstanceId:       &instanceID,
+		InstanceType:     instanceType,
+		SubnetId:         &subnetID,
+		PrivateIpAddress: &privateIPAddr,
+		NetworkInterfaces: []ec2types.InstanceNetworkInterface{{
+			NetworkInterfaceId: &primaryInterfaceID,
+			PrivateIpAddress:   &privateIPAddr,
+			Groups:             []ec2types.GroupIdentifier{{GroupId: &securityGroup3}},
+			Attachment:         &ec2types.InstanceNetworkInterfaceAttachment{DeviceIndex: &deviceIndex0},
+			ConnectionTrackingConfiguration: &ec2types.ConnectionTrackingSpecificationResponse{
+				TcpEstablishedTimeout: &tcpTimeout,
+			},
+		}},
+	}
+	gomock.InOrder(
+		mockEC2API.EXPECT().GetInstanceDetails(&instanceID).Return(withConnTracking, nil),
+		mockEC2API.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil),
+		mockEC2API.EXPECT().GetInstanceDetails(&instanceID).Return(nwInterfaces, nil),
+		mockEC2API.EXPECT().GetSubnet(&subnetID).Return(&subnet, nil),
+	)
+
+	assert.NoError(t, instance.LoadDetails(mockEC2API))
+	assert.NoError(t, instance.LoadDetails(mockEC2API))
+
+	assert.Equal(t, primaryInterfaceID, instance.PrimaryNetworkInterfaceID())
+	assert.Equal(t, primaryInterfaceID, instance.BuildNodeNetworkState().PrimaryNetworkInterfaceID)
+	assert.Equal(t, []string{securityGroup1, securityGroup2}, instance.CurrentInstanceSecurityGroups())
+	tcp, udpStream, udp := instance.GetConnectionTrackingSpec()
+	assert.Nil(t, tcp)
+	assert.Nil(t, udpStream)
+	assert.Nil(t, udp)
 }
 
 // TestEc2Instance_LoadDetails tests that load instance details loads all the instance details correctly by making calls

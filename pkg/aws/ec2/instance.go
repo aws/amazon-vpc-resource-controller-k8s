@@ -374,23 +374,12 @@ func subnetMaskFromCIDR(cidr string, wantIPv6 bool) (string, error) {
 		return "", err
 	}
 	if prefix.Addr().Is6() != wantIPv6 {
-		family := "IPv4"
-		if wantIPv6 {
-			family = "IPv6"
-		}
-		return "", fmt.Errorf("expected an %s CIDR", family)
+		return "", fmt.Errorf("unexpected CIDR address family")
 	}
 	return strconv.Itoa(prefix.Bits()), nil
 }
 
 func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState, trunkENIID string) error {
-	if state.InstanceID != i.instanceID {
-		return fmt.Errorf("checkpoint instance ID %q does not match node instance ID %q", state.InstanceID, i.instanceID)
-	}
-	if state.InstanceType == "" || state.SubnetID == "" || state.SubnetCIDRBlock == "" ||
-		state.PrimaryNetworkInterfaceID == "" || trunkENIID == "" {
-		return fmt.Errorf("checkpoint is missing required stable instance or trunk state")
-	}
 	if _, ok := vpc.Limits[state.InstanceType]; !ok {
 		return fmt.Errorf("unsupported checkpoint instance type %s", state.InstanceType)
 	}
@@ -414,22 +403,11 @@ func (i *ec2Instance) LoadFromNodeNetworkState(state rcv1alpha1.NodeNetworkState
 	i.subnetMask = subnetMask
 	i.subnetV6Mask = subnetV6Mask
 	i.primaryENIID = state.PrimaryNetworkInterfaceID
-	i.primaryENISecurityGroups = nil
-	i.tcpEstablishedTimeout = nil
-	i.udpStreamTimeout = nil
-	i.udpTimeout = nil
-	i.currentSubnetID = ""
-	i.currentSubnetCIDRBlock = ""
-	i.currentSubnetV6CIDRBlock = ""
-	i.currentInstanceSecurityGroups = nil
 	i.restoredTrunkENIID = trunkENIID
 	return nil
 }
 
 func (i *ec2Instance) RefreshPrimaryNetworkInterface(networkInterface ec2types.NetworkInterface) error {
-	if networkInterface.NetworkInterfaceId == nil {
-		return fmt.Errorf("described primary network interface has no ID")
-	}
 	var securityGroups []string
 	for _, group := range networkInterface.Groups {
 		if group.GroupId != nil && *group.GroupId != "" {
@@ -447,9 +425,6 @@ func (i *ec2Instance) RefreshPrimaryNetworkInterface(networkInterface ec2types.N
 	}
 	i.lock.Lock()
 	defer i.lock.Unlock()
-	if *networkInterface.NetworkInterfaceId != i.primaryENIID {
-		return fmt.Errorf("described primary network interface does not match checkpoint")
-	}
 	i.primaryENISecurityGroups = append([]string(nil), securityGroups...)
 	i.tcpEstablishedTimeout = tcpEstablishedTimeout
 	i.udpStreamTimeout = udpStreamTimeout

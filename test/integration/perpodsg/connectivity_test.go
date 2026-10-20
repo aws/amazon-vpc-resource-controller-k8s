@@ -23,6 +23,7 @@ import (
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
+	nodeWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/node"
 	sgpWrapper "github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/sgp"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
 
@@ -276,7 +277,7 @@ func customNetworkingTarget() (*v1.Node, *cniv1alpha1.ENIConfig, error) {
 
 	for index := range nodes.Items {
 		node := &nodes.Items[index]
-		if node.Labels["kubernetes.io/os"] != config.OSLinux || !nodeIsReady(node) {
+		if node.Labels["kubernetes.io/os"] != config.OSLinux || !nodeWrapper.IsNodeReady(node) {
 			continue
 		}
 		eniConfigName := node.Labels[config.CustomNetworkingLabel]
@@ -322,15 +323,6 @@ func customNetworkingTarget() (*v1.Node, *cniv1alpha1.ENIConfig, error) {
 		return node, eniConfig, nil
 	}
 	return nil, nil, nil
-}
-
-func nodeIsReady(node *v1.Node) bool {
-	for _, condition := range node.Status.Conditions {
-		if condition.Type == v1.NodeReady {
-			return condition.Status == v1.ConditionTrue
-		}
-	}
-	return false
 }
 
 func activePodENIRequests(nodeName string, pods []v1.Pod) int64 {

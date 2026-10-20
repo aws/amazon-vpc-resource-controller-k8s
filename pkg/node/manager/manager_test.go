@@ -800,13 +800,13 @@ func Test_isWindowsNode_Linux(t *testing.T) {
 
 // Test_getNodeInstanceID test if the correct node id is retrieved from the provider id
 func Test_getNodeInstanceID(t *testing.T) {
-	id := GetNodeInstanceID(v1Node)
+	id := utils.GetNodeInstanceID(v1Node)
 	assert.Equal(t, instanceID, id)
 }
 
 // Test_getNodeOS tests that is OS label is set then the correct os is returned
 func Test_getNodeOS(t *testing.T) {
-	os := GetNodeOS(v1Node)
+	os := utils.GetNodeOS(v1Node)
 	assert.Equal(t, config.OSLinux, os)
 }
 

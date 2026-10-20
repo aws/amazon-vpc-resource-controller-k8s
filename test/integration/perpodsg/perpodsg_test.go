@@ -529,12 +529,7 @@ var _ = Describe("Branch ENI Pods", func() {
 					if err := frameWork.K8sClient.Get(restartContext, utils.NamespacedName(pod), observedPod); err != nil {
 						return false
 					}
-					for _, condition := range observedPod.Status.Conditions {
-						if condition.Type == v1.PodReady {
-							return condition.Status == v1.ConditionTrue
-						}
-					}
-					return false
+					return podWrapper.IsPodReady(observedPod)
 				}, utils.ResourceCreationTimeout, utils.PollIntervalShort).
 					WithContext(restartContext).
 					Should(BeTrue())

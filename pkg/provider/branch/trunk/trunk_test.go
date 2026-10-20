@@ -236,16 +236,16 @@ func getMockHelperInstanceAndTrunkObject(ctrl *gomock.Controller) (*trunkENI, *m
 	trunkENI.ec2ApiHelper = mockHelper
 	trunkENI.instance = mockInstance
 
-	// Clean up
+	return trunkENI, mockHelper, mockInstance
+}
+
+func getMockTrunk() *trunkENI {
+	// Clean up the shared branch fixtures that earlier tests queued for deletion.
 	EniDetails1.deletionTimeStamp = time.Time{}
 	EniDetails2.deletionTimeStamp = time.Time{}
 	EniDetails1.deleteRetryCount = 0
 	EniDetails2.deleteRetryCount = 0
 
-	return trunkENI, mockHelper, mockInstance
-}
-
-func getMockTrunk() *trunkENI {
 	log := zap.New(zap.UseDevMode(true)).WithName("node manager")
 	trunk := trunkENI{
 		log:               log,

@@ -16,6 +16,7 @@ package node
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -28,12 +29,15 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/provider"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
+	"github.com/go-logr/logr/funcr"
 	"github.com/golang/mock/gomock"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
@@ -324,6 +328,60 @@ func TestNode_InitResources_FallsBackWhenCheckpointReadFails(t *testing.T) {
 	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
 
 	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
+}
+
+func TestNode_InitResources_CountsMissingCNINodeAsMissingState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 1)
+	expectCheckpointRestore(&mock)
+
+	mock.MockInstance.EXPECT().Name().Return(nodeName)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).
+		Return(nil, apierrors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, nodeName))
+	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
+	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
+	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+	missing := cniNodeCheckpointRestoreCount.WithLabelValues("fallback", "missing_state")
+	readError := cniNodeCheckpointRestoreCount.WithLabelValues("fallback", "read_error")
+	missingBefore := writePrometheusMetric(t, missing).GetCounter().GetValue()
+	readErrorBefore := writePrometheusMetric(t, readError).GetCounter().GetValue()
+
+	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
+
+	assert.Equal(t, missingBefore+1, writePrometheusMetric(t, missing).GetCounter().GetValue())
+	assert.Equal(t, readErrorBefore, writePrometheusMetric(t, readError).GetCounter().GetValue())
+}
+
+func TestNode_InitResources_LogsAndCountsCNINodeReadError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, 1)
+	expectCheckpointRestore(&mock)
+	var logged []string
+	mock.NodeWithMock.log = funcr.New(func(prefix, args string) {
+		logged = append(logged, args)
+	}, funcr.Options{})
+
+	mock.MockInstance.EXPECT().Name().Return(nodeName)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(nil, mockError)
+	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
+	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
+	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
+	missing := cniNodeCheckpointRestoreCount.WithLabelValues("fallback", "missing_state")
+	readError := cniNodeCheckpointRestoreCount.WithLabelValues("fallback", "read_error")
+	missingBefore := writePrometheusMetric(t, missing).GetCounter().GetValue()
+	readErrorBefore := writePrometheusMetric(t, readError).GetCounter().GetValue()
+
+	assert.NoError(t, mock.NodeWithMock.InitResources(mock.MockResourceManager))
+
+	assert.Equal(t, readErrorBefore+1, writePrometheusMetric(t, readError).GetCounter().GetValue())
+	assert.Equal(t, missingBefore, writePrometheusMetric(t, missing).GetCounter().GetValue())
+	assert.Contains(t, strings.Join(logged, "\n"), mockError.Error())
 }
 
 func TestNode_InitResources_FallsBackForForeignCheckpointManager(t *testing.T) {

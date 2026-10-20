@@ -208,7 +208,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 		}
 	}
 	// A failed write only disables fast restore on the next controller restart.
-	_ = b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
+	b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
 	b.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName))
 	b.log.Info("initialized the resource provider successfully")
 	utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkInitiatedReason, "The node has trunk interface initialized successfully", v1.EventTypeNormal, b.log)
@@ -219,7 +219,7 @@ func (b *branchENIProvider) persistCNINodeCheckpoint(
 	nodeName string,
 	instance ec2.EC2Instance,
 	trunkENI trunk.TrunkENI,
-) error {
+) {
 	state := instance.BuildNodeNetworkState()
 	if err := b.apiWrapper.K8sAPI.PatchCNINodeCheckpoint(
 		nodeName,
@@ -228,9 +228,7 @@ func (b *branchENIProvider) persistCNINodeCheckpoint(
 	); err != nil {
 		cniNodeCheckpointPersistErrCount.Inc()
 		b.log.Error(err, "failed to persist CNINode checkpoint", "node", nodeName)
-		return err
 	}
-	return nil
 }
 
 func (b *branchENIProvider) prepareTrunkForAllocation(
@@ -248,7 +246,7 @@ func (b *branchENIProvider) prepareTrunkForAllocation(
 		return err
 	}
 	if instance != nil {
-		_ = b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
+		b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
 	}
 	return nil
 }
@@ -375,6 +373,30 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		return ctrl.Result{}, nil
 	}
 
+	// Preparation can requeue this job every second, so run it before any API server read.
+	nodeName := pod.Spec.NodeName
+	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
+	if !isPresent {
+		// This should never happen
+		branchProviderOperationsErrCount.WithLabelValues("get_trunk_create").Inc()
+		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", nodeName)
+	}
+
+	if err := b.prepareTrunkForAllocation(nodeName, trunkENI); err != nil {
+		retryAfter := preparationRetryPeriod
+		var deferred *trunk.PreparationDeferred
+		if errors.As(err, &deferred) {
+			retryAfter = deferred.After
+			if deferred.Err == nil {
+				return ctrl.Result{RequeueAfter: retryAfter, Requeue: true}, nil
+			}
+		}
+		branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation").Inc()
+		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
+			fmt.Sprintf("failed to prepare trunk before branch ENI allocation: %v", err), v1.EventTypeWarning)
+		return ctrl.Result{RequeueAfter: retryAfter, Requeue: true}, nil
+	}
+
 	// Get the pod object again directly from API Server as the cache can be stale
 	pod, err = b.apiWrapper.PodAPI.GetPodFromAPIServer(b.ctx, podNamespace, podName)
 	if err != nil {
@@ -387,6 +409,14 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 		b.log.Info("skipping pod event as the pod already has pod-eni allocated",
 			"namespace", pod.Namespace, "name", pod.Name)
 		return ctrl.Result{}, nil
+	}
+
+	if pod.Spec.NodeName != nodeName {
+		// A pod with the same name was re-created on another node, so the prepared trunk is the wrong one.
+		b.log.Info("requeuing allocation as the cached pod was on another node",
+			"namespace", pod.Namespace, "name", pod.Name,
+			"preparedNode", nodeName, "currentNode", pod.Spec.NodeName)
+		return ctrl.Result{RequeueAfter: preparationRetryPeriod, Requeue: true}, nil
 	}
 
 	securityGroups, err := b.apiWrapper.SGPAPI.GetMatchingSecurityGroupForPods(pod)
@@ -406,28 +436,6 @@ func (b *branchENIProvider) CreateAndAnnotateResources(podNamespace string, podN
 	log := b.log.WithValues("pod namespace", pod.Namespace, "pod name", pod.Name, "nodeName", pod.Spec.NodeName)
 
 	start := time.Now()
-	trunkENI, isPresent := b.getTrunkFromCache(pod.Spec.NodeName)
-	if !isPresent {
-		// This should never happen
-		branchProviderOperationsErrCount.WithLabelValues("get_trunk_create").Inc()
-		return ctrl.Result{}, fmt.Errorf("trunk not found for node %s", pod.Spec.NodeName)
-	}
-
-	if err := b.prepareTrunkForAllocation(pod.Spec.NodeName, trunkENI); err != nil {
-		retryAfter := preparationRetryPeriod
-		var deferred *trunk.PreparationDeferred
-		if errors.As(err, &deferred) {
-			retryAfter = deferred.After
-			if deferred.Err == nil {
-				return ctrl.Result{RequeueAfter: retryAfter, Requeue: true}, nil
-			}
-		}
-		branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation").Inc()
-		b.apiWrapper.K8sAPI.BroadcastEvent(pod, ReasonBranchAllocationFailed,
-			fmt.Sprintf("failed to prepare trunk before branch ENI allocation: %v", err), v1.EventTypeWarning)
-		return ctrl.Result{RequeueAfter: retryAfter, Requeue: true}, nil
-	}
-
 	// Get the list of branch ENIs that will be allocated to the pod object
 	branchENIs, err := trunkENI.CreateAndAssociateBranchENIs(pod, securityGroups, resourceCount)
 	if err != nil {
