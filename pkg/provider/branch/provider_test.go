@@ -332,6 +332,7 @@ func TestBranchENIProvider_FallbackAfterDeleteNodeKeepsCheckpointCleared(t *test
 	provider.trunkENICache[NodeName] = fakeTrunk
 
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	fakeTrunk.EXPECT().NeedsPreparation().Return(false)
 	mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(nil)
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).
 		DoAndReturn(func(listPods func() ([]v1.Pod, error)) (ec2.EC2Instance, error) {
@@ -373,25 +374,32 @@ func TestBranchENIProvider_getTrunkFromCache_NotExist(t *testing.T) {
 	assert.Nil(t, trunkENI)
 }
 
-// De-initializing a node clears its checkpoint, so a node that becomes managed again cold-inits.
 // De-initializing a node clears its checkpoint, so a node that becomes managed again cold-inits. A CNINode already
-// deleted with its node is no failure; any other failed clear is counted, yet DeleteNode still succeeds, since a
-// retry would only fail on the trunk it has already dropped.
+// deleted with its node is no failure; any other failed clear is counted and retried by a clear-only job, since the
+// trunk is already gone from the cache.
 func TestBranchENIProvider_DeleteNodeClearsTheCheckpoint(t *testing.T) {
 	tests := map[string]struct {
 		clearErr   error
 		wantCounts float64
+		wantRetry  bool
 	}{
 		"cleared":         {},
 		"CNINode missing": {clearErr: apierrors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, NodeName)},
-		"clear failed":    {clearErr: apierrors.NewServiceUnavailable("apiserver unavailable"), wantCounts: 1},
+		"clear failed":    {clearErr: apierrors.NewServiceUnavailable("apiserver unavailable"), wantCounts: 1, wantRetry: true},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
-			provider.trunkENICache[NodeName] = mock_trunk.NewMockTrunkENI(ctrl)
+			mockWorker := mock_worker.NewMockWorker(ctrl)
+			provider.workerPool = mockWorker
+			fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+			fakeTrunk.EXPECT().NeedsPreparation().Return(false)
+			provider.trunkENICache[NodeName] = fakeTrunk
 			mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(test.clearErr)
+			if test.wantRetry {
+				mockWorker.EXPECT().SubmitJobAfter(worker.NewOnDemandClearCheckpointJob(NodeName), checkpointClearRetryPeriod)
+			}
 			failuresBefore := checkpointPersistErrorCount(t)
 
 			result, err := provider.DeleteNode(NodeName)
@@ -400,6 +408,99 @@ func TestBranchENIProvider_DeleteNodeClearsTheCheckpoint(t *testing.T) {
 			assert.Equal(t, k8sCtrl.Result{}, result)
 			assert.NotContains(t, provider.trunkENICache, NodeName)
 			assert.Equal(t, failuresBefore+test.wantCounts, checkpointPersistErrorCount(t))
+		})
+	}
+}
+
+// The clear-only job retries until the clear succeeds, and stops once the node is managed again, because that
+// node's initialization wrote a fresh checkpoint.
+func TestBranchENIProvider_ClearCheckpointJob(t *testing.T) {
+	tests := map[string]struct {
+		managedAgain bool
+		clearErr     error
+		wantRequeue  bool
+	}{
+		"clear succeeds":       {},
+		"clear fails again":    {clearErr: apierrors.NewForbidden(schema.GroupResource{Resource: "cninodes"}, NodeName, nil), wantRequeue: true},
+		"node managed again":   {managedAgain: true},
+		"CNINode already gone": {clearErr: apierrors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, NodeName)},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
+			if test.managedAgain {
+				provider.trunkENICache[NodeName] = mock_trunk.NewMockTrunkENI(ctrl)
+			} else {
+				mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(test.clearErr)
+			}
+
+			result, err := provider.ProcessAsyncJob(worker.NewOnDemandClearCheckpointJob(NodeName))
+
+			assert.NoError(t, err)
+			want := k8sCtrl.Result{}
+			if test.wantRequeue {
+				want = k8sCtrl.Result{RequeueAfter: checkpointClearRetryPeriod, Requeue: true}
+			}
+			assert.Equal(t, want, result)
+		})
+	}
+}
+
+// An unprepared restored trunk deletes nothing, so DeleteNode keeps it cached while it has queued branch ENIs: the
+// delete-queue job can then prepare it and delete them once EC2 answers. The hold ends when the trunk is prepared
+// or drained, when the Node exists again, or after deletedNodeHoldPeriod.
+func TestBranchENIProvider_DeleteNodeHoldsUnpreparedTrunkWithPendingDeletions(t *testing.T) {
+	nodeGone := apierrors.NewNotFound(schema.GroupResource{Resource: "nodes"}, NodeName)
+	nodeBack := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: NodeName}}
+	tests := map[string]struct {
+		needsPreparation bool
+		pendingDeletions bool
+		node             *v1.Node
+		heldFor          time.Duration
+		wantHold         bool
+	}{
+		"held while unprepared with queued ENIs": {needsPreparation: true, pendingDeletions: true, wantHold: true},
+		"still held inside the hold period":      {needsPreparation: true, pendingDeletions: true, heldFor: time.Minute, wantHold: true},
+		"dropped after the hold period":          {needsPreparation: true, pendingDeletions: true, heldFor: deletedNodeHoldPeriod + time.Second},
+		"dropped once prepared":                  {pendingDeletions: true, heldFor: time.Minute},
+		"dropped with nothing queued":            {needsPreparation: true},
+		"dropped when the Node is back":          {needsPreparation: true, pendingDeletions: true, node: nodeBack},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			provider, mockK8sAPI := getProviderAndMockK8sWrapper(ctrl)
+			fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+			provider.trunkENICache[NodeName] = fakeTrunk
+			fakeTrunk.EXPECT().NeedsPreparation().Return(test.needsPreparation)
+			fakeTrunk.EXPECT().HasPendingDeletions().Return(test.pendingDeletions).AnyTimes()
+			if test.needsPreparation && test.pendingDeletions {
+				if test.node != nil {
+					mockK8sAPI.EXPECT().GetNode(NodeName).Return(test.node, nil)
+				} else {
+					mockK8sAPI.EXPECT().GetNode(NodeName).Return(nil, nodeGone)
+				}
+			}
+			if test.heldFor != 0 {
+				provider.heldDeletes = map[string]time.Time{NodeName: time.Now().Add(-test.heldFor)}
+			}
+			if !test.wantHold {
+				mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(nil)
+			}
+
+			result, err := provider.DeleteNode(NodeName)
+
+			assert.NoError(t, err)
+			if test.wantHold {
+				assert.Equal(t, k8sCtrl.Result{RequeueAfter: deletedNodeRetryPeriod, Requeue: true}, result)
+				assert.Contains(t, provider.trunkENICache, NodeName)
+				assert.Contains(t, provider.heldDeletes, NodeName)
+				return
+			}
+			assert.Equal(t, k8sCtrl.Result{}, result)
+			assert.NotContains(t, provider.trunkENICache, NodeName)
+			assert.NotContains(t, provider.heldDeletes, NodeName)
 		})
 	}
 }

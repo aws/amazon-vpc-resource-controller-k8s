@@ -189,6 +189,10 @@ var (
 				Values: []string{trunkInterfaceId},
 			},
 			{
+				Name:   aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
+				Values: []string{config.NetworkInterfaceOwnerTagValue},
+			},
+			{
 				Name:   aws.String("vpc-id"),
 				Values: []string{vpcID},
 			},

@@ -572,11 +572,16 @@ func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.R
 }
 
 func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2types.NetworkInterface, error) {
-	// Tag plus VPC, no subnet: earlier ENIConfig subnets keep their VLANs, and the VPC bounds a tag anyone allowed to tag ENIs can set.
+	// Trunk tag plus VPC, no subnet: earlier ENIConfig subnets keep their VLANs. The owner tag, which the controller
+	// sets on every branch ENI it creates, keeps ENIs that only carry a copied trunk tag out of the delete queue.
 	filters := []ec2types.Filter{
 		{
 			Name:   aws.String("tag:" + config.TrunkENIIDTag),
 			Values: []string{*trunkID},
+		},
+		{
+			Name:   aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
+			Values: []string{config.NetworkInterfaceOwnerTagValue},
 		},
 		{
 			Name:   aws.String("vpc-id"),

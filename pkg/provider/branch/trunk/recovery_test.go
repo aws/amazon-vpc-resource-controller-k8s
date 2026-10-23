@@ -77,15 +77,32 @@ func TestCorruptOrphanMetricContract(t *testing.T) {
 	assert.NoError(t, counter.Write(value))
 	before := value.GetCounter().GetValue()
 
-	trunk := &trunkENI{log: zap.New()}
-	state := trunk.buildRecoveredBranchState(nil, []*ec2types.NetworkInterface{{
-		NetworkInterfaceId: aws.String(recoveryBranchENIID),
-	}})
+	// An unclaimed ENI without a VLAN tag is skipped, as before checkpoint restore; one a deleted pod owned is still
+	// deleted by ID.
+	tests := map[string]struct {
+		queued    bool
+		wantQueue int
+	}{
+		"unclaimed orphan is skipped":        {},
+		"deleted pod's ENI is still deleted": {queued: true, wantQueue: 1},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			trunk := &trunkENI{log: zap.New()}
+			if test.queued {
+				trunk.deleteQueue = []*ENIDetails{{ID: recoveryBranchENIID, AssociationID: "trunk-assoc-1"}}
+			}
+			state := trunk.buildRecoveredBranchState(nil, []*ec2types.NetworkInterface{{
+				NetworkInterfaceId: aws.String(recoveryBranchENIID),
+			}})
 
-	assert.Len(t, state.deleteQueue, 1)
-	value.Reset()
-	assert.NoError(t, counter.Write(value))
-	assert.Equal(t, before+1, value.GetCounter().GetValue())
+			assert.Len(t, state.deleteQueue, test.wantQueue)
+			value.Reset()
+			assert.NoError(t, counter.Write(value))
+			assert.Equal(t, before+1, value.GetCounter().GetValue())
+			before = value.GetCounter().GetValue()
+		})
+	}
 }
 
 func writeTrunkMetric(t *testing.T, counter prometheus.Metric) float64 {
@@ -704,9 +721,11 @@ func TestPrepareForAllocationHandlesUnusableAnnotationsAndCorruptOrphans(t *test
 			wantReservedVLAN: 17,
 		},
 		{
-			name:            "malformed ENI ID is not ownership proof",
-			annotation:      `[{"eniId":"eni-not-hex","vlanId":17}]`,
-			wantDeleteQueue: true,
+			name:             "malformed ENI ID is not ownership proof",
+			annotation:       `[{"eniId":"eni-not-hex","vlanId":17}]`,
+			branchTags:       []ec2types.Tag{{Key: aws.String(config.VLandIDTag), Value: aws.String("17")}},
+			wantDeleteQueue:  true,
+			wantReservedVLAN: 17,
 		},
 		{
 			name:             "malformed JSON is not ownership proof",
@@ -716,8 +735,8 @@ func TestPrepareForAllocationHandlesUnusableAnnotationsAndCorruptOrphans(t *test
 			wantReservedVLAN: 17,
 		},
 		{
-			name:            "VLAN-less EC2 orphan is queued by ENI ID",
-			wantDeleteQueue: true,
+			// Without a VLAN tag nothing vouches for an unclaimed ENI, so it is left alone as before restore.
+			name: "VLAN-less EC2 orphan is skipped",
 		},
 	}
 

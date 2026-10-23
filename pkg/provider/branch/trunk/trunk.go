@@ -425,15 +425,22 @@ func (t *trunkENI) buildRecoveredBranchState(
 			ID:                id,
 			deletionTimeStamp: time.Now(),
 		}
-		if eni, isQueued := queued[id]; isQueued {
+		eni, isQueued := queued[id]
+		if isQueued {
 			// A pod deleted before preparation keeps its cooldown start and trunk association.
 			details.deletionTimeStamp, details.AssociationID = eni.deletionTimeStamp, eni.AssociationID
 		}
 		vlanID, err := t.getVlanIdFromTag(branchInterface.TagSet)
 		switch {
-		case err != nil:
+		case err != nil && !isQueued:
+			// Only tags vouch for an orphan no pod claims, so one without a usable VLAN tag is left alone.
 			trunkENIOperationsErrCount.WithLabelValues("corrupt_orphan_branch_eni").Inc()
-			t.log.Error(err, "queuing corrupt orphan branch ENI by ID", "interface", id)
+			t.log.Error(err, "skipping orphan branch ENI without a usable VLAN tag", "interface", id)
+			continue
+		case err != nil:
+			// A deleted pod's annotation named this ENI, so delete it by ID even without a VLAN to free.
+			trunkENIOperationsErrCount.WithLabelValues("corrupt_orphan_branch_eni").Inc()
+			t.log.Error(err, "queuing branch ENI of a deleted pod by ID", "interface", id)
 		case state.usedVlanIDs[vlanID]:
 			// A pod already owns this VLAN, so deleting the orphan must not free it.
 			trunkENIOperationsErrCount.WithLabelValues("orphan_branch_eni_vlan_in_use").Inc()

@@ -382,8 +382,16 @@ func TestBranchENIProvider_StartPreparesRestoredNodesAfterTenMinutes(t *testing.
 	})
 }
 
-// A node drained and deleted before its restored trunk is prepared still deletes its deleted pods' branch ENIs.
+// A node drained and deleted before its restored trunk is prepared still deletes its deleted pods' branch ENIs, also
+// when EC2 Describe fails from the drain until after the node is deleted: DeleteNode then keeps the trunk until the
+// delete-queue job can prepare it.
 func TestBranchENIProvider_DrainedRestoredNodeDeletesQueuedBranchENIs(t *testing.T) {
+	for name, describeDown := range map[string]bool{"EC2 available": false, "EC2 Describe down until after DeleteNode": true} {
+		t.Run(name, func(t *testing.T) { testDrainedRestoredNode(t, describeDown) })
+	}
+}
+
+func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 	// The bubble's fake clock lets the real cooldown and node-delete delay elapse instantly.
 	synctest.Test(t, func(t *testing.T) {
 		ctrl := gomock.NewController(t)
@@ -426,8 +434,14 @@ func TestBranchENIProvider_DrainedRestoredNodeDeletesQueuedBranchENIs(t *testing
 		workerPool.EXPECT().SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(NodeName), NodeDeleteRequeueRequestDelay)
 		conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true).AnyTimes()
 		// EC2 inventory for any ownership check made before the branch ENIs are deleted.
+		ec2Down := false
 		helper.EXPECT().DescribeNetworkInterfaces([]string{restoredPrimaryENIID, restoredTrunkENIID}).
-			Return(restoredInterfacesForProvider(), nil).AnyTimes()
+			DoAndReturn(func([]string) ([]ec2types.NetworkInterface, error) {
+				if ec2Down {
+					return nil, MockError
+				}
+				return restoredInterfacesForProvider(), nil
+			}).AnyTimes()
 		helper.EXPECT().GetBranchNetworkInterface(aws.String(restoredTrunkENIID)).Return(branchInterfaces, nil).AnyTimes()
 		helper.EXPECT().DisassociateTrunkInterface(gomock.Any()).Return(nil).AnyTimes()
 		helper.EXPECT().DeleteNetworkInterface(gomock.Any()).DoAndReturn(func(eniID *string) error {
@@ -441,6 +455,7 @@ func TestBranchENIProvider_DrainedRestoredNodeDeletesQueuedBranchENIs(t *testing
 		require.True(t, restoredTrunk.NeedsPreparation())
 
 		// The node is drained: its pods are deleted and their branch ENIs wait out the cooldown.
+		ec2Down = describeDown
 		deletedPods := runningPods
 		runningPods = nil
 		for _, pod := range deletedPods {
@@ -462,11 +477,29 @@ func TestBranchENIProvider_DrainedRestoredNodeDeletesQueuedBranchENIs(t *testing
 			rate.NewLimiter(rate.Inf, 1),
 		))
 		time.Sleep(NodeDeleteRequeueRequestDelay)
-		_, err = provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName))
+		result, err := provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName))
 		require.NoError(t, err)
+		if describeDown {
+			// The unprepared trunk still holds the queued ENIs, so DeleteNode keeps it and asks to run again.
+			require.True(t, result.Requeue)
+			_, cached := provider.getTrunkFromCache(NodeName)
+			require.True(t, cached)
+			ec2Down = false
+			for range 20 {
+				result, err = provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+				require.NoError(t, err)
+				if !restoredTrunk.HasPendingDeletions() {
+					break
+				}
+				time.Sleep(result.RequeueAfter)
+			}
+			result, err = provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName))
+			require.NoError(t, err)
+		}
+		require.False(t, result.Requeue)
 		// Run the requeued cleanup job until it stops, as the worker does.
 		for range 20 {
-			result, err := provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+			result, err = provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
 			require.NoError(t, err)
 			if !result.Requeue {
 				break
