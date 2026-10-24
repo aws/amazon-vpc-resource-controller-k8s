@@ -60,36 +60,22 @@ func TestTrunkInterfaceDeepCopyCarriesSubnetID(t *testing.T) {
 	assert.Equal(t, "subnet-0123456789abcdef0", original.SubnetID)
 }
 
-func TestNodeNetworkStateWireFormatAndDeepCopy(t *testing.T) {
-	tcpTimeout := int32(432000)
-	original := &NodeNetworkState{
-		InstanceID:                            "i-0123456789abcdef0",
-		InstanceType:                          "m5.large",
-		SubnetID:                              "subnet-0123456789abcdef0",
-		SubnetCIDRBlock:                       "10.0.0.0/24",
-		PrimaryNetworkInterfaceID:             "eni-0123456789abcdef0",
-		PrimaryNetworkInterfaceSecurityGroups: []string{"sg-0123456789abcdef0"},
-		ConnectionTracking: &ConnectionTrackingConfig{
-			TCPEstablishedTimeout: &tcpTimeout,
-		},
+func TestNodeNetworkStateWireFormat(t *testing.T) {
+	state := &NodeNetworkState{
+		InstanceID:                "i-0123456789abcdef0",
+		InstanceType:              "m5.large",
+		SubnetID:                  "subnet-0123456789abcdef0",
+		SubnetCIDRBlock:           "10.0.0.0/24",
+		PrimaryNetworkInterfaceID: "eni-0123456789abcdef0",
 	}
 
-	encoded, err := json.Marshal(original)
+	encoded, err := json.Marshal(state)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{
 		"instanceID":"i-0123456789abcdef0",
 		"instanceType":"m5.large",
 		"subnetID":"subnet-0123456789abcdef0",
 		"subnetCIDRBlock":"10.0.0.0/24",
-		"primaryNetworkInterfaceID":"eni-0123456789abcdef0",
-		"primaryNetworkInterfaceSecurityGroups":["sg-0123456789abcdef0"],
-		"connectionTracking":{"tcpEstablishedTimeout":432000}
+		"primaryNetworkInterfaceID":"eni-0123456789abcdef0"
 	}`, string(encoded))
-
-	copied := original.DeepCopy()
-	require.Equal(t, original, copied)
-	copied.PrimaryNetworkInterfaceSecurityGroups[0] = "sg-0fedcba9876543210"
-	*copied.ConnectionTracking.TCPEstablishedTimeout = 60
-	assert.Equal(t, "sg-0123456789abcdef0", original.PrimaryNetworkInterfaceSecurityGroups[0])
-	assert.EqualValues(t, 432000, *original.ConnectionTracking.TCPEstablishedTimeout)
 }

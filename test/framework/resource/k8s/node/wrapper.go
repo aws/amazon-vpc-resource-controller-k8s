@@ -83,3 +83,13 @@ func VerifyCNINode(manager Manager) error {
 	}
 	return nil
 }
+
+// IsNodeReady returns true when the node Ready condition is true.
+func IsNodeReady(node *v1.Node) bool {
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == v1.NodeReady {
+			return condition.Status == v1.ConditionTrue
+		}
+	}
+	return false
+}

@@ -131,6 +131,7 @@ func TestPodAPI_GetRunningPodsOnNode(t *testing.T) {
 	podList, err := podAPI.GetRunningPodsOnNode(nodeName)
 
 	assert.NoError(t, err)
+	assert.Len(t, podList, 1)
 	assert.Equal(t, podList[0], *runningPod)
 }
 

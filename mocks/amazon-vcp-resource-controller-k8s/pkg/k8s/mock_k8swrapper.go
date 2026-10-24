@@ -95,6 +95,20 @@ func (mr *MockK8sWrapperMockRecorder) BroadcastEvent(arg0, arg1, arg2, arg3 inte
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BroadcastEvent", reflect.TypeOf((*MockK8sWrapper)(nil).BroadcastEvent), arg0, arg1, arg2, arg3)
 }
 
+// ClearCNINodeCheckpoint mocks base method.
+func (m *MockK8sWrapper) ClearCNINodeCheckpoint(arg0 string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ClearCNINodeCheckpoint", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ClearCNINodeCheckpoint indicates an expected call of ClearCNINodeCheckpoint.
+func (mr *MockK8sWrapperMockRecorder) ClearCNINodeCheckpoint(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearCNINodeCheckpoint", reflect.TypeOf((*MockK8sWrapper)(nil).ClearCNINodeCheckpoint), arg0)
+}
+
 // CreateCNINode mocks base method.
 func (m *MockK8sWrapper) CreateCNINode(arg0 *v10.Node, arg1 string) error {
 	m.ctrl.T.Helper()

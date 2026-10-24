@@ -199,8 +199,8 @@ func (m *manager) AddNode(nodeName string) error {
 	var op AsyncOperation
 
 	if shouldManage {
-		newNode = node.NewManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
-			GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
+		newNode = node.NewManagedNode(m.Log, k8sNode.Name, utils.GetNodeInstanceID(k8sNode),
+			utils.GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
 		err := m.updateSubnetIfUsingENIConfig(newNode, k8sNode)
 		if err != nil {
 			return err
@@ -209,8 +209,8 @@ func (m *manager) AddNode(nodeName string) error {
 		log.Info("node added as a managed node")
 		op = Init
 	} else {
-		newNode = node.NewUnManagedNode(m.Log, k8sNode.Name, GetNodeInstanceID(k8sNode),
-			GetNodeOS(k8sNode))
+		newNode = node.NewUnManagedNode(m.Log, k8sNode.Name, utils.GetNodeInstanceID(k8sNode),
+			utils.GetNodeOS(k8sNode))
 		m.dataStore[k8sNode.Name] = newNode
 		log.V(1).Info("node added as an un-managed node")
 		return nil
@@ -271,7 +271,7 @@ func (m *manager) UpdateNode(nodeName string) error {
 	case UnManagedToManaged:
 		log.Info("node was previously un-managed, will be added as managed node now")
 		cachedNode = node.NewManagedNode(m.Log, k8sNode.Name,
-			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
+			utils.GetNodeInstanceID(k8sNode), utils.GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
 		// Update the Subnet if the node has custom networking configured
 		err = m.updateSubnetIfUsingENIConfig(cachedNode, k8sNode)
 		if err != nil {
@@ -284,7 +284,7 @@ func (m *manager) UpdateNode(nodeName string) error {
 		// Change the node in cache, but for de initializing all resource providers
 		// pass the async job the older cached value instead
 		m.dataStore[nodeName] = node.NewUnManagedNode(m.Log, k8sNode.Name,
-			GetNodeInstanceID(k8sNode), GetNodeOS(k8sNode))
+			utils.GetNodeInstanceID(k8sNode), utils.GetNodeOS(k8sNode))
 		op = Delete
 	case StillManaged:
 		// We only need to update the Subnet for Managed Node. This subnet is required for creating
@@ -468,8 +468,8 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 
 // isSelectedForManagement returns true if the node should be managed by the controller
 func (m *manager) isSelectedForManagement(v1node *v1.Node) (bool, error) {
-	os := GetNodeOS(v1node)
-	instanceID := GetNodeInstanceID(v1node)
+	os := utils.GetNodeOS(v1node)
+	instanceID := utils.GetNodeInstanceID(v1node)
 
 	if os == "" || instanceID == "" {
 		m.Log.V(1).Info("node doesn't have os/instance id", v1node.Name,
@@ -482,31 +482,6 @@ func (m *manager) isSelectedForManagement(v1node *v1.Node) (bool, error) {
 	} else {
 		return m.canAttachTrunk(v1node)
 	}
-}
-
-// GetNodeInstanceID returns the EC2 instance ID of a node
-func GetNodeInstanceID(node *v1.Node) string {
-	var instanceID string
-
-	if node.Spec.ProviderID != "" {
-		// ProviderID is preferred when available.
-		// aws:///us-west-2c/i-01234567890abcdef
-		id := strings.Split(node.Spec.ProviderID, "/")
-		instanceID = id[len(id)-1]
-	}
-
-	return instanceID
-}
-
-// getNodeOS returns the operating system of a node.
-func GetNodeOS(node *v1.Node) string {
-	labels := node.GetLabels()
-	os := labels[config.NodeLabelOS]
-	if os == "" {
-		// For older k8s version.
-		os = labels[config.NodeLabelOSBeta]
-	}
-	return os
 }
 
 // isWindowsNode returns true if the "kubernetes.io/os" or "beta.kubernetes.io/os" is set to windows

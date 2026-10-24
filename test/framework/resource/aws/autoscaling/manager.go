@@ -23,8 +23,9 @@ import (
 )
 
 type Manager interface {
-	DescribeAutoScalingGroup(autoScalingGroupName string) ([]autoscalingtypes.AutoScalingGroup, error)
-	UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int32) error
+	DescribeAutoScalingGroup(ctx context.Context, autoScalingGroupName string) ([]autoscalingtypes.AutoScalingGroup, error)
+	UpdateAutoScalingGroup(ctx context.Context, asgName string, desiredSize *int32) error
+	TerminateInstanceInAutoScalingGroup(ctx context.Context, instanceID string, shouldDecrementDesiredCapacity bool) error
 }
 
 type defaultManager struct {
@@ -37,11 +38,14 @@ func NewManager(cfg aws.Config) Manager {
 	}
 }
 
-func (d defaultManager) DescribeAutoScalingGroup(autoScalingGroupName string) ([]autoscalingtypes.AutoScalingGroup, error) {
+func (d defaultManager) DescribeAutoScalingGroup(
+	ctx context.Context,
+	autoScalingGroupName string,
+) ([]autoscalingtypes.AutoScalingGroup, error) {
 	describeAutoScalingGroupIp := &autoscaling.DescribeAutoScalingGroupsInput{
 		AutoScalingGroupNames: []string{autoScalingGroupName},
 	}
-	asg, err := d.AutoScalingAPI.DescribeAutoScalingGroups(context.TODO(), describeAutoScalingGroupIp)
+	asg, err := d.AutoScalingAPI.DescribeAutoScalingGroups(ctx, describeAutoScalingGroupIp)
 	if err != nil {
 		return nil, err
 	}
@@ -52,13 +56,30 @@ func (d defaultManager) DescribeAutoScalingGroup(autoScalingGroupName string) ([
 	return asg.AutoScalingGroups, nil
 }
 
-func (d defaultManager) UpdateAutoScalingGroup(asgName string, desiredSize, minSize, maxSize int32) error {
+func (d defaultManager) UpdateAutoScalingGroup(
+	ctx context.Context,
+	asgName string,
+	desiredSize *int32,
+) error {
 	updateASGInput := &autoscaling.UpdateAutoScalingGroupInput{
 		AutoScalingGroupName: aws.String(asgName),
-		DesiredCapacity:      aws.Int32(desiredSize),
-		MaxSize:              aws.Int32(maxSize),
-		MinSize:              aws.Int32(minSize),
+		DesiredCapacity:      desiredSize,
 	}
-	_, err := d.AutoScalingAPI.UpdateAutoScalingGroup(context.TODO(), updateASGInput)
+	_, err := d.AutoScalingAPI.UpdateAutoScalingGroup(ctx, updateASGInput)
+	return err
+}
+
+func (d defaultManager) TerminateInstanceInAutoScalingGroup(
+	ctx context.Context,
+	instanceID string,
+	shouldDecrementDesiredCapacity bool,
+) error {
+	_, err := d.AutoScalingAPI.TerminateInstanceInAutoScalingGroup(
+		ctx,
+		&autoscaling.TerminateInstanceInAutoScalingGroupInput{
+			InstanceId:                     aws.String(instanceID),
+			ShouldDecrementDesiredCapacity: aws.Bool(shouldDecrementDesiredCapacity),
+		},
+	)
 	return err
 }

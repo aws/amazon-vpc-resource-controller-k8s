@@ -86,6 +86,7 @@ type K8sWrapper interface {
 	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
 	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
 	PatchCNINodeCheckpoint(nodeName string, state rcv1alpha1.NodeNetworkState, trunkENIID string) error
+	ClearCNINodeCheckpoint(nodeName string) error
 	DeleteCNINode(cniNode *rcv1alpha1.CNINode) error
 }
 
@@ -301,6 +302,28 @@ func (k *k8sWrapper) PatchCNINodeCheckpoint(
 	state rcv1alpha1.NodeNetworkState,
 	trunkENIID string,
 ) error {
+	return k.patchCNINodeStatus(nodeName, func(cniNode *rcv1alpha1.CNINode) {
+		cniNode.Status.NodeNetworkState = state.DeepCopy()
+		if cniNode.Status.TrunkInterface == nil {
+			cniNode.Status.TrunkInterface = &rcv1alpha1.TrunkInterface{}
+		}
+		cniNode.Status.TrunkInterface.ID = trunkENIID
+	})
+}
+
+// ClearCNINodeCheckpoint drops the network state, so the next node init reads EC2 instead of restoring it.
+func (k *k8sWrapper) ClearCNINodeCheckpoint(nodeName string) error {
+	// A deleted node's CNINode is usually gone already; skip the NotFound retries of the shared write path.
+	err := k.cacheClient.Get(k.context, types.NamespacedName{Name: nodeName}, &rcv1alpha1.CNINode{})
+	if errors.IsNotFound(err) {
+		return nil
+	}
+	return k.patchCNINodeStatus(nodeName, func(cniNode *rcv1alpha1.CNINode) {
+		cniNode.Status.NodeNetworkState = nil
+	})
+}
+
+func (k *k8sWrapper) patchCNINodeStatus(nodeName string, mutate func(*rcv1alpha1.CNINode)) error {
 	useAPIReader := false
 	return retry.OnError(retry.DefaultBackoff, shouldRetryCNINodeStatusUpdate, func() error {
 		current := &rcv1alpha1.CNINode{}
@@ -325,11 +348,7 @@ func (k *k8sWrapper) PatchCNINodeCheckpoint(
 		}
 
 		modified := current.DeepCopy()
-		modified.Status.NodeNetworkState = state.DeepCopy()
-		if modified.Status.TrunkInterface == nil {
-			modified.Status.TrunkInterface = &rcv1alpha1.TrunkInterface{}
-		}
-		modified.Status.TrunkInterface.ID = trunkENIID
+		mutate(modified)
 
 		if reflect.DeepEqual(current.Status, modified.Status) {
 			return nil
