@@ -254,7 +254,6 @@ func (b *branchENIProvider) prepareTrunkForAllocation(
 		}
 		return err
 	}
-	// shortcut: a DeleteNode landing between this check and the patch still re-persists; serialize them on the trunk if that is seen.
 	if current, present := b.getTrunkFromCache(nodeName); instance != nil && present && current == trunkENI {
 		b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
 	}

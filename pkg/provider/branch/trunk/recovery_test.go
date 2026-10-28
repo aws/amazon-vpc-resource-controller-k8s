@@ -69,25 +69,29 @@ func prepareTrunk(trunk *trunkENI, pods []v1.Pod) error {
 	return err
 }
 
-func TestCorruptOrphanMetricContract(t *testing.T) {
-	counter := trunkENIOperationsErrCount.WithLabelValues("corrupt_orphan_branch_eni")
-	assert.Contains(t, counter.Desc().String(), `fqName: "trunk_eni_operations_err_count"`)
-	assert.Contains(t, counter.Desc().String(), `variableLabels: {operation}`)
-	value := &dto.Metric{}
-	assert.NoError(t, counter.Write(value))
-	before := value.GetCounter().GetValue()
-
-	// An unclaimed ENI without a VLAN tag is skipped, as before checkpoint restore; one a deleted pod owned is still
-	// deleted by ID.
+func TestOrphanWithoutVlanTagMetricContract(t *testing.T) {
+	// An unclaimed ENI without a VLAN tag is skipped and counted as before checkpoint restore; one a deleted pod owned
+	// is still deleted by ID and counted on its own label.
 	tests := map[string]struct {
-		queued    bool
-		wantQueue int
+		queued     bool
+		wantQueue  int
+		wantLabel  string
+		otherLabel string
 	}{
-		"unclaimed orphan is skipped":        {},
-		"deleted pod's ENI is still deleted": {queued: true, wantQueue: 1},
+		"unclaimed orphan is skipped": {
+			wantLabel: "get_vlan_from_tag", otherLabel: "deleted_pod_branch_eni_without_vlan",
+		},
+		"deleted pod's ENI is still deleted": {
+			queued: true, wantQueue: 1,
+			wantLabel: "deleted_pod_branch_eni_without_vlan", otherLabel: "get_vlan_from_tag",
+		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
+			want := trunkENIOperationsErrCount.WithLabelValues(test.wantLabel)
+			other := trunkENIOperationsErrCount.WithLabelValues(test.otherLabel)
+			wantBefore, otherBefore := writeTrunkMetric(t, want), writeTrunkMetric(t, other)
+
 			trunk := &trunkENI{log: zap.New()}
 			if test.queued {
 				trunk.deleteQueue = []*ENIDetails{{ID: recoveryBranchENIID, AssociationID: "trunk-assoc-1"}}
@@ -97,10 +101,8 @@ func TestCorruptOrphanMetricContract(t *testing.T) {
 			}})
 
 			assert.Len(t, state.deleteQueue, test.wantQueue)
-			value.Reset()
-			assert.NoError(t, counter.Write(value))
-			assert.Equal(t, before+1, value.GetCounter().GetValue())
-			before = value.GetCounter().GetValue()
+			assert.Equal(t, wantBefore+1, writeTrunkMetric(t, want))
+			assert.Equal(t, otherBefore, writeTrunkMetric(t, other))
 		})
 	}
 }
