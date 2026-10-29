@@ -34,6 +34,8 @@ const (
 	OperationReSyncPool Operations = "ReSyncPool"
 	// OperationDeleteNode represents the job to delete the node
 	OperationDeleteNode Operations = "NodeDelete"
+	// OperationClearCheckpoint represents the job that clears a removed node's CNINode checkpoint
+	OperationClearCheckpoint Operations = "ClearCheckpoint"
 )
 
 // OnDemandJob represents the job that will be executed by the respective worker
@@ -91,6 +93,14 @@ func NewOnDemandProcessDeleteQueueJob(nodeName string) OnDemandJob {
 func NewOnDemandDeleteNodeJob(nodeName string) OnDemandJob {
 	return OnDemandJob{
 		Operation: OperationDeleteNode,
+		NodeName:  nodeName,
+	}
+}
+
+// NewOnDemandClearCheckpointJob returns a job that clears the CNINode checkpoint of a node no longer managed
+func NewOnDemandClearCheckpointJob(nodeName string) OnDemandJob {
+	return OnDemandJob{
+		Operation: OperationClearCheckpoint,
 		NodeName:  nodeName,
 	}
 }

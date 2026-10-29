@@ -60,6 +60,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -321,7 +322,7 @@ func main() {
 		setupLog.Info("vpc resource controller is disabled")
 		featureGauge.Set(float64(0))
 	} else {
-		ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName)
+		ec2APIHelper := ec2API.NewEC2APIHelper(ec2Wrapper, clusterName, vpcID)
 
 		sgpAPI := utils.NewSecurityGroupForPodsAPI(
 			mgr.GetClient(),
@@ -357,6 +358,11 @@ func main() {
 			ctx, supportedResources, apiWrapper, ctrl.Log.WithName("managers").WithName("resource"), healthzHandler, controllerConditions)
 		if err != nil {
 			ctrl.Log.Error(err, "failed to init resources", "resources", supportedResources)
+			os.Exit(1)
+		}
+		branchProvider, _ := resourceManager.GetResourceProvider(config.ResourceNamePodENI)
+		if err := mgr.Add(branchProvider.(ctrlmanager.Runnable)); err != nil {
+			ctrl.Log.Error(err, "failed to add restored-node branch inventory")
 			os.Exit(1)
 		}
 

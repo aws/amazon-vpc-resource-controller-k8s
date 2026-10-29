@@ -63,16 +63,17 @@ var (
 
 type ec2APIHelper struct {
 	ec2Wrapper EC2Wrapper
+	vpcID      string
 }
 
-func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string) EC2APIHelper {
+func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string, vpcID string) EC2APIHelper {
 	// Set the key and value of the cluster name tag which will be used to tag all the network interfaces created by
 	// the controller
 	clusterNameTag = ec2types.Tag{
 		Key:   aws.String(fmt.Sprintf(config.VPCRCClusterNameTagKeyFormat, clusterName)),
 		Value: aws.String(config.VPCRCClusterNameTagValue),
 	}
-	return &ec2APIHelper{ec2Wrapper: ec2Wrapper}
+	return &ec2APIHelper{ec2Wrapper: ec2Wrapper, vpcID: vpcID}
 }
 
 type EC2APIHelper interface {
@@ -81,7 +82,7 @@ type EC2APIHelper interface {
 		ipResourceCount *config.IPResourceCount, interfaceType *string, connectionTrackingSpec *ec2types.ConnectionTrackingSpecificationRequest) (*ec2types.NetworkInterface, error)
 	DeleteNetworkInterface(interfaceId *string) error
 	GetSubnet(subnetId *string) (*ec2types.Subnet, error)
-	GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error)
+	GetBranchNetworkInterface(trunkID *string) ([]*ec2types.NetworkInterface, error)
 	GetInstanceNetworkInterface(instanceId *string) ([]ec2types.InstanceNetworkInterface, error)
 	DescribeNetworkInterfaces(nwInterfaceIds []string) ([]ec2types.NetworkInterface, error)
 	DescribeTrunkInterfaceAssociation(trunkInterfaceId *string) ([]ec2types.TrunkInterfaceAssociation, error)
@@ -570,15 +571,21 @@ func (h *ec2APIHelper) UnassignIPv4Resources(eniID string, resourceType config.R
 	return err
 }
 
-func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID, subnetID *string) ([]*ec2types.NetworkInterface, error) {
+func (h *ec2APIHelper) GetBranchNetworkInterface(trunkID *string) ([]*ec2types.NetworkInterface, error) {
+	// Trunk tag plus VPC, no subnet: earlier ENIConfig subnets keep their VLANs. The owner tag, which the controller
+	// sets on every branch ENI it creates, keeps ENIs that only carry a copied trunk tag out of the delete queue.
 	filters := []ec2types.Filter{
 		{
 			Name:   aws.String("tag:" + config.TrunkENIIDTag),
 			Values: []string{*trunkID},
 		},
 		{
-			Name:   aws.String("subnet-id"),
-			Values: []string{*subnetID},
+			Name:   aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
+			Values: []string{config.NetworkInterfaceOwnerTagValue},
+		},
+		{
+			Name:   aws.String("vpc-id"),
+			Values: []string{h.vpcID},
 		},
 	}
 

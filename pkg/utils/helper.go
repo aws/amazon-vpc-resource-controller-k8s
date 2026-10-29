@@ -261,3 +261,28 @@ func IntToInt32(value int) (int32, error) {
 
 	return int32(value), nil
 }
+
+// GetNodeInstanceID returns the EC2 instance ID of a node
+func GetNodeInstanceID(node *corev1.Node) string {
+	var instanceID string
+
+	if node.Spec.ProviderID != "" {
+		// ProviderID is preferred when available.
+		// aws:///us-west-2c/i-01234567890abcdef
+		id := strings.Split(node.Spec.ProviderID, "/")
+		instanceID = id[len(id)-1]
+	}
+
+	return instanceID
+}
+
+// getNodeOS returns the operating system of a node.
+func GetNodeOS(node *corev1.Node) string {
+	labels := node.GetLabels()
+	os := labels[config.NodeLabelOS]
+	if os == "" {
+		// For older k8s version.
+		os = labels[config.NodeLabelOSBeta]
+	}
+	return os
+}

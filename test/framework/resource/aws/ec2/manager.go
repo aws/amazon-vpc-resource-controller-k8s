@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/vpc"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/utils"
@@ -50,7 +51,14 @@ func (d *Manager) CreateSecurityGroup(groupName string) (string, error) {
 }
 
 func (d *Manager) GetInstanceDetails(instanceID string) (*ec2types.Instance, error) {
-	describeInstanceOutput, err := d.ec2Client.DescribeInstances(context.TODO(), &ec2.DescribeInstancesInput{
+	return d.GetInstanceDetailsContext(context.TODO(), instanceID)
+}
+
+func (d *Manager) GetInstanceDetailsContext(
+	ctx context.Context,
+	instanceID string,
+) (*ec2types.Instance, error) {
+	describeInstanceOutput, err := d.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceID},
 	})
 	if err != nil {
@@ -75,6 +83,28 @@ func (d *Manager) AuthorizeSecurityGroupIngress(securityGroupID string, port int
 				IpProtocol: aws.String(protocol),
 				IpRanges:   []ec2types.IpRange{{CidrIp: aws.String("0.0.0.0/0")}},
 				ToPort:     aws.Int32(int32(port)),
+			},
+		},
+	})
+	return err
+}
+
+func (d *Manager) AuthorizeSecurityGroupIngressFromSecurityGroup(
+	securityGroupID string,
+	sourceSecurityGroupID string,
+	port int,
+	protocol string,
+) error {
+	_, err := d.ec2Client.AuthorizeSecurityGroupIngress(context.TODO(), &ec2.AuthorizeSecurityGroupIngressInput{
+		GroupId: &securityGroupID,
+		IpPermissions: []ec2types.IpPermission{
+			{
+				FromPort:   aws.Int32(int32(port)),
+				IpProtocol: aws.String(protocol),
+				ToPort:     aws.Int32(int32(port)),
+				UserIdGroupPairs: []ec2types.UserIdGroupPair{
+					{GroupId: aws.String(sourceSecurityGroupID)},
+				},
 			},
 		},
 	})
@@ -115,6 +145,28 @@ func (d *Manager) RevokeSecurityGroupIngress(securityGroupID string, port int,
 	return err
 }
 
+func (d *Manager) RevokeSecurityGroupIngressFromSecurityGroup(
+	securityGroupID string,
+	sourceSecurityGroupID string,
+	port int,
+	protocol string,
+) error {
+	_, err := d.ec2Client.RevokeSecurityGroupIngress(context.TODO(), &ec2.RevokeSecurityGroupIngressInput{
+		GroupId: aws.String(securityGroupID),
+		IpPermissions: []ec2types.IpPermission{
+			{
+				FromPort:   aws.Int32(int32(port)),
+				IpProtocol: aws.String(protocol),
+				ToPort:     aws.Int32(int32(port)),
+				UserIdGroupPairs: []ec2types.UserIdGroupPair{
+					{GroupId: aws.String(sourceSecurityGroupID)},
+				},
+			},
+		},
+	})
+	return err
+}
+
 func (d *Manager) DeleteSecurityGroup(ctx context.Context, securityGroupID string) error {
 	return wait.PollUntil(utils.PollIntervalShort, func() (done bool, err error) {
 		if _, err = d.ec2Client.DeleteSecurityGroup(context.TODO(), &ec2.DeleteSecurityGroupInput{GroupId: &securityGroupID}); err != nil {
@@ -148,6 +200,36 @@ func (d *Manager) GetENISecurityGroups(eniID string) ([]string, error) {
 	}
 
 	return securityGroups, nil
+}
+
+func (d *Manager) GetENISubnetID(eniID string) (string, error) {
+	networkInterface, err := d.ec2Client.DescribeNetworkInterfaces(context.TODO(), &ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: []string{eniID},
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(networkInterface.NetworkInterfaces) == 0 ||
+		networkInterface.NetworkInterfaces[0].SubnetId == nil {
+		return "", fmt.Errorf("no subnet found for ENI %s", eniID)
+	}
+	return *networkInterface.NetworkInterfaces[0].SubnetId, nil
+}
+
+func (d *Manager) GetSubnetDetailsContext(
+	ctx context.Context,
+	subnetID string,
+) (*ec2types.Subnet, error) {
+	output, err := d.ec2Client.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{
+		SubnetIds: []string{subnetID},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(output.Subnets) == 0 {
+		return nil, fmt.Errorf("no subnet found for subnet ID %s", subnetID)
+	}
+	return &output.Subnets[0], nil
 }
 
 func (d *Manager) GetENIConnectionTrackingConfiguration(eniID string) (*ec2types.ConnectionTrackingConfiguration, error) {
@@ -210,23 +292,56 @@ func (d *Manager) GetSecurityGroupID(securityGroupName string) (string, error) {
 }
 
 func (d *Manager) WaitTillTheENIIsDeleted(ctx context.Context, eniID string) error {
-	return wait.PollImmediateUntil(utils.PollIntervalMedium, func() (done bool, err error) {
-		_, err = d.ec2Client.DescribeNetworkInterfaces(context.TODO(), &ec2.DescribeNetworkInterfacesInput{
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err := d.ec2Client.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
 			NetworkInterfaceIds: []string{eniID},
 		})
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
 		if err == nil {
-			return false, nil
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(utils.PollIntervalMedium):
+			}
+			continue
 		}
 
 		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
-			code := apiErr.ErrorCode()
-			if code == "InvalidNetworkInterfaceID.NotFound" {
-				return true, nil
-			}
+		if errors.As(err, &apiErr) &&
+			apiErr.ErrorCode() == "InvalidNetworkInterfaceID.NotFound" {
+			return nil
 		}
-		return true, err
-	}, ctx.Done())
+		return err
+	}
+}
+
+func (d *Manager) IsBranchENIAssociated(
+	ctx context.Context,
+	associationID string,
+	branchENIID string,
+	trunkENIID string,
+) (bool, error) {
+	output, err := d.ec2Client.DescribeTrunkInterfaceAssociations(
+		ctx,
+		&ec2.DescribeTrunkInterfaceAssociationsInput{
+			AssociationIds: []string{associationID},
+		},
+	)
+	if err != nil {
+		return false, err
+	}
+	for _, association := range output.InterfaceAssociations {
+		if aws.ToString(association.BranchInterfaceId) == branchENIID &&
+			aws.ToString(association.TrunkInterfaceId) == trunkENIID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (d *Manager) UnAssignSecondaryIPv4Address(instanceID string, secondaryIPv4Address []string) error {

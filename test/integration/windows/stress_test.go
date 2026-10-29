@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/manifest"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/test/framework/resource/k8s/controller"
@@ -287,7 +286,7 @@ var _ = Describe("Windows Integration Stress Tests", func() {
 			By("getting the instance ID of the test Node")
 			nodeList := windowsNodeList.Items[:testNodeCount]
 			testNode := nodeList[0]
-			instanceID := manager.GetNodeInstanceID(&testNode)
+			instanceID := utils.GetNodeInstanceID(&testNode)
 			Expect(instanceID).ToNot(Equal(""))
 
 			By("creating a windows deployment")

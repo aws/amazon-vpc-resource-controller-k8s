@@ -31,6 +31,7 @@ import (
 
 var (
 	clusterName = "cluster-name"
+	vpcID       = "vpc-00000000000000000"
 	// instance id of EC2 worker node
 	instanceId   = "i-00000000000000000"
 	instanceType = ec2types.InstanceTypeM5Xlarge
@@ -188,8 +189,12 @@ var (
 				Values: []string{trunkInterfaceId},
 			},
 			{
-				Name:   aws.String("subnet-id"),
-				Values: []string{subnetId},
+				Name:   aws.String("tag:" + config.NetworkInterfaceOwnerTagKey),
+				Values: []string{config.NetworkInterfaceOwnerTagValue},
+			},
+			{
+				Name:   aws.String("vpc-id"),
+				Values: []string{vpcID},
 			},
 		},
 	}
@@ -347,7 +352,7 @@ func getMockWrapper(ctrl *gomock.Controller) (EC2APIHelper, *mock_api.MockEC2Wra
 	}
 
 	mockWrapper := mock_api.NewMockEC2Wrapper(ctrl)
-	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName)
+	ec2ApiHelper := NewEC2APIHelper(mockWrapper, clusterName, vpcID)
 
 	return ec2ApiHelper, mockWrapper
 }
@@ -1220,7 +1225,7 @@ func TestEc2APIHelper_GetBranchNetworkInterface(t *testing.T) {
 
 	mockWrapper.EXPECT().DescribeNetworkInterfaces(describeTrunkInterfaceInput).Return(describeTrunkInterfaceOutput, nil)
 
-	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId, &subnetId)
+	branchInterfaces, err := ec2ApiHelper.GetBranchNetworkInterface(&trunkInterfaceId)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []*ec2types.NetworkInterface{&networkInterface1, &networkInterface2}, branchInterfaces)
 }

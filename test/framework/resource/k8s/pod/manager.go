@@ -76,7 +76,7 @@ func (d *defaultManager) CreateAndWaitTillPodIsRunning(context context.Context, 
 		if err != nil {
 			return true, err
 		}
-		return isPodReady(updatedPod), nil
+		return IsPodReady(updatedPod), nil
 	})
 
 	return updatedPod, err
@@ -172,7 +172,7 @@ func (d *defaultManager) PatchPod(context context.Context, oldPod *v1.Pod, newPo
 	return d.k8sClient.Patch(context, newPod, client.MergeFrom(oldPod))
 }
 
-func isPodReady(pod *v1.Pod) bool {
+func IsPodReady(pod *v1.Pod) bool {
 	for _, condition := range pod.Status.Conditions {
 		if condition.Status == v1.ConditionTrue && condition.Type == v1.PodReady {
 			return true

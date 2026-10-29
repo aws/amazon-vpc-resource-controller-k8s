@@ -212,3 +212,20 @@ func TestNodeReconciler_Reconcile_SkipAutoComputeType(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, res, reconcile.Result{})
 }
+
+// Restored-trunk recovery reads the pod data store, so node initialization must wait for its first sync.
+func TestNodeReconciler_Reconcile_WaitsForPodDataStoreSync(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewNodeMock(ctrl, mockNodeObj)
+
+	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(false)
+	mock.Manager.EXPECT().GetNode(gomock.Any()).Times(0)
+	mock.Manager.EXPECT().AddNode(gomock.Any()).Times(0)
+	mock.Manager.EXPECT().UpdateNode(gomock.Any()).Times(0)
+
+	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
+	assert.NoError(t, err)
+	assert.Equal(t, reconcile.Result{RequeueAfter: time.Second}, res)
+}
