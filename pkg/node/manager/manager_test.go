@@ -991,3 +991,108 @@ func Test_TrunkEnabledInCNINode(t *testing.T) {
 		})
 	}
 }
+
+// replacementNode returns a Node that reuses nodeName for a new EC2 instance, as happens after private-IP reuse.
+func replacementNode(newInstanceID string, uid types.UID) *v1.Node {
+	n := v1Node.DeepCopy()
+	n.UID = uid
+	n.Spec.ProviderID = "aws:///us-west-2c/" + newInstanceID
+	return n
+}
+
+// The Node delete and create collapsed into one reconcile, so the cache still holds the old instance when the
+// replacement's update arrives. The old instance must be retired before the replacement is initialized.
+func Test_UpdateNode_NodeNameReusedByNewInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	newInstanceID := "i-0fedcba09876543210"
+	oldNode := mock_node.NewMockNode(ctrl)
+	oldNode.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
+	oldNode.EXPECT().IsManaged().Return(true).AnyTimes()
+	oldNode.EXPECT().UpdateCustomNetworkingSpecs(gomock.Any(), gomock.Any()).AnyTimes()
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: oldNode})
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(replacementNode(newInstanceID, "uid-new"), nil).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcV1alpha1.CNINode{}, nil).AnyTimes()
+	var jobs []AsyncOperationJob
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Do(func(job interface{}) {
+		jobs = append(jobs, job.(AsyncOperationJob))
+	}).AnyTimes()
+
+	assert.NoError(t, mock.Manager.UpdateNode(nodeName))
+
+	assert.Equal(t, newInstanceID, mock.Manager.dataStore[nodeName].GetNodeInstanceID())
+	if !assert.Len(t, jobs, 1) || !assert.Equal(t, Init, jobs[0].op) {
+		return
+	}
+	assert.Equal(t, newInstanceID, jobs[0].node.GetNodeInstanceID())
+
+	// Running the job retires the old instance first, then initializes the replacement.
+	newNode := mock_node.NewMockNode(ctrl)
+	gomock.InOrder(
+		oldNode.EXPECT().DeleteResources(mock.MockResourceManager).Return(nil),
+		newNode.EXPECT().InitResources(mock.MockResourceManager).Return(nil),
+		newNode.EXPECT().UpdateResources(mock.MockResourceManager).Return(nil),
+	)
+	mock.MockK8sAPI.EXPECT().BroadcastEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	jobs[0].node = newNode
+	_, err := mock.Manager.performAsyncOperation(jobs[0])
+	assert.NoError(t, err)
+}
+
+// GC has not yet deleted the old instance's CNINode when the replacement Node is added. The object must be taken
+// over by the current Node, keeping the features VPC CNI already published, instead of being reused as is.
+func Test_AddNode_TakesOverCNINodeOfReplacedInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+	k8sNode := replacementNode(instanceID, "uid-new")
+	stale := &rcV1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            nodeName,
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Node", Name: nodeName, UID: "uid-old"}},
+		},
+		Spec: rcV1alpha1.CNINodeSpec{Features: []rcV1alpha1.Feature{{Name: rcV1alpha1.SecurityGroupsForPods}}},
+	}
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(stale, nil).AnyTimes()
+	mock.MockK8sAPI.EXPECT().CreateCNINode(gomock.Any(), gomock.Any()).Times(0)
+	mock.MockK8sAPI.EXPECT().PatchCNINode(stale, gomock.Any()).DoAndReturn(
+		func(_, taken *rcV1alpha1.CNINode) error {
+			if assert.Len(t, taken.OwnerReferences, 1) {
+				assert.Equal(t, k8sNode.UID, taken.OwnerReferences[0].UID)
+			}
+			assert.Equal(t, stale.Spec.Features, taken.Spec.Features)
+			return nil
+		})
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).AnyTimes()
+
+	assert.NoError(t, mock.Manager.AddNode(nodeName))
+}
+
+// GC already marked the old instance's CNINode for deletion. AddNode must wait for it to go away instead of
+// managing the replacement with the deleting object.
+func Test_AddNode_WaitsForDeletingCNINodeOfReplacedInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+	deleting := &rcV1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              nodeName,
+			OwnerReferences:   []metav1.OwnerReference{{Kind: "Node", Name: nodeName, UID: "uid-old"}},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+			Finalizers:        []string{config.NodeTerminationFinalizer},
+		},
+	}
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(replacementNode(instanceID, "uid-new"), nil)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(deleting, nil).AnyTimes()
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Times(0)
+
+	assert.Error(t, mock.Manager.AddNode(nodeName))
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
+}

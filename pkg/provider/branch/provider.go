@@ -267,7 +267,7 @@ func (b *branchENIProvider) DeInitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 	b.log.Info("will clean up resources later to allow pods to be evicted first",
 		"node name", nodeName, "cleanup after", NodeDeleteRequeueRequestDelay)
-	b.workerPool.SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(nodeName), NodeDeleteRequeueRequestDelay)
+	b.workerPool.SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(nodeName, instance.InstanceID()), NodeDeleteRequeueRequestDelay)
 	return nil
 }
 
@@ -293,6 +293,12 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 	case worker.OperationProcessDeleteQueue:
 		return b.ProcessDeleteQueue(onDemandJob.NodeName)
 	case worker.OperationDeleteNode:
+		if trunkENI, ok := b.getTrunkFromCache(onDemandJob.NodeName); ok && onDemandJob.InstanceID != "" &&
+			trunkENI.InstanceID() != onDemandJob.InstanceID {
+			b.log.Info("skipping delete of a replaced instance, its node name now belongs to a new instance",
+				"node", onDemandJob.NodeName, "replaced instance", onDemandJob.InstanceID, "instance", trunkENI.InstanceID())
+			return ctrl.Result{}, nil
+		}
 		return b.DeleteNode(onDemandJob.NodeName)
 	case worker.OperationClearCheckpoint:
 		return b.clearCheckpoint(onDemandJob.NodeName)
@@ -584,17 +590,22 @@ func (b *branchENIProvider) DeleteBranchUsedByPods(nodeName string, UID string) 
 	return ctrl.Result{}, nil
 }
 
-// addTrunkToCache adds the trunk eni to cache, if the trunk already exists an error is thrown
+// addTrunkToCache adds the trunk eni to cache, if the trunk of the same instance already exists an error is thrown.
+// A trunk of another instance is replaced, as the node name was reused by a new instance after EC2 private-IP reuse.
 func (b *branchENIProvider) addTrunkToCache(nodeName string, trunkENI trunk.TrunkENI) error {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 	log := b.log.WithValues("node", nodeName)
 
-	if _, ok := b.trunkENICache[nodeName]; ok {
-		branchProviderOperationsErrCount.WithLabelValues("add_to_cache").Inc()
-		log.Error(ErrTrunkExistInCache, "trunk already exist in cache")
-		return ErrTrunkExistInCache
+	if cached, ok := b.trunkENICache[nodeName]; ok {
+		if cached.InstanceID() == trunkENI.InstanceID() {
+			branchProviderOperationsErrCount.WithLabelValues("add_to_cache").Inc()
+			log.Error(ErrTrunkExistInCache, "trunk already exist in cache")
+			return ErrTrunkExistInCache
+		}
+		log.Info("replacing the trunk of a replaced instance that had the same node name",
+			"replaced instance", cached.InstanceID(), "instance", trunkENI.InstanceID())
 	}
 
 	b.trunkENICache[nodeName] = trunkENI

@@ -97,6 +97,8 @@ type AsyncOperationJob struct {
 	op       AsyncOperation
 	node     node.Node
 	nodeName string
+	// replaced is the node of an earlier instance with the same name, de-initialized before node is initialized
+	replaced node.Node
 }
 
 const pausingHealthCheckDuration = 10 * time.Minute
@@ -175,18 +177,37 @@ func (m *manager) AddNode(nodeName string) error {
 		return fmt.Errorf("failed to add node %s, doesn't exist in cache anymore", nodeName)
 	}
 
-	log := m.Log.WithValues("node name", k8sNode.Name, "request", "add")
-
-	var newNode node.Node
-	var nodeFound bool
-
-	_, nodeFound = m.dataStore[k8sNode.Name]
-	if nodeFound {
-		log.Info("node is already processed, not processing add event again")
+	cachedNode, nodeFound := m.dataStore[k8sNode.Name]
+	if nodeFound && !isReplacedBy(cachedNode, k8sNode) {
+		m.Log.Info("node is already processed, not processing add event again", "node name", k8sNode.Name)
 		return nil
 	}
+	return m.addNode(k8sNode, cachedNode)
+}
 
-	if err = m.CreateCNINodeIfNotExisting(k8sNode); err != nil {
+// isReplacedBy reports whether the cached node belongs to an earlier instance that had the same node name.
+func isReplacedBy(cachedNode node.Node, k8sNode *v1.Node) bool {
+	instanceID := utils.GetNodeInstanceID(k8sNode)
+	return cachedNode.GetNodeInstanceID() != "" && instanceID != "" && cachedNode.GetNodeInstanceID() != instanceID
+}
+
+// addNode adds the node with the manager lock held. A non-nil replaced node is the cached node of an earlier instance
+// with the same name, which is de-initialized before the new node is initialized.
+func (m *manager) addNode(k8sNode *v1.Node, replaced node.Node) error {
+	nodeName := k8sNode.Name
+	log := m.Log.WithValues("node name", nodeName, "request", "add")
+	if replaced != nil {
+		// The cached entry is overwritten only once the new node is ready to be stored, so a failed add is retried.
+		log.Info("node name was reused by a new instance, replacing the cached node",
+			"replaced instance", replaced.GetNodeInstanceID(), "instance", utils.GetNodeInstanceID(k8sNode))
+		if !replaced.IsManaged() {
+			replaced = nil
+		}
+	}
+
+	var newNode node.Node
+
+	if err := m.CreateCNINodeIfNotExisting(k8sNode); err != nil {
 		m.Log.Error(err, "Failed to create CNINode for k8sNode", "NodeName", k8sNode.Name)
 		return err
 	}
@@ -213,6 +234,9 @@ func (m *manager) AddNode(nodeName string) error {
 			utils.GetNodeOS(k8sNode))
 		m.dataStore[k8sNode.Name] = newNode
 		log.V(1).Info("node added as an un-managed node")
+		if replaced != nil {
+			m.worker.SubmitJob(AsyncOperationJob{op: Delete, node: replaced, nodeName: nodeName})
+		}
 		return nil
 	}
 
@@ -220,23 +244,41 @@ func (m *manager) AddNode(nodeName string) error {
 		op:       op,
 		node:     newNode,
 		nodeName: nodeName,
+		replaced: replaced,
 	})
 	return nil
 }
 
 func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
-	if cniNode, err := m.wrapper.K8sAPI.GetCNINode(
-		types.NamespacedName{Name: node.Name},
-	); err != nil {
+	cniNode, err := m.wrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: node.Name})
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			m.Log.Info("Will create a new CNINode", "CNINodeName", node.Name)
 			return m.wrapper.K8sAPI.CreateCNINode(node, m.clusterName)
 		}
 		return err
-	} else {
+	}
+	if !utils.OwnedByReplacedNode(cniNode.OwnerReferences, node) {
 		m.Log.Info("The CNINode is already existing", "cninode", cniNode.Name, "features", cniNode.Spec.Features)
 		return nil
 	}
+	// The CNINode belongs to an earlier instance with the same node name, see EC2 private-IP reuse.
+	if !cniNode.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("waiting for the CNINode %s of a replaced node to be deleted", cniNode.Name)
+	}
+	// Take the object over before GC deletes it. Its features stay, as VPC CNI writes some of them only once at
+	// startup and replaces a feature when it writes it again.
+	takenOver := cniNode.DeepCopy()
+	for i := range takenOver.OwnerReferences {
+		if takenOver.OwnerReferences[i].Name == node.Name {
+			takenOver.OwnerReferences[i].UID = node.UID
+		}
+	}
+	if _, ok := takenOver.Spec.Tags[config.NetworkInterfaceNodeIDKey]; ok {
+		takenOver.Spec.Tags[config.NetworkInterfaceNodeIDKey] = utils.GetNodeInstanceID(node)
+	}
+	m.Log.Info("taking over the CNINode of a replaced node with the same name", "cninode", cniNode.Name)
+	return m.wrapper.K8sAPI.PatchCNINode(cniNode, takenOver)
 }
 
 // UpdateNode updates the node object and, if the node is previously un-managed and now
@@ -258,6 +300,10 @@ func (m *manager) UpdateNode(nodeName string) error {
 	if !found {
 		m.Log.Info("the node doesn't exist in cache anymore, it might have been deleted")
 		return nil
+	}
+	// The delete of the earlier instance and the add of the new one collapsed into this update.
+	if isReplacedBy(cachedNode, k8sNode) {
+		return m.addNode(k8sNode, cachedNode)
 	}
 
 	var op AsyncOperation
@@ -428,6 +474,12 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 	var err error
 	switch asyncJob.op {
 	case Init:
+		if asyncJob.replaced != nil {
+			if err := asyncJob.replaced.DeleteResources(m.resourceManager); err != nil {
+				log.Error(err, "failed to de-initialize the replaced node", "replaced instance", asyncJob.replaced.GetNodeInstanceID())
+			}
+			asyncJob.replaced = nil
+		}
 		utils.SendNodeEventWithNodeName(m.wrapper.K8sAPI, asyncJob.nodeName, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", m.controllerVersion), v1.EventTypeNormal, m.Log)
 		err = asyncJob.node.InitResources(m.resourceManager)
 		if err != nil {

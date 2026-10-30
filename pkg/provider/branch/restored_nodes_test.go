@@ -431,7 +431,7 @@ func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 		// DeleteNode clears the checkpoint, so the node cold-inits if it is ever managed again.
 		k8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(nil)
 		workerPool.EXPECT().SubmitJob(gomock.Any()).AnyTimes()
-		workerPool.EXPECT().SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(NodeName), NodeDeleteRequeueRequestDelay)
+		workerPool.EXPECT().SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(NodeName, restoredInstanceID), NodeDeleteRequeueRequestDelay)
 		conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true).AnyTimes()
 		// EC2 inventory for any ownership check made before the branch ENIs are deleted.
 		ec2Down := false
@@ -477,7 +477,7 @@ func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 			rate.NewLimiter(rate.Inf, 1),
 		))
 		time.Sleep(NodeDeleteRequeueRequestDelay)
-		result, err := provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName))
+		result, err := provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName, restoredInstanceID))
 		require.NoError(t, err)
 		if describeDown {
 			// The unprepared trunk still holds the queued ENIs, so DeleteNode keeps it and asks to run again.
@@ -493,7 +493,7 @@ func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 				}
 				time.Sleep(result.RequeueAfter)
 			}
-			result, err = provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName))
+			result, err = provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName, restoredInstanceID))
 			require.NoError(t, err)
 		}
 		require.False(t, result.Requeue)

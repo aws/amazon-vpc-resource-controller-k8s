@@ -181,7 +181,8 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 
 	} else { // CNINode is marked for deletion
-		if !nodeFound {
+		// A CNINode owned by a replaced Node with the same name belongs to an instance that is gone, so finalize it.
+		if !nodeFound || utils.OwnedByReplacedNode(cniNode.OwnerReferences, node) {
 			//  node is also deleted, proceed with running the cleanup routine and remove the finalizer
 
 			// run cleanup for Linux nodes only

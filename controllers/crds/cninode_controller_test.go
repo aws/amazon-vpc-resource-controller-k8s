@@ -245,6 +245,46 @@ func TestCNINodeReconcile(t *testing.T) {
 				assert.Equal(t, res, reconcile.Result{})
 			},
 		},
+		{
+			// After EC2 private-IP reuse, GC deletes the old instance's CNINode while a replacement Node with the same
+			// name exists. The object belongs to the old Node UID, so it must be finalized, not recreated.
+			name: "verify CNINode of a replaced instance is finalized instead of recreated",
+			args: args{
+				mockNode: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   mockName,
+						UID:    "uid-new",
+						Labels: map[string]string{config.NodeLabelOS: config.OSLinux},
+					},
+				},
+				mockCNINode: &v1alpha1.CNINode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:              mockName,
+						Labels:            map[string]string{config.NodeLabelOS: config.OSLinux},
+						OwnerReferences:   []metav1.OwnerReference{{Kind: "Node", Name: mockName, UID: "uid-old"}},
+						Finalizers:        []string{config.NodeTerminationFinalizer},
+						DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
+					},
+					Spec: v1alpha1.CNINodeSpec{
+						Tags: map[string]string{config.NetworkInterfaceNodeIDKey: "i-0old"},
+					},
+				},
+			},
+			prepare: func(f *fields) {
+				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner {
+					assert.Equal(t, "i-0old", nodeID)
+					return f.mockResourceCleaner
+				}
+				f.mockResourceCleaner.EXPECT().DeleteLeakedResources().Times(1).Return(nil)
+				f.mockFinalizerManager.EXPECT().
+					RemoveFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
+					Return(nil)
+			},
+			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
+				assert.NoError(t, err)
+				assert.Equal(t, res, reconcile.Result{})
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
