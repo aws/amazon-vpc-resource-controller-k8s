@@ -59,6 +59,9 @@ type manager struct {
 	controllerVersion string
 	stopHealthCheckAt time.Time
 	clusterName       string
+	// replacedFeatures holds, per node name, the features of a deleting CNINode of a replaced node. They are carried
+	// to the new CNINode because VPC CNI may have written them to the deleting object and does not always rewrite them.
+	replacedFeatures map[string][]v1alpha1.Feature
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -253,8 +256,13 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 	cniNode, err := m.wrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: node.Name})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			m.Log.Info("Will create a new CNINode", "CNINodeName", node.Name)
-			return m.wrapper.K8sAPI.CreateCNINode(node, m.clusterName)
+			features := m.replacedFeatures[node.Name]
+			m.Log.Info("Will create a new CNINode", "CNINodeName", node.Name, "carried features", features)
+			if err := m.wrapper.K8sAPI.CreateCNINode(node, m.clusterName, features...); err != nil {
+				return err
+			}
+			delete(m.replacedFeatures, node.Name)
+			return nil
 		}
 		return err
 	}
@@ -264,6 +272,10 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 	}
 	// The CNINode belongs to an earlier instance with the same node name, see EC2 private-IP reuse.
 	if !cniNode.DeletionTimestamp.IsZero() {
+		if m.replacedFeatures == nil {
+			m.replacedFeatures = make(map[string][]v1alpha1.Feature)
+		}
+		m.replacedFeatures[node.Name] = cniNode.Spec.Features
 		return fmt.Errorf("waiting for the CNINode %s of a replaced node to be deleted", cniNode.Name)
 	}
 	// Take the object over before GC deletes it. Its features stay, as VPC CNI writes some of them only once at
@@ -387,6 +399,7 @@ func (m *manager) DeleteNode(nodeName string) error {
 	}
 
 	delete(m.dataStore, nodeName)
+	delete(m.replacedFeatures, nodeName)
 
 	if !cachedNode.IsManaged() {
 		log.V(1).Info("un managed node removed from data store")

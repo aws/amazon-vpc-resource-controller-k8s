@@ -1080,6 +1080,7 @@ func Test_AddNode_WaitsForDeletingCNINodeOfReplacedInstance(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl, map[string]node.Node{})
+	features := []rcV1alpha1.Feature{{Name: rcV1alpha1.SecurityGroupsForPods}}
 	deleting := &rcV1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              nodeName,
@@ -1087,12 +1088,25 @@ func Test_AddNode_WaitsForDeletingCNINodeOfReplacedInstance(t *testing.T) {
 			DeletionTimestamp: &metav1.Time{Time: time.Now()},
 			Finalizers:        []string{config.NodeTerminationFinalizer},
 		},
+		Spec: rcV1alpha1.CNINodeSpec{Features: features},
 	}
+	k8sNode := replacementNode(instanceID, "uid-new")
+	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, nodeName)
 
-	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(replacementNode(instanceID, "uid-new"), nil)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(deleting, nil).AnyTimes()
-	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Times(0)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil).Times(2)
+	gomock.InOrder(
+		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(deleting, nil),
+		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(nil, notFound),
+	)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).AnyTimes()
 
 	assert.Error(t, mock.Manager.AddNode(nodeName))
 	assert.NotContains(t, mock.Manager.dataStore, nodeName)
+
+	// Once the deleting object is gone, the new CNINode carries the features VPC CNI wrote to it. On IPv6 VPC CNI
+	// writes the SecurityGroupsForPods feature only once at startup, so without them the node never gets a trunk.
+	mock.MockK8sAPI.EXPECT().CreateCNINode(k8sNode, mockClusterName, features[0]).Return(nil)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcV1alpha1.CNINode{}, nil).AnyTimes()
+	assert.NoError(t, mock.Manager.AddNode(nodeName))
+	assert.Empty(t, mock.Manager.replacedFeatures)
 }
