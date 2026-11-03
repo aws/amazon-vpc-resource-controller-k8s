@@ -15,6 +15,7 @@ function load_cluster_details() {
   SERVICE_ROLE_ARN=$(echo $CLUSTER_INFO | jq -r '.cluster.roleArn')
   K8S_VERSION=$(echo $CLUSTER_INFO | jq -r '.cluster.version')
   ROLE_NAME=${SERVICE_ROLE_ARN##*/}
+  PARTITION=$(echo $SERVICE_ROLE_ARN | cut -d: -f2)
 
   echo "VPC ID: $VPC_ID, Service Role ARN: $SERVICE_ROLE_ARN, Role Name: $ROLE_NAME"
 }
@@ -26,8 +27,10 @@ function load_deveks_cluster_details() {
   VPC_ID=$(aws ec2 describe-instances --instance-ids ${INSTANCE_ID} | jq -r '.Reservations[].Instances[].VpcId')
   REGION_NAME=$(echo $REGION | tr -d '-')
   ROLE_NAME="deveks-${CLUSTER_NAME}-cluster-ServiceRole-${REGION_NAME}"
-  ACCOUNT_ID=$(aws sts get-caller-identity | jq -r '.Account')
-  SERVICE_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
+  CALLER_IDENTITY=$(aws sts get-caller-identity)
+  ACCOUNT_ID=$(echo $CALLER_IDENTITY | jq -r '.Account')
+  PARTITION=$(echo $CALLER_IDENTITY | jq -r '.Arn' | cut -d: -f2)
+  SERVICE_ROLE_ARN="arn:${PARTITION}:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
 
   echo "VPC ID: $VPC_ID, Service Role ARN: $SERVICE_ROLE_ARN, Role Name: $ROLE_NAME"
 }
@@ -37,14 +40,14 @@ function load_deveks_cluster_details() {
 function attach_controller_policy_cluster_role() {
   echo "Attaching IAM Policy to Cluster Service Role"
   AWS_MAX_ATTEMPTS=10 aws iam attach-role-policy \
-    --policy-arn arn:aws:iam::aws:policy/AmazonEKSVPCResourceController \
+    --policy-arn arn:${PARTITION}:iam::aws:policy/AmazonEKSVPCResourceController \
     --role-name "$ROLE_NAME" > /dev/null
 }
 
 function detach_controller_policy_cluster_role() {
   echo "Detaching the IAM Policy from Cluster Service Role"
   aws iam detach-role-policy \
-    --policy-arn arn:aws:iam::aws:policy/AmazonEKSVPCResourceController \
+    --policy-arn arn:${PARTITION}:iam::aws:policy/AmazonEKSVPCResourceController \
     --role-name $ROLE_NAME > /dev/null
 }
 
