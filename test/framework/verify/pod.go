@@ -135,13 +135,21 @@ func (v *PodVerification) WindowsPodsHaveIPv4Address(namespace string,
 	pods, err := v.frameWork.PodManager.GetPodsWithLabel(v.ctx, namespace, podLabelKey, podLabelVal)
 	Expect(err).ToNot(HaveOccurred())
 
+	verified := 0
 	for _, pod := range pods {
 		// Skip pods that failed and were replaced by their Job.
 		if pod.Status.Phase == v1.PodFailed {
 			continue
 		}
+		// Short-lived Job pods can complete before kubelet reports Status.PodIP.
+		if pod.Status.PodIP == "" {
+			Expect(pod.Annotations).To(HaveKey("vpc.amazonaws.com/PrivateIPv4Address"))
+			continue
+		}
 		v.WindowsPodHaveIPv4Address(&pod)
+		verified++
 	}
+	Expect(verified).To(BeNumerically(">", 0), "no pod had a PodIP to verify against its annotation")
 }
 
 func (v *PodVerification) ExpectPodHaveDesiredPhase(namespace string,
