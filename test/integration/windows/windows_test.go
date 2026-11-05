@@ -645,7 +645,7 @@ var _ = Describe("Windows Integration Test", func() {
 						PodLabel(podLabelKey, podLabelVal).
 						NodeSelector(map[string]string{"kubernetes.io/os": "windows", podLabelKey: podLabelVal}).
 						Build()
-					deployCtx, cancel := context.WithTimeout(ctx, utils.WindowsPodsCreationTimeout)
+					deployCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 					defer cancel()
 					_, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReady(deployCtx, deployment)
 					Expect(err).ToNot(HaveOccurred())
@@ -658,11 +658,13 @@ var _ = Describe("Windows Integration Test", func() {
 					err = frameWork.DeploymentManager.DeleteAndWaitUntilDeploymentDeleted(ctx, deployment)
 					Expect(err).ToNot(HaveOccurred())
 
-					// allow some time for previous test pods to cool down since deletion of deployment doesn't wait for pods to terminate
-					time.Sleep(utils.WindowsPodsDeletionTimeout)
-					privateIPsAfter, prefixesAfterDelete, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
-					Expect(err).ToNot(HaveOccurred())
-					Expect(len(prefixesAfterDelete)).To(Equal(2))
+					var privateIPsAfter []string
+					Eventually(func(g Gomega) {
+						var prefixesAfterDelete []string
+						privateIPsAfter, prefixesAfterDelete, err = frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+						g.Expect(err).ToNot(HaveOccurred())
+						g.Expect(prefixesAfterDelete).To(HaveLen(2))
+					}).WithTimeout(5 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
 					// number of secondary ips should not change
 					Expect(len(privateIPsBefore)).To(Equal(len(privateIPsAfter)))
 
@@ -780,7 +782,7 @@ var _ = Describe("Windows Integration Test", func() {
 						PodLabel(podLabelKey, podLabelVal).
 						NodeSelector(map[string]string{"kubernetes.io/os": "windows", podLabelKey: podLabelVal}).
 						Build()
-					deployCtx, cancel := context.WithTimeout(ctx, utils.WindowsPodsCreationTimeout)
+					deployCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 					defer cancel()
 					_, err = frameWork.DeploymentManager.CreateAndWaitUntilDeploymentReady(deployCtx, deployment)
 					Expect(err).ToNot(HaveOccurred())
@@ -793,11 +795,13 @@ var _ = Describe("Windows Integration Test", func() {
 					err = frameWork.DeploymentManager.DeleteAndWaitUntilDeploymentDeleted(ctx, deployment)
 					Expect(err).ToNot(HaveOccurred())
 
-					// allow some time for previous test pods to cool down since deletion of deployment doesn't wait for pods to terminate
-					time.Sleep(utils.WindowsPodsDeletionTimeout)
-					privateIPsAfter, prefixesAfterDelete, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
-					Expect(err).ToNot(HaveOccurred())
-					Expect(len(prefixesAfterDelete)).To(Equal(2))
+					var privateIPsAfter []string
+					Eventually(func(g Gomega) {
+						var prefixesAfterDelete []string
+						privateIPsAfter, prefixesAfterDelete, err = frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+						g.Expect(err).ToNot(HaveOccurred())
+						g.Expect(prefixesAfterDelete).To(HaveLen(2))
+					}).WithTimeout(5 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
 					// number of secondary ips should not change
 					Expect(len(privateIPsBefore)).To(Equal(len(privateIPsAfter)))
 
