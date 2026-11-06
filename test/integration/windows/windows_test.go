@@ -545,12 +545,14 @@ var _ = Describe("Windows Integration Test", func() {
 
 				})
 				It("two prefixes should be assigned", func() {
-					// allow some time for previous test pod to cool down
-					time.Sleep(bufferForCoolDown)
-					numIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
-					Expect(err).ToNot(HaveOccurred())
-					Expect(len(numIPsBefore)).To(Equal(0))
-					Expect(len(prefixesBefore)).To(Equal(2))
+					var prefixesBefore []string
+					Eventually(func(g Gomega) {
+						var numIPsBefore []string
+						numIPsBefore, prefixesBefore, err = frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+						g.Expect(err).ToNot(HaveOccurred())
+						g.Expect(numIPsBefore).To(BeEmpty())
+						g.Expect(prefixesBefore).To(HaveLen(2))
+					}).WithTimeout(2 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
 
 					By("creating pod and waiting for ready should have 1 new prefix assigned")
 					// verify if ip assigned is coming from a prefix
@@ -684,12 +686,14 @@ var _ = Describe("Windows Integration Test", func() {
 				})
 
 				It("two prefixes should be assigned", func() {
-					// allow some time for previous test pod to cool down
-					time.Sleep(bufferForCoolDown)
-					numIPsBefore, prefixesBefore, err := frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
-					Expect(err).ToNot(HaveOccurred())
-					Expect(len(numIPsBefore)).To(Equal(0))
-					Expect(len(prefixesBefore)).To(Equal(2))
+					var prefixesBefore []string
+					Eventually(func(g Gomega) {
+						var numIPsBefore []string
+						numIPsBefore, prefixesBefore, err = frameWork.EC2Manager.GetPrivateIPv4AddressAndPrefix(instanceID)
+						g.Expect(err).ToNot(HaveOccurred())
+						g.Expect(numIPsBefore).To(BeEmpty())
+						g.Expect(prefixesBefore).To(HaveLen(2))
+					}).WithTimeout(2 * time.Minute).WithPolling(10 * time.Second).Should(Succeed())
 
 					By("creating pod and waiting for ready should have 1 new prefix assigned")
 					// verify if ip assigned is coming from a prefix
