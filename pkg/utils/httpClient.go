@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"golang.org/x/time/rate"
 )
 
@@ -28,15 +29,17 @@ const (
 )
 
 // NewAWSSDKHTTPClient returns a new HTTP client with the default AWS SDK timeout.
-func NewAWSSDKHTTPClient() *http.Client {
-	return &http.Client{Timeout: defaultAWSSDKClientTimeout}
+// It returns *awshttp.BuildableClient (instead of *http.Client) so the SDK can
+// inject custom CA bundles via WithTransportOptions in air-gapped regions.
+func NewAWSSDKHTTPClient() *awshttp.BuildableClient {
+	return awshttp.NewBuildableClient().WithTimeout(defaultAWSSDKClientTimeout)
 }
 
 // NewRateLimitedClient returns a new HTTP client with rate limiter and the default AWS SDK timeout.
 // The timeout is applied after the rate limit wait, so queue time does not eat into the HTTP timeout.
 func NewRateLimitedClient(qps int, burst int) (*http.Client, error) {
 	if qps == 0 {
-		return NewAWSSDKHTTPClient(), nil
+		return &http.Client{Timeout: defaultAWSSDKClientTimeout}, nil
 	}
 	if burst < 1 {
 		return nil, fmt.Errorf("burst expected >0, got %d", burst)
