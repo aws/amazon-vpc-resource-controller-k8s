@@ -1100,7 +1100,7 @@ func Test_AddNode_WaitsForDeletingCNINodeOfReplacedInstance(t *testing.T) {
 	)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).AnyTimes()
 
-	assert.Error(t, mock.Manager.AddNode(nodeName))
+	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrReplacedCNINodeDeleting)
 	assert.NotContains(t, mock.Manager.dataStore, nodeName)
 
 	// Once the deleting object is gone, the new CNINode carries the features VPC CNI wrote to it. On IPv6 VPC CNI
@@ -1109,4 +1109,34 @@ func Test_AddNode_WaitsForDeletingCNINodeOfReplacedInstance(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcV1alpha1.CNINode{}, nil).AnyTimes()
 	assert.NoError(t, mock.Manager.AddNode(nodeName))
 	assert.Empty(t, mock.Manager.replacedFeatures)
+}
+
+// The new instance that reused the node name is not selected for management, so the job only retires the old one.
+func Test_UpdateNode_NodeNameReusedByUnmanagedInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	newInstanceID := "i-0fedcba09876543210"
+	oldNode := mock_node.NewMockNode(ctrl)
+	oldNode.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
+	oldNode.EXPECT().IsManaged().Return(true).AnyTimes()
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: oldNode})
+
+	k8sNode := replacementNode(newInstanceID, "uid-new")
+	delete(k8sNode.Labels, config.HasTrunkAttachedLabel)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcV1alpha1.CNINode{}, nil).AnyTimes()
+	var jobs []AsyncOperationJob
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Do(func(job interface{}) {
+		jobs = append(jobs, job.(AsyncOperationJob))
+	}).AnyTimes()
+
+	assert.NoError(t, mock.Manager.UpdateNode(nodeName))
+
+	assert.False(t, mock.Manager.dataStore[nodeName].IsManaged())
+	assert.Equal(t, newInstanceID, mock.Manager.dataStore[nodeName].GetNodeInstanceID())
+	if assert.Len(t, jobs, 1) {
+		assert.Equal(t, Delete, jobs[0].op)
+		assert.Equal(t, oldNode, jobs[0].node)
+	}
 }

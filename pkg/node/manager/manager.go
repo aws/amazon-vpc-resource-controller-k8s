@@ -106,6 +106,10 @@ type AsyncOperationJob struct {
 
 const pausingHealthCheckDuration = 10 * time.Minute
 
+// ErrReplacedCNINodeDeleting is returned while the CNINode of a replaced node with the same name is still being
+// deleted. It is an expected wait after EC2 private-IP reuse, not a failure.
+var ErrReplacedCNINodeDeleting = errors.New("waiting for the CNINode of a replaced node to be deleted")
+
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
 	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
@@ -211,7 +215,11 @@ func (m *manager) addNode(k8sNode *v1.Node, replaced node.Node) error {
 	var newNode node.Node
 
 	if err := m.CreateCNINodeIfNotExisting(k8sNode); err != nil {
-		m.Log.Error(err, "Failed to create CNINode for k8sNode", "NodeName", k8sNode.Name)
+		if errors.Is(err, ErrReplacedCNINodeDeleting) {
+			log.Info("waiting for the CNINode of a replaced node to be deleted")
+		} else {
+			m.Log.Error(err, "Failed to create CNINode for k8sNode", "NodeName", k8sNode.Name)
+		}
 		return err
 	}
 
@@ -276,7 +284,7 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 			m.replacedFeatures = make(map[string][]v1alpha1.Feature)
 		}
 		m.replacedFeatures[node.Name] = cniNode.Spec.Features
-		return fmt.Errorf("waiting for the CNINode %s of a replaced node to be deleted", cniNode.Name)
+		return fmt.Errorf("%w: %s", ErrReplacedCNINodeDeleting, cniNode.Name)
 	}
 	// Take the object over before GC deletes it. Its features stay, as VPC CNI writes some of them only once at
 	// startup and replaces a feature when it writes it again.

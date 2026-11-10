@@ -23,6 +23,7 @@ import (
 	mock_condition "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/condition"
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
 	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
@@ -228,4 +229,19 @@ func TestNodeReconciler_Reconcile_WaitsForPodDataStoreSync(t *testing.T) {
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
 	assert.Equal(t, reconcile.Result{RequeueAfter: time.Second}, res)
+}
+
+func TestNodeReconciler_Reconcile_WaitsForReplacedCNINode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewNodeMock(ctrl, mockNodeObj)
+
+	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
+	mock.Manager.EXPECT().GetNode(mockNodeName).Return(nil, false).Times(1)
+	mock.Manager.EXPECT().AddNode(mockNodeName).Return(fmt.Errorf("%w: %s", manager.ErrReplacedCNINodeDeleting, mockNodeName))
+	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
+
+	assert.NoError(t, err, "an expected wait must not be reported as a reconcile error")
+	assert.Positive(t, res.RequeueAfter)
 }

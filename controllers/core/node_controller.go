@@ -15,6 +15,7 @@ package controllers
 
 import (
 	"context"
+	goErrors "errors"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -42,6 +43,9 @@ const (
 	NodeTerminationFinalizer  = "networking.k8s.aws/resource-cleanup"
 	computeTypeLabelKey       = "eks.amazonaws.com/compute-type"
 	autoComputeTypeLabelValue = "auto"
+	// replacedCNINodeRetryPeriod is how often a node waits for the CNINode of a replaced node to be deleted. The
+	// CNINode reconciler finalizes such a CNINode right away, so the wait is short.
+	replacedCNINodeRetryPeriod = time.Second
 )
 
 // NodeReconciler reconciles a Node object
@@ -108,6 +112,10 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	} else {
 		logger.Info("adding node")
 		err = r.Manager.AddNode(req.Name)
+	}
+	// Retry without reporting an error, as waiting for the CNINode of a replaced node is expected after IP reuse.
+	if goErrors.Is(err, manager.ErrReplacedCNINodeDeleting) {
+		return ctrl.Result{RequeueAfter: replacedCNINodeRetryPeriod}, nil
 	}
 
 	return ctrl.Result{}, err
