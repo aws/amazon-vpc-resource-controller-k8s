@@ -42,6 +42,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 var (
@@ -172,6 +173,15 @@ func Test_GetNewManager(t *testing.T) {
 
 	assert.NotNil(t, manager)
 	assert.NoError(t, err)
+
+	// The node manager is built at startup on every replica, so the standby already exposes the restore metrics.
+	families, err := metrics.Registry.Gather()
+	assert.NoError(t, err)
+	exposed := false
+	for _, family := range families {
+		exposed = exposed || family.GetName() == "cninode_checkpoint_restore_total"
+	}
+	assert.True(t, exposed, "cninode_checkpoint_restore_total is not exposed after NewNodeManager")
 }
 
 // Test_GetNewManager tests new node manager is created with error

@@ -95,9 +95,19 @@ var (
 	registerMetricsOnce sync.Once
 )
 
-func registerNodeMetrics() {
+// RegisterMetrics registers the node metrics and exposes every restore series at 0. Call it at startup on every
+// replica: a restart restores all nodes within one scrape, and a scraper that baselines a new family would drop them.
+func RegisterMetrics() {
 	registerMetricsOnce.Do(func() {
 		metrics.Registry.MustRegister(cniNodeCheckpointRestoreCount, nodeInitDuration)
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultHit, checkpointRestoreReasonNone)
+		cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultError, checkpointRestoreReasonNetworkUpdate)
+		for _, reason := range []string{
+			checkpointRestoreReasonReadError, checkpointRestoreReasonForeignManager, checkpointRestoreReasonMissingState,
+			checkpointRestoreReasonMissingField, checkpointRestoreReasonInstanceIDMismatch, checkpointRestoreReasonInvalidState,
+		} {
+			cniNodeCheckpointRestoreCount.WithLabelValues(checkpointRestoreResultFallback, reason)
+		}
 	})
 }
 
@@ -133,7 +143,7 @@ type Node interface {
 
 // NewManagedNode returns node managed by the controller
 func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
-	registerNodeMetrics()
+	RegisterMetrics()
 	return &node{
 		managed: true,
 		log: log.WithName("node resource handler").
