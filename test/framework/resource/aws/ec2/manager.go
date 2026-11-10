@@ -461,3 +461,48 @@ func (d *Manager) ReCreateSG(securityGroupName string, ctx context.Context) (str
 	}
 	return groupID, nil
 }
+
+// RunInstanceWithPrivateIP launches one instance from the launch template with the given primary private IP and
+// returns its ID. It retries while EC2 still holds the IP for a terminating instance, so a caller can take over the
+// private IP, and with it the node name, of an instance it just terminated.
+func (d *Manager) RunInstanceWithPrivateIP(
+	ctx context.Context,
+	launchTemplate ec2types.LaunchTemplateSpecification,
+	instanceType ec2types.InstanceType,
+	subnetID string,
+	privateIP string,
+	tags []ec2types.Tag,
+) (string, error) {
+	input := &ec2.RunInstancesInput{
+		LaunchTemplate:   &launchTemplate,
+		InstanceType:     instanceType,
+		MinCount:         aws.Int32(1),
+		MaxCount:         aws.Int32(1),
+		SubnetId:         aws.String(subnetID),
+		PrivateIpAddress: aws.String(privateIP),
+	}
+	if len(tags) > 0 {
+		input.TagSpecifications = []ec2types.TagSpecification{{ResourceType: ec2types.ResourceTypeInstance, Tags: tags}}
+	}
+
+	var instanceID string
+	var lastErr error
+	err := wait.PollUntilContextTimeout(ctx, utils.PollIntervalShort, utils.ResourceCreationTimeout, true,
+		func(ctx context.Context) (bool, error) {
+			out, err := d.ec2Client.RunInstances(ctx, input)
+			if err != nil {
+				var apiErr smithy.APIError
+				if errors.As(err, &apiErr) && apiErr.ErrorCode() == "InvalidIPAddress.InUse" {
+					lastErr = err
+					return false, nil
+				}
+				return false, err
+			}
+			instanceID = aws.ToString(out.Instances[0].InstanceId)
+			return true, nil
+		})
+	if err != nil && lastErr != nil {
+		return "", fmt.Errorf("launching an instance with private IP %s: %w", privateIP, lastErr)
+	}
+	return instanceID, err
+}
