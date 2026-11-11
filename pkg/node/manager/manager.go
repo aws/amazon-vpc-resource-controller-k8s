@@ -517,7 +517,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 				log.Info("node manager sets a pause on health check due to observing a EC2 error", "error", err.Error())
 			}
 			log.Error(err, "removing the node from cache as it failed to initialize")
-			m.removeNodeSafe(asyncJob.nodeName)
+			m.removeNodeSafe(asyncJob.nodeName, asyncJob.node)
 			// if initializing node failed, we want to make this visible although the manager will retry
 			// the trunk label will stay as false until retry succeed
 
@@ -617,11 +617,15 @@ func (m *manager) customNetworkEnabledInCNINode(node *v1.Node) (bool, error) {
 	return false, err
 }
 
-func (m *manager) removeNodeSafe(nodeName string) {
+// removeNodeSafe removes the given node from the data store. A different node cached under the name is kept, as it
+// belongs to a new instance that reused the node name.
+func (m *manager) removeNodeSafe(nodeName string, cachedNode node.Node) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	delete(m.dataStore, nodeName)
+	if m.dataStore[nodeName] == cachedNode {
+		delete(m.dataStore, nodeName)
+	}
 }
 
 func (m *manager) check() healthz.Checker {

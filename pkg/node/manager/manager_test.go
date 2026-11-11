@@ -670,7 +670,8 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+	mock := NewMock(ctrl, map[string]node.Node{})
+	mock.Manager.dataStore[nodeName] = mock.MockNode
 
 	job := AsyncOperationJob{
 		node:     mock.MockNode,
@@ -691,7 +692,8 @@ func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+	mock := NewMock(ctrl, map[string]node.Node{})
+	mock.Manager.dataStore[nodeName] = mock.MockNode
 
 	job := AsyncOperationJob{
 		node:     mock.MockNode,
@@ -1164,4 +1166,28 @@ func Test_AddNode_IgnoresFeaturesRecordedForAnotherNode(t *testing.T) {
 
 	assert.NoError(t, mock.Manager.AddNode(nodeName))
 	assert.Empty(t, mock.Manager.replacedFeatures)
+}
+
+// A failed Init of an instance that a new instance with the same node name already replaced must not remove the
+// new instance's cached node.
+func Test_performAsyncOperation_failKeepsNodeOfNewInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	newNode := mock_node.NewMockNode(ctrl)
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: newNode})
+
+	job := AsyncOperationJob{
+		node:     mock.MockNode,
+		nodeName: nodeName,
+		op:       Init,
+	}
+
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{})
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
+	mock.MockK8sAPI.EXPECT().BroadcastEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+
+	_, err := mock.Manager.performAsyncOperation(job)
+	assert.NoError(t, err)
+	assert.Equal(t, newNode, mock.Manager.dataStore[nodeName])
 }
