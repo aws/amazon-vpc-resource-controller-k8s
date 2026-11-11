@@ -39,7 +39,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 type manager struct {
@@ -62,6 +64,17 @@ type manager struct {
 	// replacedFeatures holds, per node name, the features of a deleting CNINode of a replaced node. They are carried
 	// to the new CNINode because VPC CNI may have written them to the deleting object and does not always rewrite them.
 	replacedFeatures map[string]replacedCNINode
+	// removedNodes holds, per node name, a managed node removed from the data store, so a new instance that registers
+	// under the name while the removed node's state may remain is counted as a node name reuse.
+	removedNodes map[string]removedNode
+	// reusedNodes holds, per node name, the new instance of a counted node name reuse that has not initialized yet.
+	reusedNodes map[string]string
+}
+
+// removedNode is the instance ID of a managed node removed from the data store, and when it was removed.
+type removedNode struct {
+	instanceID string
+	removedAt  time.Time
 }
 
 // replacedCNINode is the features of a deleting CNINode of a replaced node, recorded for the Node that replaces it.
@@ -112,6 +125,24 @@ type AsyncOperationJob struct {
 
 const pausingHealthCheckDuration = 10 * time.Minute
 
+// removedNodeRetention is how long a removed node's state, such as its cached trunk, may outlive the node.
+const removedNodeRetention = 10 * time.Minute
+
+var (
+	// nodeNameReuseDetected and nodeNameReuseInitialized compare node name reuse with its outcome. They should move
+	// together; a gap is a new instance that reused the node name of an earlier one and never got its resources.
+	nodeNameReuseDetected = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "node_name_reuse_detected_total",
+		Help: "Number of new instances found registered under the node name of an earlier instance that used " +
+			"security groups for pods, while state of the earlier instance remained",
+	})
+	nodeNameReuseInitialized = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "node_name_reuse_initialized_total",
+		Help: "Number of the instances counted by node_name_reuse_detected_total that initialized their resources",
+	})
+	registerMetricsOnce sync.Once
+)
+
 // ErrReplacedCNINodeDeleting is returned while the CNINode of a replaced node with the same name is still being
 // deleted. It is an expected wait after EC2 private-IP reuse, not a failure.
 var ErrReplacedCNINodeDeleting = errors.New("waiting for the CNINode of a replaced node to be deleted")
@@ -119,6 +150,9 @@ var ErrReplacedCNINodeDeleting = errors.New("waiting for the CNINode of a replac
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
 	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+	registerMetricsOnce.Do(func() {
+		metrics.Registry.MustRegister(nodeNameReuseDetected, nodeNameReuseInitialized)
+	})
 
 	manager := &manager{
 		resourceManager:   resourceManager,
@@ -217,6 +251,15 @@ func (m *manager) addNode(k8sNode *v1.Node, replaced node.Node) error {
 			replaced = nil
 		}
 	}
+	instanceID := utils.GetNodeInstanceID(k8sNode)
+	if replaced != nil {
+		m.countNodeNameReuse(nodeName, instanceID, "cached node")
+	} else if removed, ok := m.removedNodes[nodeName]; ok {
+		if removed.instanceID != instanceID && time.Since(removed.removedAt) < removedNodeRetention {
+			m.countNodeNameReuse(nodeName, instanceID, "removed node")
+		}
+		delete(m.removedNodes, nodeName)
+	}
 
 	var newNode node.Node
 
@@ -288,6 +331,10 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 		return nil
 	}
 	// The CNINode belongs to an earlier instance with the same node name, see EC2 private-IP reuse.
+	if state := cniNode.Status.NodeNetworkState; state != nil && state.InstanceID != utils.GetNodeInstanceID(node) &&
+		lo.ContainsBy(cniNode.Spec.Features, func(f v1alpha1.Feature) bool { return f.Name == v1alpha1.SecurityGroupsForPods }) {
+		m.countNodeNameReuse(node.Name, utils.GetNodeInstanceID(node), "CNINode")
+	}
 	if !cniNode.DeletionTimestamp.IsZero() {
 		if m.replacedFeatures == nil {
 			m.replacedFeatures = make(map[string]replacedCNINode)
@@ -417,11 +464,13 @@ func (m *manager) DeleteNode(nodeName string) error {
 
 	delete(m.dataStore, nodeName)
 	delete(m.replacedFeatures, nodeName)
+	delete(m.reusedNodes, nodeName)
 
 	if !cachedNode.IsManaged() {
 		log.V(1).Info("un managed node removed from data store")
 		return nil
 	}
+	m.recordRemovedNode(nodeName, cachedNode.GetNodeInstanceID())
 
 	m.worker.SubmitJob(AsyncOperationJob{
 		op:       Delete,
@@ -525,6 +574,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 			return ctrl.Result{}, nil
 		}
 
+		m.countNodeNameReuseInitialized(asyncJob.nodeName, asyncJob.node)
 		// If there's no error, we need to update the node so the capacity is advertised
 		asyncJob.op = Update
 		return m.performAsyncOperation(asyncJob)
@@ -615,6 +665,47 @@ func (m *manager) customNetworkEnabledInCNINode(node *v1.Node) (bool, error) {
 		}
 	}
 	return false, err
+}
+
+// countNodeNameReuse counts, once per new instance, a node name reuse found from state an earlier instance left. It
+// is called with the manager lock held.
+func (m *manager) countNodeNameReuse(nodeName, instanceID, foundIn string) {
+	if instanceID == "" || m.reusedNodes[nodeName] == instanceID {
+		return
+	}
+	if m.reusedNodes == nil {
+		m.reusedNodes = make(map[string]string)
+	}
+	m.reusedNodes[nodeName] = instanceID
+	nodeNameReuseDetected.Inc()
+	m.Log.Info("detected node name reuse by a new instance", "node name", nodeName, "instance", instanceID,
+		"found in", foundIn)
+}
+
+// countNodeNameReuseInitialized counts the initialization of a new instance whose node name reuse was counted.
+func (m *manager) countNodeNameReuseInitialized(nodeName string, initialized node.Node) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	reusedBy, found := m.reusedNodes[nodeName]
+	if !found || initialized.GetNodeInstanceID() != reusedBy {
+		return
+	}
+	delete(m.reusedNodes, nodeName)
+	nodeNameReuseInitialized.Inc()
+}
+
+// recordRemovedNode records a managed node removed from the data store, and drops records older than the retention.
+func (m *manager) recordRemovedNode(nodeName, instanceID string) {
+	if m.removedNodes == nil {
+		m.removedNodes = make(map[string]removedNode)
+	}
+	for name, removed := range m.removedNodes {
+		if time.Since(removed.removedAt) >= removedNodeRetention {
+			delete(m.removedNodes, name)
+		}
+	}
+	m.removedNodes[nodeName] = removedNode{instanceID: instanceID, removedAt: time.Now()}
 }
 
 // removeNodeSafe removes the given node from the data store. A different node cached under the name is kept, as it
