@@ -293,13 +293,7 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 	case worker.OperationProcessDeleteQueue:
 		return b.ProcessDeleteQueue(onDemandJob.NodeName)
 	case worker.OperationDeleteNode:
-		if trunkENI, ok := b.getTrunkFromCache(onDemandJob.NodeName); ok && onDemandJob.InstanceID != "" &&
-			trunkENI.InstanceID() != onDemandJob.InstanceID {
-			b.log.Info("skipping delete of a replaced instance, its node name now belongs to a new instance",
-				"node", onDemandJob.NodeName, "replaced instance", onDemandJob.InstanceID, "instance", trunkENI.InstanceID())
-			return ctrl.Result{}, nil
-		}
-		return b.DeleteNode(onDemandJob.NodeName)
+		return b.DeleteNode(onDemandJob.NodeName, onDemandJob.InstanceID)
 	case worker.OperationClearCheckpoint:
 		return b.clearCheckpoint(onDemandJob.NodeName)
 	}
@@ -307,11 +301,18 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 	return ctrl.Result{}, fmt.Errorf("unsupported operation type")
 }
 
-// DeleteNode deletes all the cached branch ENIs associated with the trunk and removes the trunk from the cache.
-func (b *branchENIProvider) DeleteNode(nodeName string) (ctrl.Result, error) {
+// DeleteNode deletes all the cached branch ENIs associated with the trunk and removes the trunk from the cache. A
+// non-empty instanceID is the instance the delete was scheduled for; the trunk of another instance that reused the
+// node name is kept.
+func (b *branchENIProvider) DeleteNode(nodeName string, instanceID string) (ctrl.Result, error) {
 	trunkENI, isPresent := b.getTrunkFromCache(nodeName)
 	if !isPresent {
 		return ctrl.Result{}, fmt.Errorf("failed to find node %s", nodeName)
+	}
+	if instanceID != "" && trunkENI.InstanceID() != instanceID {
+		b.log.Info("skipping delete of a replaced instance, its node name now belongs to a new instance",
+			"node", nodeName, "replaced instance", instanceID, "instance", trunkENI.InstanceID())
+		return ctrl.Result{}, nil
 	}
 	if b.holdForPendingDeletions(nodeName, trunkENI) {
 		return ctrl.Result{RequeueAfter: deletedNodeRetryPeriod, Requeue: true}, nil

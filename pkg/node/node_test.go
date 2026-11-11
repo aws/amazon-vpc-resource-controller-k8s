@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	rcv1alpha1 "github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_ec2 "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2"
@@ -557,4 +558,24 @@ func TestNode_IsNitroInstance_NonNitro(t *testing.T) {
 	mock.MockInstance.EXPECT().Type().Return(nonNitroInstanceType)
 
 	assert.False(t, mock.NodeWithMock.IsNitroInstance())
+}
+
+// The node manager reads the instance ID under its own lock, so the read must not wait for an Init or Update that
+// holds the node lock while it calls EC2.
+func TestNode_GetNodeInstanceIDDoesNotWaitForTheNodeLock(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	managedNode := NewManagedNode(zap.New(), nodeName, instanceID, linux, mock_k8s.NewMockK8sWrapper(ctrl), mock_api.NewMockEC2APIHelper(ctrl))
+	managedNode.(*node).lock.Lock()
+	defer managedNode.(*node).lock.Unlock()
+
+	read := make(chan string, 1)
+	go func() { read <- managedNode.GetNodeInstanceID() }()
+	select {
+	case got := <-read:
+		assert.Equal(t, instanceID, got)
+	case <-time.After(time.Second):
+		t.Fatal("GetNodeInstanceID waited for the node lock")
+	}
 }

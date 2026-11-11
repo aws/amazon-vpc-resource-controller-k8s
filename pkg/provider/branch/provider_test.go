@@ -338,7 +338,7 @@ func TestBranchENIProvider_FallbackAfterDeleteNodeKeepsCheckpointCleared(t *test
 		DoAndReturn(func(listPods func() ([]v1.Pod, error)) (ec2.EC2Instance, error) {
 			_, err := listPods()
 			assert.NoError(t, err)
-			_, err = provider.DeleteNode(NodeName)
+			_, err = provider.DeleteNode(NodeName, "")
 			assert.NoError(t, err)
 			return mock_ec2.NewMockEC2Instance(ctrl), nil
 		})
@@ -402,7 +402,7 @@ func TestBranchENIProvider_DeleteNodeClearsTheCheckpoint(t *testing.T) {
 			}
 			failuresBefore := checkpointPersistErrorCount(t)
 
-			result, err := provider.DeleteNode(NodeName)
+			result, err := provider.DeleteNode(NodeName, "")
 
 			assert.NoError(t, err)
 			assert.Equal(t, k8sCtrl.Result{}, result)
@@ -489,7 +489,7 @@ func TestBranchENIProvider_DeleteNodeHoldsUnpreparedTrunkWithPendingDeletions(t 
 				mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(nil)
 			}
 
-			result, err := provider.DeleteNode(NodeName)
+			result, err := provider.DeleteNode(NodeName, "")
 
 			assert.NoError(t, err)
 			if test.wantHold {
