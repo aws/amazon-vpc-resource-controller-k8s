@@ -501,7 +501,7 @@ func (d *Manager) RunInstanceWithPrivateIP(
 			instanceID = aws.ToString(out.Instances[0].InstanceId)
 			return true, nil
 		})
-	if err != nil && lastErr != nil {
+	if wait.Interrupted(err) && lastErr != nil {
 		return "", fmt.Errorf("launching an instance with private IP %s: %w", privateIP, lastErr)
 	}
 	return instanceID, err

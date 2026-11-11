@@ -320,7 +320,7 @@ func (b *branchENIProvider) DeleteNode(nodeName string) (ctrl.Result, error) {
 	// At this point, the finalizer routine should have deleted all available branch ENIs
 	// Any leaked ENIs will be deleted by the periodic cleanup routine if cluster is active
 	// remove trunk from cache and de-initializer the resource provider
-	b.removeTrunkFromCache(nodeName)
+	b.removeTrunkFromCache(nodeName, trunkENI)
 	// Preparation persists only while its trunk is cached; a re-managed node must cold-init, as no sweep covers it.
 	if result, _ := b.clearCheckpoint(nodeName); result.Requeue {
 		b.workerPool.SubmitJobAfter(worker.NewOnDemandClearCheckpointJob(nodeName), result.RequeueAfter)
@@ -613,17 +613,23 @@ func (b *branchENIProvider) addTrunkToCache(nodeName string, trunkENI trunk.Trun
 	return nil
 }
 
-// removeTrunkFromCache removes the trunk eni from cache for the given node name
-func (b *branchENIProvider) removeTrunkFromCache(nodeName string) {
+// removeTrunkFromCache removes the given trunk eni from cache for the given node name. A different trunk cached for the
+// name is kept, as it belongs to a new instance that reused the node name.
+func (b *branchENIProvider) removeTrunkFromCache(nodeName string, trunkENI trunk.TrunkENI) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 	log := b.log.WithValues("node", nodeName)
 
-	if _, ok := b.trunkENICache[nodeName]; !ok {
+	cached, ok := b.trunkENICache[nodeName]
+	if !ok {
 		branchProviderOperationsErrCount.WithLabelValues("remove_from_cache").Inc()
 		// No need to propagate the error
 		log.Error(ErrTrunkNotInCache, "trunk doesn't exist in cache")
+		return
+	}
+	if cached != trunkENI {
+		log.Info("keeping the trunk of a new instance that reused the node name")
 		return
 	}
 

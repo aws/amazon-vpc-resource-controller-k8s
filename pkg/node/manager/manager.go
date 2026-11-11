@@ -61,7 +61,13 @@ type manager struct {
 	clusterName       string
 	// replacedFeatures holds, per node name, the features of a deleting CNINode of a replaced node. They are carried
 	// to the new CNINode because VPC CNI may have written them to the deleting object and does not always rewrite them.
-	replacedFeatures map[string][]v1alpha1.Feature
+	replacedFeatures map[string]replacedCNINode
+}
+
+// replacedCNINode is the features of a deleting CNINode of a replaced node, recorded for the Node that replaces it.
+type replacedCNINode struct {
+	nodeUID  types.UID
+	features []v1alpha1.Feature
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -264,7 +270,10 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 	cniNode, err := m.wrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: node.Name})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			features := m.replacedFeatures[node.Name]
+			var features []v1alpha1.Feature
+			if replaced := m.replacedFeatures[node.Name]; replaced.nodeUID == node.UID {
+				features = replaced.features
+			}
 			m.Log.Info("Will create a new CNINode", "CNINodeName", node.Name, "carried features", features)
 			if err := m.wrapper.K8sAPI.CreateCNINode(node, m.clusterName, features...); err != nil {
 				return err
@@ -281,9 +290,9 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 	// The CNINode belongs to an earlier instance with the same node name, see EC2 private-IP reuse.
 	if !cniNode.DeletionTimestamp.IsZero() {
 		if m.replacedFeatures == nil {
-			m.replacedFeatures = make(map[string][]v1alpha1.Feature)
+			m.replacedFeatures = make(map[string]replacedCNINode)
 		}
-		m.replacedFeatures[node.Name] = cniNode.Spec.Features
+		m.replacedFeatures[node.Name] = replacedCNINode{nodeUID: node.UID, features: cniNode.Spec.Features}
 		return fmt.Errorf("%w: %s", ErrReplacedCNINodeDeleting, cniNode.Name)
 	}
 	// Take the object over before GC deletes it. Its features stay, as VPC CNI writes some of them only once at
@@ -499,7 +508,6 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 			if err := asyncJob.replaced.DeleteResources(m.resourceManager); err != nil {
 				log.Error(err, "failed to de-initialize the replaced node", "replaced instance", asyncJob.replaced.GetNodeInstanceID())
 			}
-			asyncJob.replaced = nil
 		}
 		utils.SendNodeEventWithNodeName(m.wrapper.K8sAPI, asyncJob.nodeName, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", m.controllerVersion), v1.EventTypeNormal, m.Log)
 		err = asyncJob.node.InitResources(m.resourceManager)

@@ -515,10 +515,26 @@ func TestBranchENIProvider_removeTrunkFromCache(t *testing.T) {
 
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk
-	provider.removeTrunkFromCache(NodeName)
+	provider.removeTrunkFromCache(NodeName, fakeTrunk)
 
 	_, ok := provider.trunkENICache[NodeName]
 	assert.False(t, ok)
+}
+
+// TestBranchENIProvider_removeTrunkFromCache_TrunkOfNewInstance tests that removing the trunk of a replaced instance
+// keeps the trunk a new instance with the same node name cached in the meantime
+func TestBranchENIProvider_removeTrunkFromCache_TrunkOfNewInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+
+	oldTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	newTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = newTrunk
+	provider.removeTrunkFromCache(NodeName, oldTrunk)
+
+	assert.Equal(t, newTrunk, provider.trunkENICache[NodeName])
 }
 
 // TestBranchENIProvider_removeTrunkFromCache_NotExists tests delete doesn't panic if entry doesn't exist in cache
@@ -526,7 +542,7 @@ func TestBranchENIProvider_removeTrunkFromCache_NotExists(t *testing.T) {
 	provider := getProvider()
 
 	// Should not throw an error
-	provider.removeTrunkFromCache(NodeName)
+	provider.removeTrunkFromCache(NodeName, nil)
 }
 
 // TestBranchENIProvider_addTrunkToCache tests entry is added to cache

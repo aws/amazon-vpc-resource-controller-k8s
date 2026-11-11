@@ -1140,3 +1140,28 @@ func Test_UpdateNode_NodeNameReusedByUnmanagedInstance(t *testing.T) {
 		assert.Equal(t, oldNode, jobs[0].node)
 	}
 }
+
+// Features recorded for an earlier Node with the same name are not carried to a different Node.
+func Test_AddNode_IgnoresFeaturesRecordedForAnotherNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+	mock.Manager.replacedFeatures = map[string]replacedCNINode{nodeName: {
+		nodeUID:  "uid-earlier",
+		features: []rcV1alpha1.Feature{{Name: rcV1alpha1.CustomNetworking, Value: "stale"}},
+	}}
+	k8sNode := replacementNode(instanceID, "uid-new")
+	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, nodeName)
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil)
+	gomock.InOrder(
+		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(nil, notFound),
+		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcV1alpha1.CNINode{}, nil).AnyTimes(),
+	)
+	mock.MockK8sAPI.EXPECT().CreateCNINode(k8sNode, mockClusterName).Return(nil)
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).AnyTimes()
+
+	assert.NoError(t, mock.Manager.AddNode(nodeName))
+	assert.Empty(t, mock.Manager.replacedFeatures)
+}
