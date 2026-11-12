@@ -281,7 +281,7 @@ func GetNodeInstanceID(node *corev1.Node) string {
 // reference are treated as owned by the current Node.
 func OwnedByReplacedNode(ownerRefs []metav1.OwnerReference, node *corev1.Node) bool {
 	for _, ref := range ownerRefs {
-		if ref.Name == node.Name && ref.UID != "" && node.UID != "" {
+		if ref.Kind == "Node" && ref.Name == node.Name && ref.UID != "" && node.UID != "" {
 			return ref.UID != node.UID
 		}
 	}

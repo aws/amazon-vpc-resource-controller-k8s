@@ -147,7 +147,7 @@ func replaceSuiteInstanceWithSameIP(
 	})
 
 	// Pods bound to the old instance would otherwise be handed to the new kubelet with the same node name.
-	_ = frameWork.PodManager.DeleteAllPodsForcefully(ctx, "role", nodeNameReuseLabel)
+	Expect(frameWork.PodManager.DeleteAllPodsForcefully(ctx, "role", nodeNameReuseLabel)).To(Succeed())
 
 	// EC2 releases the private IP anywhere from seconds to minutes after termination. Holding the old Node until the
 	// new instance has the IP starts the controller's delayed cleanup right before the new instance boots, and keeps

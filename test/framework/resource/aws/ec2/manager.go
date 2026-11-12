@@ -498,6 +498,9 @@ func (d *Manager) RunInstanceWithPrivateIP(
 				}
 				return false, err
 			}
+			if len(out.Instances) == 0 {
+				return false, fmt.Errorf("RunInstances returned no instances")
+			}
 			instanceID = aws.ToString(out.Instances[0].InstanceId)
 			return true, nil
 		})
