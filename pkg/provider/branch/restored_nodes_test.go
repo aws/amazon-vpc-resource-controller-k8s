@@ -530,8 +530,9 @@ func expectPreparation(ctrl *gomock.Controller, provider *branchENIProvider, pod
 	nodeName, instanceID string, prepare func() error,
 ) *mock_trunk.MockTrunkENI {
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-	provider.trunkENICache[nodeName] = fakeTrunk
-	fakeTrunk.EXPECT().InstanceID().Return(instanceID).Times(2)
+	provider.trunkENICache[instanceID] = fakeTrunk
+	provider.trunkNodeNames[instanceID] = nodeName
+	fakeTrunk.EXPECT().InstanceID().Return(instanceID).AnyTimes()
 	fakeTrunk.EXPECT().NeedsPreparation().Return(true).Times(2)
 	podAPI.EXPECT().GetRunningPodsOnNode(nodeName).Return(nil, nil)
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
@@ -633,7 +634,8 @@ func TestBranchENIProvider_RestoredNodeCheckWaitsForNodeInitialization(t *testin
 	}, nil).Times(3)
 	fakeTrunk := expectPreparation(ctrl, provider, podAPI, NodeName, instanceID, nil)
 	// The trunk is not cached on the first pass, so the node waits and is checked again.
-	delete(provider.trunkENICache, NodeName)
+	delete(provider.trunkENICache, instanceID)
+	delete(provider.trunkNodeNames, instanceID)
 	gomock.InOrder(
 		k8sAPI.EXPECT().GetNode(NodeName).Return(currentNode, nil),
 		k8sAPI.EXPECT().GetNode(NodeName).DoAndReturn(func(string) (*v1.Node, error) {

@@ -95,9 +95,10 @@ func getProviderAndMocks(ctrl *gomock.Controller) (branchENIProvider, *mock_pod.
 			SGPAPI: mockSGPAPI,
 			K8sAPI: mockK8sAPI,
 		},
-		log:           log,
-		trunkENICache: make(map[string]trunk.TrunkENI),
-		ctx:           ctx,
+		log:            log,
+		trunkENICache:  make(map[string]trunk.TrunkENI),
+		trunkNodeNames: make(map[string]string),
+		ctx:            ctx,
 	}, mockPodAPI, mockSGPAPI, mockK8sAPI
 }
 
@@ -110,8 +111,9 @@ func getProviderAndMockK8sWrapper(ctrl *gomock.Controller) (branchENIProvider, *
 		apiWrapper: api.Wrapper{
 			K8sAPI: mockK8sWrapper,
 		},
-		log:           log,
-		trunkENICache: make(map[string]trunk.TrunkENI),
+		log:            log,
+		trunkENICache:  make(map[string]trunk.TrunkENI),
+		trunkNodeNames: make(map[string]string),
 	}, mockK8sWrapper
 }
 
@@ -126,8 +128,9 @@ func getProviderWithMockWorker(ctrl *gomock.Controller) (branchENIProvider, *moc
 func getProvider() branchENIProvider {
 	log := zap.New(zap.UseDevMode(true)).WithName("branch provider")
 	return branchENIProvider{
-		log:           log,
-		trunkENICache: make(map[string]trunk.TrunkENI),
+		log:            log,
+		trunkENICache:  make(map[string]trunk.TrunkENI),
+		trunkNodeNames: make(map[string]string),
 	}
 }
 
@@ -200,9 +203,10 @@ func prepareInitResourceSuccess(
 			K8sAPI: mockK8sAPI,
 			PodAPI: mockPodAPI,
 		},
-		log:           zap.New(zap.UseDevMode(true)).WithName("branch provider"),
-		workerPool:    mockWorker,
-		trunkENICache: make(map[string]trunk.TrunkENI),
+		log:            zap.New(zap.UseDevMode(true)).WithName("branch provider"),
+		workerPool:     mockWorker,
+		trunkENICache:  make(map[string]trunk.TrunkENI),
+		trunkNodeNames: make(map[string]string),
 	}
 
 	mockInstance.EXPECT().Name().Return(NodeName)
@@ -227,7 +231,7 @@ func prepareInitResourceSuccess(
 	).Return(&ec2types.NetworkInterface{NetworkInterfaceId: aws.String(trunkENIID)}, nil)
 	mockInstance.EXPECT().BuildNodeNetworkState().Return(state)
 	mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(checkpointErr)
-	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, instanceID))
 	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: NodeName}}
 	mockK8sAPI.EXPECT().GetNode(NodeName).Return(node, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(
@@ -278,7 +282,7 @@ func TestBranchENIProvider_InitResourceRestoredCheckpointPersistsCheckpoint(t *t
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
 	mockInstance.EXPECT().BuildNodeNetworkState().Return(state)
 	mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(nil)
-	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, state.InstanceID))
 	mockK8sAPI.EXPECT().GetNode(NodeName).Return(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: NodeName}}, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(gomock.Any(), utils.NodeTrunkInitiatedReason,
 		"The node has trunk interface initialized successfully", v1.EventTypeNormal)
@@ -553,10 +557,11 @@ func TestBranchENIProvider_addTrunkToCache(t *testing.T) {
 	provider := getProvider()
 
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	fakeTrunk.EXPECT().InstanceID().Return(restoredInstanceID)
 	err := provider.addTrunkToCache(NodeName, fakeTrunk)
 
 	assert.NoError(t, err)
-	trunkENI, ok := provider.trunkENICache[NodeName]
+	trunkENI, ok := provider.trunkENICache[restoredInstanceID]
 
 	assert.True(t, ok)
 	assert.Equal(t, fakeTrunk, trunkENI)
@@ -572,15 +577,14 @@ func TestBranchENIProvider_addTrunkToCache_AlreadyExist(t *testing.T) {
 
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	fakeTrunk.EXPECT().InstanceID().Return(restoredInstanceID).AnyTimes()
-	provider.trunkENICache[NodeName] = fakeTrunk
+	provider.trunkENICache[restoredInstanceID] = fakeTrunk
 
 	err := provider.addTrunkToCache(NodeName, fakeTrunk)
 
 	assert.ErrorIs(t, err, ErrTrunkExistInCache)
 }
 
-// TestBranchENIProvider_addTrunkToCache_ReplacedInstance tests that the trunk of an earlier instance with the same node
-// name is replaced
+// TestBranchENIProvider_addTrunkToCache_ReplacedInstance keeps both trunks while the earlier instance is cleaned up.
 func TestBranchENIProvider_addTrunkToCache_ReplacedInstance(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -591,10 +595,11 @@ func TestBranchENIProvider_addTrunkToCache_ReplacedInstance(t *testing.T) {
 	oldTrunk.EXPECT().InstanceID().Return("i-0old").AnyTimes()
 	newTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	newTrunk.EXPECT().InstanceID().Return(restoredInstanceID).AnyTimes()
-	provider.trunkENICache[NodeName] = oldTrunk
+	provider.trunkENICache["i-0old"] = oldTrunk
 
 	assert.NoError(t, provider.addTrunkToCache(NodeName, newTrunk))
-	assert.Equal(t, newTrunk, provider.trunkENICache[NodeName])
+	assert.Equal(t, oldTrunk, provider.trunkENICache["i-0old"])
+	assert.Equal(t, newTrunk, provider.trunkENICache[restoredInstanceID])
 }
 
 // TestBranchENIProvider_DeleteBranchUsedByPods tests that ENIs used by pods are pushed to the Cool down Queue by the
@@ -1226,7 +1231,8 @@ func TestBranchENIProvider_NodeNameReusedInsideDeleteWindow(t *testing.T) {
 	oldTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	oldTrunk.EXPECT().InstanceID().Return("i-0old").AnyTimes()
 	oldTrunk.EXPECT().NeedsPreparation().Return(false).AnyTimes()
-	provider.trunkENICache[NodeName] = oldTrunk
+	provider.trunkENICache["i-0old"] = oldTrunk
+	provider.trunkNodeNames["i-0old"] = NodeName
 
 	oldInstance := mock_ec2.NewMockEC2Instance(ctrl)
 	oldInstance.EXPECT().Name().Return(NodeName).AnyTimes()

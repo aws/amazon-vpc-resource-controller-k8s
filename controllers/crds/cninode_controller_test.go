@@ -247,8 +247,9 @@ func TestCNINodeReconcile(t *testing.T) {
 		},
 		{
 			// After EC2 private-IP reuse, GC deletes the old instance's CNINode while a replacement Node with the same
-			// name exists. The object belongs to the old Node UID, so it must be finalized, not recreated.
-			name: "verify CNINode of a replaced instance is finalized instead of recreated",
+			// name exists. Do not clean the replacement's resources; recreate the
+			// CNINode with its features for the current Node.
+			name: "verify CNINode of a replaced instance is recreated without cleanup",
 			args: args{
 				mockNode: &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
@@ -266,16 +267,23 @@ func TestCNINodeReconcile(t *testing.T) {
 						DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
 					},
 					Spec: v1alpha1.CNINodeSpec{
-						Tags: map[string]string{config.NetworkInterfaceNodeIDKey: "i-0old"},
+						Tags:     map[string]string{config.NetworkInterfaceNodeIDKey: "i-0old"},
+						Features: []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}},
 					},
 				},
 			},
 			prepare: func(f *fields) {
-				f.mockCNINode.Reconciler.newResourceCleaner = func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner {
-					assert.Equal(t, "i-0old", nodeID)
-					return f.mockResourceCleaner
+				f.mockCNINode.Reconciler.waitForDeletion = func(key types.NamespacedName) error {
+					current := &v1alpha1.CNINode{}
+					if err := f.mockCNINode.Reconciler.Client.Get(context.Background(), key, current); err != nil {
+						return err
+					}
+					current.Finalizers = nil
+					if err := f.mockCNINode.Reconciler.Client.Update(context.Background(), current); err != nil {
+						return err
+					}
+					return client.IgnoreNotFound(f.mockCNINode.Reconciler.Client.Delete(context.Background(), current))
 				}
-				f.mockResourceCleaner.EXPECT().DeleteLeakedResources().Times(1).Return(nil)
 				f.mockFinalizerManager.EXPECT().
 					RemoveFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
 					Return(nil)
@@ -283,6 +291,9 @@ func TestCNINodeReconcile(t *testing.T) {
 			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
 				assert.NoError(t, err)
 				assert.Equal(t, res, reconcile.Result{})
+				assert.Equal(t, types.UID("uid-new"), cniNode.OwnerReferences[0].UID)
+				assert.Equal(t, []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}, cniNode.Spec.Features)
+				assert.Equal(t, []string{config.NodeTerminationFinalizer}, cniNode.Finalizers)
 			},
 		},
 	}
@@ -318,4 +329,24 @@ func TestCNINodeReconcile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCNINodeReconcile_CreatesCNINodeForNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	node := mockNodeWithLabel.DeepCopy()
+	node.UID = "uid-current"
+	mock := NewCNINodeMock(ctrl, node)
+
+	result, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
+	assert.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, result)
+
+	cniNode := &v1alpha1.CNINode{}
+	assert.NoError(t, mock.Reconciler.Client.Get(context.Background(), reconcileRequest.NamespacedName, cniNode))
+	assert.Len(t, cniNode.OwnerReferences, 1)
+	assert.Equal(t, node.UID, cniNode.OwnerReferences[0].UID)
+	assert.Equal(t, []string{config.NodeTerminationFinalizer}, cniNode.Finalizers)
+	assert.Equal(t, mockClusterName, cniNode.Spec.Tags[config.VPCCNIClusterNameKey])
 }
