@@ -139,18 +139,9 @@ func NewMock(ctrl *gomock.Controller, existingDataStore map[string]node.Node) Mo
 	mockNode := mock_node.NewMockNode(ctrl)
 	mockConditions := mock_condition.NewMockConditions(ctrl)
 
-	dataStore := make(map[string]node.Node, len(existingDataStore))
-	nodeNames := make(map[string]string, len(existingDataStore))
-	for nodeName, cachedNode := range existingDataStore {
-		instanceID := cachedNode.GetNodeInstanceID()
-		dataStore[instanceID] = cachedNode
-		nodeNames[instanceID] = nodeName
-	}
-
 	return Mock{
 		Manager: manager{
-			dataStore: dataStore,
-			nodeNames: nodeNames,
+			dataStore: existingDataStore,
 			Log:       zap.New(),
 			wrapper: api.Wrapper{
 				K8sAPI: mockK8sWrapper,
@@ -219,8 +210,8 @@ func Test_AddNode_CNINode_Existing(t *testing.T) {
 
 	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], managedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
 func Test_AddNode_CNINode_Not_Existing(t *testing.T) {
@@ -236,7 +227,7 @@ func Test_AddNode_CNINode_Not_Existing(t *testing.T) {
 
 	err := mock.Manager.AddNode(nodeName)
 	assert.ErrorIs(t, err, ErrReplacedCNINodeDeleting)
-	assert.NotContains(t, mock.Manager.dataStore, instanceID)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
 }
 
 func Test_AddNode_UnManaged(t *testing.T) {
@@ -255,8 +246,26 @@ func Test_AddNode_UnManaged(t *testing.T) {
 
 	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], unManagedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], unManagedNode))
+}
+
+func Test_AddNode_WithoutProviderIDUsesNodeNameKey(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+	nodeWithoutProviderID := v1Node.DeepCopy()
+	nodeWithoutProviderID.Spec.ProviderID = ""
+	nodeWithoutProviderID.Labels = map[string]string{}
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithoutProviderID, nil)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).
+		Return(&rcV1alpha1.CNINode{}, nil)
+
+	assert.NoError(t, mock.Manager.AddNode(nodeName))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.NotContains(t, mock.Manager.dataStore, "")
 }
 
 func Test_AddNode_AlreadyAdded(t *testing.T) {
@@ -269,8 +278,8 @@ func Test_AddNode_AlreadyAdded(t *testing.T) {
 
 	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], unManagedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], unManagedNode))
 }
 
 func Test_AddNode_CustomNetworking_CNINode(t *testing.T) {
@@ -297,8 +306,8 @@ func Test_AddNode_CustomNetworking_CNINode(t *testing.T) {
 	}, nil).Times(3)
 	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], managedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
 func Test_AddNode_CustomNetworking_CNINode_No_EniConfigName(t *testing.T) {
@@ -357,8 +366,8 @@ func Test_AddNode_CustomNetworking_NodeLabel(t *testing.T) {
 
 	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], managedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
 // Test adding node when custom networking is enabled but incorrect ENIConfig is defined; it should succeed
@@ -389,8 +398,8 @@ func Test_AddNode_CustomNetworking_Incorrect_ENIConfig(t *testing.T) {
 
 	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], managedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 
 }
 
@@ -408,7 +417,7 @@ func Test_AddNode_CustomNetworking_NoENIConfig(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithENIConfig.Name}).Return(&rcV1alpha1.CNINode{}, nil)
 
 	err := mock.Manager.AddNode(nodeName)
-	assert.NotContains(t, mock.Manager.dataStore, instanceID)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
 	assert.Error(t, err, mockError)
 }
 
@@ -434,8 +443,8 @@ func Test_UpdateNode_Managed(t *testing.T) {
 
 	err := mock.Manager.UpdateNode(nodeName)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], managedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
 func Test_UpdateNode_UnManaged(t *testing.T) {
@@ -451,8 +460,8 @@ func Test_UpdateNode_UnManaged(t *testing.T) {
 
 	err := mock.Manager.UpdateNode(v1Node.Name)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], unManagedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], unManagedNode))
 }
 
 func Test_UpdateNode_ManagedToUnManaged(t *testing.T) {
@@ -475,8 +484,8 @@ func Test_UpdateNode_ManagedToUnManaged(t *testing.T) {
 
 	err := mock.Manager.UpdateNode(nodeName)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], unManagedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], unManagedNode))
 }
 
 func Test_UpdateNode_UnManagedToManaged(t *testing.T) {
@@ -502,8 +511,8 @@ func Test_UpdateNode_UnManagedToManaged(t *testing.T) {
 
 	err := mock.Manager.UpdateNode(v1Node.Name)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], managedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
 func Test_UpdateNode_UnManagedToManaged_WithENIConfig_NodeLabel(t *testing.T) {
@@ -529,8 +538,8 @@ func Test_UpdateNode_UnManagedToManaged_WithENIConfig_NodeLabel(t *testing.T) {
 
 	err := mock.Manager.UpdateNode(v1Node.Name)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], managedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
 func Test_UpdateNode_UnManagedToManaged_WithENIConfig_CNINode(t *testing.T) {
@@ -560,8 +569,8 @@ func Test_UpdateNode_UnManagedToManaged_WithENIConfig_CNINode(t *testing.T) {
 
 	err := mock.Manager.UpdateNode(v1Node.Name)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], managedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
 func Test_DeleteNode_Managed(t *testing.T) {
@@ -582,7 +591,7 @@ func Test_DeleteNode_Managed(t *testing.T) {
 
 	err := mock.Manager.DeleteNode(v1Node.Name)
 	assert.NoError(t, err)
-	assert.NotContains(t, mock.Manager.dataStore, instanceID)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
 }
 
 func Test_DeleteNode_UnManaged(t *testing.T) {
@@ -595,7 +604,7 @@ func Test_DeleteNode_UnManaged(t *testing.T) {
 
 	err := mock.Manager.DeleteNode(v1Node.Name)
 	assert.NoError(t, err)
-	assert.NotContains(t, mock.Manager.dataStore, instanceID)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
 }
 
 func Test_DeleteNode_AlreadyDeleted(t *testing.T) {
@@ -627,7 +636,7 @@ func Test_performAsyncOperation(t *testing.T) {
 	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(nil)
 	mock.MockNode.EXPECT().UpdateResources(mock.MockResourceManager).Return(nil)
 	_, err := mock.Manager.performAsyncOperation(job)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
 	assert.NoError(t, err)
 
 	job.op = Update
@@ -650,8 +659,7 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl, map[string]node.Node{})
-	mock.Manager.dataStore[instanceID] = mock.MockNode
-	mock.Manager.nodeNames[instanceID] = nodeName
+	mock.Manager.dataStore[nodeName] = mock.MockNode
 
 	job := AsyncOperationJob{
 		node:     mock.MockNode,
@@ -665,7 +673,7 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().BroadcastEvent(v1Node, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", mock.Manager.controllerVersion), v1.EventTypeNormal).Times(1)
 
 	_, err := mock.Manager.performAsyncOperation(job)
-	assert.NotContains(t, mock.Manager.dataStore, instanceID) // It should be cleared from cache
+	assert.NotContains(t, mock.Manager.dataStore, nodeName) // It should be cleared from cache
 	assert.NoError(t, err)
 }
 
@@ -674,8 +682,7 @@ func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
 	defer ctrl.Finish()
 
 	mock := NewMock(ctrl, map[string]node.Node{})
-	mock.Manager.dataStore[instanceID] = mock.MockNode
-	mock.Manager.nodeNames[instanceID] = nodeName
+	mock.Manager.dataStore[nodeName] = mock.MockNode
 
 	job := AsyncOperationJob{
 		node:     mock.MockNode,
@@ -693,7 +700,7 @@ func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
 	_, err := mock.Manager.performAsyncOperation(job)
 	time.Sleep(time.Millisecond * 100)
 	assert.True(t, mock.Manager.SkipHealthCheck())
-	assert.NotContains(t, mock.Manager.dataStore, instanceID) // It should be cleared from cache
+	assert.NotContains(t, mock.Manager.dataStore, nodeName) // It should be cleared from cache
 	assert.NoError(t, err)
 
 	time.Sleep(time.Second * 2)
@@ -848,8 +855,8 @@ func Test_UpdateNode_Windows_UnManagedToManaged(t *testing.T) {
 
 	err := mock.Manager.UpdateNode(windowsNode.Name)
 	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, instanceID)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[instanceID], managedNode))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
 }
 
 func Test_Node_HasInstance(t *testing.T) {
@@ -1007,7 +1014,7 @@ func Test_UpdateNode_NodeNameReusedByNewInstance(t *testing.T) {
 
 	assert.NoError(t, mock.Manager.UpdateNode(nodeName))
 
-	assert.Equal(t, newInstanceID, mock.Manager.dataStore[newInstanceID].GetNodeInstanceID())
+	assert.Equal(t, newInstanceID, mock.Manager.dataStore[nodeName].GetNodeInstanceID())
 	if !assert.Len(t, jobs, 1) || !assert.Equal(t, Init, jobs[0].op) {
 		return
 	}
@@ -1074,7 +1081,7 @@ func Test_AddNode_WaitsForDeletingCNINodeOfReplacedInstance(t *testing.T) {
 		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(nil, notFound),
 	)
 	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrReplacedCNINodeDeleting)
-	assert.NotContains(t, mock.Manager.dataStore, instanceID)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
 
 	// Once deletion reaches NotFound, the NodeManager still waits: the CNINodeReconciler
 	// must recreate the object before NodeManager can initialize this instance.
@@ -1103,8 +1110,8 @@ func Test_UpdateNode_NodeNameReusedByUnmanagedInstance(t *testing.T) {
 
 	assert.NoError(t, mock.Manager.UpdateNode(nodeName))
 
-	assert.False(t, mock.Manager.dataStore[newInstanceID].IsManaged())
-	assert.Equal(t, newInstanceID, mock.Manager.dataStore[newInstanceID].GetNodeInstanceID())
+	assert.False(t, mock.Manager.dataStore[nodeName].IsManaged())
+	assert.Equal(t, newInstanceID, mock.Manager.dataStore[nodeName].GetNodeInstanceID())
 	if assert.Len(t, jobs, 1) {
 		assert.Equal(t, Delete, jobs[0].op)
 		assert.Equal(t, oldNode, jobs[0].node)
@@ -1150,7 +1157,7 @@ func Test_performAsyncOperation_failKeepsNodeOfNewInstance(t *testing.T) {
 
 	_, err := mock.Manager.performAsyncOperation(job)
 	assert.NoError(t, err)
-	assert.Equal(t, newNode, mock.Manager.dataStore[instanceID])
+	assert.Equal(t, newNode, mock.Manager.dataStore[nodeName])
 }
 
 func reuseCounts() (float64, float64) {

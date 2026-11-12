@@ -687,28 +687,36 @@ func (b *branchENIProvider) getTrunkByInstanceID(instanceID string) (trunkENI tr
 // deletion and delayed cleanup can still drain its branch ENIs.
 func (b *branchENIProvider) getTrunkFromCache(nodeName string) (trunkENI trunk.TrunkENI, present bool) {
 	b.lock.RLock()
+	legacyTrunk, legacyPresent := b.trunkENICache[nodeName]
+	hasTrackedTrunks := len(b.trunkNodeNames) != 0
+	b.lock.RUnlock()
+
+	if hasTrackedTrunks && b.apiWrapper.K8sAPI != nil {
+		currentNode, err := b.apiWrapper.K8sAPI.GetNode(nodeName)
+		if err == nil {
+			return b.getTrunkByInstanceID(utils.GetNodeInstanceID(currentNode))
+		}
+		if !apierrors.IsNotFound(err) {
+			return nil, false
+		}
+	}
+	if legacyPresent {
+		return legacyTrunk, true
+	}
+
+	b.lock.RLock()
 	var matches []trunk.TrunkENI
 	for instanceID, cached := range b.trunkENICache {
 		if b.trunkNodeNames[instanceID] == nodeName {
 			matches = append(matches, cached)
 		}
 	}
-	legacyTrunk, legacyPresent := b.trunkENICache[nodeName]
 	b.lock.RUnlock()
 
 	if len(matches) == 1 {
 		return matches[0], true
 	}
-	if len(matches) > 1 {
-		currentNode, err := b.apiWrapper.K8sAPI.GetNode(nodeName)
-		if err == nil {
-			return b.getTrunkByInstanceID(utils.GetNodeInstanceID(currentNode))
-		}
-		return nil, false
-	}
-	// Compatibility for cache fixtures written by older unit tests. Production
-	// entries are always keyed by instance ID.
-	return legacyTrunk, legacyPresent
+	return nil, false
 }
 
 // GetPool is not supported for Branch ENI

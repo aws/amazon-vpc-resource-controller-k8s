@@ -24,6 +24,7 @@ import (
 	mock_node "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node"
 	mock_manager "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/node/manager"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
@@ -121,7 +122,6 @@ func TestNodeReconciler_Reconcile_DeleteNode(t *testing.T) {
 	mock := NewNodeMock(ctrl)
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
-	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, true)
 	mock.Manager.EXPECT().DeleteNode(mockNodeName).Return(nil)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
@@ -136,7 +136,7 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentNode(t *testing.T) {
 	mock := NewNodeMock(ctrl)
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
-	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
+	mock.Manager.EXPECT().DeleteNode(mockNodeName).Return(nil)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
@@ -150,7 +150,7 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentUnmanagedNode(t *testing.T) {
 	mock := NewNodeMock(ctrl)
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
-	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
+	mock.Manager.EXPECT().DeleteNode(mockNodeName).Return(nil)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
@@ -164,7 +164,7 @@ func TestNodeReconciler_Reconcile_DeleteNonExistentUnmanagedWithoutInstanceNode(
 	mock := NewNodeMock(ctrl)
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
-	mock.Manager.EXPECT().GetNode(mockNodeName).Return(mock.MockNode, false)
+	mock.Manager.EXPECT().DeleteNode(mockNodeName).Return(nil)
 
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 	assert.NoError(t, err)
@@ -196,7 +196,7 @@ func TestNodeReconciler_Reconcile_SkipAutoComputeType(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name: mockNodeName,
 			Labels: map[string]string{
-				computeTypeLabelKey: autoComputeTypeLabelValue,
+				utils.AutoComputeTypeLabelKey: utils.AutoComputeTypeLabelValue,
 			},
 		},
 	}

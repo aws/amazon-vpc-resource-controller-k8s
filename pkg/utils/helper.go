@@ -38,7 +38,15 @@ import (
 const (
 	PartitionIndex = 1
 	AccountIndex   = 4
+	AutoComputeTypeLabelKey = "eks.amazonaws.com/compute-type"
+	AutoComputeTypeLabelValue = "auto"
 )
+
+// IsAutoModeNode reports whether the Node is managed by EKS Auto Mode rather
+// than VPC Resource Controller.
+func IsAutoModeNode(node *corev1.Node) bool {
+	return node.Labels[AutoComputeTypeLabelKey] == AutoComputeTypeLabelValue
+}
 
 // RemoveDuplicatedSg removes duplicated items from a string slice.
 // It returns a no duplicates string slice.

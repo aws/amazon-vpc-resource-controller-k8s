@@ -232,8 +232,11 @@ func prepareInitResourceSuccess(
 	mockInstance.EXPECT().BuildNodeNetworkState().Return(state)
 	mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(checkpointErr)
 	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, instanceID))
-	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: NodeName}}
-	mockK8sAPI.EXPECT().GetNode(NodeName).Return(node, nil)
+	node := &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: NodeName},
+		Spec:       v1.NodeSpec{ProviderID: "aws:///us-west-2a/" + instanceID},
+	}
+	mockK8sAPI.EXPECT().GetNode(NodeName).Return(node, nil).AnyTimes()
 	mockK8sAPI.EXPECT().BroadcastEvent(
 		gomock.Any(),
 		utils.NodeTrunkInitiatedReason,

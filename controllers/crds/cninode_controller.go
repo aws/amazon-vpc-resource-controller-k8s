@@ -15,6 +15,7 @@ package crds
 
 import (
 	"context"
+	"maps"
 	"sync"
 	"time"
 
@@ -35,10 +36,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -81,14 +85,16 @@ type CNINodeReconciler struct {
 	finalizerManager   k8s.FinalizerManager
 	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner
 	waitForDeletion    func(types.NamespacedName) error
-	pendingFeatures    map[string]cachedFeatures
+	pendingFeatures    map[string]cachedCNINodeState
 	pendingFeaturesMu  sync.Mutex
 }
 
 const pendingFeaturesTTL = 5 * time.Minute
 
-type cachedFeatures struct {
+type cachedCNINodeState struct {
 	features  []v1alpha1.Feature
+	tags      map[string]string
+	managedBy v1alpha1.CNINodeManager
 	createdAt time.Time
 }
 
@@ -115,7 +121,7 @@ func NewCNINodeReconciler(
 		vpcId:              vpcId,
 		finalizerManager:   finalizerManager,
 		newResourceCleaner: newResourceCleaner,
-		pendingFeatures:    make(map[string]cachedFeatures),
+		pendingFeatures:    make(map[string]cachedCNINodeState),
 	}
 }
 
@@ -130,8 +136,12 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if errors.IsNotFound(err) {
 			node := &v1.Node{}
 			if nodeErr := r.Client.Get(ctx, req.NamespacedName, node); nodeErr == nil {
-				features := r.pendingFeaturesFor(req.Name)
-				if err := r.createCNINodeForNode(ctx, node, features); err != nil {
+				if utils.IsAutoModeNode(node) {
+					return ctrl.Result{}, nil
+				}
+				state := r.pendingFeaturesFor(req.Name)
+				if err := r.createCNINodeForNode(ctx, node, state); err != nil {
+					recreateCNINodeErrCount.Inc()
 					return ctrl.Result{}, err
 				}
 				r.clearPendingFeatures(req.Name)
@@ -153,10 +163,6 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	if !cniNode.GetDeletionTimestamp().IsZero() {
-		r.rememberPendingFeatures(cniNode.Name, cniNode.Spec.Features)
-	}
-
 	nodeFound := true
 	node := &v1.Node{}
 	if err := r.Client.Get(ctx, req.NamespacedName, node); err != nil {
@@ -167,6 +173,13 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			// Requeue request so it can be retried
 			return ctrl.Result{}, err
 		}
+	}
+	if nodeFound && utils.IsAutoModeNode(node) {
+		return ctrl.Result{}, nil
+	}
+
+	if !cniNode.GetDeletionTimestamp().IsZero() {
+		r.rememberPendingFeatures(cniNode)
 	}
 
 	if cniNode.GetDeletionTimestamp().IsZero() {
@@ -265,7 +278,15 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			// The deletion is irreversible. Keep the features in this reconcile,
 			// delete the old object, then make a fresh object for the current
 			// Node. This makes CNINodeReconciler the sole owner of replacement.
-			features := append([]v1alpha1.Feature(nil), cniNode.Spec.Features...)
+			state := cachedCNINodeState{
+				features:  append([]v1alpha1.Feature(nil), cniNode.Spec.Features...),
+				tags:      maps.Clone(cniNode.Spec.Tags),
+				managedBy: cniNode.Spec.ManagedBy,
+			}
+			if _, ok := state.tags[config.NetworkInterfaceNodeIDKey]; ok &&
+				utils.OwnedByReplacedNode(cniNode.OwnerReferences, node) {
+				state.tags[config.NetworkInterfaceNodeIDKey] = utils.GetNodeInstanceID(node)
+			}
 			if err := r.finalizerManager.RemoveFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
 				r.log.Error(err, "failed to remove finalizer on CNINode, will retry")
 				return ctrl.Result{}, err
@@ -281,7 +302,7 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 			r.log.Info("creating CNINode after it has been deleted as node still exists", "cniNode", cniNode.Name)
 			recreateCNINodeCallCount.Inc()
-			if err := r.createCNINodeForNode(ctx, node, features); err != nil {
+			if err := r.createCNINodeForNode(ctx, node, state); err != nil {
 				recreateCNINodeErrCount.Inc()
 				// raise event on if CNINode is deleted and could not be recreated by controller
 				utils.SendNodeEventWithNodeName(r.k8sAPI, node.Name, utils.CNINodeCreateFailed,
@@ -304,33 +325,40 @@ func hasFinalizerOtherThan(finalizers []string, expected string) bool {
 	return false
 }
 
-func (r *CNINodeReconciler) rememberPendingFeatures(name string, features []v1alpha1.Feature) {
-	if len(features) == 0 {
-		return
-	}
+func (r *CNINodeReconciler) rememberPendingFeatures(cniNode *v1alpha1.CNINode) {
 	r.pendingFeaturesMu.Lock()
 	defer r.pendingFeaturesMu.Unlock()
 	if r.pendingFeatures == nil {
-		r.pendingFeatures = make(map[string]cachedFeatures)
+		r.pendingFeatures = make(map[string]cachedCNINodeState)
 	}
-	r.pendingFeatures[name] = cachedFeatures{
-		features:  append([]v1alpha1.Feature(nil), features...),
-		createdAt: time.Now(),
+	now := time.Now()
+	for name, cached := range r.pendingFeatures {
+		if now.Sub(cached.createdAt) > pendingFeaturesTTL {
+			delete(r.pendingFeatures, name)
+		}
+	}
+	r.pendingFeatures[cniNode.Name] = cachedCNINodeState{
+		features:  append([]v1alpha1.Feature(nil), cniNode.Spec.Features...),
+		tags:      maps.Clone(cniNode.Spec.Tags),
+		managedBy: cniNode.Spec.ManagedBy,
+		createdAt: now,
 	}
 }
 
-func (r *CNINodeReconciler) pendingFeaturesFor(name string) []v1alpha1.Feature {
+func (r *CNINodeReconciler) pendingFeaturesFor(name string) cachedCNINodeState {
 	r.pendingFeaturesMu.Lock()
 	defer r.pendingFeaturesMu.Unlock()
 	cached, ok := r.pendingFeatures[name]
 	if !ok {
-		return nil
+		return cachedCNINodeState{}
 	}
 	if time.Since(cached.createdAt) > pendingFeaturesTTL {
 		delete(r.pendingFeatures, name)
-		return nil
+		return cachedCNINodeState{}
 	}
-	return append([]v1alpha1.Feature(nil), cached.features...)
+	cached.features = append([]v1alpha1.Feature(nil), cached.features...)
+	cached.tags = maps.Clone(cached.tags)
+	return cached
 }
 
 func (r *CNINodeReconciler) clearPendingFeatures(name string) {
@@ -348,6 +376,14 @@ func (r *CNINodeReconciler) SetupWithManager(mgr ctrl.Manager, maxNodeConcurrent
 		For(&v1alpha1.CNINode{}).
 		Watches(&v1.Node{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
 			return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(obj)}}
+		}), builder.WithPredicates(predicate.Funcs{
+			CreateFunc: func(event event.CreateEvent) bool {
+				node, ok := event.Object.(*v1.Node)
+				return ok && !utils.IsAutoModeNode(node)
+			},
+			UpdateFunc:  func(event event.UpdateEvent) bool { return false },
+			DeleteFunc:  func(event event.DeleteEvent) bool { return false },
+			GenericFunc: func(event event.GenericEvent) bool { return false },
 		})).
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxNodeConcurrentReconciles}).
 		Complete(r)
@@ -380,7 +416,12 @@ func (r *CNINodeReconciler) createCNINodeFromObj(ctx context.Context, newCNINode
 		})
 }
 
-func (r *CNINodeReconciler) createCNINodeForNode(ctx context.Context, node *v1.Node, features []v1alpha1.Feature) error {
+func (r *CNINodeReconciler) createCNINodeForNode(ctx context.Context, node *v1.Node, state cachedCNINodeState) error {
+	tags := maps.Clone(state.tags)
+	if tags == nil {
+		tags = make(map[string]string)
+	}
+	tags[config.VPCCNIClusterNameKey] = r.clusterName
 	cniNode := &v1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      node.Name,
@@ -395,10 +436,9 @@ func (r *CNINodeReconciler) createCNINodeForNode(ctx context.Context, node *v1.N
 			Finalizers: []string{config.NodeTerminationFinalizer},
 		},
 		Spec: v1alpha1.CNINodeSpec{
-			Tags: map[string]string{
-				config.VPCCNIClusterNameKey: r.clusterName,
-			},
-			Features: features,
+			Tags:      tags,
+			Features:  state.features,
+			ManagedBy: state.managedBy,
 		},
 	}
 	return client.IgnoreAlreadyExists(r.Client.Create(ctx, cniNode))

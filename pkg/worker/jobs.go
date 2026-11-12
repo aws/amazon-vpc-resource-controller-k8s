@@ -83,7 +83,7 @@ func NewOnDemandReconcileNodeJob(nodeName string) OnDemandJob {
 	}
 }
 
-// NewOnDemandProcessDeleteQueueJob returns a process delete queue job
+// NewOnDemandProcessDeleteQueueJob returns a process delete queue job.
 func NewOnDemandProcessDeleteQueueJob(nodeName string, instanceID ...string) OnDemandJob {
 	var id string
 	if len(instanceID) != 0 {

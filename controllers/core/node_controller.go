@@ -23,6 +23,7 @@ import (
 	rcHealthz "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/healthz"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/k8s"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/node/manager"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -40,9 +41,7 @@ import (
 // one routines to help high rate churn and larger nodes groups restarting
 // when the controller has to be restarted for various reasons.
 const (
-	NodeTerminationFinalizer  = "networking.k8s.aws/resource-cleanup"
-	computeTypeLabelKey       = "eks.amazonaws.com/compute-type"
-	autoComputeTypeLabelValue = "auto"
+	NodeTerminationFinalizer = "networking.k8s.aws/resource-cleanup"
 	// replacedCNINodeRetryPeriod is how often a node waits for the CNINode of a replaced node to be deleted. The
 	// CNINode reconciler finalizes such a CNINode right away, so the wait is short.
 	replacedCNINodeRetryPeriod = time.Second
@@ -81,22 +80,19 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	if nodeErr := r.Client.Get(ctx, req.NamespacedName, node); nodeErr != nil {
 		if errors.IsNotFound(nodeErr) {
-			// clean up local cached nodes
-			_, found := r.Manager.GetNode(req.Name)
-			if found {
-				cacheErr := r.Manager.DeleteNode(req.Name)
-				if cacheErr != nil {
-					// The request is not retryable so not returning the error
-					logger.Error(cacheErr, "failed to delete node from manager")
-					return ctrl.Result{}, nil
-				}
-				logger.V(1).Info("deleted the node from manager")
+			// DeleteNode is idempotent and must not depend on looking up the
+			// Node again: the object has already disappeared from the cache.
+			cacheErr := r.Manager.DeleteNode(req.Name)
+			if cacheErr != nil {
+				// The request is not retryable so not returning the error
+				logger.Error(cacheErr, "failed to delete node from manager")
+				return ctrl.Result{}, nil
 			}
+			logger.V(1).Info("deleted the node from manager")
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(nodeErr)
 	}
-	computeKey, ok := node.Labels[computeTypeLabelKey]
-	if ok && computeKey == autoComputeTypeLabelValue {
+	if utils.IsAutoModeNode(node) {
 		logger.Info("node is auto compute type, skipping")
 		return ctrl.Result{}, nil
 	}
