@@ -368,6 +368,8 @@ func TestCNINodeReconcile_CreatesCNINodeForNode(t *testing.T) {
 	node := mockNodeWithLabel.DeepCopy()
 	node.UID = "uid-current"
 	mock := NewCNINodeMock(ctrl, node)
+	mock.Reconciler.rememberPendingFeatures(node.Name,
+		[]v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}})
 
 	result, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
 	assert.NoError(t, err)
@@ -379,4 +381,19 @@ func TestCNINodeReconcile_CreatesCNINodeForNode(t *testing.T) {
 	assert.Equal(t, node.UID, cniNode.OwnerReferences[0].UID)
 	assert.Equal(t, []string{config.NodeTerminationFinalizer}, cniNode.Finalizers)
 	assert.Equal(t, mockClusterName, cniNode.Spec.Tags[config.VPCCNIClusterNameKey])
+	assert.Equal(t, []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}, cniNode.Spec.Features)
+	assert.Nil(t, mock.Reconciler.pendingFeaturesFor(node.Name))
+}
+
+func TestCNINodeReconcilerPendingFeatures(t *testing.T) {
+	reconciler := &CNINodeReconciler{}
+	features := []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}
+
+	reconciler.rememberPendingFeatures("node-a", features)
+	features[0].Name = v1alpha1.CustomNetworking
+
+	assert.Equal(t, []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}},
+		reconciler.pendingFeaturesFor("node-a"))
+	reconciler.clearPendingFeatures("node-a")
+	assert.Nil(t, reconciler.pendingFeaturesFor("node-a"))
 }

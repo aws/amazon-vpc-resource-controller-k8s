@@ -15,6 +15,7 @@ package crds
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
@@ -80,6 +81,15 @@ type CNINodeReconciler struct {
 	finalizerManager   k8s.FinalizerManager
 	newResourceCleaner func(nodeID string, eC2Wrapper ec2API.EC2Wrapper, vpcID string) cleanup.ResourceCleaner
 	waitForDeletion    func(types.NamespacedName) error
+	pendingFeatures    map[string]cachedFeatures
+	pendingFeaturesMu  sync.Mutex
+}
+
+const pendingFeaturesTTL = 5 * time.Minute
+
+type cachedFeatures struct {
+	features  []v1alpha1.Feature
+	createdAt time.Time
 }
 
 func NewCNINodeReconciler(
@@ -105,6 +115,7 @@ func NewCNINodeReconciler(
 		vpcId:              vpcId,
 		finalizerManager:   finalizerManager,
 		newResourceCleaner: newResourceCleaner,
+		pendingFeatures:    make(map[string]cachedFeatures),
 	}
 }
 
@@ -119,7 +130,12 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if errors.IsNotFound(err) {
 			node := &v1.Node{}
 			if nodeErr := r.Client.Get(ctx, req.NamespacedName, node); nodeErr == nil {
-				return ctrl.Result{}, r.createCNINodeForNode(ctx, node, nil)
+				features := r.pendingFeaturesFor(req.Name)
+				if err := r.createCNINodeForNode(ctx, node, features); err != nil {
+					return ctrl.Result{}, err
+				}
+				r.clearPendingFeatures(req.Name)
+				return ctrl.Result{}, nil
 			} else if !errors.IsNotFound(nodeErr) {
 				return ctrl.Result{}, nodeErr
 			}
@@ -135,6 +151,10 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if cniNode.Spec.ManagedBy != "" && cniNode.Spec.ManagedBy != v1alpha1.ManagedByVPCResourceController {
 		r.log.V(1).Info("skipping CNINode managed by another controller", "cniNode", cniNode.Name, "managedBy", cniNode.Spec.ManagedBy)
 		return ctrl.Result{}, nil
+	}
+
+	if !cniNode.GetDeletionTimestamp().IsZero() {
+		r.rememberPendingFeatures(cniNode.Name, cniNode.Spec.Features)
 	}
 
 	nodeFound := true
@@ -282,6 +302,41 @@ func hasFinalizerOtherThan(finalizers []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func (r *CNINodeReconciler) rememberPendingFeatures(name string, features []v1alpha1.Feature) {
+	if len(features) == 0 {
+		return
+	}
+	r.pendingFeaturesMu.Lock()
+	defer r.pendingFeaturesMu.Unlock()
+	if r.pendingFeatures == nil {
+		r.pendingFeatures = make(map[string]cachedFeatures)
+	}
+	r.pendingFeatures[name] = cachedFeatures{
+		features:  append([]v1alpha1.Feature(nil), features...),
+		createdAt: time.Now(),
+	}
+}
+
+func (r *CNINodeReconciler) pendingFeaturesFor(name string) []v1alpha1.Feature {
+	r.pendingFeaturesMu.Lock()
+	defer r.pendingFeaturesMu.Unlock()
+	cached, ok := r.pendingFeatures[name]
+	if !ok {
+		return nil
+	}
+	if time.Since(cached.createdAt) > pendingFeaturesTTL {
+		delete(r.pendingFeatures, name)
+		return nil
+	}
+	return append([]v1alpha1.Feature(nil), cached.features...)
+}
+
+func (r *CNINodeReconciler) clearPendingFeatures(name string) {
+	r.pendingFeaturesMu.Lock()
+	defer r.pendingFeaturesMu.Unlock()
+	delete(r.pendingFeatures, name)
 }
 
 // SetupWithManager sets up the controller with the Manager.
