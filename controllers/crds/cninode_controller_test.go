@@ -246,6 +246,36 @@ func TestCNINodeReconcile(t *testing.T) {
 			},
 		},
 		{
+			name: "keep the controller finalizer while another finalizer holds a replaced CNINode",
+			args: args{
+				mockNode: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   mockName,
+						UID:    "uid-new",
+						Labels: map[string]string{config.NodeLabelOS: config.OSLinux},
+					},
+				},
+				mockCNINode: &v1alpha1.CNINode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:              mockName,
+						Labels:            map[string]string{config.NodeLabelOS: config.OSLinux},
+						OwnerReferences:   []metav1.OwnerReference{{Kind: "Node", Name: mockName, UID: "uid-old"}},
+						Finalizers:        []string{config.NodeTerminationFinalizer, "test.example/hold"},
+						DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
+					},
+					Spec: v1alpha1.CNINodeSpec{
+						Features: []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}},
+					},
+				},
+			},
+			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
+				assert.NoError(t, err)
+				assert.Equal(t, reconcile.Result{}, res)
+				assert.Equal(t, []string{config.NodeTerminationFinalizer, "test.example/hold"}, cniNode.Finalizers)
+				assert.Equal(t, []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}, cniNode.Spec.Features)
+			},
+		},
+		{
 			// After EC2 private-IP reuse, GC deletes the old instance's CNINode while a replacement Node with the same
 			// name exists. Do not clean the replacement's resources; recreate the
 			// CNINode with its features for the current Node.

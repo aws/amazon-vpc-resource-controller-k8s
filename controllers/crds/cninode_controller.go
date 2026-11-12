@@ -233,6 +233,15 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 			return ctrl.Result{}, nil
 		} else {
+			// Keep our finalizer until every other finalizer has released the
+			// object. Otherwise the object could disappear between retries and
+			// a later NotFound reconcile would have no features to transfer.
+			if hasFinalizerOtherThan(cniNode.Finalizers, config.NodeTerminationFinalizer) {
+				r.log.Info("waiting for other finalizers before replacing CNINode",
+					"cniNode", cniNode.Name)
+				return ctrl.Result{}, nil
+			}
+
 			// The deletion is irreversible. Keep the features in this reconcile,
 			// delete the old object, then make a fresh object for the current
 			// Node. This makes CNINodeReconciler the sole owner of replacement.
@@ -264,6 +273,15 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+func hasFinalizerOtherThan(finalizers []string, expected string) bool {
+	for _, finalizer := range finalizers {
+		if finalizer != expected {
+			return true
+		}
+	}
+	return false
 }
 
 // SetupWithManager sets up the controller with the Manager.
