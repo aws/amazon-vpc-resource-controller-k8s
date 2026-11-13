@@ -96,7 +96,10 @@ var (
 )
 
 // RegisterMetrics registers the node metrics and exposes every restore series at 0. Call it at startup on every
-// replica: a restart restores all nodes within one scrape, and a scraper that baselines a new family would drop them.
+// replica. A restart restores every node within one scrape, so a delta-based scraper counts the restores only if it
+// read this process at 0 first, as it does for a standby that takes over. If the process restores before its first
+// scrape, the restores are lost: a scraper with no baseline takes the burst as its baseline, and one that kept the
+// previous process's value N publishes the burst minus N, or nothing if the burst is below N (read as a reset).
 func RegisterMetrics() {
 	registerMetricsOnce.Do(func() {
 		metrics.Registry.MustRegister(cniNodeCheckpointRestoreCount, nodeInitDuration)
