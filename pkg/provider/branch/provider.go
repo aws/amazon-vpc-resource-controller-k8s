@@ -638,8 +638,6 @@ func (b *branchENIProvider) removeTrunkFromCache(nodeName string, trunkENI trunk
 
 	log := b.log.WithValues("node", nodeName)
 	if trunkENI == nil {
-		branchProviderOperationsErrCount.WithLabelValues("remove_from_cache").Inc()
-		log.Error(ErrTrunkNotInCache, "trunk doesn't exist in cache")
 		return
 	}
 
@@ -747,6 +745,7 @@ func (b *branchENIProvider) Introspect() interface{} {
 	defer b.lock.RUnlock()
 
 	allResponse := make(map[string]trunk.IntrospectResponse)
+	responseKeys := make(map[string]struct{})
 
 	for instanceID, trunkENI := range b.trunkENICache {
 		response := trunkENI.Introspect()
@@ -754,7 +753,7 @@ func (b *branchENIProvider) Introspect() interface{} {
 		if nodeName == "" {
 			nodeName = instanceID
 		}
-		allResponse[nodeName] = response
+		allResponse[introspectionKey(nodeName, instanceID, responseKeys)] = response
 	}
 	return allResponse
 }
@@ -764,6 +763,7 @@ func (b *branchENIProvider) IntrospectSummary() interface{} {
 	defer b.lock.RUnlock()
 
 	allResponse := make(map[string]trunk.IntrospectSummaryResponse)
+	responseKeys := make(map[string]struct{})
 
 	for instanceID, trunkENI := range b.trunkENICache {
 		response := trunkENI.Introspect()
@@ -771,9 +771,18 @@ func (b *branchENIProvider) IntrospectSummary() interface{} {
 		if nodeName == "" {
 			nodeName = instanceID
 		}
-		allResponse[nodeName] = changeToIntrospectSummary(response)
+		allResponse[introspectionKey(nodeName, instanceID, responseKeys)] = changeToIntrospectSummary(response)
 	}
 	return allResponse
+}
+
+func introspectionKey(nodeName, instanceID string, responseKeys map[string]struct{}) string {
+	key := nodeName
+	if _, exists := responseKeys[key]; exists {
+		key = fmt.Sprintf("%s/%s", nodeName, instanceID)
+	}
+	responseKeys[key] = struct{}{}
+	return key
 }
 
 func changeToIntrospectSummary(details trunk.IntrospectResponse) trunk.IntrospectSummaryResponse {

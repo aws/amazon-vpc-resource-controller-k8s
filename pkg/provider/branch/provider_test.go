@@ -548,7 +548,7 @@ func TestBranchENIProvider_removeTrunkFromCache_TrunkOfNewInstance(t *testing.T)
 func TestBranchENIProvider_removeTrunkFromCache_NotExists(t *testing.T) {
 	provider := getProvider()
 
-	// Should not throw an error
+	// A defensive cleanup call without a trunk is a no-op.
 	provider.removeTrunkFromCache(NodeName, nil)
 }
 
@@ -1169,6 +1169,57 @@ func TestBranchENIProvider_Introspect(t *testing.T) {
 
 	resp = provider.IntrospectNode("unregistered-node")
 	assert.Equal(t, resp, struct{}{})
+}
+
+func TestBranchENIProvider_IntrospectKeepsTrunksOfReplacedNodes(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+	oldInstanceID, newInstanceID := "i-old", "i-new"
+	oldResponse := trunk.IntrospectResponse{TrunkENIID: "eni-old", InstanceID: oldInstanceID}
+	newResponse := trunk.IntrospectResponse{TrunkENIID: "eni-new", InstanceID: newInstanceID}
+	oldTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	newTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	oldTrunk.EXPECT().Introspect().Return(oldResponse).Times(2)
+	newTrunk.EXPECT().Introspect().Return(newResponse).Times(2)
+	provider.trunkENICache[oldInstanceID] = oldTrunk
+	provider.trunkENICache[newInstanceID] = newTrunk
+	provider.trunkNodeNames[oldInstanceID] = NodeName
+	provider.trunkNodeNames[newInstanceID] = NodeName
+
+	response := provider.Introspect().(map[string]trunk.IntrospectResponse)
+	assert.Len(t, response, 2)
+	assert.Contains(t, response, NodeName)
+	assert.True(t, containsIntrospectResponse(response, oldResponse))
+	assert.True(t, containsIntrospectResponse(response, newResponse))
+
+	summary := provider.IntrospectSummary().(map[string]trunk.IntrospectSummaryResponse)
+	assert.Len(t, summary, 2)
+	assert.Contains(t, summary, NodeName)
+	assert.True(t, containsIntrospectSummary(summary, changeToIntrospectSummary(oldResponse)))
+	assert.True(t, containsIntrospectSummary(summary, changeToIntrospectSummary(newResponse)))
+}
+
+func containsIntrospectResponse(responses map[string]trunk.IntrospectResponse, expected trunk.IntrospectResponse) bool {
+	for _, response := range responses {
+		if reflect.DeepEqual(response, expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsIntrospectSummary(
+	responses map[string]trunk.IntrospectSummaryResponse,
+	expected trunk.IntrospectSummaryResponse,
+) bool {
+	for _, response := range responses {
+		if response == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func TestUnSupportedNodeEvents_Linux(t *testing.T) {
