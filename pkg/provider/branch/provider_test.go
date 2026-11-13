@@ -268,6 +268,20 @@ func TestBranchENIProvider_InitResourceCheckpointFailureIsBestEffort(t *testing.
 	assert.Equal(t, before+1, checkpointPersistErrorCount(t))
 }
 
+func TestBranchENIProvider_InitResourceRejectsMissingInstanceID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+	instance := mock_ec2.NewMockEC2Instance(ctrl)
+	instance.EXPECT().Name().Return(NodeName)
+	instance.EXPECT().InstanceID().Return("")
+
+	err := provider.InitResource(instance)
+
+	assert.ErrorIs(t, err, ErrMissingInstanceID)
+}
+
 func TestBranchENIProvider_InitResourceRestoredCheckpointPersistsCheckpoint(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1076,8 +1090,17 @@ func TestBranchENIProvider_ReconcileNode_TrunkENIDeleted(t *testing.T) {
 func TestBranchENIProvider_ProcessDeleteQueue_TrunkENIDeleted(t *testing.T) {
 	provider := getProvider()
 
-	result, err := provider.ProcessDeleteQueue(NodeName)
+	result, err := provider.ProcessDeleteQueue(NodeName, NodeName)
 	assert.NoError(t, err)
+	assert.Equal(t, k8sCtrl.Result{}, result)
+}
+
+func TestBranchENIProvider_ProcessAsyncJobRejectsMissingInstanceID(t *testing.T) {
+	provider := getProvider()
+
+	result, err := provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, ""))
+
+	assert.ErrorIs(t, err, ErrMissingInstanceID)
 	assert.Equal(t, k8sCtrl.Result{}, result)
 }
 
@@ -1095,7 +1118,7 @@ func TestBranchENIProvider_ProcessDeleteQueue(t *testing.T) {
 	fakeTrunk1.EXPECT().NeedsPreparation().Return(false)
 	fakeTrunk1.EXPECT().DeleteCooledDownENIs()
 
-	result, err := provider.ProcessDeleteQueue(NodeName)
+	result, err := provider.ProcessDeleteQueue(NodeName, NodeName)
 	assert.NoError(t, err)
 	assert.Equal(t, deleteQueueRequeueRequest, result)
 }
@@ -1139,7 +1162,7 @@ func TestBranchENIProvider_ProcessDeleteQueuePreparesARestoredTrunkWithQueuedENI
 			failures := branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation")
 			before := writePrometheusMetric(t, failures).GetCounter().GetValue()
 
-			result, err := provider.ProcessDeleteQueue(NodeName)
+			result, err := provider.ProcessDeleteQueue(NodeName, NodeName)
 
 			assert.NoError(t, err)
 			assert.Equal(t, test.wantResult, result)

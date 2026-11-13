@@ -108,6 +108,7 @@ var (
 
 	ErrTrunkExistInCache = fmt.Errorf("trunk eni already exist in cache")
 	ErrTrunkNotInCache   = fmt.Errorf("trunk eni not present in cache")
+	ErrMissingInstanceID = errors.New("instance ID is required")
 )
 
 // branchENIProvider provides branch ENI to all nodes that support Trunk network interface
@@ -176,6 +177,10 @@ func timeSinceSeconds(start time.Time) float64 {
 func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	nodeName := instance.Name()
 	log := b.log.WithValues("nodeName", nodeName)
+	instanceID := instance.InstanceID()
+	if instanceID == "" {
+		return fmt.Errorf("initializing trunk for %s: %w", nodeName, ErrMissingInstanceID)
+	}
 	trunkENI := trunk.NewTrunkENI(log, instance, b.apiWrapper.EC2API)
 
 	// Initialize the Trunk ENI
@@ -223,7 +228,7 @@ func (b *branchENIProvider) InitResource(instance ec2.EC2Instance) error {
 	}
 	// A failed write only disables fast restore on the next controller restart.
 	b.persistCNINodeCheckpoint(nodeName, instance, trunkENI)
-	b.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName, instance.InstanceID()))
+	b.SubmitAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(nodeName, instanceID))
 	b.log.Info("initialized the resource provider successfully")
 	utils.SendNodeEventWithNodeName(b.apiWrapper.K8sAPI, nodeName, utils.NodeTrunkInitiatedReason, "The node has trunk interface initialized successfully", v1.EventTypeNormal, b.log)
 	return nil
@@ -299,6 +304,9 @@ func (b *branchENIProvider) ProcessAsyncJob(job interface{}) (ctrl.Result, error
 	case worker.OperationDeleted:
 		return b.DeleteBranchUsedByPods(onDemandJob.NodeName, onDemandJob.UID)
 	case worker.OperationProcessDeleteQueue:
+		if onDemandJob.InstanceID == "" {
+			return ctrl.Result{}, ErrMissingInstanceID
+		}
 		return b.ProcessDeleteQueue(onDemandJob.NodeName, onDemandJob.InstanceID)
 	case worker.OperationDeleteNode:
 		return b.DeleteNode(onDemandJob.NodeName, onDemandJob.InstanceID)
@@ -433,15 +441,12 @@ func (b *branchENIProvider) ReconcileNode(nodeName string) bool {
 	return foundLeakedENI
 }
 
-// ProcessDeleteQueue removes cooled down ENIs associated with a trunk for a given node
-func (b *branchENIProvider) ProcessDeleteQueue(nodeName string, instanceID ...string) (ctrl.Result, error) {
-	var trunkENI trunk.TrunkENI
-	var isPresent bool
-	if len(instanceID) != 0 && instanceID[0] != "" {
-		trunkENI, isPresent = b.getTrunkByInstanceID(instanceID[0])
-	} else {
-		trunkENI, isPresent = b.getTrunkFromCache(nodeName)
+// ProcessDeleteQueue removes cooled down ENIs associated with a trunk for a given node instance.
+func (b *branchENIProvider) ProcessDeleteQueue(nodeName, instanceID string) (ctrl.Result, error) {
+	if instanceID == "" {
+		return ctrl.Result{}, ErrMissingInstanceID
 	}
+	trunkENI, isPresent := b.getTrunkByInstanceID(instanceID)
 	log := b.log.WithValues("node", nodeName)
 	if !isPresent {
 		log.Info("stopping the process delete queue job")

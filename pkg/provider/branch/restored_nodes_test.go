@@ -464,7 +464,7 @@ func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 			require.NoError(t, err)
 		}
 		time.Sleep(cooldown.GetCoolDown().GetCoolDownPeriod() + time.Second)
-		_, err := provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+		_, err := provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, restoredInstanceID))
 		require.NoError(t, err)
 
 		// The node is deleted before the restored-node pass prepares it, so that pass skips it.
@@ -487,7 +487,7 @@ func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 			require.True(t, cached)
 			ec2Down = false
 			for range 20 {
-				result, err = provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+				result, err = provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, restoredInstanceID))
 				require.NoError(t, err)
 				if !restoredTrunk.HasPendingDeletions() {
 					break
@@ -500,7 +500,7 @@ func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 		require.False(t, result.Requeue)
 		// Run the requeued cleanup job until it stops, as the worker does.
 		for range 20 {
-			result, err = provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+			result, err = provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, restoredInstanceID))
 			require.NoError(t, err)
 			if !result.Requeue {
 				break
