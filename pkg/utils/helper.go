@@ -36,9 +36,9 @@ import (
 )
 
 const (
-	PartitionIndex = 1
-	AccountIndex   = 4
-	AutoComputeTypeLabelKey = "eks.amazonaws.com/compute-type"
+	PartitionIndex            = 1
+	AccountIndex              = 4
+	AutoComputeTypeLabelKey   = "eks.amazonaws.com/compute-type"
 	AutoComputeTypeLabelValue = "auto"
 )
 
