@@ -135,9 +135,14 @@ var (
 	registerMetricsOnce sync.Once
 )
 
-// ErrReplacedCNINodeDeleting is returned while the CNINode of a replaced node with the same name is still being
-// deleted. It is an expected wait after EC2 private-IP reuse, not a failure.
-var ErrReplacedCNINodeDeleting = errors.New("waiting for the CNINode of a replaced node to be deleted")
+var (
+	// ErrCNINodeNotReady is returned while CNINodeReconciler has not yet
+	// created the CNINode for a current Node.
+	ErrCNINodeNotReady = errors.New("waiting for the CNINode to become ready")
+	// ErrReplacedCNINodeDeleting is returned while the CNINode of a replaced
+	// Node is still being deleted. It is an expected wait after IP reuse.
+	ErrReplacedCNINodeDeleting = errors.New("waiting for the CNINode of a replaced node to be deleted")
+)
 
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
@@ -233,7 +238,8 @@ func (m *manager) addNode(k8sNode *v1.Node, replaced node.Node) error {
 	nodeName := k8sNode.Name
 	log := m.Log.WithValues("node name", nodeName, "request", "add")
 	replacedManaged := replaced != nil && replaced.IsManaged()
-	if replaced != nil {
+	if replaced != nil && replaced.GetNodeInstanceID() != "" && utils.GetNodeInstanceID(k8sNode) != "" &&
+		replaced.GetNodeInstanceID() != utils.GetNodeInstanceID(k8sNode) {
 		log.Info("node name was reused by a new instance, replacing the cached node",
 			"replaced instance", replaced.GetNodeInstanceID(), "instance", utils.GetNodeInstanceID(k8sNode))
 	}
@@ -251,7 +257,9 @@ func (m *manager) addNode(k8sNode *v1.Node, replaced node.Node) error {
 	var newNode node.Node
 
 	if err := m.CreateCNINodeIfNotExisting(k8sNode); err != nil {
-		if errors.Is(err, ErrReplacedCNINodeDeleting) {
+		if errors.Is(err, ErrCNINodeNotReady) {
+			log.V(1).Info("waiting for CNINode reconciler to create the CNINode")
+		} else if errors.Is(err, ErrReplacedCNINodeDeleting) {
 			log.Info("waiting for the CNINode of a replaced node to be deleted")
 		} else {
 			m.Log.Error(err, "Failed to create CNINode for k8sNode", "NodeName", k8sNode.Name)
@@ -308,7 +316,7 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 			// CNINodeReconciler owns creation and watches Node objects. Waiting
 			// here prevents the two reconcilers racing to create a replacement
 			// with different feature sets.
-			return fmt.Errorf("%w: %s", ErrReplacedCNINodeDeleting, node.Name)
+			return fmt.Errorf("%w: %s", ErrCNINodeNotReady, node.Name)
 		}
 		return err
 	}

@@ -283,10 +283,6 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				tags:      maps.Clone(cniNode.Spec.Tags),
 				managedBy: cniNode.Spec.ManagedBy,
 			}
-			if _, ok := state.tags[config.NetworkInterfaceNodeIDKey]; ok &&
-				utils.OwnedByReplacedNode(cniNode.OwnerReferences, node) {
-				state.tags[config.NetworkInterfaceNodeIDKey] = utils.GetNodeInstanceID(node)
-			}
 			if err := r.finalizerManager.RemoveFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
 				r.log.Error(err, "failed to remove finalizer on CNINode, will retry")
 				return ctrl.Result{}, err
@@ -422,6 +418,9 @@ func (r *CNINodeReconciler) createCNINodeForNode(ctx context.Context, node *v1.N
 		tags = make(map[string]string)
 	}
 	tags[config.VPCCNIClusterNameKey] = r.clusterName
+	if _, ok := tags[config.NetworkInterfaceNodeIDKey]; ok {
+		tags[config.NetworkInterfaceNodeIDKey] = utils.GetNodeInstanceID(node)
+	}
 	cniNode := &v1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      node.Name,

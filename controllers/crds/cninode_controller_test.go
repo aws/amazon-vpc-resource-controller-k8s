@@ -376,10 +376,17 @@ func TestCNINodeReconcile_CreatesCNINodeForNode(t *testing.T) {
 
 	node := mockNodeWithLabel.DeepCopy()
 	node.UID = "uid-current"
+	node.Spec.ProviderID = "aws:///us-west-2a/i-0bbb"
 	mock := NewCNINodeMock(ctrl, node)
 	mock.Reconciler.rememberPendingFeatures(&v1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{Name: node.Name},
-		Spec:       v1alpha1.CNINodeSpec{Features: []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}},
+		Spec: v1alpha1.CNINodeSpec{
+			Features: []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}},
+			Tags: map[string]string{
+				config.NetworkInterfaceNodeIDKey: "i-0aaa",
+				"team":                           "networking",
+			},
+		},
 	})
 
 	result, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
@@ -392,6 +399,8 @@ func TestCNINodeReconcile_CreatesCNINodeForNode(t *testing.T) {
 	assert.Equal(t, node.UID, cniNode.OwnerReferences[0].UID)
 	assert.Equal(t, []string{config.NodeTerminationFinalizer}, cniNode.Finalizers)
 	assert.Equal(t, mockClusterName, cniNode.Spec.Tags[config.VPCCNIClusterNameKey])
+	assert.Equal(t, "i-0bbb", cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey])
+	assert.Equal(t, "networking", cniNode.Spec.Tags["team"])
 	assert.Equal(t, []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}, cniNode.Spec.Features)
 	assert.Empty(t, mock.Reconciler.pendingFeaturesFor(node.Name))
 }

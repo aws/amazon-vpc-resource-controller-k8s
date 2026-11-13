@@ -109,8 +109,10 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		logger.Info("adding node")
 		err = r.Manager.AddNode(req.Name)
 	}
-	// Retry without reporting an error, as waiting for the CNINode of a replaced node is expected after IP reuse.
-	if goErrors.Is(err, manager.ErrReplacedCNINodeDeleting) {
+	// Retry without reporting an error while CNINodeReconciler creates or
+	// replaces the CNINode for this Node.
+	if goErrors.Is(err, manager.ErrCNINodeNotReady) ||
+		goErrors.Is(err, manager.ErrReplacedCNINodeDeleting) {
 		return ctrl.Result{RequeueAfter: replacedCNINodeRetryPeriod}, nil
 	}
 

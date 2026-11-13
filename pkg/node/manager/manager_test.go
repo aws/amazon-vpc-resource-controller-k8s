@@ -226,7 +226,7 @@ func Test_AddNode_CNINode_Not_Existing(t *testing.T) {
 		Times(1)
 
 	err := mock.Manager.AddNode(nodeName)
-	assert.ErrorIs(t, err, ErrReplacedCNINodeDeleting)
+	assert.ErrorIs(t, err, ErrCNINodeNotReady)
 	assert.NotContains(t, mock.Manager.dataStore, nodeName)
 }
 
@@ -1085,7 +1085,7 @@ func Test_AddNode_WaitsForDeletingCNINodeOfReplacedInstance(t *testing.T) {
 
 	// Once deletion reaches NotFound, the NodeManager still waits: the CNINodeReconciler
 	// must recreate the object before NodeManager can initialize this instance.
-	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrReplacedCNINodeDeleting)
+	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrCNINodeNotReady)
 }
 
 // The new instance that reused the node name is not selected for management, so the job only retires the old one.
@@ -1131,7 +1131,7 @@ func Test_AddNode_WaitsForCNINodeReconcilerToCreateCNINode(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(nil, notFound)
 
-	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrReplacedCNINodeDeleting)
+	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrCNINodeNotReady)
 }
 
 // A failed Init of an instance that a new instance with the same node name already replaced must not remove the
