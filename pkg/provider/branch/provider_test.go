@@ -95,9 +95,10 @@ func getProviderAndMocks(ctrl *gomock.Controller) (branchENIProvider, *mock_pod.
 			SGPAPI: mockSGPAPI,
 			K8sAPI: mockK8sAPI,
 		},
-		log:           log,
-		trunkENICache: make(map[string]trunk.TrunkENI),
-		ctx:           ctx,
+		log:            log,
+		trunkENICache:  make(map[string]trunk.TrunkENI),
+		trunkNodeNames: make(map[string]string),
+		ctx:            ctx,
 	}, mockPodAPI, mockSGPAPI, mockK8sAPI
 }
 
@@ -110,8 +111,9 @@ func getProviderAndMockK8sWrapper(ctrl *gomock.Controller) (branchENIProvider, *
 		apiWrapper: api.Wrapper{
 			K8sAPI: mockK8sWrapper,
 		},
-		log:           log,
-		trunkENICache: make(map[string]trunk.TrunkENI),
+		log:            log,
+		trunkENICache:  make(map[string]trunk.TrunkENI),
+		trunkNodeNames: make(map[string]string),
 	}, mockK8sWrapper
 }
 
@@ -126,8 +128,9 @@ func getProviderWithMockWorker(ctrl *gomock.Controller) (branchENIProvider, *moc
 func getProvider() branchENIProvider {
 	log := zap.New(zap.UseDevMode(true)).WithName("branch provider")
 	return branchENIProvider{
-		log:           log,
-		trunkENICache: make(map[string]trunk.TrunkENI),
+		log:            log,
+		trunkENICache:  make(map[string]trunk.TrunkENI),
+		trunkNodeNames: make(map[string]string),
 	}
 }
 
@@ -200,9 +203,10 @@ func prepareInitResourceSuccess(
 			K8sAPI: mockK8sAPI,
 			PodAPI: mockPodAPI,
 		},
-		log:           zap.New(zap.UseDevMode(true)).WithName("branch provider"),
-		workerPool:    mockWorker,
-		trunkENICache: make(map[string]trunk.TrunkENI),
+		log:            zap.New(zap.UseDevMode(true)).WithName("branch provider"),
+		workerPool:     mockWorker,
+		trunkENICache:  make(map[string]trunk.TrunkENI),
+		trunkNodeNames: make(map[string]string),
 	}
 
 	mockInstance.EXPECT().Name().Return(NodeName)
@@ -227,9 +231,12 @@ func prepareInitResourceSuccess(
 	).Return(&ec2types.NetworkInterface{NetworkInterfaceId: aws.String(trunkENIID)}, nil)
 	mockInstance.EXPECT().BuildNodeNetworkState().Return(state)
 	mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(checkpointErr)
-	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
-	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: NodeName}}
-	mockK8sAPI.EXPECT().GetNode(NodeName).Return(node, nil)
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, instanceID))
+	node := &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: NodeName},
+		Spec:       v1.NodeSpec{ProviderID: "aws:///us-west-2a/" + instanceID},
+	}
+	mockK8sAPI.EXPECT().GetNode(NodeName).Return(node, nil).AnyTimes()
 	mockK8sAPI.EXPECT().BroadcastEvent(
 		gomock.Any(),
 		utils.NodeTrunkInitiatedReason,
@@ -261,6 +268,20 @@ func TestBranchENIProvider_InitResourceCheckpointFailureIsBestEffort(t *testing.
 	assert.Equal(t, before+1, checkpointPersistErrorCount(t))
 }
 
+func TestBranchENIProvider_InitResourceRejectsMissingInstanceID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+	instance := mock_ec2.NewMockEC2Instance(ctrl)
+	instance.EXPECT().Name().Return(NodeName)
+	instance.EXPECT().InstanceID().Return("")
+
+	err := provider.InitResource(instance)
+
+	assert.ErrorIs(t, err, ErrMissingInstanceID)
+}
+
 func TestBranchENIProvider_InitResourceRestoredCheckpointPersistsCheckpoint(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -278,7 +299,7 @@ func TestBranchENIProvider_InitResourceRestoredCheckpointPersistsCheckpoint(t *t
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
 	mockInstance.EXPECT().BuildNodeNetworkState().Return(state)
 	mockK8sAPI.EXPECT().PatchCNINodeCheckpoint(NodeName, state, trunkENIID).Return(nil)
-	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+	mockWorker.EXPECT().SubmitJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, state.InstanceID))
 	mockK8sAPI.EXPECT().GetNode(NodeName).Return(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: NodeName}}, nil)
 	mockK8sAPI.EXPECT().BroadcastEvent(gomock.Any(), utils.NodeTrunkInitiatedReason,
 		"The node has trunk interface initialized successfully", v1.EventTypeNormal)
@@ -338,7 +359,7 @@ func TestBranchENIProvider_FallbackAfterDeleteNodeKeepsCheckpointCleared(t *test
 		DoAndReturn(func(listPods func() ([]v1.Pod, error)) (ec2.EC2Instance, error) {
 			_, err := listPods()
 			assert.NoError(t, err)
-			_, err = provider.DeleteNode(NodeName)
+			_, err = provider.DeleteNode(NodeName, "")
 			assert.NoError(t, err)
 			return mock_ec2.NewMockEC2Instance(ctrl), nil
 		})
@@ -402,7 +423,7 @@ func TestBranchENIProvider_DeleteNodeClearsTheCheckpoint(t *testing.T) {
 			}
 			failuresBefore := checkpointPersistErrorCount(t)
 
-			result, err := provider.DeleteNode(NodeName)
+			result, err := provider.DeleteNode(NodeName, "")
 
 			assert.NoError(t, err)
 			assert.Equal(t, k8sCtrl.Result{}, result)
@@ -489,7 +510,7 @@ func TestBranchENIProvider_DeleteNodeHoldsUnpreparedTrunkWithPendingDeletions(t 
 				mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(nil)
 			}
 
-			result, err := provider.DeleteNode(NodeName)
+			result, err := provider.DeleteNode(NodeName, "")
 
 			assert.NoError(t, err)
 			if test.wantHold {
@@ -515,18 +536,34 @@ func TestBranchENIProvider_removeTrunkFromCache(t *testing.T) {
 
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	provider.trunkENICache[NodeName] = fakeTrunk
-	provider.removeTrunkFromCache(NodeName)
+	provider.removeTrunkFromCache(NodeName, fakeTrunk)
 
 	_, ok := provider.trunkENICache[NodeName]
 	assert.False(t, ok)
+}
+
+// TestBranchENIProvider_removeTrunkFromCache_TrunkOfNewInstance tests that removing the trunk of a replaced instance
+// keeps the trunk a new instance with the same node name cached in the meantime
+func TestBranchENIProvider_removeTrunkFromCache_TrunkOfNewInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+
+	oldTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	newTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	provider.trunkENICache[NodeName] = newTrunk
+	provider.removeTrunkFromCache(NodeName, oldTrunk)
+
+	assert.Equal(t, newTrunk, provider.trunkENICache[NodeName])
 }
 
 // TestBranchENIProvider_removeTrunkFromCache_NotExists tests delete doesn't panic if entry doesn't exist in cache
 func TestBranchENIProvider_removeTrunkFromCache_NotExists(t *testing.T) {
 	provider := getProvider()
 
-	// Should not throw an error
-	provider.removeTrunkFromCache(NodeName)
+	// A defensive cleanup call without a trunk is a no-op.
+	provider.removeTrunkFromCache(NodeName, nil)
 }
 
 // TestBranchENIProvider_addTrunkToCache tests entry is added to cache
@@ -537,10 +574,11 @@ func TestBranchENIProvider_addTrunkToCache(t *testing.T) {
 	provider := getProvider()
 
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	fakeTrunk.EXPECT().InstanceID().Return(restoredInstanceID)
 	err := provider.addTrunkToCache(NodeName, fakeTrunk)
 
 	assert.NoError(t, err)
-	trunkENI, ok := provider.trunkENICache[NodeName]
+	trunkENI, ok := provider.trunkENICache[restoredInstanceID]
 
 	assert.True(t, ok)
 	assert.Equal(t, fakeTrunk, trunkENI)
@@ -555,11 +593,30 @@ func TestBranchENIProvider_addTrunkToCache_AlreadyExist(t *testing.T) {
 	provider := getProvider()
 
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-	provider.trunkENICache[NodeName] = fakeTrunk
+	fakeTrunk.EXPECT().InstanceID().Return(restoredInstanceID).AnyTimes()
+	provider.trunkENICache[restoredInstanceID] = fakeTrunk
 
 	err := provider.addTrunkToCache(NodeName, fakeTrunk)
 
 	assert.ErrorIs(t, err, ErrTrunkExistInCache)
+}
+
+// TestBranchENIProvider_addTrunkToCache_ReplacedInstance keeps both trunks while the earlier instance is cleaned up.
+func TestBranchENIProvider_addTrunkToCache_ReplacedInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+
+	oldTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	oldTrunk.EXPECT().InstanceID().Return("i-0old").AnyTimes()
+	newTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	newTrunk.EXPECT().InstanceID().Return(restoredInstanceID).AnyTimes()
+	provider.trunkENICache["i-0old"] = oldTrunk
+
+	assert.NoError(t, provider.addTrunkToCache(NodeName, newTrunk))
+	assert.Equal(t, oldTrunk, provider.trunkENICache["i-0old"])
+	assert.Equal(t, newTrunk, provider.trunkENICache[restoredInstanceID])
 }
 
 // TestBranchENIProvider_DeleteBranchUsedByPods tests that ENIs used by pods are pushed to the Cool down Queue by the
@@ -635,7 +692,8 @@ func TestBranchENIProvider_DeInitResources(t *testing.T) {
 	mockInstance := mock_ec2.NewMockEC2Instance(ctrl)
 
 	mockInstance.EXPECT().Name().Return(NodeName)
-	mockWorker.EXPECT().SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(NodeName), NodeDeleteRequeueRequestDelay)
+	mockInstance.EXPECT().InstanceID().Return(restoredInstanceID)
+	mockWorker.EXPECT().SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(NodeName, restoredInstanceID), NodeDeleteRequeueRequestDelay)
 
 	err := provider.DeInitResource(mockInstance)
 
@@ -1032,8 +1090,17 @@ func TestBranchENIProvider_ReconcileNode_TrunkENIDeleted(t *testing.T) {
 func TestBranchENIProvider_ProcessDeleteQueue_TrunkENIDeleted(t *testing.T) {
 	provider := getProvider()
 
-	result, err := provider.ProcessDeleteQueue(NodeName)
+	result, err := provider.ProcessDeleteQueue(NodeName, NodeName)
 	assert.NoError(t, err)
+	assert.Equal(t, k8sCtrl.Result{}, result)
+}
+
+func TestBranchENIProvider_ProcessAsyncJobRejectsMissingInstanceID(t *testing.T) {
+	provider := getProvider()
+
+	result, err := provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, ""))
+
+	assert.ErrorIs(t, err, ErrMissingInstanceID)
 	assert.Equal(t, k8sCtrl.Result{}, result)
 }
 
@@ -1051,7 +1118,7 @@ func TestBranchENIProvider_ProcessDeleteQueue(t *testing.T) {
 	fakeTrunk1.EXPECT().NeedsPreparation().Return(false)
 	fakeTrunk1.EXPECT().DeleteCooledDownENIs()
 
-	result, err := provider.ProcessDeleteQueue(NodeName)
+	result, err := provider.ProcessDeleteQueue(NodeName, NodeName)
 	assert.NoError(t, err)
 	assert.Equal(t, deleteQueueRequeueRequest, result)
 }
@@ -1095,7 +1162,7 @@ func TestBranchENIProvider_ProcessDeleteQueuePreparesARestoredTrunkWithQueuedENI
 			failures := branchProviderOperationsErrCount.WithLabelValues("prepare_trunk_for_allocation")
 			before := writePrometheusMetric(t, failures).GetCounter().GetValue()
 
-			result, err := provider.ProcessDeleteQueue(NodeName)
+			result, err := provider.ProcessDeleteQueue(NodeName, NodeName)
 
 			assert.NoError(t, err)
 			assert.Equal(t, test.wantResult, result)
@@ -1125,6 +1192,57 @@ func TestBranchENIProvider_Introspect(t *testing.T) {
 
 	resp = provider.IntrospectNode("unregistered-node")
 	assert.Equal(t, resp, struct{}{})
+}
+
+func TestBranchENIProvider_IntrospectKeepsTrunksOfReplacedNodes(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	provider := getProvider()
+	oldInstanceID, newInstanceID := "i-old", "i-new"
+	oldResponse := trunk.IntrospectResponse{TrunkENIID: "eni-old", InstanceID: oldInstanceID}
+	newResponse := trunk.IntrospectResponse{TrunkENIID: "eni-new", InstanceID: newInstanceID}
+	oldTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	newTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	oldTrunk.EXPECT().Introspect().Return(oldResponse).Times(2)
+	newTrunk.EXPECT().Introspect().Return(newResponse).Times(2)
+	provider.trunkENICache[oldInstanceID] = oldTrunk
+	provider.trunkENICache[newInstanceID] = newTrunk
+	provider.trunkNodeNames[oldInstanceID] = NodeName
+	provider.trunkNodeNames[newInstanceID] = NodeName
+
+	response := provider.Introspect().(map[string]trunk.IntrospectResponse)
+	assert.Len(t, response, 2)
+	assert.Contains(t, response, NodeName)
+	assert.True(t, containsIntrospectResponse(response, oldResponse))
+	assert.True(t, containsIntrospectResponse(response, newResponse))
+
+	summary := provider.IntrospectSummary().(map[string]trunk.IntrospectSummaryResponse)
+	assert.Len(t, summary, 2)
+	assert.Contains(t, summary, NodeName)
+	assert.True(t, containsIntrospectSummary(summary, changeToIntrospectSummary(oldResponse)))
+	assert.True(t, containsIntrospectSummary(summary, changeToIntrospectSummary(newResponse)))
+}
+
+func containsIntrospectResponse(responses map[string]trunk.IntrospectResponse, expected trunk.IntrospectResponse) bool {
+	for _, response := range responses {
+		if reflect.DeepEqual(response, expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsIntrospectSummary(
+	responses map[string]trunk.IntrospectSummaryResponse,
+	expected trunk.IntrospectSummaryResponse,
+) bool {
+	for _, response := range responses {
+		if response == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func TestUnSupportedNodeEvents_Linux(t *testing.T) {
@@ -1177,4 +1295,37 @@ func TestUnSupportedNodeEvents_Windows(t *testing.T) {
 
 	supported := provider.IsInstanceSupported(mockInstance)
 	assert.False(t, supported)
+}
+
+// A replacement instance that reuses the node name initializes inside the old instance's delayed DeleteNode window,
+// as happens after EC2 private-IP reuse. The old instance's delete job must not drop the replacement's trunk.
+func TestBranchENIProvider_NodeNameReusedInsideDeleteWindow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	provider, newInstance, _, newTrunkENIID := prepareInitResourceSuccess(ctrl, nil)
+	mockWorker := provider.workerPool.(*mock_worker.MockWorker)
+	mockK8sAPI := provider.apiWrapper.K8sAPI.(*mock_k8s.MockK8sWrapper)
+
+	oldTrunk := mock_trunk.NewMockTrunkENI(ctrl)
+	oldTrunk.EXPECT().InstanceID().Return("i-0old").AnyTimes()
+	oldTrunk.EXPECT().NeedsPreparation().Return(false).AnyTimes()
+	provider.trunkENICache["i-0old"] = oldTrunk
+	provider.trunkNodeNames["i-0old"] = NodeName
+
+	oldInstance := mock_ec2.NewMockEC2Instance(ctrl)
+	oldInstance.EXPECT().Name().Return(NodeName).AnyTimes()
+	oldInstance.EXPECT().InstanceID().Return("i-0old").AnyTimes()
+	var deleteJob interface{}
+	mockWorker.EXPECT().SubmitJobAfter(gomock.Any(), NodeDeleteRequeueRequestDelay).
+		Do(func(job interface{}, _ time.Duration) { deleteJob = job })
+	mockK8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(nil).AnyTimes()
+
+	assert.NoError(t, provider.DeInitResource(oldInstance))
+	assert.NoError(t, provider.InitResource(newInstance))
+	_, err := provider.ProcessAsyncJob(deleteJob)
+	assert.NoError(t, err)
+
+	trunkENI, found := provider.getTrunkFromCache(NodeName)
+	if assert.True(t, found, "the replacement instance's trunk must stay cached") {
+		assert.Equal(t, newTrunkENIID, trunkENI.TrunkENIID())
+	}
 }

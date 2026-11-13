@@ -14,6 +14,7 @@
 package cninode_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -43,6 +44,8 @@ var (
 	suiteASGDesiredSize int32
 	suiteNodeInstanceID string
 	suiteNodeName       string
+	// suiteNodeInAutoScalingGroup is false once the IP reuse specs replace the suite instance with one they launched
+	suiteNodeInAutoScalingGroup = true
 )
 
 var _ = SynchronizedBeforeSuite(func(ctx SpecContext) []byte {
@@ -144,11 +147,7 @@ var _ = SynchronizedAfterSuite(func() {}, func(ctx SpecContext) {
 			suiteNodeInstanceID,
 			suiteNodeName,
 		)
-		terminateErr = frameWork.AutoScalingManager.TerminateInstanceInAutoScalingGroup(
-			ctx,
-			suiteNodeInstanceID,
-			true,
-		)
+		terminateErr = terminateSuiteInstance(ctx)
 	}
 	restoreErr := frameWork.AutoScalingManager.UpdateAutoScalingGroup(
 		ctx,
@@ -170,6 +169,14 @@ func initializeFramework() {
 		By("creating a framework")
 		frameWork = framework.New(framework.GlobalOptions)
 	}
+}
+
+// terminateSuiteInstance terminates the suite instance, through its Auto Scaling group while it is still a member.
+func terminateSuiteInstance(ctx context.Context) error {
+	if suiteNodeInAutoScalingGroup {
+		return frameWork.AutoScalingManager.TerminateInstanceInAutoScalingGroup(ctx, suiteNodeInstanceID, true)
+	}
+	return frameWork.EC2Manager.TerminateInstances(suiteNodeInstanceID)
 }
 
 func suiteNode() *v1.Node {

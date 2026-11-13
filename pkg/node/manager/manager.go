@@ -39,7 +39,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 type manager struct {
@@ -47,7 +49,8 @@ type manager struct {
 	Log logr.Logger
 	// lock to prevent multiple routines to write/update to data store concurrently
 	lock sync.RWMutex
-	// dataStore is the in memory data store of all the managed/un-managed nodes in the cluster
+	// dataStore is the in memory data store of the current managed/un-managed node for each
+	// Kubernetes Node name. A replaced Node is retained by its async job, not by this cache.
 	dataStore map[string]node.Node
 	// resourceManager provides the resource provider for all supported resources
 	resourceManager resource.ResourceManager
@@ -59,6 +62,17 @@ type manager struct {
 	controllerVersion string
 	stopHealthCheckAt time.Time
 	clusterName       string
+	// removedNodes holds, per node name, a managed node removed from the data store, so a new instance that registers
+	// under the name while the removed node's state may remain is counted as a node name reuse.
+	removedNodes map[string]removedNode
+	// reusedNodes holds, per node name, the new instance of a counted node name reuse that has not initialized yet.
+	reusedNodes map[string]string
+}
+
+// removedNode is the instance ID of a managed node removed from the data store, and when it was removed.
+type removedNode struct {
+	instanceID string
+	removedAt  time.Time
 }
 
 // Manager to perform operation on list of managed/un-managed node
@@ -97,13 +111,45 @@ type AsyncOperationJob struct {
 	op       AsyncOperation
 	node     node.Node
 	nodeName string
+	// replaced is the node of an earlier instance with the same name, de-initialized before node is initialized
+	replaced node.Node
 }
 
 const pausingHealthCheckDuration = 10 * time.Minute
 
+// removedNodeRetention is how long a removed node's state, such as its cached trunk, may outlive the node.
+const removedNodeRetention = 10 * time.Minute
+
+var (
+	// nodeNameReuseDetected and nodeNameReuseInitialized compare node name reuse with its outcome. They should move
+	// together; a gap is a new instance that reused the node name of an earlier one and never got its resources.
+	nodeNameReuseDetected = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "node_name_reuse_detected_total",
+		Help: "Number of new instances found registered under the node name of an earlier instance that used " +
+			"security groups for pods, while state of the earlier instance remained",
+	})
+	nodeNameReuseInitialized = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "node_name_reuse_initialized_total",
+		Help: "Number of the instances counted by node_name_reuse_detected_total that initialized their resources",
+	})
+	registerMetricsOnce sync.Once
+)
+
+var (
+	// ErrCNINodeNotReady is returned while CNINodeReconciler has not yet
+	// created the CNINode for a current Node.
+	ErrCNINodeNotReady = errors.New("waiting for the CNINode to become ready")
+	// ErrReplacedCNINodeDeleting is returned while the CNINode of a replaced
+	// Node is still being deleted. It is an expected wait after IP reuse.
+	ErrReplacedCNINodeDeleting = errors.New("waiting for the CNINode of a replaced node to be deleted")
+)
+
 // NewNodeManager returns a new node manager
 func NewNodeManager(logger logr.Logger, resourceManager resource.ResourceManager,
 	wrapper api.Wrapper, worker asyncWorker.Worker, conditions condition.Conditions, clusterName string, controllerVersion string, healthzHandler *rcHealthz.HealthzHandler) (Manager, error) {
+	registerMetricsOnce.Do(func() {
+		metrics.Registry.MustRegister(nodeNameReuseDetected, nodeNameReuseInitialized)
+	})
 
 	manager := &manager{
 		resourceManager:   resourceManager,
@@ -161,7 +207,7 @@ func (m *manager) GetNode(nodeName string) (node node.Node, found bool) {
 	defer m.lock.RUnlock()
 
 	node, found = m.dataStore[nodeName]
-	return
+	return node, found
 }
 
 // AddNode adds the managed and un-managed nodes to the in memory data store, the
@@ -175,19 +221,49 @@ func (m *manager) AddNode(nodeName string) error {
 		return fmt.Errorf("failed to add node %s, doesn't exist in cache anymore", nodeName)
 	}
 
-	log := m.Log.WithValues("node name", k8sNode.Name, "request", "add")
-
-	var newNode node.Node
-	var nodeFound bool
-
-	_, nodeFound = m.dataStore[k8sNode.Name]
+	cachedNode, nodeFound := m.dataStore[k8sNode.Name]
 	if nodeFound {
-		log.Info("node is already processed, not processing add event again")
-		return nil
+		if cachedNode.GetNodeInstanceID() == utils.GetNodeInstanceID(k8sNode) {
+			m.Log.Info("node is already processed, not processing add event again", "node name", k8sNode.Name)
+			return nil
+		}
+		return m.addNode(k8sNode, cachedNode)
+	}
+	return m.addNode(k8sNode, nil)
+}
+
+// addNode adds the node with the manager lock held. A previous Node instance with
+// the same name is de-initialized before the new managed Node is initialized.
+func (m *manager) addNode(k8sNode *v1.Node, replaced node.Node) error {
+	nodeName := k8sNode.Name
+	log := m.Log.WithValues("node name", nodeName, "request", "add")
+	replacedManaged := replaced != nil && replaced.IsManaged()
+	if replaced != nil && replaced.GetNodeInstanceID() != "" && utils.GetNodeInstanceID(k8sNode) != "" &&
+		replaced.GetNodeInstanceID() != utils.GetNodeInstanceID(k8sNode) {
+		log.Info("node name was reused by a new instance, replacing the cached node",
+			"replaced instance", replaced.GetNodeInstanceID(), "instance", utils.GetNodeInstanceID(k8sNode))
+	}
+	instanceID := utils.GetNodeInstanceID(k8sNode)
+	if replacedManaged && replaced.GetNodeInstanceID() != "" && instanceID != "" &&
+		replaced.GetNodeInstanceID() != instanceID {
+		m.countNodeNameReuse(nodeName, instanceID, "cached node")
+	} else if removed, ok := m.removedNodes[nodeName]; ok {
+		if removed.instanceID != instanceID && time.Since(removed.removedAt) < removedNodeRetention {
+			m.countNodeNameReuse(nodeName, instanceID, "removed node")
+		}
+		delete(m.removedNodes, nodeName)
 	}
 
-	if err = m.CreateCNINodeIfNotExisting(k8sNode); err != nil {
-		m.Log.Error(err, "Failed to create CNINode for k8sNode", "NodeName", k8sNode.Name)
+	var newNode node.Node
+
+	if err := m.CreateCNINodeIfNotExisting(k8sNode); err != nil {
+		if errors.Is(err, ErrCNINodeNotReady) {
+			log.V(1).Info("waiting for CNINode reconciler to create the CNINode")
+		} else if errors.Is(err, ErrReplacedCNINodeDeleting) {
+			log.Info("waiting for the CNINode of a replaced node to be deleted")
+		} else {
+			m.Log.Error(err, "Failed to create CNINode for k8sNode", "NodeName", k8sNode.Name)
+		}
 		return err
 	}
 
@@ -205,38 +281,58 @@ func (m *manager) AddNode(nodeName string) error {
 		if err != nil {
 			return err
 		}
-		m.dataStore[k8sNode.Name] = newNode
+		m.dataStore[nodeName] = newNode
 		log.Info("node added as a managed node")
 		op = Init
 	} else {
 		newNode = node.NewUnManagedNode(m.Log, k8sNode.Name, utils.GetNodeInstanceID(k8sNode),
 			utils.GetNodeOS(k8sNode))
-		m.dataStore[k8sNode.Name] = newNode
+		m.dataStore[nodeName] = newNode
 		log.V(1).Info("node added as an un-managed node")
+		if replacedManaged {
+			m.worker.SubmitJob(AsyncOperationJob{op: Delete, node: replaced, nodeName: nodeName})
+		}
 		return nil
 	}
 
-	m.worker.SubmitJob(AsyncOperationJob{
-		op:       op,
-		node:     newNode,
-		nodeName: nodeName,
-	})
+	if replacedManaged {
+		m.worker.SubmitJob(AsyncOperationJob{
+			op:       op,
+			node:     newNode,
+			nodeName: nodeName,
+			replaced: replaced,
+		})
+	}
+	if !replacedManaged {
+		m.worker.SubmitJob(AsyncOperationJob{op: op, node: newNode, nodeName: nodeName})
+	}
 	return nil
 }
 
 func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
-	if cniNode, err := m.wrapper.K8sAPI.GetCNINode(
-		types.NamespacedName{Name: node.Name},
-	); err != nil {
+	cniNode, err := m.wrapper.K8sAPI.GetCNINode(types.NamespacedName{Name: node.Name})
+	if err != nil {
 		if apierrors.IsNotFound(err) {
-			m.Log.Info("Will create a new CNINode", "CNINodeName", node.Name)
-			return m.wrapper.K8sAPI.CreateCNINode(node, m.clusterName)
+			// CNINodeReconciler owns creation and watches Node objects. Waiting
+			// here prevents the two reconcilers racing to create a replacement
+			// with different feature sets.
+			return fmt.Errorf("%w: %s", ErrCNINodeNotReady, node.Name)
 		}
 		return err
-	} else {
+	}
+	if !utils.OwnedByReplacedNode(cniNode.OwnerReferences, node) && cniNode.DeletionTimestamp.IsZero() {
 		m.Log.Info("The CNINode is already existing", "cninode", cniNode.Name, "features", cniNode.Spec.Features)
 		return nil
 	}
+	// The CNINode belongs to an earlier instance with the same node name, see EC2 private-IP reuse.
+	if state := cniNode.Status.NodeNetworkState; state != nil && state.InstanceID != utils.GetNodeInstanceID(node) &&
+		lo.ContainsBy(cniNode.Spec.Features, func(f v1alpha1.Feature) bool { return f.Name == v1alpha1.SecurityGroupsForPods }) {
+		m.countNodeNameReuse(node.Name, utils.GetNodeInstanceID(node), "CNINode")
+	}
+	// CNINodeReconciler owns replacement. It either transfers ownership or
+	// recreates a deleting object with its features; the node manager waits
+	// for that stable result.
+	return fmt.Errorf("%w: %s", ErrReplacedCNINodeDeleting, cniNode.Name)
 }
 
 // UpdateNode updates the node object and, if the node is previously un-managed and now
@@ -256,8 +352,10 @@ func (m *manager) UpdateNode(nodeName string) error {
 
 	cachedNode, found := m.dataStore[nodeName]
 	if !found {
-		m.Log.Info("the node doesn't exist in cache anymore, it might have been deleted")
-		return nil
+		return m.addNode(k8sNode, nil)
+	}
+	if cachedNode.GetNodeInstanceID() != utils.GetNodeInstanceID(k8sNode) {
+		return m.addNode(k8sNode, cachedNode)
 	}
 
 	var op AsyncOperation
@@ -334,24 +432,23 @@ func (m *manager) DeleteNode(nodeName string) error {
 
 	log := m.Log.WithValues("node name", nodeName, "request", "delete")
 
-	cachedNode, nodeFound := m.dataStore[nodeName]
-	if !nodeFound {
+	cachedNode, found := m.dataStore[nodeName]
+	if !found {
 		log.Info("node not found in the data store, ignoring the event")
 		return nil
 	}
-
 	delete(m.dataStore, nodeName)
 
-	if !cachedNode.IsManaged() {
-		log.V(1).Info("un managed node removed from data store")
-		return nil
-	}
+	delete(m.reusedNodes, nodeName)
 
-	m.worker.SubmitJob(AsyncOperationJob{
-		op:       Delete,
-		node:     cachedNode,
-		nodeName: nodeName,
-	})
+	if cachedNode.IsManaged() {
+		m.recordRemovedNode(nodeName, cachedNode.GetNodeInstanceID())
+		m.worker.SubmitJob(AsyncOperationJob{
+			op:       Delete,
+			node:     cachedNode,
+			nodeName: nodeName,
+		})
+	}
 
 	log.Info("node removed from data store")
 
@@ -428,6 +525,11 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 	var err error
 	switch asyncJob.op {
 	case Init:
+		if asyncJob.replaced != nil {
+			if err := asyncJob.replaced.DeleteResources(m.resourceManager); err != nil {
+				log.Error(err, "failed to de-initialize the replaced node", "replaced instance", asyncJob.replaced.GetNodeInstanceID())
+			}
+		}
 		utils.SendNodeEventWithNodeName(m.wrapper.K8sAPI, asyncJob.nodeName, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", m.controllerVersion), v1.EventTypeNormal, m.Log)
 		err = asyncJob.node.InitResources(m.resourceManager)
 		if err != nil {
@@ -436,7 +538,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 				log.Info("node manager sets a pause on health check due to observing a EC2 error", "error", err.Error())
 			}
 			log.Error(err, "removing the node from cache as it failed to initialize")
-			m.removeNodeSafe(asyncJob.nodeName)
+			m.removeNodeSafe(asyncJob.nodeName, asyncJob.node)
 			// if initializing node failed, we want to make this visible although the manager will retry
 			// the trunk label will stay as false until retry succeed
 
@@ -444,6 +546,7 @@ func (m *manager) performAsyncOperation(job interface{}) (ctrl.Result, error) {
 			return ctrl.Result{}, nil
 		}
 
+		m.countNodeNameReuseInitialized(asyncJob.nodeName, asyncJob.node)
 		// If there's no error, we need to update the node so the capacity is advertised
 		asyncJob.op = Update
 		return m.performAsyncOperation(asyncJob)
@@ -536,11 +639,56 @@ func (m *manager) customNetworkEnabledInCNINode(node *v1.Node) (bool, error) {
 	return false, err
 }
 
-func (m *manager) removeNodeSafe(nodeName string) {
+// countNodeNameReuse counts, once per new instance, a node name reuse found from state an earlier instance left. It
+// is called with the manager lock held.
+func (m *manager) countNodeNameReuse(nodeName, instanceID, foundIn string) {
+	if instanceID == "" || m.reusedNodes[nodeName] == instanceID {
+		return
+	}
+	if m.reusedNodes == nil {
+		m.reusedNodes = make(map[string]string)
+	}
+	m.reusedNodes[nodeName] = instanceID
+	nodeNameReuseDetected.Inc()
+	m.Log.Info("detected node name reuse by a new instance", "node name", nodeName, "instance", instanceID,
+		"found in", foundIn)
+}
+
+// countNodeNameReuseInitialized counts the initialization of a new instance whose node name reuse was counted.
+func (m *manager) countNodeNameReuseInitialized(nodeName string, initialized node.Node) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	delete(m.dataStore, nodeName)
+	reusedBy, found := m.reusedNodes[nodeName]
+	if !found || initialized.GetNodeInstanceID() != reusedBy {
+		return
+	}
+	delete(m.reusedNodes, nodeName)
+	nodeNameReuseInitialized.Inc()
+}
+
+// recordRemovedNode records a managed node removed from the data store, and drops records older than the retention.
+func (m *manager) recordRemovedNode(nodeName, instanceID string) {
+	if m.removedNodes == nil {
+		m.removedNodes = make(map[string]removedNode)
+	}
+	for name, removed := range m.removedNodes {
+		if time.Since(removed.removedAt) >= removedNodeRetention {
+			delete(m.removedNodes, name)
+		}
+	}
+	m.removedNodes[nodeName] = removedNode{instanceID: instanceID, removedAt: time.Now()}
+}
+
+// removeNodeSafe removes the given node only if it is still the current Node
+// for the name. A replacement must remain cached if an older Init fails.
+func (m *manager) removeNodeSafe(nodeName string, cachedNode node.Node) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	if m.dataStore[nodeName] == cachedNode {
+		delete(m.dataStore, nodeName)
+	}
 }
 
 func (m *manager) check() healthz.Checker {

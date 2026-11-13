@@ -3,6 +3,7 @@ package crds
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1alpha1"
 	mock_api "github.com/aws/amazon-vpc-resource-controller-k8s/mocks/amazon-vcp-resource-controller-k8s/pkg/aws/ec2/api"
@@ -11,6 +12,7 @@ import (
 	ec2API "github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/aws/ec2/api/cleanup"
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
+	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
@@ -245,6 +247,94 @@ func TestCNINodeReconcile(t *testing.T) {
 				assert.Equal(t, res, reconcile.Result{})
 			},
 		},
+		{
+			name: "keep the controller finalizer while another finalizer holds a replaced CNINode",
+			args: args{
+				mockNode: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   mockName,
+						UID:    "uid-new",
+						Labels: map[string]string{config.NodeLabelOS: config.OSLinux},
+					},
+					Spec: corev1.NodeSpec{ProviderID: "aws:///us-west-2a/i-new"},
+				},
+				mockCNINode: &v1alpha1.CNINode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:              mockName,
+						Labels:            map[string]string{config.NodeLabelOS: config.OSLinux},
+						OwnerReferences:   []metav1.OwnerReference{{Kind: "Node", Name: mockName, UID: "uid-old"}},
+						Finalizers:        []string{config.NodeTerminationFinalizer, "test.example/hold"},
+						DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
+					},
+					Spec: v1alpha1.CNINodeSpec{
+						Features: []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}},
+					},
+				},
+			},
+			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
+				assert.NoError(t, err)
+				assert.Equal(t, reconcile.Result{}, res)
+				assert.Equal(t, []string{config.NodeTerminationFinalizer, "test.example/hold"}, cniNode.Finalizers)
+				assert.Equal(t, []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}, cniNode.Spec.Features)
+			},
+		},
+		{
+			// After EC2 private-IP reuse, GC deletes the old instance's CNINode while a replacement Node with the same
+			// name exists. Do not clean the replacement's resources; recreate the
+			// CNINode with its features for the current Node.
+			name: "verify CNINode of a replaced instance is recreated without cleanup",
+			args: args{
+				mockNode: &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   mockName,
+						UID:    "uid-new",
+						Labels: map[string]string{config.NodeLabelOS: config.OSLinux},
+					},
+					Spec: corev1.NodeSpec{ProviderID: "aws:///us-west-2a/i-new"},
+				},
+				mockCNINode: &v1alpha1.CNINode{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:              mockName,
+						Labels:            map[string]string{config.NodeLabelOS: config.OSLinux},
+						OwnerReferences:   []metav1.OwnerReference{{Kind: "Node", Name: mockName, UID: "uid-old"}},
+						Finalizers:        []string{config.NodeTerminationFinalizer},
+						DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
+					},
+					Spec: v1alpha1.CNINodeSpec{
+						Tags: map[string]string{
+							config.NetworkInterfaceNodeIDKey: "i-0old",
+							"cost-center":                    "networking",
+						},
+						Features: []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}},
+					},
+				},
+			},
+			prepare: func(f *fields) {
+				f.mockCNINode.Reconciler.waitForDeletion = func(key types.NamespacedName) error {
+					current := &v1alpha1.CNINode{}
+					if err := f.mockCNINode.Reconciler.Client.Get(context.Background(), key, current); err != nil {
+						return err
+					}
+					current.Finalizers = nil
+					if err := f.mockCNINode.Reconciler.Client.Update(context.Background(), current); err != nil {
+						return err
+					}
+					return client.IgnoreNotFound(f.mockCNINode.Reconciler.Client.Delete(context.Background(), current))
+				}
+				f.mockFinalizerManager.EXPECT().
+					RemoveFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
+					Return(nil)
+			},
+			asserts: func(res reconcile.Result, err error, cniNode *v1alpha1.CNINode) {
+				assert.NoError(t, err)
+				assert.Equal(t, res, reconcile.Result{})
+				assert.Equal(t, types.UID("uid-new"), cniNode.OwnerReferences[0].UID)
+				assert.Equal(t, []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}, cniNode.Spec.Features)
+				assert.Equal(t, []string{config.NodeTerminationFinalizer}, cniNode.Finalizers)
+				assert.Equal(t, "i-new", cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey])
+				assert.Equal(t, "networking", cniNode.Spec.Tags["cost-center"])
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -278,4 +368,84 @@ func TestCNINodeReconcile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCNINodeReconcile_CreatesCNINodeForNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	node := mockNodeWithLabel.DeepCopy()
+	node.UID = "uid-current"
+	node.Spec.ProviderID = "aws:///us-west-2a/i-0bbb"
+	mock := NewCNINodeMock(ctrl, node)
+	mock.Reconciler.rememberPendingFeatures(&v1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{Name: node.Name},
+		Spec: v1alpha1.CNINodeSpec{
+			Features: []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}},
+			Tags: map[string]string{
+				config.NetworkInterfaceNodeIDKey: "i-0aaa",
+				"team":                           "networking",
+			},
+		},
+	})
+
+	result, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
+	assert.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, result)
+
+	cniNode := &v1alpha1.CNINode{}
+	assert.NoError(t, mock.Reconciler.Client.Get(context.Background(), reconcileRequest.NamespacedName, cniNode))
+	assert.Len(t, cniNode.OwnerReferences, 1)
+	assert.Equal(t, node.UID, cniNode.OwnerReferences[0].UID)
+	assert.Equal(t, []string{config.NodeTerminationFinalizer}, cniNode.Finalizers)
+	assert.Equal(t, mockClusterName, cniNode.Spec.Tags[config.VPCCNIClusterNameKey])
+	assert.Equal(t, "i-0bbb", cniNode.Spec.Tags[config.NetworkInterfaceNodeIDKey])
+	assert.Equal(t, "networking", cniNode.Spec.Tags["team"])
+	assert.Equal(t, []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}, cniNode.Spec.Features)
+	assert.Empty(t, mock.Reconciler.pendingFeaturesFor(node.Name))
+}
+
+func TestCNINodeReconcilerPendingFeatures(t *testing.T) {
+	reconciler := &CNINodeReconciler{}
+	features := []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}
+
+	reconciler.rememberPendingFeatures(&v1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Spec:       v1alpha1.CNINodeSpec{Features: features},
+	})
+	features[0].Name = v1alpha1.CustomNetworking
+
+	assert.Equal(t, []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}},
+		reconciler.pendingFeaturesFor("node-a").features)
+	reconciler.clearPendingFeatures("node-a")
+	assert.Empty(t, reconciler.pendingFeaturesFor("node-a"))
+}
+
+func TestCNINodeReconcilerPendingFeaturesSweepsExpiredEntries(t *testing.T) {
+	reconciler := &CNINodeReconciler{
+		pendingFeatures: map[string]cachedCNINodeState{
+			"expired-node": {createdAt: time.Now().Add(-pendingFeaturesTTL - time.Second)},
+		},
+	}
+
+	reconciler.rememberPendingFeatures(&v1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{Name: "current-node"},
+	})
+
+	assert.NotContains(t, reconciler.pendingFeatures, "expired-node")
+	assert.Contains(t, reconciler.pendingFeatures, "current-node")
+}
+
+func TestCNINodeReconcile_AutoModeNodeDoesNotCreateCNINode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	node := mockNodeWithLabel.DeepCopy()
+	node.Labels[utils.AutoComputeTypeLabelKey] = utils.AutoComputeTypeLabelValue
+	mock := NewCNINodeMock(ctrl, node)
+
+	result, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
+	assert.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, result)
+	assert.Error(t, mock.Reconciler.Client.Get(context.Background(), reconcileRequest.NamespacedName, &v1alpha1.CNINode{}))
 }

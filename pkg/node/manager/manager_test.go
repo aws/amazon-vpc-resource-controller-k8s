@@ -34,6 +34,7 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/utils"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -219,23 +220,14 @@ func Test_AddNode_CNINode_Not_Existing(t *testing.T) {
 
 	mock := NewMock(ctrl, map[string]node.Node{})
 
-	expectedJob := AsyncOperationJob{
-		op:       Init,
-		nodeName: nodeName,
-		node:     managedNode,
-	}
-
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil).Times(1)
-	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(expectedJob)))
-	mock.MockK8sAPI.EXPECT().CreateCNINode(v1Node, mock.Manager.clusterName).Return(nil).Times(1)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: v1Node.Name}).Return(
 		&rcV1alpha1.CNINode{}, apierrors.NewNotFound(schema.GroupResource{Group: "vpcresources.k8s.aws", Resource: "1"}, "test")).
-		Times(2)
+		Times(1)
 
 	err := mock.Manager.AddNode(nodeName)
-	assert.NoError(t, err)
-	assert.Contains(t, mock.Manager.dataStore, nodeName)
-	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], managedNode))
+	assert.ErrorIs(t, err, ErrCNINodeNotReady)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
 }
 
 func Test_AddNode_UnManaged(t *testing.T) {
@@ -248,15 +240,32 @@ func Test_AddNode_UnManaged(t *testing.T) {
 	nodeWithoutLabel.Labels = map[string]string{}
 
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithoutLabel, nil).Times(1)
-	mock.MockK8sAPI.EXPECT().CreateCNINode(nodeWithoutLabel, mock.Manager.clusterName).Return(nil).Times(1)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithoutLabel.Name}).Return(
-		&rcV1alpha1.CNINode{}, apierrors.NewNotFound(schema.GroupResource{Group: "vpcresources.k8s.aws", Resource: "1"}, "test")).
+		&rcV1alpha1.CNINode{}, nil).
 		Times(1) // unmanaged node won't check custom networking subnets and call GetCNINode only once
 
 	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
 	assert.Contains(t, mock.Manager.dataStore, nodeName)
 	assert.True(t, AreNodesEqual(mock.Manager.dataStore[nodeName], unManagedNode))
+}
+
+func Test_AddNode_WithoutProviderIDUsesNodeNameKey(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+	nodeWithoutProviderID := v1Node.DeepCopy()
+	nodeWithoutProviderID.Spec.ProviderID = ""
+	nodeWithoutProviderID.Labels = map[string]string{}
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithoutProviderID, nil)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).
+		Return(&rcV1alpha1.CNINode{}, nil)
+
+	assert.NoError(t, mock.Manager.AddNode(nodeName))
+	assert.Contains(t, mock.Manager.dataStore, nodeName)
+	assert.NotContains(t, mock.Manager.dataStore, "")
 }
 
 func Test_AddNode_AlreadyAdded(t *testing.T) {
@@ -290,20 +299,11 @@ func Test_AddNode_CustomNetworking_CNINode(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
 	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil).Times(1)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
-	mock.MockK8sAPI.EXPECT().CreateCNINode(nodeWithENIConfig, mock.Manager.clusterName).Return(nil).Times(1)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithENIConfig.Name}).Return(&rcV1alpha1.CNINode{
 		Spec: rcV1alpha1.CNINodeSpec{
 			Features: []rcV1alpha1.Feature{{Name: rcV1alpha1.CustomNetworking, Value: eniConfigName}},
 		},
-	}, apierrors.NewNotFound(schema.GroupResource{Group: "vpcresources.k8s.aws", Resource: "1"}, "test"))
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithENIConfig.Name}).Return(
-		&rcV1alpha1.CNINode{
-			ObjectMeta: metav1.ObjectMeta{Name: nodeWithENIConfig.Name},
-			Spec: rcV1alpha1.CNINodeSpec{
-				Features: []rcV1alpha1.Feature{{Name: rcV1alpha1.CustomNetworking, Value: eniConfigName}},
-			},
-		}, nil,
-	).Times(2)
+	}, nil).Times(3)
 	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
 	assert.Contains(t, mock.Manager.dataStore, nodeName)
@@ -330,20 +330,11 @@ func Test_AddNode_CustomNetworking_CNINode_No_EniConfigName(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().BroadcastEvent(nodeWithENIConfig, utils.EniConfigNameNotFoundReason, msg, v1.EventTypeWarning).Times(1)
 	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil).Times(0)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job))).Times(0)
-	mock.MockK8sAPI.EXPECT().CreateCNINode(nodeWithENIConfig, mock.Manager.clusterName).Return(nil).Times(1)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithENIConfig.Name}).Return(&rcV1alpha1.CNINode{
 		Spec: rcV1alpha1.CNINodeSpec{
 			Features: []rcV1alpha1.Feature{{Name: rcV1alpha1.CustomNetworking}},
 		},
-	}, apierrors.NewNotFound(schema.GroupResource{Group: "vpcresources.k8s.aws", Resource: "1"}, "test"))
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithENIConfig.Name}).Return(
-		&rcV1alpha1.CNINode{
-			ObjectMeta: metav1.ObjectMeta{Name: nodeWithENIConfig.Name},
-			Spec: rcV1alpha1.CNINodeSpec{
-				Features: []rcV1alpha1.Feature{{Name: rcV1alpha1.CustomNetworking}},
-			},
-		}, nil,
-	).Times(2)
+	}, nil).Times(3)
 	err := mock.Manager.AddNode(nodeName)
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, utils.ErrNotFound))
@@ -367,12 +358,11 @@ func Test_AddNode_CustomNetworking_NodeLabel(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
 	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig, nil).Times(1)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
-	mock.MockK8sAPI.EXPECT().CreateCNINode(nodeWithENIConfig, mock.Manager.clusterName).Return(nil).Times(1)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithENIConfig.Name}).Return(&rcV1alpha1.CNINode{
 		Spec: rcV1alpha1.CNINodeSpec{
 			Features: []rcV1alpha1.Feature{{Name: rcV1alpha1.CustomNetworking}},
 		},
-	}, apierrors.NewNotFound(schema.GroupResource{Group: "vpcresources.k8s.aws", Resource: "1"}, "test")).Times(1)
+	}, nil).Times(1)
 
 	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
@@ -400,12 +390,11 @@ func Test_AddNode_CustomNetworking_Incorrect_ENIConfig(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
 	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(eniConfig_empty_sg, nil)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(job)))
-	mock.MockK8sAPI.EXPECT().CreateCNINode(nodeWithENIConfig, mockClusterName).Return(nil).Times(1)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithENIConfig.Name}).Return(&rcV1alpha1.CNINode{
 		Spec: rcV1alpha1.CNINodeSpec{
 			Features: []rcV1alpha1.Feature{{Name: rcV1alpha1.CustomNetworking}},
 		},
-	}, apierrors.NewNotFound(schema.GroupResource{Group: "vpcresources.k8s.aws", Resource: "1"}, "test"))
+	}, nil)
 
 	err := mock.Manager.AddNode(nodeName)
 	assert.NoError(t, err)
@@ -424,9 +413,8 @@ func Test_AddNode_CustomNetworking_NoENIConfig(t *testing.T) {
 	nodeWithENIConfig.Labels[config.CustomNetworkingLabel] = eniConfigName
 
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(nodeWithENIConfig, nil)
-	mock.MockK8sAPI.EXPECT().CreateCNINode(nodeWithENIConfig, mock.Manager.clusterName).Return(nil).Times(1)
 	mock.MockK8sAPI.EXPECT().GetENIConfig(eniConfigName).Return(nil, mockError)
-	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithENIConfig.Name}).Return(&rcV1alpha1.CNINode{}, apierrors.NewNotFound(schema.GroupResource{Group: "vpcresources.k8s.aws", Resource: "1"}, "test"))
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeWithENIConfig.Name}).Return(&rcV1alpha1.CNINode{}, nil)
 
 	err := mock.Manager.AddNode(nodeName)
 	assert.NotContains(t, mock.Manager.dataStore, nodeName)
@@ -670,7 +658,8 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+	mock := NewMock(ctrl, map[string]node.Node{})
+	mock.Manager.dataStore[nodeName] = mock.MockNode
 
 	job := AsyncOperationJob{
 		node:     mock.MockNode,
@@ -679,6 +668,7 @@ func Test_performAsyncOperation_fail(t *testing.T) {
 	}
 
 	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{})
+	mock.MockNode.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
 	mock.MockK8sAPI.EXPECT().BroadcastEvent(v1Node, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", mock.Manager.controllerVersion), v1.EventTypeNormal).Times(1)
 
@@ -691,7 +681,8 @@ func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mock := NewMock(ctrl, map[string]node.Node{nodeName: managedNode})
+	mock := NewMock(ctrl, map[string]node.Node{})
+	mock.Manager.dataStore[nodeName] = mock.MockNode
 
 	job := AsyncOperationJob{
 		node:     mock.MockNode,
@@ -702,6 +693,7 @@ func Test_performAsyncOperation_fail_pausingHealthCheck(t *testing.T) {
 	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{
 		Err: errors.New("RequestLimitExceeded: Request limit exceeded.\n\tstatus code: 503, request id: 123-123-123-123-123"),
 	}).Times(2)
+	mock.MockNode.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil).Times(2)
 	mock.MockK8sAPI.EXPECT().BroadcastEvent(v1Node, utils.VersionNotice, fmt.Sprintf("The node is managed by VPC resource controller version %s", mock.Manager.controllerVersion), v1.EventTypeNormal).Times(2)
 
@@ -990,4 +982,310 @@ func Test_TrunkEnabledInCNINode(t *testing.T) {
 			assert.Equal(t, test.managed, managed)
 		})
 	}
+}
+
+// replacementNode returns a Node that reuses nodeName for a new EC2 instance, as happens after private-IP reuse.
+func replacementNode(newInstanceID string, uid types.UID) *v1.Node {
+	n := v1Node.DeepCopy()
+	n.UID = uid
+	n.Spec.ProviderID = "aws:///us-west-2c/" + newInstanceID
+	return n
+}
+
+// The Node delete and create collapsed into one reconcile, so the cache still holds the old instance when the
+// replacement's update arrives. The old instance must be retired before the replacement is initialized.
+func Test_UpdateNode_NodeNameReusedByNewInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	newInstanceID := "i-0fedcba09876543210"
+	oldNode := mock_node.NewMockNode(ctrl)
+	oldNode.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
+	oldNode.EXPECT().IsManaged().Return(true).AnyTimes()
+	oldNode.EXPECT().UpdateCustomNetworkingSpecs(gomock.Any(), gomock.Any()).AnyTimes()
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: oldNode})
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(replacementNode(newInstanceID, "uid-new"), nil).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcV1alpha1.CNINode{}, nil).AnyTimes()
+	var jobs []AsyncOperationJob
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Do(func(job interface{}) {
+		jobs = append(jobs, job.(AsyncOperationJob))
+	}).AnyTimes()
+
+	assert.NoError(t, mock.Manager.UpdateNode(nodeName))
+
+	assert.Equal(t, newInstanceID, mock.Manager.dataStore[nodeName].GetNodeInstanceID())
+	if !assert.Len(t, jobs, 1) || !assert.Equal(t, Init, jobs[0].op) {
+		return
+	}
+	assert.Equal(t, newInstanceID, jobs[0].node.GetNodeInstanceID())
+
+	// Running the job retires the old instance first, then initializes the replacement.
+	newNode := mock_node.NewMockNode(ctrl)
+	newNode.EXPECT().GetNodeInstanceID().Return(newInstanceID).AnyTimes()
+	gomock.InOrder(
+		oldNode.EXPECT().DeleteResources(mock.MockResourceManager).Return(nil),
+		newNode.EXPECT().InitResources(mock.MockResourceManager).Return(nil),
+		newNode.EXPECT().UpdateResources(mock.MockResourceManager).Return(nil),
+	)
+	mock.MockK8sAPI.EXPECT().BroadcastEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	jobs[0].node = newNode
+	_, err := mock.Manager.performAsyncOperation(jobs[0])
+	assert.NoError(t, err)
+}
+
+// NodeManager leaves ownership transfer to CNINodeReconciler, which can preserve features without retaining them
+// in NodeManager memory.
+func Test_AddNode_WaitsForCNINodeReconcilerToTakeOverReplacedCNINode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+	k8sNode := replacementNode(instanceID, "uid-new")
+	stale := &rcV1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            nodeName,
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Node", Name: nodeName, UID: "uid-old"}},
+		},
+		Spec: rcV1alpha1.CNINodeSpec{Features: []rcV1alpha1.Feature{{Name: rcV1alpha1.SecurityGroupsForPods}}},
+	}
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(stale, nil).AnyTimes()
+	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrReplacedCNINodeDeleting)
+}
+
+// GC already marked the old instance's CNINode for deletion. AddNode must wait for it to go away instead of
+// managing the replacement with the deleting object.
+func Test_AddNode_WaitsForDeletingCNINodeOfReplacedInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+	features := []rcV1alpha1.Feature{{Name: rcV1alpha1.SecurityGroupsForPods}}
+	deleting := &rcV1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              nodeName,
+			OwnerReferences:   []metav1.OwnerReference{{Kind: "Node", Name: nodeName, UID: "uid-old"}},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+			Finalizers:        []string{config.NodeTerminationFinalizer},
+		},
+		Spec: rcV1alpha1.CNINodeSpec{Features: features},
+	}
+	k8sNode := replacementNode(instanceID, "uid-new")
+	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, nodeName)
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil).Times(2)
+	gomock.InOrder(
+		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(deleting, nil),
+		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(nil, notFound),
+	)
+	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrReplacedCNINodeDeleting)
+	assert.NotContains(t, mock.Manager.dataStore, nodeName)
+
+	// Once deletion reaches NotFound, the NodeManager still waits: the CNINodeReconciler
+	// must recreate the object before NodeManager can initialize this instance.
+	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrCNINodeNotReady)
+}
+
+// The new instance that reused the node name is not selected for management, so the job only retires the old one.
+func Test_UpdateNode_NodeNameReusedByUnmanagedInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	newInstanceID := "i-0fedcba09876543210"
+	oldNode := mock_node.NewMockNode(ctrl)
+	oldNode.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
+	oldNode.EXPECT().IsManaged().Return(true).AnyTimes()
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: oldNode})
+
+	k8sNode := replacementNode(newInstanceID, "uid-new")
+	delete(k8sNode.Labels, config.HasTrunkAttachedLabel)
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcV1alpha1.CNINode{}, nil).AnyTimes()
+	var jobs []AsyncOperationJob
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Do(func(job interface{}) {
+		jobs = append(jobs, job.(AsyncOperationJob))
+	}).AnyTimes()
+
+	assert.NoError(t, mock.Manager.UpdateNode(nodeName))
+
+	assert.False(t, mock.Manager.dataStore[nodeName].IsManaged())
+	assert.Equal(t, newInstanceID, mock.Manager.dataStore[nodeName].GetNodeInstanceID())
+	if assert.Len(t, jobs, 1) {
+		assert.Equal(t, Delete, jobs[0].op)
+		assert.Equal(t, oldNode, jobs[0].node)
+	}
+}
+
+// NodeManager does not create a CNINode. The dedicated reconciler owns creation,
+// which avoids retaining feature state in NodeManager memory.
+func Test_AddNode_WaitsForCNINodeReconcilerToCreateCNINode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+	k8sNode := replacementNode(instanceID, "uid-new")
+	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: "cninodes"}, nodeName)
+
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(nil, notFound)
+
+	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrCNINodeNotReady)
+}
+
+// A failed Init of an instance that a new instance with the same node name already replaced must not remove the
+// new instance's cached node.
+func Test_performAsyncOperation_failKeepsNodeOfNewInstance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	newNode := mock_node.NewMockNode(ctrl)
+	newNode.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: newNode})
+
+	job := AsyncOperationJob{
+		node:     mock.MockNode,
+		nodeName: nodeName,
+		op:       Init,
+	}
+
+	mock.MockNode.EXPECT().InitResources(mock.MockResourceManager).Return(&node.ErrInitResources{})
+	mock.MockNode.EXPECT().GetNodeInstanceID().Return("i-failed").AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
+	mock.MockK8sAPI.EXPECT().BroadcastEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+
+	_, err := mock.Manager.performAsyncOperation(job)
+	assert.NoError(t, err)
+	assert.Equal(t, newNode, mock.Manager.dataStore[nodeName])
+}
+
+func reuseCounts() (float64, float64) {
+	return testutil.ToFloat64(nodeNameReuseDetected), testutil.ToFloat64(nodeNameReuseInitialized)
+}
+
+// initNodeOfJob runs the Init job with a node that initializes successfully for the given instance.
+func initNodeOfJob(t *testing.T, ctrl *gomock.Controller, mock *Mock, job AsyncOperationJob, instanceID string) {
+	t.Helper()
+	initialized := mock_node.NewMockNode(ctrl)
+	initialized.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
+	initialized.EXPECT().InitResources(mock.MockResourceManager).Return(nil)
+	initialized.EXPECT().UpdateResources(mock.MockResourceManager).Return(nil)
+	if job.replaced != nil {
+		job.replaced.(*mock_node.MockNode).EXPECT().DeleteResources(mock.MockResourceManager).Return(nil)
+	}
+	// Init sends a node event, which reads the node.
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil).AnyTimes()
+	mock.MockK8sAPI.EXPECT().BroadcastEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	job.node = initialized
+	_, err := mock.Manager.performAsyncOperation(job)
+	assert.NoError(t, err)
+}
+
+// A cached node of an earlier instance is a node name reuse, counted once and then as initialized.
+func Test_NodeNameReuseMetrics_CachedNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	newInstanceID := "i-0fedcba09876543210"
+	oldNode := mock_node.NewMockNode(ctrl)
+	oldNode.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
+	oldNode.EXPECT().IsManaged().Return(true).AnyTimes()
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: oldNode})
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(replacementNode(newInstanceID, "uid-new"), nil).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcV1alpha1.CNINode{}, nil).AnyTimes()
+	var jobs []AsyncOperationJob
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Do(func(job interface{}) {
+		jobs = append(jobs, job.(AsyncOperationJob))
+	}).AnyTimes()
+	detected, initialized := reuseCounts()
+
+	assert.NoError(t, mock.Manager.UpdateNode(nodeName))
+	assert.NoError(t, mock.Manager.UpdateNode(nodeName))
+	assert.Equal(t, detected+1, testutil.ToFloat64(nodeNameReuseDetected), "detected once per new instance")
+
+	initNodeOfJob(t, ctrl, &mock, jobs[0], newInstanceID)
+	assert.Equal(t, initialized+1, testutil.ToFloat64(nodeNameReuseInitialized))
+}
+
+// A new instance that registers after the managed node of an earlier instance with the same name was removed is a
+// node name reuse, as the earlier instance's trunk may still be cached.
+func Test_NodeNameReuseMetrics_RemovedNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	newInstanceID := "i-0fedcba09876543210"
+	oldNode := mock_node.NewMockNode(ctrl)
+	oldNode.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
+	oldNode.EXPECT().IsManaged().Return(true).AnyTimes()
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: oldNode})
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(replacementNode(newInstanceID, "uid-new"), nil).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcV1alpha1.CNINode{}, nil).AnyTimes()
+	var jobs []AsyncOperationJob
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Do(func(job interface{}) {
+		jobs = append(jobs, job.(AsyncOperationJob))
+	}).AnyTimes()
+	detected, initialized := reuseCounts()
+
+	assert.NoError(t, mock.Manager.DeleteNode(nodeName))
+	assert.NoError(t, mock.Manager.AddNode(nodeName))
+	assert.Equal(t, detected+1, testutil.ToFloat64(nodeNameReuseDetected))
+
+	initNodeOfJob(t, ctrl, &mock, jobs[len(jobs)-1], newInstanceID)
+	assert.Equal(t, initialized+1, testutil.ToFloat64(nodeNameReuseInitialized))
+}
+
+// A CNINode whose checkpoint records an earlier instance using security groups for pods is a node name reuse. It
+// counts once even when the cached node shows the same reuse.
+func Test_NodeNameReuseMetrics_CNINode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	newInstanceID := "i-0fedcba09876543210"
+	oldNode := mock_node.NewMockNode(ctrl)
+	oldNode.EXPECT().GetNodeInstanceID().Return(instanceID).AnyTimes()
+	oldNode.EXPECT().IsManaged().Return(true).AnyTimes()
+	mock := NewMock(ctrl, map[string]node.Node{nodeName: oldNode})
+	k8sNode := replacementNode(newInstanceID, "uid-new")
+	stale := &rcV1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            nodeName,
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Node", Name: nodeName, UID: "uid-old"}},
+		},
+		Spec:   rcV1alpha1.CNINodeSpec{Features: []rcV1alpha1.Feature{{Name: rcV1alpha1.SecurityGroupsForPods}}},
+		Status: rcV1alpha1.CNINodeStatus{NodeNetworkState: &rcV1alpha1.NodeNetworkState{InstanceID: instanceID}},
+	}
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil).AnyTimes()
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(stale, nil).AnyTimes()
+	detected, _ := reuseCounts()
+
+	assert.ErrorIs(t, mock.Manager.UpdateNode(nodeName), ErrReplacedCNINodeDeleting)
+	assert.Equal(t, detected+1, testutil.ToFloat64(nodeNameReuseDetected))
+
+	// Without a cached node, the CNINode alone shows the reuse, as after a controller restart.
+	restarted := NewMock(ctrl, map[string]node.Node{})
+	restarted.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil)
+	restarted.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(stale, nil).AnyTimes()
+	assert.ErrorIs(t, restarted.Manager.AddNode(nodeName), ErrReplacedCNINodeDeleting)
+	assert.Equal(t, detected+2, testutil.ToFloat64(nodeNameReuseDetected))
+}
+
+// Adding and initializing a node without reuse moves neither counter, and a failed init is not counted.
+func Test_NodeNameReuseMetrics_NoReuse(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mock := NewMock(ctrl, map[string]node.Node{})
+	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil)
+	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(&rcV1alpha1.CNINode{}, nil).AnyTimes()
+	var jobs []AsyncOperationJob
+	mock.MockWorker.EXPECT().SubmitJob(gomock.Any()).Do(func(job interface{}) {
+		jobs = append(jobs, job.(AsyncOperationJob))
+	}).AnyTimes()
+	detected, initialized := reuseCounts()
+
+	assert.NoError(t, mock.Manager.AddNode(nodeName))
+	initNodeOfJob(t, ctrl, &mock, jobs[0], instanceID)
+	assert.Equal(t, detected, testutil.ToFloat64(nodeNameReuseDetected))
+	assert.Equal(t, initialized, testutil.ToFloat64(nodeNameReuseInitialized))
 }
