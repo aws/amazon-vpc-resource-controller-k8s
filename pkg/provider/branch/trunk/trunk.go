@@ -255,10 +255,15 @@ func (t *trunkENI) coldInit(podList []v1.Pod) error {
 	instanceID := t.instance.InstanceID()
 	log := t.log.WithValues("request", "initialize", "instance ID", instanceID)
 	var trunk ec2types.InstanceNetworkInterface
-	nwInterfaces, err := t.ec2ApiHelper.GetInstanceNetworkInterface(&instanceID)
-	if err != nil {
-		trunkENIOperationsErrCount.WithLabelValues("describe_instance_nw_interface").Inc()
-		return err
+	var err error
+	// Every caller loads the instance right before, so reuse the interfaces it read instead of describing it again.
+	nwInterfaces := t.instance.TakeNetworkInterfaces()
+	if len(nwInterfaces) == 0 {
+		nwInterfaces, err = t.ec2ApiHelper.GetInstanceNetworkInterface(&instanceID)
+		if err != nil {
+			trunkENIOperationsErrCount.WithLabelValues("describe_instance_nw_interface").Inc()
+			return err
+		}
 	}
 	trunkENIID := ""
 	for _, nwInterface := range nwInterfaces {
@@ -269,11 +274,14 @@ func (t *trunkENI) coldInit(podList []v1.Pod) error {
 		if *nwInterface.InterfaceType != string(ec2types.NetworkInterfaceTypeTrunk) {
 			continue
 		}
-		if err = t.ec2ApiHelper.WaitForNetworkInterfaceStatusChange(
-			nwInterface.NetworkInterfaceId,
-			string(ec2types.AttachmentStatusAttached),
-		); err != nil {
-			return fmt.Errorf("failed to verify network interface status attached for %v", *nwInterface.NetworkInterfaceId)
+		// The instance description already reports the attachment state, so only poll a trunk that is still attaching.
+		if nwInterface.Attachment == nil || nwInterface.Attachment.Status != ec2types.AttachmentStatusAttached {
+			if err = t.ec2ApiHelper.WaitForNetworkInterfaceStatusChange(
+				nwInterface.NetworkInterfaceId,
+				string(ec2types.AttachmentStatusAttached),
+			); err != nil {
+				return fmt.Errorf("failed to verify network interface status attached for %v", *nwInterface.NetworkInterfaceId)
+			}
 		}
 		trunkENIID = *nwInterface.NetworkInterfaceId
 		trunk = nwInterface

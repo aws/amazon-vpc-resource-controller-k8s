@@ -329,6 +329,20 @@ func (mr *MockEC2InstanceMockRecorder) SubnetV6Mask() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubnetV6Mask", reflect.TypeOf((*MockEC2Instance)(nil).SubnetV6Mask))
 }
 
+// TakeNetworkInterfaces mocks base method.
+func (m *MockEC2Instance) TakeNetworkInterfaces() []types.InstanceNetworkInterface {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TakeNetworkInterfaces")
+	ret0, _ := ret[0].([]types.InstanceNetworkInterface)
+	return ret0
+}
+
+// TakeNetworkInterfaces indicates an expected call of TakeNetworkInterfaces.
+func (mr *MockEC2InstanceMockRecorder) TakeNetworkInterfaces() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TakeNetworkInterfaces", reflect.TypeOf((*MockEC2Instance)(nil).TakeNetworkInterfaces))
+}
+
 // Type mocks base method.
 func (m *MockEC2Instance) Type() string {
 	m.ctrl.T.Helper()

@@ -73,6 +73,8 @@ type ec2Instance struct {
 	udpStreamTimeout                  *int32
 	udpTimeout                        *int32
 	restoredTrunkENIID                string
+	// networkInterfaces is what the last LoadDetails read, kept for the trunk cold init that follows it
+	networkInterfaces []ec2types.InstanceNetworkInterface
 }
 
 // EC2Instance exposes the immutable details of an ec2 instance and common operations on an EC2 Instance
@@ -99,6 +101,7 @@ type EC2Instance interface {
 	RefreshPrimaryNetworkInterface(networkInterface ec2types.NetworkInterface) error
 	RestoredTrunkENIID() string
 	BuildNodeNetworkState() rcv1alpha1.NodeNetworkState
+	TakeNetworkInterfaces() []ec2types.InstanceNetworkInterface
 }
 
 // NewEC2Instance returns a new EC2 Instance type
@@ -200,6 +203,7 @@ func (i *ec2Instance) LoadDetails(ec2APIHelper api.EC2APIHelper) error {
 	}
 
 	i.restoredTrunkENIID = ""
+	i.networkInterfaces = instance.NetworkInterfaces
 	return i.updateCurrentSubnetAndCidrBlock(ec2APIHelper)
 }
 
@@ -439,6 +443,16 @@ func (i *ec2Instance) RestoredTrunkENIID() string {
 	i.lock.RLock()
 	defer i.lock.RUnlock()
 	return i.restoredTrunkENIID
+}
+
+// TakeNetworkInterfaces returns the network interfaces the last LoadDetails read and forgets them, so a caller that
+// did not reload the instance describes them again instead of acting on stale attachments.
+func (i *ec2Instance) TakeNetworkInterfaces() []ec2types.InstanceNetworkInterface {
+	i.lock.Lock()
+	defer i.lock.Unlock()
+	networkInterfaces := i.networkInterfaces
+	i.networkInterfaces = nil
+	return networkInterfaces
 }
 
 func (i *ec2Instance) BuildNodeNetworkState() rcv1alpha1.NodeNetworkState {

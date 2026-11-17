@@ -314,6 +314,9 @@ func TestEc2Instance_LoadDetails(t *testing.T) {
 	assert.Nil(t, ec2Instance.tcpEstablishedTimeout)
 	assert.Nil(t, ec2Instance.udpStreamTimeout)
 	assert.Nil(t, ec2Instance.udpTimeout)
+	// The trunk cold init that follows reuses the loaded interfaces once; a later caller must describe them again.
+	assert.Equal(t, nwInterfaces.NetworkInterfaces, ec2Instance.TakeNetworkInterfaces())
+	assert.Nil(t, ec2Instance.TakeNetworkInterfaces())
 }
 
 // TestEc2Instance_LoadDetails_WithConnectionTracking tests that connection tracking config

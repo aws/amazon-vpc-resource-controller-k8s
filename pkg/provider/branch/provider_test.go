@@ -209,6 +209,7 @@ func prepareInitResourceSuccess(
 	mockInstance.EXPECT().RestoredTrunkENIID().Return("").AnyTimes()
 	mockInstance.EXPECT().InstanceID().Return(instanceID).AnyTimes()
 	mockPodAPI.EXPECT().GetRunningPodsOnNode(NodeName).Return(nil, nil)
+	mockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 	mockEC2API.EXPECT().GetInstanceNetworkInterface(&instanceID).
 		Return([]ec2types.InstanceNetworkInterface{}, nil)
 	mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(freeIndex, nil)

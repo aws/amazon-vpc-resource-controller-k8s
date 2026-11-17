@@ -133,6 +133,7 @@ func coldInstanceDetails() *ec2types.Instance {
 		SubnetId:         aws.String(SubnetId),
 		PrivateIpAddress: primaryIP,
 		NetworkInterfaces: []ec2types.InstanceNetworkInterface{{
+			InterfaceType:      aws.String("interface"),
 			NetworkInterfaceId: aws.String(recoveryPrimaryENIID),
 			PrivateIpAddress:   primaryIP,
 			Groups:             []ec2types.GroupIdentifier{{GroupId: aws.String(recoveryRefreshedSG)}},
@@ -605,12 +606,13 @@ func TestColdFallbackReportsConfigDriftOnce(t *testing.T) {
 	interfaces[1].SubnetId = aws.String(recoveryOldSubnetID)
 	helper.EXPECT().DescribeNetworkInterfaces([]string{recoveryPrimaryENIID, recoveryTrunkENIID}).
 		Return(interfaces, nil)
-	helper.EXPECT().GetInstanceDetails(aws.String(InstanceId)).Return(coldInstanceDetails(), nil)
+	details := coldInstanceDetails()
+	details.NetworkInterfaces = append(details.NetworkInterfaces, instanceNwInterfaces...)
+	helper.EXPECT().GetInstanceDetails(aws.String(InstanceId)).Return(details, nil)
 	helper.EXPECT().GetSubnet(aws.String(SubnetId)).
 		Return(&ec2types.Subnet{CidrBlock: aws.String(SubnetCidrBlock)}, nil)
 	helper.EXPECT().GetSubnet(aws.String(recoveryCustomSubnet)).
 		Return(&ec2types.Subnet{CidrBlock: aws.String(SubnetCidrBlock)}, nil)
-	helper.EXPECT().GetInstanceNetworkInterface(aws.String(InstanceId)).Return(instanceNwInterfaces, nil)
 	helper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(ec2types.AttachmentStatusAttached)).
 		Return(nil)
 	helper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(nil, nil)
