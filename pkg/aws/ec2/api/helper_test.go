@@ -661,6 +661,37 @@ func TestEc2APIHelper_GetSubnet_Error(t *testing.T) {
 	assert.Error(t, errMock, err)
 }
 
+// TestEc2APIHelper_GetSubnet_Cached tests that lookups of one subnet share a DescribeSubnets call until it expires,
+// that a failed lookup is not cached, and that a caller reassigning a field of its result does not change the cache.
+func TestEc2APIHelper_GetSubnet_Cached(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ec2ApiHelper, mockWrapper := getMockWrapper(ctrl)
+	gomock.InOrder(
+		mockWrapper.EXPECT().DescribeSubnets(describeSubnetInput).Return(nil, errMock),
+		mockWrapper.EXPECT().DescribeSubnets(describeSubnetInput).Return(describeSubnetOutput, nil),
+		mockWrapper.EXPECT().DescribeSubnets(describeSubnetInput).Return(describeSubnetOutput, nil),
+	)
+
+	_, err := ec2ApiHelper.GetSubnet(&subnetId)
+	assert.ErrorIs(t, err, errMock)
+	for range 3 {
+		subnet, err := ec2ApiHelper.GetSubnet(&subnetId)
+		assert.NoError(t, err)
+		assert.Equal(t, subnetId, *subnet.SubnetId)
+		subnet.SubnetId = aws.String("subnet-edited-by-caller")
+	}
+
+	helper := ec2ApiHelper.(*ec2APIHelper)
+	expired := helper.subnets[subnetId]
+	expired.expires = time.Now().Add(-time.Second)
+	helper.subnets[subnetId] = expired
+	subnet, err := ec2ApiHelper.GetSubnet(&subnetId)
+	assert.NoError(t, err)
+	assert.Equal(t, subnetId, *subnet.SubnetId)
+}
+
 // TestEc2APIHelper_GetNetworkInterfaceOfInstance tests that describe network interface returns no errors
 // under valid input
 func TestEc2APIHelper_GetNetworkInterfaceOfInstance(t *testing.T) {

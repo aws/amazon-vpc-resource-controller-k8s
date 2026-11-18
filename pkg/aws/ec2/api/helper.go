@@ -15,6 +15,7 @@ package api
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -61,9 +62,21 @@ var (
 	clusterNameTag ec2types.Tag
 )
 
+// subnetCacheTTL bounds how long nodes initialized after a subnet gains or loses its IPv6 CIDR pick up the old one,
+// which their CNINode checkpoint then keeps until they cold-initialize again.
+const subnetCacheTTL = 10 * time.Minute
+
 type ec2APIHelper struct {
 	ec2Wrapper EC2Wrapper
 	vpcID      string
+	// subnets caches DescribeSubnets by subnet ID, since every node in a subnet asks for the same CIDR blocks
+	subnetsLock sync.Mutex
+	subnets     map[string]cachedSubnet
+}
+
+type cachedSubnet struct {
+	subnet  ec2types.Subnet
+	expires time.Time
 }
 
 func NewEC2APIHelper(ec2Wrapper EC2Wrapper, clusterName string, vpcID string) EC2APIHelper {
@@ -186,8 +199,17 @@ func (h *ec2APIHelper) CreateNetworkInterface(description *string, subnetId *str
 	return nwInterface, nil
 }
 
-// GetSubnet returns the subnet details of the given subnet
+// GetSubnet returns the subnet details of the given subnet. The result shares its pointers and slices with the cache,
+// so callers must treat it as read-only.
 func (h *ec2APIHelper) GetSubnet(subnetId *string) (*ec2types.Subnet, error) {
+	h.subnetsLock.Lock()
+	cached, found := h.subnets[*subnetId]
+	h.subnetsLock.Unlock()
+	if found && time.Now().Before(cached.expires) {
+		subnet := cached.subnet
+		return &subnet, nil
+	}
+
 	describeSubnetInput := &ec2.DescribeSubnetsInput{
 		SubnetIds: []string{*subnetId},
 	}
@@ -196,11 +218,18 @@ func (h *ec2APIHelper) GetSubnet(subnetId *string) (*ec2types.Subnet, error) {
 	if err != nil {
 		return nil, err
 	}
-	if describeSubnetOutput != nil && len(describeSubnetOutput.Subnets) == 0 {
+	if describeSubnetOutput == nil || len(describeSubnetOutput.Subnets) == 0 {
 		return nil, fmt.Errorf("subnet not found %s", *subnetId)
 	}
 
-	return &describeSubnetOutput.Subnets[0], nil
+	subnet := describeSubnetOutput.Subnets[0]
+	h.subnetsLock.Lock()
+	if h.subnets == nil {
+		h.subnets = make(map[string]cachedSubnet)
+	}
+	h.subnets[*subnetId] = cachedSubnet{subnet: subnet, expires: time.Now().Add(subnetCacheTTL)}
+	h.subnetsLock.Unlock()
+	return &subnet, nil
 }
 
 // DeleteNetworkInterface deletes a network interface with retries with exponential back offs

@@ -228,6 +228,8 @@ func (n *node) InitResources(resourceManager resource.ResourceManager) error {
 				Err:     err,
 			}
 		}
+		// The trunk cold init takes the loaded interfaces; drop them when no provider did, e.g. on Windows nodes.
+		defer n.instance.TakeNetworkInterfaces()
 	}
 
 	var initializedProviders []provider.ResourceProvider

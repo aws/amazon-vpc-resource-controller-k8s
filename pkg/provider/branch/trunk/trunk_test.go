@@ -748,6 +748,18 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 		mockEC2APIHelper *mock_api.MockEC2APIHelper
 		trunkENI         *trunkENI
 	}
+	// loadedTrunk is the trunk as the DescribeInstances call in LoadDetails reports it.
+	loadedTrunk := func(status awsEc2Types.AttachmentStatus) []awsEc2Types.InstanceNetworkInterface {
+		return []awsEc2Types.InstanceNetworkInterface{{
+			InterfaceType:      aws.String("trunk"),
+			NetworkInterfaceId: &trunkId,
+			SubnetId:           &SubnetId,
+			Attachment: &awsEc2Types.InstanceNetworkInterfaceAttachment{
+				DeviceIndex: &trunkDeviceIndex,
+				Status:      status,
+			},
+		}}
+	}
 	testsTrunkENI_InitTrunk := []struct {
 		name    string
 		prepare func(f *fields)
@@ -756,11 +768,65 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 		asserts func(f *fields)
 	}{
 		{
+			name: "TrunkExists_Loaded, reuses the loaded interfaces and does not poll an attached trunk",
+			prepare: func(f *fields) {
+				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
+				f.mockInstance.EXPECT().TakeNetworkInterfaces().Return(loadedTrunk(awsEc2Types.AttachmentStatusAttached))
+				f.mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
+				f.mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(branchInterfaces, nil)
+			},
+			args: args{podList: []v1.Pod{*MockPod1, *MockPod2}},
+			asserts: func(f *fields) {
+				assert.Equal(t, trunkId, f.trunkENI.TrunkENIID())
+				branchENIs, isPresent := f.trunkENI.uidToBranchENIMap[PodUID]
+				assert.True(t, isPresent)
+				assert.Len(t, branchENIs, 2)
+			},
+		},
+		{
+			name: "TrunkExists_LoadedAttaching, polls a loaded trunk that is still attaching",
+			prepare: func(f *fields) {
+				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
+				f.mockInstance.EXPECT().TakeNetworkInterfaces().Return(loadedTrunk(awsEc2Types.AttachmentStatusAttaching))
+				f.mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
+				f.mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
+				f.mockEC2APIHelper.EXPECT().GetBranchNetworkInterface(&trunkId).Return(branchInterfaces, nil)
+			},
+			args: args{podList: []v1.Pod{*MockPod1, *MockPod2}},
+			asserts: func(f *fields) {
+				assert.Equal(t, trunkId, f.trunkENI.TrunkENIID())
+			},
+		},
+		{
+			name: "TrunkNotExists_Loaded, creates the trunk without describing the instance again",
+			prepare: func(f *fields) {
+				freeIndex := trunkDeviceIndex
+				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
+				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
+				f.mockInstance.EXPECT().TakeNetworkInterfaces().Return([]awsEc2Types.InstanceNetworkInterface{{
+					InterfaceType:      aws.String("interface"),
+					NetworkInterfaceId: aws.String("eni-primary"),
+				}})
+				f.mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(SecurityGroups)
+				f.mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(freeIndex, nil)
+				f.mockInstance.EXPECT().SubnetID().Return(SubnetId)
+				f.mockEC2APIHelper.EXPECT().CreateAndAttachNetworkInterface(&InstanceId, &SubnetId, SecurityGroups, f.trunkENI.nodeIDTag,
+					&freeIndex, &TrunkEniDescription, &InterfaceTypeTrunk, nil, nil).Return(trunkInterface, nil)
+			},
+			args: args{podList: []v1.Pod{*MockPod2}},
+			asserts: func(f *fields) {
+				assert.Equal(t, trunkId, f.trunkENI.TrunkENIID())
+			},
+		},
+		{
 			name: "TrunkNotExists, verifies trunk is created if it does not exist with no error",
 			prepare: func(f *fields) {
 				freeIndex := trunkDeviceIndex
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
 				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
+				f.mockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 				f.mockInstance.EXPECT().CurrentInstanceSecurityGroups().Return(SecurityGroups)
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]awsEc2Types.InstanceNetworkInterface{}, nil)
 				f.mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(freeIndex, nil)
@@ -779,6 +845,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
 				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
+				f.mockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(
 					[]awsEc2Types.InstanceNetworkInterface{{InterfaceType: nil}}, nil)
 			},
@@ -791,6 +858,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
 				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
+				f.mockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(nil, MockError)
 			},
 			args:    args{podList: []v1.Pod{*MockPod2}},
@@ -802,6 +870,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
 				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
+				f.mockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return([]awsEc2Types.InstanceNetworkInterface{}, nil)
 				f.mockInstance.EXPECT().GetHighestUnusedDeviceIndex().Return(int32(0), MockError)
 			},
@@ -830,6 +899,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
 				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
+				f.mockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 				f.mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
 				f.mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
@@ -862,6 +932,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
 				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
+				f.mockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 				f.mockInstance.EXPECT().GetCustomNetworkingSpec().Return("", []string{})
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
 				f.mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(nil)
@@ -884,6 +955,7 @@ func TestTrunkENI_InitTrunk(t *testing.T) {
 			prepare: func(f *fields) {
 				f.mockInstance.EXPECT().InstanceID().Return(InstanceId)
 				f.mockInstance.EXPECT().RestoredTrunkENIID().Return("")
+				f.mockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 				f.mockEC2APIHelper.EXPECT().GetInstanceNetworkInterface(&InstanceId).Return(instanceNwInterfaces, nil)
 				f.mockEC2APIHelper.EXPECT().WaitForNetworkInterfaceStatusChange(&trunkId, string(awsEc2Types.AttachmentStatusAttached)).Return(MockError)
 			},

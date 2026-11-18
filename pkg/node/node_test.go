@@ -192,6 +192,7 @@ func TestNode_InitResources(t *testing.T) {
 	expectColdInitialization(&mock)
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+	mock.MockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
 
 	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
@@ -293,6 +294,7 @@ func TestNode_InitResources_RestoresCheckpointOrFallsBack(t *testing.T) {
 			}
 			if test.wantResult == "fallback" {
 				mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+				mock.MockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 			}
 			if test.wantResult != "error" {
 				mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
@@ -339,6 +341,7 @@ func TestNode_InitResources_ColdInitsAfterTheCheckpointIsCleared(t *testing.T) {
 	mock.MockInstance.EXPECT().Name().Return(nodeName)
 	mock.MockInstance.EXPECT().InstanceID().Return(instanceID)
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+	mock.MockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
 	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(true)
 	mock.MockProviders["0"].EXPECT().InitResource(mock.MockInstance).Return(nil)
@@ -354,6 +357,7 @@ func TestNode_InitResources_InstanceNotTrunkSupported(t *testing.T) {
 	expectColdInitialization(&mock)
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+	mock.MockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
 
 	mock.MockProviders["0"].EXPECT().IsInstanceSupported(mock.MockInstance).Return(false)
@@ -413,6 +417,7 @@ func TestNode_InitResources_SecondProviderInitFails(t *testing.T) {
 	expectColdInitialization(&mock)
 
 	mock.MockInstance.EXPECT().LoadDetails(mock.MockEC2API).Return(nil)
+	mock.MockInstance.EXPECT().TakeNetworkInterfaces().Return(nil)
 	mock.MockResourceManager.EXPECT().GetResourceProviders().Return(mock.ResourceProvider)
 
 	// Second provider throws an error

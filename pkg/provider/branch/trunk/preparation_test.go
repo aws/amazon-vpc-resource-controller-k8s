@@ -254,7 +254,7 @@ func TestPreparationKeepsCarriedCooldownsAndStartsFreshOnesForOrphans(t *testing
 // A checkpoint that EC2 contradicts is cold-initialized, counted and logged once, and a failed fallback retries
 // cold init without validating the checkpoint again.
 func TestRestoredCheckpointMismatchColdInitializes(t *testing.T) {
-	for _, failAt := range []string{"", "instance reload", "trunk lookup", "branch query"} {
+	for _, failAt := range []string{"", "instance reload", "branch query"} {
 		name := failAt
 		if name == "" {
 			name = "first attempt succeeds"
@@ -284,16 +284,12 @@ func TestRestoredCheckpointMismatchColdInitializes(t *testing.T) {
 					reload.Return(nil, MockError)
 					return
 				}
-				reload.Return(coldInstanceDetails(), nil)
+				// Cold init reads the trunk from the reload instead of describing the instance again.
+				details := coldInstanceDetails()
+				details.NetworkInterfaces = append(details.NetworkInterfaces, ec2Trunk...)
+				reload.Return(details, nil)
 				calls = append(calls, helper.EXPECT().GetSubnet(aws.String(SubnetId)).
 					Return(&ec2types.Subnet{CidrBlock: aws.String(SubnetCidrBlock)}, nil))
-				lookup := helper.EXPECT().GetInstanceNetworkInterface(aws.String(InstanceId))
-				calls = append(calls, lookup)
-				if failAt == "trunk lookup" {
-					lookup.Return(nil, MockError)
-					return
-				}
-				lookup.Return(ec2Trunk, nil)
 				calls = append(calls, helper.EXPECT().WaitForNetworkInterfaceStatusChange(
 					aws.String(ec2TrunkID), string(ec2types.AttachmentStatusAttached)).Return(nil))
 				branches := helper.EXPECT().GetBranchNetworkInterface(aws.String(ec2TrunkID))
