@@ -405,6 +405,99 @@ func TestCNINodeReconcile_CreatesCNINodeForNode(t *testing.T) {
 	assert.Empty(t, mock.Reconciler.pendingFeaturesFor(node.Name))
 }
 
+func TestCNINodeReconcile_TakesOverLiveCNINodeOfReplacedNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	node := mockNodeWithLabel.DeepCopy()
+	node.UID = "uid-current"
+	node.Spec.ProviderID = "aws:///us-west-2a/i-current"
+	cniNode := &v1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            node.Name,
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Node", Name: node.Name, UID: "uid-replaced"}},
+		},
+		Spec: v1alpha1.CNINodeSpec{
+			Tags: map[string]string{config.NetworkInterfaceNodeIDKey: "i-replaced"},
+		},
+	}
+	mock := NewCNINodeMock(ctrl, node, cniNode)
+
+	result, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
+	assert.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, result)
+
+	actual := &v1alpha1.CNINode{}
+	assert.NoError(t, mock.Reconciler.Client.Get(context.Background(), reconcileRequest.NamespacedName, actual))
+	assert.Equal(t, node.UID, actual.OwnerReferences[0].UID)
+	assert.Equal(t, "i-current", actual.Spec.Tags[config.NetworkInterfaceNodeIDKey])
+}
+
+func TestCNINodeReconcile_RefreshesFeaturesBeforeReplacement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	node := mockNodeWithLabel.DeepCopy()
+	node.UID = "uid-current"
+	node.Spec.ProviderID = "aws:///us-west-2a/i-current"
+	cniNode := &v1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              node.Name,
+			OwnerReferences:   []metav1.OwnerReference{{Kind: "Node", Name: node.Name, UID: "uid-replaced"}},
+			Finalizers:        []string{config.NodeTerminationFinalizer},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+		},
+	}
+	mock := NewCNINodeMock(ctrl, node, cniNode)
+	finalizers := mock_k8s.NewMockFinalizerManager(ctrl)
+	mock.Reconciler.finalizerManager = finalizers
+	finalizers.EXPECT().
+		RemoveFinalizers(gomock.Any(), gomock.Any(), config.NodeTerminationFinalizer).
+		DoAndReturn(func(_ context.Context, object client.Object, _ ...string) error {
+			object.(*v1alpha1.CNINode).Spec.Features = []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}
+			return nil
+		})
+	mock.Reconciler.waitForDeletion = func(key types.NamespacedName) error {
+		current := &v1alpha1.CNINode{}
+		if err := mock.Reconciler.Client.Get(context.Background(), key, current); err != nil {
+			return err
+		}
+		current.Finalizers = nil
+		if err := mock.Reconciler.Client.Update(context.Background(), current); err != nil {
+			return err
+		}
+		return client.IgnoreNotFound(mock.Reconciler.Client.Delete(context.Background(), current))
+	}
+
+	result, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
+	assert.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, result)
+
+	actual := &v1alpha1.CNINode{}
+	assert.NoError(t, mock.Reconciler.Client.Get(context.Background(), reconcileRequest.NamespacedName, actual))
+	assert.Equal(t, []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}, actual.Spec.Features)
+}
+
+func TestCNINodeReconcile_WaitsForProviderIDBeforeCopyingInstanceIDTag(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	node := mockNodeWithLabel.DeepCopy()
+	node.UID = "uid-current"
+	mock := NewCNINodeMock(ctrl, node)
+	mock.Reconciler.rememberPendingFeatures(&v1alpha1.CNINode{
+		ObjectMeta: metav1.ObjectMeta{Name: node.Name},
+		Spec: v1alpha1.CNINodeSpec{
+			Tags: map[string]string{config.NetworkInterfaceNodeIDKey: "i-replaced"},
+		},
+	})
+
+	result, err := mock.Reconciler.Reconcile(context.Background(), reconcileRequest)
+	assert.ErrorIs(t, err, errNodeInstanceIDMissing)
+	assert.Equal(t, reconcile.Result{}, result)
+	assert.Error(t, mock.Reconciler.Client.Get(context.Background(), reconcileRequest.NamespacedName, &v1alpha1.CNINode{}))
+}
+
 func TestCNINodeReconcilerPendingFeatures(t *testing.T) {
 	reconciler := &CNINodeReconciler{}
 	features := []v1alpha1.Feature{{Name: v1alpha1.SecurityGroupsForPods}}

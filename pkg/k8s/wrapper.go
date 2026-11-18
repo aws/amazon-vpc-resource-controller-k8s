@@ -15,7 +15,6 @@ package k8s
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"strconv"
 
@@ -82,7 +81,6 @@ type K8sWrapper interface {
 	AddLabelToManageNode(node *v1.Node, labelKey string, labelValue string) (bool, error)
 	ListEvents(ops []client.ListOption) (*eventsv1.EventList, error)
 	GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha1.CNINode, error)
-	CreateCNINode(node *v1.Node, clusterName string, features ...rcv1alpha1.Feature) error
 	ListCNINodes() ([]*rcv1alpha1.CNINode, error)
 	PatchCNINode(oldCNINode, newCNINode *rcv1alpha1.CNINode) error
 	PatchCNINodeCheckpoint(nodeName string, state rcv1alpha1.NodeNetworkState, trunkENIID string) error
@@ -247,40 +245,6 @@ func (k *k8sWrapper) GetCNINode(namespacedName types.NamespacedName) (*rcv1alpha
 		return cninode, err
 	}
 	return cninode, nil
-}
-
-// CreateCNINode creates the CNINode of the node, with the given features carried over from a CNINode it replaces
-func (k *k8sWrapper) CreateCNINode(node *v1.Node, clusterName string, features ...rcv1alpha1.Feature) error {
-	cniNode := &rcv1alpha1.CNINode{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      node.Name,
-			Namespace: "",
-			// use the node as owner reference to let k8s clean up the CRD when the node is deleted
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: node.APIVersion,
-					Kind:       node.Kind,
-					Name:       node.Name,
-					UID:        node.UID,
-					Controller: lo.ToPtr(true),
-				},
-			},
-			Labels: map[string]string{
-				// OS is a standard label & is set by Kubernetes, so we can skip checking if it is set
-				config.NodeLabelOS: node.ObjectMeta.Labels[config.NodeLabelOS],
-			},
-			Finalizers: []string{config.NodeTerminationFinalizer}, // finalizer to clean up leaked ENIs at node termination
-		},
-		Spec: rcv1alpha1.CNINodeSpec{
-			Tags: map[string]string{
-				fmt.Sprintf(config.VPCCNIClusterNameKey): clusterName,
-			},
-			Features: features,
-		},
-	}
-
-	// TODO: need think more if we should retry on "already exists" error.
-	return client.IgnoreAlreadyExists(k.cacheClient.Create(k.context, cniNode))
 }
 
 func (k *k8sWrapper) DeleteCNINode(cniNode *rcv1alpha1.CNINode) error {

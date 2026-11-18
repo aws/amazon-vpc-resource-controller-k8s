@@ -239,9 +239,9 @@ func TestNodeReconciler_Reconcile_WaitsForReplacedCNINode(t *testing.T) {
 
 	mock.Conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true)
 	mock.Manager.EXPECT().GetNode(mockNodeName).Return(nil, false).Times(1)
-	mock.Manager.EXPECT().AddNode(mockNodeName).Return(fmt.Errorf("%w: %s", manager.ErrReplacedCNINodeDeleting, mockNodeName))
+	mock.Manager.EXPECT().AddNode(mockNodeName).Return(fmt.Errorf("%w: %s", manager.ErrCNINodeNotReady, mockNodeName))
 	res, err := mock.Reconciler.Reconcile(context.TODO(), reconcileRequest)
 
 	assert.NoError(t, err, "an expected wait must not be reported as a reconcile error")
-	assert.Positive(t, res.RequeueAfter)
+	assert.Equal(t, cniNodeReadySafetyRequeue, res.RequeueAfter)
 }

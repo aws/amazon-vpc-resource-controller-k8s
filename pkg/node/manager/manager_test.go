@@ -205,7 +205,6 @@ func Test_AddNode_CNINode_Existing(t *testing.T) {
 
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(v1Node, nil).Times(1)
 	mock.MockWorker.EXPECT().SubmitJob(gomock.All(NewAsyncOperationMatcher(expectedJob)))
-	mock.MockK8sAPI.EXPECT().CreateCNINode(v1Node, mockClusterName).Return(nil).Times(0)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: v1Node.Name}).Return(&rcV1alpha1.CNINode{}, nil).Times(2)
 
 	err := mock.Manager.AddNode(nodeName)
@@ -1052,7 +1051,7 @@ func Test_AddNode_WaitsForCNINodeReconcilerToTakeOverReplacedCNINode(t *testing.
 
 	mock.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil)
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(stale, nil).AnyTimes()
-	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrReplacedCNINodeDeleting)
+	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrCNINodeNotReady)
 }
 
 // GC already marked the old instance's CNINode for deletion. AddNode must wait for it to go away instead of
@@ -1080,7 +1079,7 @@ func Test_AddNode_WaitsForDeletingCNINodeOfReplacedInstance(t *testing.T) {
 		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(deleting, nil),
 		mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(nil, notFound),
 	)
-	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrReplacedCNINodeDeleting)
+	assert.ErrorIs(t, mock.Manager.AddNode(nodeName), ErrCNINodeNotReady)
 	assert.NotContains(t, mock.Manager.dataStore, nodeName)
 
 	// Once deletion reaches NotFound, the NodeManager still waits: the CNINodeReconciler
@@ -1259,14 +1258,14 @@ func Test_NodeNameReuseMetrics_CNINode(t *testing.T) {
 	mock.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(stale, nil).AnyTimes()
 	detected, _ := reuseCounts()
 
-	assert.ErrorIs(t, mock.Manager.UpdateNode(nodeName), ErrReplacedCNINodeDeleting)
+	assert.ErrorIs(t, mock.Manager.UpdateNode(nodeName), ErrCNINodeNotReady)
 	assert.Equal(t, detected+1, testutil.ToFloat64(nodeNameReuseDetected))
 
 	// Without a cached node, the CNINode alone shows the reuse, as after a controller restart.
 	restarted := NewMock(ctrl, map[string]node.Node{})
 	restarted.MockK8sAPI.EXPECT().GetNode(nodeName).Return(k8sNode, nil)
 	restarted.MockK8sAPI.EXPECT().GetCNINode(types.NamespacedName{Name: nodeName}).Return(stale, nil).AnyTimes()
-	assert.ErrorIs(t, restarted.Manager.AddNode(nodeName), ErrReplacedCNINodeDeleting)
+	assert.ErrorIs(t, restarted.Manager.AddNode(nodeName), ErrCNINodeNotReady)
 	assert.Equal(t, detected+2, testutil.ToFloat64(nodeNameReuseDetected))
 }
 

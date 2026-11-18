@@ -42,9 +42,10 @@ import (
 // when the controller has to be restarted for various reasons.
 const (
 	NodeTerminationFinalizer = "networking.k8s.aws/resource-cleanup"
-	// replacedCNINodeRetryPeriod is how often a node waits for the CNINode of a replaced node to be deleted. The
-	// CNINode reconciler finalizes such a CNINode right away, so the wait is short.
-	replacedCNINodeRetryPeriod = time.Second
+	// cniNodeReadySafetyRequeue is only a safeguard for a missed CNINode event.
+	// CNINodeReconciler owns creation and NodeReconciler is immediately requeued
+	// by Owns(&CNINode{}) when that object is created.
+	cniNodeReadySafetyRequeue = 5 * time.Minute
 )
 
 // NodeReconciler reconciles a Node object
@@ -109,11 +110,12 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		logger.Info("adding node")
 		err = r.Manager.AddNode(req.Name)
 	}
-	// Retry without reporting an error while CNINodeReconciler creates or
-	// replaces the CNINode for this Node.
-	if goErrors.Is(err, manager.ErrCNINodeNotReady) ||
-		goErrors.Is(err, manager.ErrReplacedCNINodeDeleting) {
-		return ctrl.Result{RequeueAfter: replacedCNINodeRetryPeriod}, nil
+	// CNINodeReconciler owns creation and replacement. Avoid a hot Node
+	// reconcile loop while it retries a failed create; the CNINode create event
+	// wakes this controller immediately, with a long safety retry for a missed
+	// event.
+	if goErrors.Is(err, manager.ErrCNINodeNotReady) {
+		return ctrl.Result{RequeueAfter: cniNodeReadySafetyRequeue}, nil
 	}
 
 	return ctrl.Result{}, err

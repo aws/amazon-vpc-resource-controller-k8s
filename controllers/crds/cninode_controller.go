@@ -15,6 +15,7 @@ package crds
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"sync"
 	"time"
@@ -34,7 +35,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -60,6 +60,7 @@ var (
 			Help: "The number of requests that failed when controller tried to recreate the CNINode",
 		},
 	)
+	errNodeInstanceIDMissing = fmt.Errorf("current Node instance ID is empty")
 )
 
 func prometheusRegister() {
@@ -141,7 +142,14 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				}
 				state := r.pendingFeaturesFor(req.Name)
 				if err := r.createCNINodeForNode(ctx, node, state); err != nil {
+					if err == errNodeInstanceIDMissing {
+						return ctrl.Result{}, err
+					}
 					recreateCNINodeErrCount.Inc()
+					if r.k8sAPI != nil {
+						utils.SendNodeEventWithNodeObject(r.k8sAPI, node, utils.CNINodeCreateFailed,
+							"CNINode failed to be created by the vpc-resource-controller and will be retried", v1.EventTypeWarning, r.log)
+					}
 					return ctrl.Result{}, err
 				}
 				r.clearPendingFeatures(req.Name)
@@ -190,12 +198,16 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if nodeFound && utils.OwnedByReplacedNode(cniNode.OwnerReferences, node) {
 			takenOver := cniNode.DeepCopy()
 			for i := range takenOver.OwnerReferences {
-				if takenOver.OwnerReferences[i].Name == node.Name {
+				if takenOver.OwnerReferences[i].Kind == "Node" && takenOver.OwnerReferences[i].Name == node.Name {
 					takenOver.OwnerReferences[i].UID = node.UID
 				}
 			}
 			if _, ok := takenOver.Spec.Tags[config.NetworkInterfaceNodeIDKey]; ok {
-				takenOver.Spec.Tags[config.NetworkInterfaceNodeIDKey] = utils.GetNodeInstanceID(node)
+				instanceID := utils.GetNodeInstanceID(node)
+				if instanceID == "" {
+					return ctrl.Result{}, errNodeInstanceIDMissing
+				}
+				takenOver.Spec.Tags[config.NetworkInterfaceNodeIDKey] = instanceID
 			}
 			r.log.Info("taking over CNINode of a replaced Node", "cniNode", cniNode.Name,
 				"nodeUID", node.UID)
@@ -278,14 +290,18 @@ func (r *CNINodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			// The deletion is irreversible. Keep the features in this reconcile,
 			// delete the old object, then make a fresh object for the current
 			// Node. This makes CNINodeReconciler the sole owner of replacement.
+			if err := r.finalizerManager.RemoveFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
+				r.log.Error(err, "failed to remove finalizer on CNINode, will retry")
+				return ctrl.Result{}, err
+			}
+			// RemoveFinalizers refreshes cniNode before patching it. Capture the
+			// refreshed object so a feature added by VPC CNI immediately before
+			// finalization is handed off to the replacement too.
+			r.rememberPendingFeatures(cniNode)
 			state := cachedCNINodeState{
 				features:  append([]v1alpha1.Feature(nil), cniNode.Spec.Features...),
 				tags:      maps.Clone(cniNode.Spec.Tags),
 				managedBy: cniNode.Spec.ManagedBy,
-			}
-			if err := r.finalizerManager.RemoveFinalizers(ctx, cniNode, config.NodeTerminationFinalizer); err != nil {
-				r.log.Error(err, "failed to remove finalizer on CNINode, will retry")
-				return ctrl.Result{}, err
 			}
 			// wait till CNINode is deleted before recreation as the new object will be created with same name to avoid "object already exists" error
 			if err := r.waitForCNINodeDeletion(client.ObjectKeyFromObject(cniNode)); err != nil {
@@ -404,14 +420,6 @@ func (r *CNINodeReconciler) waitForCNINodeDeletion(nameSpacedCNINode types.Names
 	return r.waitTillCNINodeDeleted(nameSpacedCNINode)
 }
 
-// createCNINodeFromObj will create CNINode with backoff and returns error if CNINode is not recreated
-func (r *CNINodeReconciler) createCNINodeFromObj(ctx context.Context, newCNINode client.Object) error {
-	return retry.OnError(retry.DefaultBackoff, func(error) bool { return true },
-		func() error {
-			return r.Client.Create(ctx, newCNINode)
-		})
-}
-
 func (r *CNINodeReconciler) createCNINodeForNode(ctx context.Context, node *v1.Node, state cachedCNINodeState) error {
 	tags := maps.Clone(state.tags)
 	if tags == nil {
@@ -419,7 +427,11 @@ func (r *CNINodeReconciler) createCNINodeForNode(ctx context.Context, node *v1.N
 	}
 	tags[config.VPCCNIClusterNameKey] = r.clusterName
 	if _, ok := tags[config.NetworkInterfaceNodeIDKey]; ok {
-		tags[config.NetworkInterfaceNodeIDKey] = utils.GetNodeInstanceID(node)
+		instanceID := utils.GetNodeInstanceID(node)
+		if instanceID == "" {
+			return errNodeInstanceIDMissing
+		}
+		tags[config.NetworkInterfaceNodeIDKey] = instanceID
 	}
 	cniNode := &v1alpha1.CNINode{
 		ObjectMeta: metav1.ObjectMeta{

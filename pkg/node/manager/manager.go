@@ -136,12 +136,9 @@ var (
 )
 
 var (
-	// ErrCNINodeNotReady is returned while CNINodeReconciler has not yet
-	// created the CNINode for a current Node.
-	ErrCNINodeNotReady = errors.New("waiting for the CNINode to become ready")
-	// ErrReplacedCNINodeDeleting is returned while the CNINode of a replaced
-	// Node is still being deleted. It is an expected wait after IP reuse.
-	ErrReplacedCNINodeDeleting = errors.New("waiting for the CNINode of a replaced node to be deleted")
+	// ErrCNINodeNotReady is returned while CNINodeReconciler creates or
+	// replaces the CNINode for a current Node.
+	ErrCNINodeNotReady = errors.New("waiting for CNINode reconciliation")
 )
 
 // NewNodeManager returns a new node manager
@@ -258,9 +255,7 @@ func (m *manager) addNode(k8sNode *v1.Node, replaced node.Node) error {
 
 	if err := m.CreateCNINodeIfNotExisting(k8sNode); err != nil {
 		if errors.Is(err, ErrCNINodeNotReady) {
-			log.V(1).Info("waiting for CNINode reconciler to create the CNINode")
-		} else if errors.Is(err, ErrReplacedCNINodeDeleting) {
-			log.Info("waiting for the CNINode of a replaced node to be deleted")
+			log.V(1).Info("waiting for CNINode reconciler")
 		} else {
 			m.Log.Error(err, "Failed to create CNINode for k8sNode", "NodeName", k8sNode.Name)
 		}
@@ -272,8 +267,6 @@ func (m *manager) addNode(k8sNode *v1.Node, replaced node.Node) error {
 		return err
 	}
 
-	var op AsyncOperation
-
 	if shouldManage {
 		newNode = node.NewManagedNode(m.Log, k8sNode.Name, utils.GetNodeInstanceID(k8sNode),
 			utils.GetNodeOS(k8sNode), m.wrapper.K8sAPI, m.wrapper.EC2API)
@@ -283,7 +276,6 @@ func (m *manager) addNode(k8sNode *v1.Node, replaced node.Node) error {
 		}
 		m.dataStore[nodeName] = newNode
 		log.Info("node added as a managed node")
-		op = Init
 	} else {
 		newNode = node.NewUnManagedNode(m.Log, k8sNode.Name, utils.GetNodeInstanceID(k8sNode),
 			utils.GetNodeOS(k8sNode))
@@ -295,17 +287,11 @@ func (m *manager) addNode(k8sNode *v1.Node, replaced node.Node) error {
 		return nil
 	}
 
+	job := AsyncOperationJob{op: Init, node: newNode, nodeName: nodeName}
 	if replacedManaged {
-		m.worker.SubmitJob(AsyncOperationJob{
-			op:       op,
-			node:     newNode,
-			nodeName: nodeName,
-			replaced: replaced,
-		})
+		job.replaced = replaced
 	}
-	if !replacedManaged {
-		m.worker.SubmitJob(AsyncOperationJob{op: op, node: newNode, nodeName: nodeName})
-	}
+	m.worker.SubmitJob(job)
 	return nil
 }
 
@@ -332,7 +318,7 @@ func (m *manager) CreateCNINodeIfNotExisting(node *v1.Node) error {
 	// CNINodeReconciler owns replacement. It either transfers ownership or
 	// recreates a deleting object with its features; the node manager waits
 	// for that stable result.
-	return fmt.Errorf("%w: %s", ErrReplacedCNINodeDeleting, cniNode.Name)
+	return fmt.Errorf("%w: %s", ErrCNINodeNotReady, cniNode.Name)
 }
 
 // UpdateNode updates the node object and, if the node is previously un-managed and now
