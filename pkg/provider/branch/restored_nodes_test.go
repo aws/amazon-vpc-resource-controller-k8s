@@ -150,7 +150,8 @@ func TestBranchENIProvider_AllocationAndBackgroundShareOneCheck(t *testing.T) {
 			conditions := mock_condition.NewMockConditions(ctrl)
 			provider.conditions = conditions
 			restoredTrunk, helper := newRestoredTrunkForProvider(t, ctrl, nil)
-			provider.trunkENICache[NodeName] = restoredTrunk
+			provider.trunkENICache[restoredInstanceID] = restoredTrunk
+			provider.trunkNodeNames[restoredInstanceID] = NodeName
 
 			allocationAttempts := 1
 			if !allocationFirst {
@@ -272,7 +273,7 @@ func TestBranchENIProvider_RestoredNodeCheckFailureIsNotGlobal(t *testing.T) {
 		instanceID := fmt.Sprintf("i-%d", index)
 		restoredNodes = append(restoredNodes, restoredNodeForTest(nodeName, instanceID))
 		fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-		provider.trunkENICache[nodeName] = fakeTrunk
+		provider.trunkENICache[instanceID] = fakeTrunk
 		mockK8sAPI.EXPECT().GetNode(nodeName).Return(branchEligibleNode(nodeName, instanceID), nil).AnyTimes()
 		fakeTrunk.EXPECT().InstanceID().Return(instanceID).AnyTimes()
 		prepared := false
@@ -314,7 +315,7 @@ func TestBranchENIProvider_RestoredNodeCheckDropsNodeReplacedDuringPreparation(t
 	replacementTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	// Either signal, the node's provider ID or the cached trunk, may drop the node; the new trunk is never prepared.
 	replacementTrunk.EXPECT().InstanceID().Return("i-replacement").AnyTimes()
-	provider.trunkENICache[NodeName] = oldTrunk
+	provider.trunkENICache["i-restored"] = oldTrunk
 	gomock.InOrder(
 		mockK8sAPI.EXPECT().GetNode(NodeName).Return(branchEligibleNode(NodeName, "i-restored"), nil).Times(2),
 		mockK8sAPI.EXPECT().GetNode(NodeName).Return(branchEligibleNode(NodeName, "i-replacement"), nil),
@@ -325,7 +326,7 @@ func TestBranchENIProvider_RestoredNodeCheckDropsNodeReplacedDuringPreparation(t
 		func() ([]v1.Pod, error),
 	) (ec2.EC2Instance, error) {
 		provider.lock.Lock()
-		provider.trunkENICache[NodeName] = replacementTrunk
+		provider.trunkENICache["i-replacement"] = replacementTrunk
 		provider.lock.Unlock()
 		return nil, MockError
 	})
@@ -350,7 +351,7 @@ func TestBranchENIProvider_StartPreparesRestoredNodesAfterTenMinutes(t *testing.
 		conditions := mock_condition.NewMockConditions(ctrl)
 		provider.conditions = conditions
 		fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-		provider.trunkENICache[NodeName] = fakeTrunk
+		provider.trunkENICache[restoredInstanceID] = fakeTrunk
 		k8sAPI.EXPECT().ListCNINodes().Return([]*rcv1alpha1.CNINode{{
 			ObjectMeta: metav1.ObjectMeta{Name: NodeName},
 			Status: rcv1alpha1.CNINodeStatus{
@@ -431,7 +432,7 @@ func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 		// DeleteNode clears the checkpoint, so the node cold-inits if it is ever managed again.
 		k8sAPI.EXPECT().ClearCNINodeCheckpoint(NodeName).Return(nil)
 		workerPool.EXPECT().SubmitJob(gomock.Any()).AnyTimes()
-		workerPool.EXPECT().SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(NodeName), NodeDeleteRequeueRequestDelay)
+		workerPool.EXPECT().SubmitJobAfter(worker.NewOnDemandDeleteNodeJob(NodeName, restoredInstanceID), NodeDeleteRequeueRequestDelay)
 		conditions.EXPECT().GetPodDataStoreSyncStatus().Return(true).AnyTimes()
 		// EC2 inventory for any ownership check made before the branch ENIs are deleted.
 		ec2Down := false
@@ -463,7 +464,7 @@ func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 			require.NoError(t, err)
 		}
 		time.Sleep(cooldown.GetCoolDown().GetCoolDownPeriod() + time.Second)
-		_, err := provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+		_, err := provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, restoredInstanceID))
 		require.NoError(t, err)
 
 		// The node is deleted before the restored-node pass prepares it, so that pass skips it.
@@ -477,7 +478,7 @@ func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 			rate.NewLimiter(rate.Inf, 1),
 		))
 		time.Sleep(NodeDeleteRequeueRequestDelay)
-		result, err := provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName))
+		result, err := provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName, restoredInstanceID))
 		require.NoError(t, err)
 		if describeDown {
 			// The unprepared trunk still holds the queued ENIs, so DeleteNode keeps it and asks to run again.
@@ -486,20 +487,20 @@ func testDrainedRestoredNode(t *testing.T, describeDown bool) {
 			require.True(t, cached)
 			ec2Down = false
 			for range 20 {
-				result, err = provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+				result, err = provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, restoredInstanceID))
 				require.NoError(t, err)
 				if !restoredTrunk.HasPendingDeletions() {
 					break
 				}
 				time.Sleep(result.RequeueAfter)
 			}
-			result, err = provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName))
+			result, err = provider.ProcessAsyncJob(worker.NewOnDemandDeleteNodeJob(NodeName, restoredInstanceID))
 			require.NoError(t, err)
 		}
 		require.False(t, result.Requeue)
 		// Run the requeued cleanup job until it stops, as the worker does.
 		for range 20 {
-			result, err = provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName))
+			result, err = provider.ProcessAsyncJob(worker.NewOnDemandProcessDeleteQueueJob(NodeName, restoredInstanceID))
 			require.NoError(t, err)
 			if !result.Requeue {
 				break
@@ -530,8 +531,9 @@ func expectPreparation(ctrl *gomock.Controller, provider *branchENIProvider, pod
 	nodeName, instanceID string, prepare func() error,
 ) *mock_trunk.MockTrunkENI {
 	fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-	provider.trunkENICache[nodeName] = fakeTrunk
-	fakeTrunk.EXPECT().InstanceID().Return(instanceID).Times(2)
+	provider.trunkENICache[instanceID] = fakeTrunk
+	provider.trunkNodeNames[instanceID] = nodeName
+	fakeTrunk.EXPECT().InstanceID().Return(instanceID).AnyTimes()
 	fakeTrunk.EXPECT().NeedsPreparation().Return(true).Times(2)
 	podAPI.EXPECT().GetRunningPodsOnNode(nodeName).Return(nil, nil)
 	fakeTrunk.EXPECT().PrepareForAllocation(gomock.Any()).DoAndReturn(func(
@@ -600,7 +602,7 @@ func TestBranchENIProvider_RestoredNodeCheckDropsNodesWithoutAToken(t *testing.T
 			}
 			if test.cachedInstanceID != "" {
 				fakeTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-				provider.trunkENICache[NodeName] = fakeTrunk
+				provider.trunkENICache[instanceID] = fakeTrunk
 				fakeTrunk.EXPECT().InstanceID().Return(test.cachedInstanceID)
 				if test.cachedInstanceID == instanceID {
 					fakeTrunk.EXPECT().NeedsPreparation().Return(false)
@@ -633,7 +635,8 @@ func TestBranchENIProvider_RestoredNodeCheckWaitsForNodeInitialization(t *testin
 	}, nil).Times(3)
 	fakeTrunk := expectPreparation(ctrl, provider, podAPI, NodeName, instanceID, nil)
 	// The trunk is not cached on the first pass, so the node waits and is checked again.
-	delete(provider.trunkENICache, NodeName)
+	delete(provider.trunkENICache, instanceID)
+	delete(provider.trunkNodeNames, instanceID)
 	gomock.InOrder(
 		k8sAPI.EXPECT().GetNode(NodeName).Return(currentNode, nil),
 		k8sAPI.EXPECT().GetNode(NodeName).DoAndReturn(func(string) (*v1.Node, error) {
@@ -703,9 +706,12 @@ func TestBranchENIProvider_RestoredNodeCheckRechecksAfterToken(t *testing.T) {
 	instanceID := "i-restored"
 	oldTrunk := mock_trunk.NewMockTrunkENI(ctrl)
 	replacementTrunk := mock_trunk.NewMockTrunkENI(ctrl)
-	provider.trunkENICache[NodeName] = oldTrunk
+	provider.trunkENICache[instanceID] = oldTrunk
 	checked := make(chan struct{})
-	k8sAPI.EXPECT().GetNode(NodeName).Return(branchEligibleNode(NodeName, instanceID), nil).Times(2)
+	gomock.InOrder(
+		k8sAPI.EXPECT().GetNode(NodeName).Return(branchEligibleNode(NodeName, instanceID), nil),
+		k8sAPI.EXPECT().GetNode(NodeName).Return(branchEligibleNode(NodeName, "i-replacement"), nil),
+	)
 	oldTrunk.EXPECT().InstanceID().Return(instanceID)
 	oldTrunk.EXPECT().NeedsPreparation().DoAndReturn(func() bool {
 		close(checked)
@@ -721,7 +727,7 @@ func TestBranchENIProvider_RestoredNodeCheckRechecksAfterToken(t *testing.T) {
 
 	<-checked
 	provider.lock.Lock()
-	provider.trunkENICache[NodeName] = replacementTrunk
+	provider.trunkENICache["i-replacement"] = replacementTrunk
 	provider.lock.Unlock()
 	require.NoError(t, <-done)
 }

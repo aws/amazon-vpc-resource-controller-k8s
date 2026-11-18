@@ -202,30 +202,6 @@ func TestK8sWrapper_GetDeployment_Err(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestK8sWrapper_CreateCNINodeWithExistedObject_NoError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockCNINode})
-
-	err := wrapper.CreateCNINode(mockNode, mockClusterName)
-	assert.NoError(t, err)
-	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name})
-	assert.NoError(t, err)
-	assert.Equal(t, mockNode.Name, cniNode.Name)
-	err = wrapper.CreateCNINode(mockNode, mockClusterName)
-	assert.NoError(t, err)
-}
-
-func TestK8sWrapper_CreateCNINode_NoError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	wrapper, _, _ := getMockK8sWrapperWithClient(ctrl, []runtime.Object{mockCNINode})
-
-	err := wrapper.CreateCNINode(mockNode, mockClusterName)
-	assert.NoError(t, err)
-	cniNode, err := wrapper.GetCNINode(types.NamespacedName{Name: mockNode.Name})
-	assert.NoError(t, err)
-	assert.Equal(t, mockNode.Name, cniNode.Name)
-}
-
 func TestPatchCNINodeCheckpointPreservesExistingStatus(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = v1.AddToScheme(scheme)

@@ -142,15 +142,16 @@ var _ = Describe("[CANARY]CNINode test", Serial, Ordered, func() {
 		})
 	})
 
+	// Ordered before the removal spec, which terminates whichever instance the IP reuse specs left as the suite node.
+	Describe("when a new instance reuses the private IP of the suite node", Ordered, func() {
+		describeNodeNameReuse()
+	})
+
 	Describe("CNINode count verification on adding or removing node", func() {
 		Context("when existing node is removed", func() {
 			It("it should delete CNINode", func(ctx SpecContext) {
 				node := suiteNode()
-				Expect(frameWork.AutoScalingManager.TerminateInstanceInAutoScalingGroup(
-					ctx,
-					suiteNodeInstanceID,
-					true,
-				)).To(Succeed())
+				Expect(terminateSuiteInstance(ctx)).To(Succeed())
 				suiteNodeInstanceID = ""
 				Expect(waitTillNodeDeleted(ctx, node)).To(Succeed())
 				Expect(waitTillCNINodeDeleted(ctx, node)).To(Succeed())

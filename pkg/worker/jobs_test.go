@@ -55,10 +55,11 @@ func TestNewOnDemandReconcileJob(t *testing.T) {
 }
 
 func TestNewOnDemandProcessDeleteQueueJob(t *testing.T) {
-	onDemandJob := NewOnDemandProcessDeleteQueueJob(nodeName)
+	onDemandJob := NewOnDemandProcessDeleteQueueJob(nodeName, "i-0123456789abcdef0")
 
 	assert.Equal(t, OperationProcessDeleteQueue, onDemandJob.Operation)
 	assert.Equal(t, nodeName, onDemandJob.NodeName)
+	assert.Equal(t, "i-0123456789abcdef0", onDemandJob.InstanceID)
 }
 
 func TestNewWarmPoolCreateJob(t *testing.T) {

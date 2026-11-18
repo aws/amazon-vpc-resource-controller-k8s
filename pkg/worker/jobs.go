@@ -52,6 +52,8 @@ type OnDemandJob struct {
 	RequestCount int
 	// NodeName is the k8s node name
 	NodeName string
+	// InstanceID is the EC2 instance the job was submitted for, set when the node name can be reused by a new instance
+	InstanceID string
 }
 
 // NewOnDemandDeleteJob returns an on demand job for operation Create or Update
@@ -81,19 +83,21 @@ func NewOnDemandReconcileNodeJob(nodeName string) OnDemandJob {
 	}
 }
 
-// NewOnDemandProcessDeleteQueueJob returns a process delete queue job
-func NewOnDemandProcessDeleteQueueJob(nodeName string) OnDemandJob {
+// NewOnDemandProcessDeleteQueueJob returns a process delete queue job.
+func NewOnDemandProcessDeleteQueueJob(nodeName string, instanceID string) OnDemandJob {
 	return OnDemandJob{
-		Operation: OperationProcessDeleteQueue,
-		NodeName:  nodeName,
+		Operation:  OperationProcessDeleteQueue,
+		NodeName:   nodeName,
+		InstanceID: instanceID,
 	}
 }
 
-// NewOnDemandDeleteNodeJob returns a delete node job
-func NewOnDemandDeleteNodeJob(nodeName string) OnDemandJob {
+// NewOnDemandDeleteNodeJob returns a delete node job for the given instance
+func NewOnDemandDeleteNodeJob(nodeName string, instanceID string) OnDemandJob {
 	return OnDemandJob{
-		Operation: OperationDeleteNode,
-		NodeName:  nodeName,
+		Operation:  OperationDeleteNode,
+		NodeName:   nodeName,
+		InstanceID: instanceID,
 	}
 }
 

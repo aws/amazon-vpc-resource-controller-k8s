@@ -36,9 +36,17 @@ import (
 )
 
 const (
-	PartitionIndex = 1
-	AccountIndex   = 4
+	PartitionIndex            = 1
+	AccountIndex              = 4
+	AutoComputeTypeLabelKey   = "eks.amazonaws.com/compute-type"
+	AutoComputeTypeLabelValue = "auto"
 )
+
+// IsAutoModeNode reports whether the Node is managed by EKS Auto Mode rather
+// than VPC Resource Controller.
+func IsAutoModeNode(node *corev1.Node) bool {
+	return node.Labels[AutoComputeTypeLabelKey] == AutoComputeTypeLabelValue
+}
 
 // RemoveDuplicatedSg removes duplicated items from a string slice.
 // It returns a no duplicates string slice.
@@ -274,6 +282,18 @@ func GetNodeInstanceID(node *corev1.Node) string {
 	}
 
 	return instanceID
+}
+
+// OwnedByReplacedNode reports whether the owner references point to an earlier Node with the same name, which happens
+// when EC2 reuses a private IP and the new instance registers under the old Node name. Objects without a Node owner
+// reference are treated as owned by the current Node.
+func OwnedByReplacedNode(ownerRefs []metav1.OwnerReference, node *corev1.Node) bool {
+	for _, ref := range ownerRefs {
+		if ref.Kind == "Node" && ref.Name == node.Name && ref.UID != "" && node.UID != "" {
+			return ref.UID != node.UID
+		}
+	}
+	return false
 }
 
 // getNodeOS returns the operating system of a node.

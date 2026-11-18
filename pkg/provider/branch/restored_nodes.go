@@ -168,7 +168,9 @@ func (b *branchENIProvider) classifyRestoredNode(node restoredNode) (restoredNod
 			return restoredNodeDone, nil
 		}
 	}
-	trunkENI, present := b.getTrunkFromCache(node.name)
+	// classifyRestoredNode has already resolved the current Node and verified
+	// its instance ID. Avoid resolving it again through the node-name lookup.
+	trunkENI, present := b.getTrunkByInstanceID(node.instanceID)
 	switch {
 	case !present:
 		return restoredNodeInitializationPending, nil

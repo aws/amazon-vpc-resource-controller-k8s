@@ -367,10 +367,9 @@ func (n *node) IsManaged() bool {
 	return n.managed
 }
 
+// GetNodeInstanceID returns the instance ID without the node lock, as the instance and its ID never change after the
+// node is created. The node manager reads it under its own lock, which must not wait for a node Init or Update.
 func (n *node) GetNodeInstanceID() string {
-	n.lock.RLock()
-	defer n.lock.RUnlock()
-
 	return n.instance.InstanceID()
 }
 

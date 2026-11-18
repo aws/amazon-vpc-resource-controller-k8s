@@ -26,6 +26,20 @@ import (
 	"github.com/aws/amazon-vpc-resource-controller-k8s/pkg/config"
 )
 
+func TestOwnedByReplacedNode(t *testing.T) {
+	node := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", UID: "uid-new"}}
+
+	assert.False(t, OwnedByReplacedNode([]metav1.OwnerReference{{
+		Kind: "ConfigMap", Name: "node-a", UID: "uid-old",
+	}}, node))
+	assert.True(t, OwnedByReplacedNode([]metav1.OwnerReference{{
+		Kind: "Node", Name: "node-a", UID: "uid-old",
+	}}, node))
+	assert.False(t, OwnedByReplacedNode([]metav1.OwnerReference{{
+		Kind: "Node", Name: "node-a", UID: "uid-new",
+	}}, node))
+}
+
 // TestRemoveDuplicatedSg tests if RemoveDuplicatedSg func works as expected.
 func TestRemoveDuplicatedSg(t *testing.T) {
 	duplicatedSGs := []string{
