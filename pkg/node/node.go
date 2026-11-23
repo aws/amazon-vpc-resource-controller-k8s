@@ -95,9 +95,28 @@ var (
 	registerMetricsOnce sync.Once
 )
 
-func registerNodeMetrics() {
+// RegisterMetrics registers the node metrics and exposes every restore series at 0. NewNodeManager calls it at
+// startup on every replica, before leader election. A restart restores every node within one scrape, so a
+// delta-based scraper counts the restores only if it read this process at 0 first, as it does for a standby that
+// takes over. If the process restores before its first scrape, the restores are lost: a scraper with no baseline
+// takes the burst as its baseline, and one that kept the previous process's value N publishes the burst minus N, or
+// nothing if the burst is below N (read as a reset).
+func RegisterMetrics() {
 	registerMetricsOnce.Do(func() {
 		metrics.Registry.MustRegister(cniNodeCheckpointRestoreCount, nodeInitDuration)
+		// Every result and reason pair that tryRestoreFromNodeNetworkState counts.
+		for _, series := range [][2]string{
+			{checkpointRestoreResultHit, checkpointRestoreReasonNone},
+			{checkpointRestoreResultError, checkpointRestoreReasonNetworkUpdate},
+			{checkpointRestoreResultFallback, checkpointRestoreReasonReadError},
+			{checkpointRestoreResultFallback, checkpointRestoreReasonForeignManager},
+			{checkpointRestoreResultFallback, checkpointRestoreReasonMissingState},
+			{checkpointRestoreResultFallback, checkpointRestoreReasonMissingField},
+			{checkpointRestoreResultFallback, checkpointRestoreReasonInstanceIDMismatch},
+			{checkpointRestoreResultFallback, checkpointRestoreReasonInvalidState},
+		} {
+			cniNodeCheckpointRestoreCount.WithLabelValues(series[0], series[1])
+		}
 	})
 }
 
@@ -133,7 +152,6 @@ type Node interface {
 
 // NewManagedNode returns node managed by the controller
 func NewManagedNode(log logr.Logger, nodeName string, instanceID string, os string, k8sAPI k8s.K8sWrapper, ec2API api.EC2APIHelper) Node {
-	registerNodeMetrics()
 	return &node{
 		managed: true,
 		log: log.WithName("node resource handler").

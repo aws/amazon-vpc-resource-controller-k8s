@@ -156,6 +156,10 @@ func prometheusRegister() {
 			branchProviderOperationsErrCount,
 			branchProviderOperationLatency,
 			cniNodeCheckpointPersistErrCount)
+		// Expose the series the metrics agent reads at 0, so a scraper that baselines a new family keeps the first error.
+		for _, operation := range []string{"prepare_trunk_for_allocation", "drop_unprepared_trunk"} {
+			branchProviderOperationsErrCount.WithLabelValues(operation)
+		}
 
 		prometheusRegistered = true
 	}

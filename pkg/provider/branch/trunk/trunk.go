@@ -231,6 +231,14 @@ func PrometheusRegister() {
 		metrics.Registry.MustRegister(unreconciledTrunkENICount)
 		metrics.Registry.MustRegister(branchENIOperationsSuccessCount)
 		metrics.Registry.MustRegister(branchENIOperationsFailureCount)
+		// Expose the series the metrics agent reads at 0, so a scraper that baselines a new family keeps the first event.
+		for _, operation := range []string{
+			"restored_checkpoint_mismatch", "recover_branch_state", "get_vlan_from_tag", "deleted_pod_branch_eni_without_vlan",
+			"orphan_branch_eni_vlan_in_use", "unusable_pod_eni_annotation", "branch_eni_unusable_vlan",
+		} {
+			trunkENIOperationsErrCount.WithLabelValues(operation)
+		}
+		branchENIOperationsSuccessCount.WithLabelValues("recover_branch_state")
 
 		prometheusRegistered = true
 	}
